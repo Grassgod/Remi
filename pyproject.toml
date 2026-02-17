@@ -10,7 +10,6 @@ dependencies = [
 
 [project.optional-dependencies]
 sdk = ["claude-agent-sdk>=0.1.36"]
-api = ["anthropic>=0.40"]
 feishu = ["lark-oapi>=1.3", "aiohttp>=3.9"]
 openai = ["openai>=1.60"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.8"]

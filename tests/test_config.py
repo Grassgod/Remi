@@ -19,11 +19,11 @@ class TestConfig:
 
     def test_env_override(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("REMI_BACKEND", "anthropic_api")
+        monkeypatch.setenv("REMI_BACKEND", "claude_sdk")
         monkeypatch.setenv("REMI_TIMEOUT", "60")
 
         config = load_config()
-        assert config.engine.name == "anthropic_api"
+        assert config.engine.name == "claude_sdk"
         assert config.engine.timeout == 60
 
     def test_toml_file(self, tmp_path: Path, monkeypatch):
@@ -49,7 +49,7 @@ port = 8080
 
     def test_env_overrides_toml(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("REMI_BACKEND", "anthropic_api")
+        monkeypatch.setenv("REMI_BACKEND", "openai_codex")
 
         toml_path = tmp_path / "remi.toml"
         toml_path.write_text("""
@@ -57,4 +57,4 @@ port = 8080
 name = "claude_sdk"
 """)
         config = load_config(toml_path)
-        assert config.engine.name == "anthropic_api"  # env wins
+        assert config.engine.name == "openai_codex"  # env wins

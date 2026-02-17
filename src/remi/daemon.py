@@ -94,10 +94,6 @@ class RemiDaemon:
                 timeout=self.config.engine.timeout,
                 allowed_tools=self.config.engine.allowed_tools,
             )
-        elif name == "anthropic_api":
-            from remi.engines.anthropic_api import AnthropicAPIEngine
-
-            return AnthropicAPIEngine(model=self.config.engine.model or "claude-sonnet-4-5-20250929")
         elif name == "claude_sdk":
             from remi.engines.claude_sdk import ClaudeSDKEngine
 
