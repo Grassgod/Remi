@@ -115,9 +115,7 @@ class ClaudeCLIProvider:
 
         Tries streaming path first, falls back to subprocess.run() on failure.
         """
-        full_prompt = (
-            f"<context>\n{context}\n</context>\n\n{message}" if context else message
-        )
+        full_prompt = f"<context>\n{context}\n</context>\n\n{message}" if context else message
 
         try:
             return await self._send_streaming(full_prompt, system_prompt=system_prompt)
@@ -139,9 +137,7 @@ class ClaudeCLIProvider:
         context: str | None = None,
     ) -> AsyncIterator[str]:
         """Send a message and yield text chunks as they arrive."""
-        full_prompt = (
-            f"<context>\n{context}\n</context>\n\n{message}" if context else message
-        )
+        full_prompt = f"<context>\n{context}\n</context>\n\n{message}" if context else message
 
         await self._ensure_process(system_prompt=system_prompt)
         async for msg in self._process_mgr.send_and_stream(
@@ -203,11 +199,13 @@ class ClaudeCLIProvider:
             if isinstance(msg, ContentDelta):
                 text_parts.append(msg.text)
             elif isinstance(msg, ToolUseRequest):
-                tool_calls.append({
-                    "id": msg.tool_use_id,
-                    "name": msg.name,
-                    "input": msg.input,
-                })
+                tool_calls.append(
+                    {
+                        "id": msg.tool_use_id,
+                        "name": msg.name,
+                        "input": msg.input,
+                    }
+                )
             elif isinstance(msg, ResultMessage):
                 result_msg = msg
 
@@ -249,9 +247,7 @@ class ClaudeCLIProvider:
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
 
-        full_prompt = (
-            f"<context>\n{context}\n</context>\n\n{message}" if context else message
-        )
+        full_prompt = f"<context>\n{context}\n</context>\n\n{message}" if context else message
         cmd.append(full_prompt)
 
         logger.debug("Fallback running: %s", " ".join(cmd[:4]) + " ...")
@@ -266,13 +262,9 @@ class ClaudeCLIProvider:
                 timeout=self.timeout,
             )
         except subprocess.TimeoutExpired:
-            return AgentResponse(
-                text="[Provider timeout — Claude CLI did not respond in time.]"
-            )
+            return AgentResponse(text="[Provider timeout — Claude CLI did not respond in time.]")
         except FileNotFoundError:
-            return AgentResponse(
-                text="[Error: `claude` CLI not found. Is Claude Code installed?]"
-            )
+            return AgentResponse(text="[Error: `claude` CLI not found. Is Claude Code installed?]")
 
         if result.returncode != 0:
             stderr = result.stderr.strip()

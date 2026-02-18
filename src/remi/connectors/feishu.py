@@ -36,9 +36,9 @@ class FeishuConnector:
             import lark_oapi as lark
 
             self._lark = lark
-            self._client = lark.Client.builder().app_id(config.app_id).app_secret(
-                config.app_secret
-            ).build()
+            self._client = (
+                lark.Client.builder().app_id(config.app_id).app_secret(config.app_secret).build()
+            )
         except ImportError:
             raise ImportError(
                 "lark-oapi package required. Install with: uv pip install 'remi[feishu]'"
@@ -122,9 +122,7 @@ class FeishuConnector:
 
         return web.json_response({"code": 0})
 
-    async def _process_and_reply(
-        self, msg: IncomingMessage, message_id: str, chat_id: str
-    ) -> None:
+    async def _process_and_reply(self, msg: IncomingMessage, message_id: str, chat_id: str) -> None:
         try:
             response = await self._handler(msg)
             await self.reply(chat_id, response)
@@ -134,9 +132,7 @@ class FeishuConnector:
     def _is_duplicate(self, message_id: str) -> bool:
         now = time.time()
         # Clean old entries
-        self._seen_ids = {
-            k: v for k, v in self._seen_ids.items() if now - v < self._dedup_ttl
-        }
+        self._seen_ids = {k: v for k, v in self._seen_ids.items() if now - v < self._dedup_ttl}
         if message_id in self._seen_ids:
             return True
         self._seen_ids[message_id] = now

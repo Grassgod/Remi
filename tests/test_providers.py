@@ -44,37 +44,45 @@ class MockProcess:
         self.returncode = 0
 
 
-INIT_LINE = make_line({
-    "type": "system",
-    "subtype": "init",
-    "session_id": "sess-test",
-    "tools": [],
-    "model": "claude-sonnet-4-5-20250929",
-})
+INIT_LINE = make_line(
+    {
+        "type": "system",
+        "subtype": "init",
+        "session_id": "sess-test",
+        "tools": [],
+        "model": "claude-sonnet-4-5-20250929",
+    }
+)
 
 
 def streaming_lines(text: str = "Hello! I'm Claude.", session_id: str = "sess-test"):
     """Generate a standard streaming response sequence."""
     return [
         INIT_LINE,
-        make_line({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        }),
-        make_line({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": text},
-        }),
+        make_line(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            }
+        ),
+        make_line(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            }
+        ),
         make_line({"type": "content_block_stop", "index": 0}),
-        make_line({
-            "type": "result",
-            "result": text,
-            "session_id": session_id,
-            "cost_usd": 0.01,
-            "model": "claude-sonnet-4-5-20250929",
-        }),
+        make_line(
+            {
+                "type": "result",
+                "result": text,
+                "session_id": session_id,
+                "cost_usd": 0.01,
+                "model": "claude-sonnet-4-5-20250929",
+            }
+        ),
     ]
 
 
@@ -110,20 +118,25 @@ class TestClaudeCLIProvider:
         """send() falls back to subprocess.run() if streaming fails."""
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = json.dumps({
-            "result": "Fallback response",
-            "session_id": "sess-fb",
-            "cost_usd": 0.02,
-            "model": "claude-sonnet-4-5-20250929",
-        })
+        mock_result.stdout = json.dumps(
+            {
+                "result": "Fallback response",
+                "session_id": "sess-fb",
+                "cost_usd": 0.02,
+                "model": "claude-sonnet-4-5-20250929",
+            }
+        )
         mock_result.stderr = ""
 
-        with patch(
-            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError("no claude"),
-        ), patch(
-            "remi.providers.claude_cli.provider.subprocess.run",
-            return_value=mock_result,
+        with (
+            patch(
+                "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError("no claude"),
+            ),
+            patch(
+                "remi.providers.claude_cli.provider.subprocess.run",
+                return_value=mock_result,
+            ),
         ):
             response = await provider.send("Hello")
 
@@ -195,12 +208,15 @@ class TestFallbackPath:
 
     @pytest.mark.asyncio
     async def test_fallback_cli_not_found(self, provider: ClaudeCLIProvider):
-        with patch(
-            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError,
-        ), patch(
-            "remi.providers.claude_cli.provider.subprocess.run",
-            side_effect=FileNotFoundError,
+        with (
+            patch(
+                "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError,
+            ),
+            patch(
+                "remi.providers.claude_cli.provider.subprocess.run",
+                side_effect=FileNotFoundError,
+            ),
         ):
             response = await provider.send("Hello")
         assert "not found" in response.text
@@ -209,12 +225,15 @@ class TestFallbackPath:
     async def test_fallback_timeout(self, provider: ClaudeCLIProvider):
         import subprocess
 
-        with patch(
-            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError,
-        ), patch(
-            "remi.providers.claude_cli.provider.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300),
+        with (
+            patch(
+                "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError,
+            ),
+            patch(
+                "remi.providers.claude_cli.provider.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300),
+            ),
         ):
             response = await provider.send("Hello")
         assert "timeout" in response.text.lower()
@@ -226,12 +245,15 @@ class TestFallbackPath:
         mock_result.stdout = ""
         mock_result.stderr = "some error"
 
-        with patch(
-            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError,
-        ), patch(
-            "remi.providers.claude_cli.provider.subprocess.run",
-            return_value=mock_result,
+        with (
+            patch(
+                "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError,
+            ),
+            patch(
+                "remi.providers.claude_cli.provider.subprocess.run",
+                return_value=mock_result,
+            ),
         ):
             response = await provider.send("Hello")
         assert "error" in response.text.lower()
@@ -243,13 +265,16 @@ class TestFallbackPath:
         mock_result.stdout = json.dumps({"result": "Continued"})
         mock_result.stderr = ""
 
-        with patch(
-            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError,
-        ), patch(
-            "remi.providers.claude_cli.provider.subprocess.run",
-            return_value=mock_result,
-        ) as mock_run:
+        with (
+            patch(
+                "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
+                side_effect=FileNotFoundError,
+            ),
+            patch(
+                "remi.providers.claude_cli.provider.subprocess.run",
+                return_value=mock_result,
+            ) as mock_run,
+        ):
             await provider.send("Continue", session_id="sess-123")
 
         call_args = mock_run.call_args[0][0]
@@ -300,12 +325,14 @@ class TestHooks:
     @pytest.fixture
     def provider(self) -> ClaudeCLIProvider:
         p = ClaudeCLIProvider()
-        p.register_tool(ToolDefinition(
-            name="test_tool",
-            description="test",
-            parameters={},
-            handler=lambda: "result",
-        ))
+        p.register_tool(
+            ToolDefinition(
+                name="test_tool",
+                description="test",
+                parameters={},
+                handler=lambda: "result",
+            )
+        )
         return p
 
     @pytest.mark.asyncio
@@ -331,9 +358,7 @@ class TestHooks:
     @pytest.mark.asyncio
     async def test_post_hook_called(self, provider: ClaudeCLIProvider):
         hook_results = []
-        provider.add_post_tool_hook(
-            lambda name, inp, res: hook_results.append((name, res))
-        )
+        provider.add_post_tool_hook(lambda name, inp, res: hook_results.append((name, res)))
 
         await provider._handle_tool_call(
             ToolUseRequest(tool_use_id="t1", name="test_tool", input={})
@@ -349,12 +374,14 @@ class TestHooks:
 
     @pytest.mark.asyncio
     async def test_tool_handler_exception(self, provider: ClaudeCLIProvider):
-        provider.register_tool(ToolDefinition(
-            name="bad_tool",
-            description="fails",
-            parameters={},
-            handler=lambda: (_ for _ in ()).throw(ValueError("boom")),
-        ))
+        provider.register_tool(
+            ToolDefinition(
+                name="bad_tool",
+                description="fails",
+                parameters={},
+                handler=lambda: (_ for _ in ()).throw(ValueError("boom")),
+            )
+        )
         result = await provider._handle_tool_call(
             ToolUseRequest(tool_use_id="t1", name="bad_tool", input={})
         )
@@ -411,41 +438,51 @@ class TestToolCallIntegration:
         lines = [
             INIT_LINE,
             # Tool use
-            make_line({
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_mem1",
-                    "name": "read_memory",
-                    "input": {},
-                },
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": "{}"},
-            }),
+            make_line(
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_mem1",
+                        "name": "read_memory",
+                        "input": {},
+                    },
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                }
+            ),
             make_line({"type": "content_block_stop", "index": 1}),
             # Text after tool
-            make_line({
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": "Based on memory..."},
-            }),
-            make_line({
-                "type": "result",
-                "result": "Based on memory...",
-                "session_id": "sess-test",
-                "cost_usd": 0.005,
-            }),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Based on memory..."},
+                }
+            ),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Based on memory...",
+                    "session_id": "sess-test",
+                    "cost_usd": 0.005,
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 
         provider = ClaudeCLIProvider()
-        provider.register_tools_from_dict({
-            "read_memory": lambda: "User prefers Python",
-        })
+        provider.register_tools_from_dict(
+            {
+                "read_memory": lambda: "User prefers Python",
+            }
+        )
 
         with patch(
             "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
@@ -463,17 +500,21 @@ class TestToolCallIntegration:
         lines = [
             INIT_LINE,
             # First response
-            make_line({
-                "type": "result",
-                "result": "First",
-                "session_id": "sess-test",
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "First",
+                    "session_id": "sess-test",
+                }
+            ),
             # Second response
-            make_line({
-                "type": "result",
-                "result": "Second",
-                "session_id": "sess-test",
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Second",
+                    "session_id": "sess-test",
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 

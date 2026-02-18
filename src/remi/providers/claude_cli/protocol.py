@@ -134,17 +134,21 @@ def parse_line(line: str) -> ParsedMessage:
 
 def format_user_message(text: str) -> str:
     """Format a user message for CLI stdin (JSONL string, no trailing newline)."""
-    return json.dumps({
-        "type": "user",
-        "message": {"role": "user", "content": text},
-    })
+    return json.dumps(
+        {
+            "type": "user",
+            "message": {"role": "user", "content": text},
+        }
+    )
 
 
 def format_tool_result(tool_use_id: str, result: str, is_error: bool = False) -> str:
     """Format a tool result for CLI stdin (JSONL string, no trailing newline)."""
-    return json.dumps({
-        "type": "tool_result",
-        "tool_use_id": tool_use_id,
-        "content": result,
-        "is_error": is_error,
-    })
+    return json.dumps(
+        {
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "content": result,
+            "is_error": is_error,
+        }
+    )

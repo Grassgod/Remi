@@ -45,13 +45,15 @@ class MockProcess:
         self.returncode = 0
 
 
-INIT_LINE = make_line({
-    "type": "system",
-    "subtype": "init",
-    "session_id": "sess-123",
-    "tools": [],
-    "model": "claude-sonnet-4-5-20250929",
-})
+INIT_LINE = make_line(
+    {
+        "type": "system",
+        "subtype": "init",
+        "session_id": "sess-123",
+        "tools": [],
+        "model": "claude-sonnet-4-5-20250929",
+    }
+)
 
 
 @pytest.fixture
@@ -156,28 +158,36 @@ class TestSendAndStream:
     async def test_text_streaming(self, manager):
         lines = [
             INIT_LINE,
-            make_line({
-                "type": "content_block_start",
-                "index": 0,
-                "content_block": {"type": "text", "text": ""},
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": "Hello"},
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": " world"},
-            }),
+            make_line(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Hello"},
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": " world"},
+                }
+            ),
             make_line({"type": "content_block_stop", "index": 0}),
-            make_line({
-                "type": "result",
-                "result": "Hello world",
-                "session_id": "sess-123",
-                "cost_usd": 0.001,
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Hello world",
+                    "session_id": "sess-123",
+                    "cost_usd": 0.001,
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 
@@ -207,33 +217,41 @@ class TestSendAndStream:
         lines = [
             INIT_LINE,
             # Tool use block
-            make_line({
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_1",
-                    "name": "read_memory",
-                    "input": {},
-                },
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": "{}"},
-            }),
+            make_line(
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "read_memory",
+                        "input": {},
+                    },
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                }
+            ),
             make_line({"type": "content_block_stop", "index": 1}),
             # After tool result, text response
-            make_line({
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": "Memory says hi"},
-            }),
-            make_line({
-                "type": "result",
-                "result": "Memory says hi",
-                "session_id": "sess-123",
-            }),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Memory says hi"},
+                }
+            ),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Memory says hi",
+                    "session_id": "sess-123",
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 
@@ -272,32 +290,40 @@ class TestSendAndStream:
         """Tool input arrives in multiple input_json_delta chunks."""
         lines = [
             INIT_LINE,
-            make_line({
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_2",
-                    "name": "write_memory",
-                    "input": {},
-                },
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": '{"content"'},
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": ': "hello"}'},
-            }),
+            make_line(
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_2",
+                        "name": "write_memory",
+                        "input": {},
+                    },
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"content"'},
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": ': "hello"}'},
+                }
+            ),
             make_line({"type": "content_block_stop", "index": 1}),
-            make_line({
-                "type": "result",
-                "result": "Done",
-                "session_id": "sess-123",
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Done",
+                    "session_id": "sess-123",
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 
@@ -314,9 +340,7 @@ class TestSendAndStream:
         ):
             await manager.start()
 
-            async for _ in manager.send_and_stream(
-                "Write memory", tool_handler=mock_tool_handler
-            ):
+            async for _ in manager.send_and_stream("Write memory", tool_handler=mock_tool_handler):
                 pass
 
         assert received_input == {"content": "hello"}
@@ -326,27 +350,33 @@ class TestSendAndStream:
         """Tool call without handler — should still yield the request."""
         lines = [
             INIT_LINE,
-            make_line({
-                "type": "content_block_start",
-                "index": 1,
-                "content_block": {
-                    "type": "tool_use",
-                    "id": "toolu_3",
-                    "name": "unknown_tool",
-                    "input": {},
-                },
-            }),
-            make_line({
-                "type": "content_block_delta",
-                "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": "{}"},
-            }),
+            make_line(
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_3",
+                        "name": "unknown_tool",
+                        "input": {},
+                    },
+                }
+            ),
+            make_line(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": "{}"},
+                }
+            ),
             make_line({"type": "content_block_stop", "index": 1}),
-            make_line({
-                "type": "result",
-                "result": "Done",
-                "session_id": "sess-123",
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "Done",
+                    "session_id": "sess-123",
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 
@@ -374,11 +404,13 @@ class TestSendAndStream:
     async def test_session_id_updated_from_result(self, manager):
         lines = [
             INIT_LINE,
-            make_line({
-                "type": "result",
-                "result": "ok",
-                "session_id": "sess-new",
-            }),
+            make_line(
+                {
+                    "type": "result",
+                    "result": "ok",
+                    "session_id": "sess-new",
+                }
+            ),
         ]
         mock_proc = MockProcess(lines)
 

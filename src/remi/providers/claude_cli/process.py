@@ -60,8 +60,10 @@ class ClaudeProcessManager:
     def _build_command(self) -> list[str]:
         cmd = [
             "claude",
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
             "--verbose",
         ]
         if self.model:
@@ -143,9 +145,7 @@ class ClaudeProcessManager:
                     yield msg  # yield for tracking
                     if tool_handler:
                         result_text = await tool_handler(msg)
-                        await self._write_line(
-                            format_tool_result(msg.tool_use_id, result_text)
-                        )
+                        await self._write_line(format_tool_result(msg.tool_use_id, result_text))
                     continue
 
                 # Input JSON delta accumulation
@@ -164,9 +164,7 @@ class ClaudeProcessManager:
                             try:
                                 pending_tool.input = json.loads(full_json)
                             except json.JSONDecodeError:
-                                logger.warning(
-                                    "Failed to parse tool input: %s", full_json[:200]
-                                )
+                                logger.warning("Failed to parse tool input: %s", full_json[:200])
 
                         yield pending_tool  # yield for tracking
                         # Call tool handler and write result back
@@ -242,18 +240,14 @@ class ClaudeProcessManager:
         self._process.stdin.write((data + "\n").encode())
         await self._process.stdin.drain()
 
-    async def _read_until_type(
-        self, target_type: type, timeout: float = 30.0
-    ) -> ParsedMessage:
+    async def _read_until_type(self, target_type: type, timeout: float = 30.0) -> ParsedMessage:
         """Read lines until a message of the target type is found."""
 
         async def _read() -> ParsedMessage:
             while True:
                 line = await self._readline()
                 if line is None:
-                    raise RuntimeError(
-                        "Process stdout closed before receiving expected message"
-                    )
+                    raise RuntimeError("Process stdout closed before receiving expected message")
                 msg = parse_line(line)
                 if isinstance(msg, target_type):
                     return msg

@@ -17,14 +17,16 @@ from remi.providers.claude_cli.protocol import (
 
 class TestParseLine:
     def test_system_init(self):
-        line = json.dumps({
-            "type": "system",
-            "subtype": "init",
-            "session_id": "sess-abc",
-            "tools": [{"name": "read_file"}],
-            "model": "claude-sonnet-4-5-20250929",
-            "mcp_servers": [],
-        })
+        line = json.dumps(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "sess-abc",
+                "tools": [{"name": "read_file"}],
+                "model": "claude-sonnet-4-5-20250929",
+                "mcp_servers": [],
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, SystemMessage)
         assert msg.session_id == "sess-abc"
@@ -39,57 +41,65 @@ class TestParseLine:
         assert msg.tools == []
 
     def test_content_delta_text(self):
-        line = json.dumps({
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "Hello"},
-        })
+        line = json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hello"},
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, ContentDelta)
         assert msg.text == "Hello"
         assert msg.index == 0
 
     def test_input_json_delta_returns_dict(self):
-        line = json.dumps({
-            "type": "content_block_delta",
-            "index": 1,
-            "delta": {"type": "input_json_delta", "partial_json": '{"key":'},
-        })
+        line = json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"key":'},
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, dict)
         assert msg["delta"]["partial_json"] == '{"key":'
 
     def test_tool_use_from_content_block_start(self):
-        line = json.dumps({
-            "type": "content_block_start",
-            "index": 1,
-            "content_block": {
-                "type": "tool_use",
-                "id": "toolu_123",
-                "name": "read_memory",
-                "input": {},
-            },
-        })
+        line = json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_123",
+                    "name": "read_memory",
+                    "input": {},
+                },
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, ToolUseRequest)
         assert msg.tool_use_id == "toolu_123"
         assert msg.name == "read_memory"
 
     def test_tool_use_from_assistant_message(self):
-        line = json.dumps({
-            "type": "assistant",
-            "message": {
-                "content": [
-                    {"type": "text", "text": "Let me check."},
-                    {
-                        "type": "tool_use",
-                        "id": "toolu_456",
-                        "name": "write_memory",
-                        "input": {"content": "hello"},
-                    },
-                ],
-            },
-        })
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Let me check."},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_456",
+                            "name": "write_memory",
+                            "input": {"content": "hello"},
+                        },
+                    ],
+                },
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, ToolUseRequest)
         assert msg.tool_use_id == "toolu_456"
@@ -97,26 +107,30 @@ class TestParseLine:
         assert msg.input == {"content": "hello"}
 
     def test_assistant_message_no_tools_returns_dict(self):
-        line = json.dumps({
-            "type": "assistant",
-            "message": {
-                "content": [{"type": "text", "text": "Just text."}],
-            },
-        })
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Just text."}],
+                },
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, dict)
 
     def test_result_message(self):
-        line = json.dumps({
-            "type": "result",
-            "subtype": "success",
-            "result": "Hello world",
-            "session_id": "sess-abc",
-            "cost_usd": 0.003,
-            "model": "claude-sonnet-4-5-20250929",
-            "is_error": False,
-            "duration_ms": 1234,
-        })
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "Hello world",
+                "session_id": "sess-abc",
+                "cost_usd": 0.003,
+                "model": "claude-sonnet-4-5-20250929",
+                "is_error": False,
+                "duration_ms": 1234,
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, ResultMessage)
         assert msg.result == "Hello world"
@@ -126,12 +140,14 @@ class TestParseLine:
         assert msg.duration_ms == 1234
 
     def test_result_error(self):
-        line = json.dumps({
-            "type": "result",
-            "subtype": "error",
-            "result": "",
-            "is_error": True,
-        })
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "error",
+                "result": "",
+                "is_error": True,
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, ResultMessage)
         assert msg.is_error is True
@@ -143,11 +159,13 @@ class TestParseLine:
         assert msg["type"] == "unknown"
 
     def test_content_block_start_text_returns_dict(self):
-        line = json.dumps({
-            "type": "content_block_start",
-            "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        })
+        line = json.dumps(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            }
+        )
         msg = parse_line(line)
         assert isinstance(msg, dict)
 
