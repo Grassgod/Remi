@@ -1,7 +1,7 @@
 """Scheduler for periodic tasks using pure asyncio.
 
 Jobs:
-- Heartbeat: check connector/engine health
+- Heartbeat: check connector/provider health
 - Memory compaction: archive daily notes → long-term memory
 - Cleanup: remove old dailies and version files
 """
@@ -74,19 +74,19 @@ class Scheduler:
         logger.info("Scheduler stopped.")
 
     async def _heartbeat(self) -> None:
-        """Check engine health."""
-        for name, engine in self._remi._engines.items():
+        """Check provider health."""
+        for name, provider in self._remi._providers.items():
             try:
-                healthy = await engine.health_check()
+                healthy = await provider.health_check()
                 if not healthy:
-                    logger.warning("Engine %s health check failed", name)
+                    logger.warning("Provider %s health check failed", name)
             except Exception as e:
-                logger.error("Engine %s health check error: %s", name, e)
+                logger.error("Provider %s health check error: %s", name, e)
 
     async def _compact_memory(self) -> None:
         """Summarize yesterday's daily notes and suggest memory updates.
 
-        This uses the engine itself to do the summarization — self-maintaining memory.
+        This uses the provider itself to do the summarization — self-maintaining memory.
         """
         from datetime import timedelta
 
@@ -99,9 +99,8 @@ class Scheduler:
 
         logger.info("Compacting daily notes for %s", yesterday)
 
-        # Use the primary engine to summarize
         try:
-            engine = self._remi._get_engine()
+            provider = self._remi._get_provider()
             prompt = (
                 f"Below are my daily notes from {yesterday}. "
                 "Extract any important facts, decisions, or preferences that should be "
@@ -109,7 +108,7 @@ class Scheduler:
                 "If nothing is worth remembering long-term, respond with 'SKIP'.\n\n"
                 f"{daily}"
             )
-            response = await engine.send(prompt)
+            response = await provider.send(prompt)
             if response.text.strip().upper() != "SKIP":
                 self._remi.memory.append_memory(
                     f"\n## From {yesterday}\n\n{response.text.strip()}"

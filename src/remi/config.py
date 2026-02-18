@@ -17,8 +17,8 @@ _CONFIG_FILENAME = "remi.toml"
 
 
 @dataclass
-class EngineConfig:
-    """Configuration for an AI engine."""
+class ProviderConfig:
+    """Configuration for an AI provider."""
 
     name: str = "claude_cli"
     fallback: str | None = None
@@ -50,7 +50,7 @@ class SchedulerConfig:
 class RemiConfig:
     """Top-level Remi configuration."""
 
-    engine: EngineConfig = field(default_factory=EngineConfig)
+    provider: ProviderConfig = field(default_factory=ProviderConfig)
     feishu: FeishuConfig = field(default_factory=FeishuConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     memory_dir: Path = _DEFAULT_MEMORY_DIR
@@ -73,17 +73,17 @@ def load_config(config_path: Path | None = None) -> RemiConfig:
                 file_data = tomllib.loads(candidate.read_text())
                 break
 
-    engine_data = file_data.get("engine", {})
+    provider_data = file_data.get("provider", {})
     feishu_data = file_data.get("feishu", {})
     scheduler_data = file_data.get("scheduler", {})
 
     config = RemiConfig(
-        engine=EngineConfig(
-            name=os.getenv("REMI_BACKEND", engine_data.get("name", "claude_cli")),
-            fallback=os.getenv("REMI_FALLBACK", engine_data.get("fallback")),
-            allowed_tools=engine_data.get("allowed_tools", []),
-            model=os.getenv("REMI_MODEL", engine_data.get("model")),
-            timeout=int(os.getenv("REMI_TIMEOUT", engine_data.get("timeout", 300))),
+        provider=ProviderConfig(
+            name=os.getenv("REMI_PROVIDER", provider_data.get("name", "claude_cli")),
+            fallback=os.getenv("REMI_FALLBACK", provider_data.get("fallback")),
+            allowed_tools=provider_data.get("allowed_tools", []),
+            model=os.getenv("REMI_MODEL", provider_data.get("model")),
+            timeout=int(os.getenv("REMI_TIMEOUT", provider_data.get("timeout", 300))),
         ),
         feishu=FeishuConfig(
             app_id=os.getenv("FEISHU_APP_ID", feishu_data.get("app_id", "")),

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Coroutine, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from remi.engines.base import AgentResponse
+    from remi.providers.base import AgentResponse
 
 
 @dataclass

@@ -4,8 +4,8 @@ Responsibilities:
 1. Receive messages from any connector (IncomingMessage)
 2. Lane Queue — serialize per chat_id to prevent race conditions
 3. Session management — chat_id → session_id mapping
-4. Memory injection — assemble context before calling engine
-5. Engine routing — select engine + fallback
+4. Memory injection — assemble context before calling provider
+5. Provider routing — select provider + fallback
 6. Response dispatch — return AgentResponse via originating connector
 """
 
@@ -17,39 +17,41 @@ from typing import TYPE_CHECKING
 
 from remi.config import RemiConfig
 from remi.connectors.base import IncomingMessage
-from remi.engines.base import AgentResponse
+from remi.providers.base import AgentResponse
 from remi.memory.store import MemoryStore
 
 if TYPE_CHECKING:
     from remi.connectors.base import Connector
-    from remi.engines.base import Engine
+    from remi.providers.base import Provider
 
 logger = logging.getLogger(__name__)
 
 
 class Remi:
-    """Core orchestrator — routes messages between connectors and engines."""
+    """Core orchestrator — routes messages between connectors and providers."""
 
     def __init__(self, config: RemiConfig) -> None:
         self.config = config
         self.memory = MemoryStore(config.memory_dir)
-        self._engines: dict[str, Engine] = {}
+        self._providers: dict[str, Provider] = {}
         self._connectors: list[Connector] = []
         self._sessions: dict[str, str] = {}  # chat_id → session_id
         self._lane_locks: dict[str, asyncio.Lock] = {}  # per-chat serialization
 
-    # ── Engine management ────────────────────────────────────
+    # ── Provider management ──────────────────────────────────
 
-    def add_engine(self, engine: Engine) -> None:
-        self._engines[engine.name] = engine
-        logger.info("Registered engine: %s", engine.name)
+    def add_provider(self, provider: Provider) -> None:
+        self._providers[provider.name] = provider
+        logger.info("Registered provider: %s", provider.name)
 
-    def _get_engine(self, name: str | None = None) -> Engine:
-        name = name or self.config.engine.name
-        engine = self._engines.get(name)
-        if not engine:
-            raise RuntimeError(f"Engine '{name}' not registered. Available: {list(self._engines)}")
-        return engine
+    def _get_provider(self, name: str | None = None) -> Provider:
+        name = name or self.config.provider.name
+        provider = self._providers.get(name)
+        if not provider:
+            raise RuntimeError(
+                f"Provider '{name}' not registered. Available: {list(self._providers)}"
+            )
+        return provider
 
     # ── Connector management ─────────────────────────────────
 
@@ -80,20 +82,22 @@ class Remi:
         # 2. Get session for multi-turn
         session_id = self._sessions.get(msg.chat_id)
 
-        # 3. Route to engine
-        engine = self._get_engine()
-        response = await engine.send(
+        # 3. Route to provider
+        provider = self._get_provider()
+        response = await provider.send(
             msg.text,
             context=context or None,
             session_id=session_id,
         )
 
         # 4. Fallback if primary fails
-        if response.text.startswith("[Engine error") or response.text.startswith("[Engine timeout"):
-            fallback_name = self.config.engine.fallback
-            if fallback_name and fallback_name in self._engines:
-                logger.warning("Primary engine failed, trying fallback: %s", fallback_name)
-                fallback = self._engines[fallback_name]
+        if response.text.startswith("[Provider error") or response.text.startswith(
+            "[Provider timeout"
+        ):
+            fallback_name = self.config.provider.fallback
+            if fallback_name and fallback_name in self._providers:
+                logger.warning("Primary provider failed, trying fallback: %s", fallback_name)
+                fallback = self._providers[fallback_name]
                 response = await fallback.send(
                     msg.text,
                     context=context or None,
@@ -112,8 +116,8 @@ class Remi:
 
     async def start(self) -> None:
         """Start all connectors (each listens for messages)."""
-        if not self._engines:
-            raise RuntimeError("No engines registered. Call add_engine() first.")
+        if not self._providers:
+            raise RuntimeError("No providers registered. Call add_provider() first.")
 
         tasks = [connector.start(self.handle_message) for connector in self._connectors]
         if tasks:

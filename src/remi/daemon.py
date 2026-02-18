@@ -20,7 +20,7 @@ from pathlib import Path
 
 from remi.config import RemiConfig, load_config
 from remi.core import Remi
-from remi.engines.claude_cli import ClaudeCLIEngine
+from remi.providers.claude_cli import ClaudeCLIProvider
 from remi.scheduler.jobs import Scheduler
 
 logger = logging.getLogger(__name__)
@@ -72,41 +72,42 @@ class RemiDaemon:
     def _build_remi(self) -> Remi:
         remi = Remi(self.config)
 
-        # Register engines
-        engine = self._build_engine()
-        remi.add_engine(engine)
+        # Register providers
+        provider = self._build_provider()
+        remi.add_provider(provider)
 
         # Register fallback if configured
-        if self.config.engine.fallback:
+        if self.config.provider.fallback:
             try:
-                fallback = self._build_engine(self.config.engine.fallback)
-                remi.add_engine(fallback)
+                fallback = self._build_provider(self.config.provider.fallback)
+                remi.add_provider(fallback)
             except Exception as e:
-                logger.warning("Failed to build fallback engine: %s", e)
+                logger.warning("Failed to build fallback provider: %s", e)
 
         return remi
 
-    def _build_engine(self, name: str | None = None):
-        name = name or self.config.engine.name
+    def _build_provider(self, name: str | None = None):
+        name = name or self.config.provider.name
         if name == "claude_cli":
-            return ClaudeCLIEngine(
-                model=self.config.engine.model,
-                timeout=self.config.engine.timeout,
-                allowed_tools=self.config.engine.allowed_tools,
+            return ClaudeCLIProvider(
+                model=self.config.provider.model,
+                timeout=self.config.provider.timeout,
+                allowed_tools=self.config.provider.allowed_tools,
             )
         elif name == "claude_sdk":
-            from remi.engines.claude_sdk import ClaudeSDKEngine
+            from remi.providers.claude_sdk import ClaudeSDKProvider
 
-            return ClaudeSDKEngine(model=self.config.engine.model or "claude-sonnet-4-5-20250929")
+            return ClaudeSDKProvider(
+                model=self.config.provider.model or "claude-sonnet-4-5-20250929"
+            )
         elif name == "codex_sdk":
-            from remi.engines.codex_sdk import CodexSDKEngine
+            from remi.providers.codex_sdk import CodexSDKProvider
 
-            return CodexSDKEngine(timeout=self.config.engine.timeout)
+            return CodexSDKProvider(timeout=self.config.provider.timeout)
         else:
-            raise ValueError(f"Unknown engine: {name}")
+            raise ValueError(f"Unknown provider: {name}")
 
     def _build_connectors(self, remi: Remi) -> None:
-        # Always add CLI connector in daemon mode? No — daemon uses feishu etc.
         if self.config.feishu.app_id:
             try:
                 from remi.connectors.feishu import FeishuConnector
@@ -128,7 +129,7 @@ class RemiDaemon:
 
         scheduler = Scheduler(remi, self.config)
 
-        logger.info("Remi daemon starting (engine=%s)", self.config.engine.name)
+        logger.info("Remi daemon starting (provider=%s)", self.config.provider.name)
 
         try:
             await asyncio.gather(
