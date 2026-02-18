@@ -2,8 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+# Callback for streaming text chunks
+StreamCallback = Callable[[str], None]
+
+
+@dataclass
+class ToolDefinition:
+    """Custom tool that the agent can call, handled within Remi."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[..., str]
 
 
 @dataclass
@@ -15,6 +29,7 @@ class AgentResponse:
     cost_usd: float | None = None
     model: str | None = None
     metadata: dict = field(default_factory=dict)
+    tool_calls: list[dict] = field(default_factory=list)
 
 
 @runtime_checkable

@@ -124,6 +124,12 @@ class Remi:
             await asyncio.gather(*tasks)
 
     async def stop(self) -> None:
-        """Gracefully stop all connectors."""
+        """Gracefully stop all connectors and providers."""
         for connector in self._connectors:
             await connector.stop()
+
+        # Close providers that support it (e.g. long-running subprocesses)
+        for provider in self._providers.values():
+            close = getattr(provider, "close", None)
+            if close and callable(close):
+                await close()

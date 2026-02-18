@@ -15,6 +15,7 @@ class MockProvider:
         self._response_text = response_text
         self.last_message: str | None = None
         self.last_context: str | None = None
+        self.closed = False
 
     @property
     def name(self) -> str:
@@ -31,6 +32,9 @@ class MockProvider:
 
     async def health_check(self) -> bool:
         return True
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class MockFailProvider:
@@ -119,3 +123,18 @@ class TestRemiCore:
         r = Remi(config)
         with pytest.raises(RuntimeError, match="No providers registered"):
             await r.start()
+
+    @pytest.mark.asyncio
+    async def test_stop_closes_providers(self, remi: Remi):
+        """stop() should call close() on providers that support it."""
+        await remi.stop()
+        provider = remi._providers["mock"]
+        assert provider.closed is True
+
+    @pytest.mark.asyncio
+    async def test_stop_without_close(self, config: RemiConfig):
+        """stop() should not fail if provider has no close() method."""
+        r = Remi(config)
+        r.add_provider(MockFailProvider())
+        # MockFailProvider has no close() — should not raise
+        await r.stop()

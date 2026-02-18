@@ -76,6 +76,9 @@ class RemiDaemon:
         provider = self._build_provider()
         remi.add_provider(provider)
 
+        # Register memory tools on provider (if supported)
+        self._register_memory_tools(provider, remi)
+
         # Register fallback if configured
         if self.config.provider.fallback:
             try:
@@ -85,6 +88,21 @@ class RemiDaemon:
                 logger.warning("Failed to build fallback provider: %s", e)
 
         return remi
+
+    def _register_memory_tools(self, provider, remi: Remi) -> None:
+        """Register memory tools on a provider that supports tool registration."""
+        register = getattr(provider, "register_tools_from_dict", None)
+        if not register:
+            return
+
+        try:
+            from remi.tools.memory_tools import get_memory_tools
+
+            tools = get_memory_tools(remi.memory)
+            register(tools)
+            logger.info("Registered %d memory tools on %s", len(tools), provider.name)
+        except Exception as e:
+            logger.warning("Failed to register memory tools: %s", e)
 
     def _build_provider(self, name: str | None = None):
         name = name or self.config.provider.name
