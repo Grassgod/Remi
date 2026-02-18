@@ -49,7 +49,7 @@ port = 8080
 
     def test_env_overrides_toml(self, tmp_path: Path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("REMI_BACKEND", "openai_codex")
+        monkeypatch.setenv("REMI_BACKEND", "codex_sdk")
 
         toml_path = tmp_path / "remi.toml"
         toml_path.write_text("""
@@ -57,4 +57,4 @@ port = 8080
 name = "claude_sdk"
 """)
         config = load_config(toml_path)
-        assert config.engine.name == "openai_codex"  # env wins
+        assert config.engine.name == "codex_sdk"  # env wins

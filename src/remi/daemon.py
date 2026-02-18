@@ -98,10 +98,10 @@ class RemiDaemon:
             from remi.engines.claude_sdk import ClaudeSDKEngine
 
             return ClaudeSDKEngine(model=self.config.engine.model or "claude-sonnet-4-5-20250929")
-        elif name == "openai_codex":
-            from remi.engines.openai_codex import OpenAICodexEngine
+        elif name == "codex_sdk":
+            from remi.engines.codex_sdk import CodexSDKEngine
 
-            return OpenAICodexEngine(timeout=self.config.engine.timeout)
+            return CodexSDKEngine(timeout=self.config.engine.timeout)
         else:
             raise ValueError(f"Unknown engine: {name}")
 
