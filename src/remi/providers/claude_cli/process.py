@@ -12,7 +12,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from remi.providers.jsonl_protocol import (
+from remi.providers.claude_cli.protocol import (
     ContentDelta,
     ParsedMessage,
     ResultMessage,

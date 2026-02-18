@@ -5,13 +5,13 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from remi.providers.jsonl_protocol import (
+from remi.providers.claude_cli.protocol import (
     ContentDelta,
     ResultMessage,
     SystemMessage,
     ToolUseRequest,
 )
-from remi.providers.process_manager import ClaudeProcessManager
+from remi.providers.claude_cli.process import ClaudeProcessManager
 
 
 def make_line(data: dict) -> bytes:
@@ -103,7 +103,7 @@ class TestStartStop:
         mock_proc = MockProcess([INIT_LINE])
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             result = await manager.start()
@@ -118,7 +118,7 @@ class TestStartStop:
         mock_proc = MockProcess([INIT_LINE])
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -131,7 +131,7 @@ class TestStartStop:
         mock_proc = MockProcess([INIT_LINE])
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -182,7 +182,7 @@ class TestSendAndStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -242,7 +242,7 @@ class TestSendAndStream:
             return "memory content"
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -309,7 +309,7 @@ class TestSendAndStream:
             return "ok"
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -351,7 +351,7 @@ class TestSendAndStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -383,7 +383,7 @@ class TestSendAndStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()
@@ -403,7 +403,7 @@ class TestSendAndStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await manager.start()

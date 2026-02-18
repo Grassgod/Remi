@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from remi.providers.jsonl_protocol import (
+from remi.providers.claude_cli.protocol import (
     ContentDelta,
     ResultMessage,
     SystemMessage,

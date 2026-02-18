@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from remi.providers.base import AgentResponse, ToolDefinition
 from remi.providers.claude_cli import ClaudeCLIProvider
-from remi.providers.jsonl_protocol import ToolUseRequest
-from remi.providers.process_manager import ClaudeProcessManager
+from remi.providers.claude_cli.protocol import ToolUseRequest
+from remi.providers.claude_cli.process import ClaudeProcessManager
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -96,7 +96,7 @@ class TestClaudeCLIProvider:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             response = await provider.send("Hello")
@@ -119,10 +119,10 @@ class TestClaudeCLIProvider:
         mock_result.stderr = ""
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError("no claude"),
         ), patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             return_value=mock_result,
         ):
             response = await provider.send("Hello")
@@ -137,7 +137,7 @@ class TestClaudeCLIProvider:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await provider.send("Hello", context="Some memory context")
@@ -153,13 +153,13 @@ class TestClaudeCLIProvider:
         mock_result = MagicMock()
         mock_result.returncode = 0
 
-        with patch("remi.providers.claude_cli.subprocess.run", return_value=mock_result):
+        with patch("remi.providers.claude_cli.provider.subprocess.run", return_value=mock_result):
             assert await provider.health_check() is True
 
     @pytest.mark.asyncio
     async def test_health_check_missing(self, provider: ClaudeCLIProvider):
         with patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             side_effect=FileNotFoundError,
         ):
             assert await provider.health_check() is False
@@ -170,7 +170,7 @@ class TestClaudeCLIProvider:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             await provider.send("Hello")
@@ -196,10 +196,10 @@ class TestFallbackPath:
     @pytest.mark.asyncio
     async def test_fallback_cli_not_found(self, provider: ClaudeCLIProvider):
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ), patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             side_effect=FileNotFoundError,
         ):
             response = await provider.send("Hello")
@@ -210,10 +210,10 @@ class TestFallbackPath:
         import subprocess
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ), patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300),
         ):
             response = await provider.send("Hello")
@@ -227,10 +227,10 @@ class TestFallbackPath:
         mock_result.stderr = "some error"
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ), patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             return_value=mock_result,
         ):
             response = await provider.send("Hello")
@@ -244,10 +244,10 @@ class TestFallbackPath:
         mock_result.stderr = ""
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             side_effect=FileNotFoundError,
         ), patch(
-            "remi.providers.claude_cli.subprocess.run",
+            "remi.providers.claude_cli.provider.subprocess.run",
             return_value=mock_result,
         ) as mock_run:
             await provider.send("Continue", session_id="sess-123")
@@ -375,7 +375,7 @@ class TestSendStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             chunks = []
@@ -390,7 +390,7 @@ class TestSendStream:
         mock_proc = MockProcess(lines)
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             async for _ in provider.send_stream("Hi", context="ctx"):
@@ -448,7 +448,7 @@ class TestToolCallIntegration:
         })
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ):
             response = await provider.send("What do I prefer?")
@@ -480,7 +480,7 @@ class TestToolCallIntegration:
         provider = ClaudeCLIProvider()
 
         with patch(
-            "remi.providers.process_manager.asyncio.create_subprocess_exec",
+            "remi.providers.claude_cli.process.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ) as mock_exec:
             await provider.send("First msg")

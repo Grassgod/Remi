@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from remi.providers.base import AgentResponse, ToolDefinition
-from remi.providers.jsonl_protocol import (
+from remi.providers.claude_cli.protocol import (
     ContentDelta,
     ResultMessage,
     ToolUseRequest,
 )
-from remi.providers.process_manager import ClaudeProcessManager
+from remi.providers.claude_cli.process import ClaudeProcessManager
 
 logger = logging.getLogger(__name__)
 
