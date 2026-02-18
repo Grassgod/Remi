@@ -91,7 +91,15 @@ class ClaudeProcessManager:
         )
 
         # Wait for system init message
-        init_msg = await self._read_until_type(SystemMessage)
+        try:
+            init_msg = await self._read_until_type(SystemMessage)
+        except (asyncio.TimeoutError, RuntimeError) as e:
+            stderr = await self._read_stderr()
+            raise RuntimeError(
+                f"Streaming init failed: {e or 'timeout'}"
+                f"{f' — stderr: {stderr}' if stderr else ''}"
+            ) from e
+
         if not isinstance(init_msg, SystemMessage):
             raise RuntimeError(f"Expected SystemMessage, got: {type(init_msg)}")
 
@@ -214,6 +222,16 @@ class ClaudeProcessManager:
         logger.info("CLI process stopped")
 
     # ── Internal I/O helpers ──────────────────────────────────
+
+    async def _read_stderr(self) -> str:
+        """Read available stderr output (best effort, 1s timeout)."""
+        if not self._process or not self._process.stderr:
+            return ""
+        try:
+            data = await asyncio.wait_for(self._process.stderr.read(4096), timeout=1.0)
+            return data.decode(errors="replace").strip()[:500]
+        except (asyncio.TimeoutError, Exception):
+            return ""
 
     async def _readline(self) -> str | None:
         """Read a single non-empty line from stdout. Returns None on EOF."""
