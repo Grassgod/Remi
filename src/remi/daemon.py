@@ -94,16 +94,6 @@ class RemiDaemon:
                 timeout=self.config.provider.timeout,
                 allowed_tools=self.config.provider.allowed_tools,
             )
-        elif name == "claude_sdk":
-            from remi.providers.claude_sdk import ClaudeSDKProvider
-
-            return ClaudeSDKProvider(
-                model=self.config.provider.model or "claude-sonnet-4-5-20250929"
-            )
-        elif name == "codex_sdk":
-            from remi.providers.codex_sdk import CodexSDKProvider
-
-            return CodexSDKProvider(timeout=self.config.provider.timeout)
         else:
             raise ValueError(f"Unknown provider: {name}")
 
