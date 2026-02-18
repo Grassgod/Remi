@@ -55,6 +55,7 @@ class ClaudeCLIProvider:
     _tools: dict[str, ToolDefinition] = field(default_factory=dict, repr=False)
     _pre_hooks: list[PreToolHook] = field(default_factory=list, repr=False)
     _post_hooks: list[PostToolHook] = field(default_factory=list, repr=False)
+    _streaming_disabled: bool = field(default=False, repr=False)
 
     @property
     def name(self) -> str:
@@ -117,17 +118,20 @@ class ClaudeCLIProvider:
         """
         full_prompt = f"<context>\n{context}\n</context>\n\n{message}" if context else message
 
-        try:
-            return await self._send_streaming(full_prompt, system_prompt=system_prompt)
-        except Exception as e:
-            logger.warning("Streaming failed (%s), falling back to subprocess", e)
-            return await self._send_fallback(
-                message,
-                system_prompt=system_prompt,
-                context=context,
-                cwd=cwd,
-                session_id=session_id,
-            )
+        if not self._streaming_disabled:
+            try:
+                return await self._send_streaming(full_prompt, system_prompt=system_prompt)
+            except Exception as e:
+                logger.warning("Streaming failed (%s), disabling for this session", e)
+                self._streaming_disabled = True
+
+        return await self._send_fallback(
+            message,
+            system_prompt=system_prompt,
+            context=context,
+            cwd=cwd,
+            session_id=session_id,
+        )
 
     async def send_stream(
         self,
