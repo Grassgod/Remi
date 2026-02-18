@@ -21,8 +21,9 @@ class MockProvider:
     def name(self) -> str:
         return "mock"
 
-    async def send(self, message, *, system_prompt=None, context=None,
-                   cwd=None, session_id=None) -> AgentResponse:
+    async def send(
+        self, message, *, system_prompt=None, context=None, cwd=None, session_id=None
+    ) -> AgentResponse:
         self.last_message = message
         self.last_context = context
         return AgentResponse(
@@ -88,7 +89,13 @@ class TestRemiCore:
     @pytest.mark.asyncio
     async def test_memory_context_injection(self, remi: Remi):
         remi.memory.write_memory("User prefers uv")
-        msg = IncomingMessage(text="Hello", chat_id="test-1", sender="user", connector_name="cli")
+        msg = IncomingMessage(
+            text="Hello",
+            chat_id="test-1",
+            sender="user",
+            connector_name="cli",
+            metadata={"cwd": None},
+        )
         await remi.handle_message(msg)
 
         provider = remi._providers["mock"]

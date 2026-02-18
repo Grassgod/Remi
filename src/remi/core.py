@@ -76,8 +76,7 @@ class Remi:
 
     async def _process(self, msg: IncomingMessage) -> AgentResponse:
         # 1. Assemble memory context
-        project = msg.metadata.get("project")
-        context = self.memory.read_with_ancestors(project)
+        context = self.memory.gather_context(cwd=msg.metadata.get("cwd"))
 
         # 2. Get session for multi-turn
         session_id = self._sessions.get(msg.chat_id)

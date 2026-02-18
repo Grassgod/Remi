@@ -2,7 +2,7 @@
 
 Jobs:
 - Heartbeat: check connector/provider health
-- Memory compaction: archive daily notes → long-term memory
+- Memory compaction: archive daily notes → long-term memory + entity extraction
 - Cleanup: remove old dailies and version files
 """
 
@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -84,12 +85,16 @@ class Scheduler:
                 logger.error("Provider %s health check error: %s", name, e)
 
     async def _compact_memory(self) -> None:
-        """Summarize yesterday's daily notes and suggest memory updates.
+        """Summarize yesterday's daily notes, extract entities, update rolling summary.
 
-        This uses the provider itself to do the summarization — self-maintaining memory.
+        v2 enhanced compaction:
+        1. Read yesterday's daily log
+        2. Append observations to mentioned entities
+        3. Extract new entities
+        4. Update rolling summary (.conversation_summary.md)
+        5. Compress 8-30 day logs into weekly summaries
+        6. Archive logs older than 30 days
         """
-        from datetime import timedelta
-
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         daily = self._remi.memory.read_daily(yesterday)
 
@@ -106,16 +111,129 @@ class Scheduler:
                 "Extract any important facts, decisions, or preferences that should be "
                 "remembered long-term. Format as bullet points. "
                 "If nothing is worth remembering long-term, respond with 'SKIP'.\n\n"
+                f"Also identify any people, organizations, or decisions mentioned. "
+                f"For each, output a line: ENTITY: name (type) - observation\n\n"
                 f"{daily}"
             )
             response = await provider.send(prompt)
-            if response.text.strip().upper() != "SKIP":
-                self._remi.memory.append_memory(
-                    f"\n## From {yesterday}\n\n{response.text.strip()}"
-                )
-                logger.info("Appended compacted memory from %s", yesterday)
+            text = response.text.strip()
+
+            if text.upper() != "SKIP":
+                # Extract entity observations
+                for line in text.splitlines():
+                    if line.startswith("ENTITY:"):
+                        self._process_entity_line(line)
+
+                # Filter out ENTITY lines for the general summary
+                summary_lines = [
+                    line for line in text.splitlines() if not line.startswith("ENTITY:")
+                ]
+                summary_text = "\n".join(summary_lines).strip()
+
+                if summary_text:
+                    self._remi.memory.append_memory(f"\n## From {yesterday}\n\n{summary_text}")
+                    logger.info("Appended compacted memory from %s", yesterday)
+
+                # Update rolling summary
+                self._update_rolling_summary(yesterday, summary_text)
+
+            # Compress old daily logs into weekly summaries
+            self._compress_weekly_logs()
+
+            # Archive very old logs
+            self._archive_old_logs()
+
         except Exception as e:
             logger.error("Memory compaction failed: %s", e)
+
+    def _process_entity_line(self, line: str) -> None:
+        """Parse and process an ENTITY: line from compaction output."""
+        # Format: ENTITY: name (type) - observation
+        match = re.match(r"ENTITY:\s*(.+?)\s*\((\w+)\)\s*-\s*(.+)", line)
+        if not match:
+            return
+        name, etype, observation = match.group(1), match.group(2), match.group(3)
+        try:
+            entity_path = self._remi.memory._find_entity_by_name(name)
+            if entity_path:
+                self._remi.memory.append_observation(name, observation)
+            else:
+                self._remi.memory.create_entity(
+                    name=name,
+                    type=etype,
+                    content=observation,
+                    source="agent-inferred",
+                )
+        except Exception as e:
+            logger.warning("Failed to process entity %s: %s", name, e)
+
+    def _update_rolling_summary(self, date_str: str, summary: str) -> None:
+        """Update the rolling conversation summary file."""
+        summary_file = self._remi.memory.root / ".conversation_summary.md"
+        try:
+            existing = ""
+            if summary_file.exists():
+                existing = summary_file.read_text(encoding="utf-8")
+
+            entry = f"\n## {date_str}\n{summary}\n"
+            summary_file.write_text(existing + entry, encoding="utf-8")
+        except OSError as e:
+            logger.warning("Failed to update rolling summary: %s", e)
+
+    def _compress_weekly_logs(self) -> None:
+        """Compress 8-30 day old daily logs into weekly summaries."""
+        daily_dir = self._remi.memory.root / "daily"
+        now = datetime.now()
+
+        for path in sorted(daily_dir.glob("*.md")):
+            if path.stem.startswith("weekly-"):
+                continue
+            try:
+                log_date = datetime.strptime(path.stem, "%Y-%m-%d")
+            except ValueError:
+                continue
+
+            age = (now - log_date).days
+            if 8 <= age <= 30:
+                # Determine ISO week
+                iso_year, iso_week, _ = log_date.isocalendar()
+                weekly_name = f"weekly-{iso_year}-W{iso_week:02d}.md"
+                weekly_path = daily_dir / weekly_name
+
+                content = path.read_text(encoding="utf-8")
+                with weekly_path.open("a", encoding="utf-8") as f:
+                    f.write(f"\n## {path.stem}\n{content}\n")
+
+                path.unlink()
+                logger.debug("Compressed %s into %s", path.stem, weekly_name)
+
+    def _archive_old_logs(self) -> None:
+        """Move logs older than 30 days to daily/archive/."""
+        daily_dir = self._remi.memory.root / "daily"
+        archive_dir = daily_dir / "archive"
+        now = datetime.now()
+
+        for path in sorted(daily_dir.glob("*.md")):
+            if path.stem.startswith("weekly-"):
+                try:
+                    # Parse weekly-YYYY-WNN
+                    parts = path.stem.split("-")
+                    year = int(parts[1])
+                    week = int(parts[2][1:])
+                    week_date = datetime.strptime(f"{year}-W{week:02d}-1", "%Y-W%W-%w")
+                    if (now - week_date).days > 30:
+                        archive_dir.mkdir(exist_ok=True)
+                        path.rename(archive_dir / path.name)
+                except (ValueError, IndexError):
+                    continue
+            else:
+                try:
+                    log_date = datetime.strptime(path.stem, "%Y-%m-%d")
+                    if (now - log_date).days > 30:
+                        archive_dir.mkdir(exist_ok=True)
+                        path.rename(archive_dir / path.name)
+                except ValueError:
+                    continue
 
     async def _cleanup(self) -> None:
         """Remove old daily notes and version files."""

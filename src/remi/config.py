@@ -56,6 +56,8 @@ class RemiConfig:
     memory_dir: Path = _DEFAULT_MEMORY_DIR
     pid_file: Path = Path.home() / ".remi" / "remi.pid"
     log_level: str = "INFO"
+    context_warn_threshold: int = 6000
+    queue_dir: Path = field(default_factory=lambda: Path.home() / ".remi" / "queue")
 
 
 def load_config(config_path: Path | None = None) -> RemiConfig:

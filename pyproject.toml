@@ -5,6 +5,7 @@ description = "Remi - Personal AI Assistant"
 requires-python = ">=3.10"
 dependencies = [
     "python-dotenv>=1.0",
+    "python-frontmatter>=1.0",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
