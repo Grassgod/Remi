@@ -4,13 +4,13 @@ import asyncio
 import pytest
 from pathlib import Path
 
-from remi.config import RemiConfig, EngineConfig
+from remi.config import RemiConfig, ProviderConfig
 from remi.connectors.base import IncomingMessage
 from remi.core import Remi
-from remi.engines.base import AgentResponse
+from remi.providers.base import AgentResponse
 
 
-class MockEngine:
+class MockProvider:
     def __init__(self, response_text: str = "Mock response"):
         self._response_text = response_text
         self.last_message: str | None = None
@@ -33,13 +33,13 @@ class MockEngine:
         return True
 
 
-class MockFailEngine:
+class MockFailProvider:
     @property
     def name(self) -> str:
         return "fail"
 
     async def send(self, message, **kwargs) -> AgentResponse:
-        return AgentResponse(text="[Engine error: boom]")
+        return AgentResponse(text="[Provider error: boom]")
 
     async def health_check(self) -> bool:
         return False
@@ -48,7 +48,7 @@ class MockFailEngine:
 @pytest.fixture
 def config(tmp_path: Path) -> RemiConfig:
     return RemiConfig(
-        engine=EngineConfig(name="mock"),
+        provider=ProviderConfig(name="mock"),
         memory_dir=tmp_path / "memory",
     )
 
@@ -56,7 +56,7 @@ def config(tmp_path: Path) -> RemiConfig:
 @pytest.fixture
 def remi(config: RemiConfig) -> Remi:
     r = Remi(config)
-    r.add_engine(MockEngine())
+    r.add_provider(MockProvider())
     return r
 
 
@@ -87,17 +87,17 @@ class TestRemiCore:
         msg = IncomingMessage(text="Hello", chat_id="test-1", sender="user", connector_name="cli")
         await remi.handle_message(msg)
 
-        engine = remi._engines["mock"]
-        assert engine.last_context is not None
-        assert "uv" in engine.last_context
+        provider = remi._providers["mock"]
+        assert provider.last_context is not None
+        assert "uv" in provider.last_context
 
     @pytest.mark.asyncio
-    async def test_fallback_engine(self, config: RemiConfig):
-        config.engine.name = "fail"
-        config.engine.fallback = "mock"
+    async def test_fallback_provider(self, config: RemiConfig):
+        config.provider.name = "fail"
+        config.provider.fallback = "mock"
         r = Remi(config)
-        r.add_engine(MockFailEngine())
-        r.add_engine(MockEngine("Fallback worked"))
+        r.add_provider(MockFailProvider())
+        r.add_provider(MockProvider("Fallback worked"))
 
         msg = IncomingMessage(text="Hello", chat_id="test-1", sender="user", connector_name="cli")
         response = await r.handle_message(msg)
@@ -113,10 +113,9 @@ class TestRemiCore:
             remi.handle_message(msg1),
             remi.handle_message(msg2),
         )
-        # Both should complete without error (lock serializes them)
 
     @pytest.mark.asyncio
-    async def test_no_engine_raises(self, config: RemiConfig):
+    async def test_no_provider_raises(self, config: RemiConfig):
         r = Remi(config)
-        with pytest.raises(RuntimeError, match="No engines registered"):
+        with pytest.raises(RuntimeError, match="No providers registered"):
             await r.start()
