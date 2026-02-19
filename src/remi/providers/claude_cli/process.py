@@ -92,11 +92,13 @@ class ClaudeProcessManager:
 
         # Wait for system init message
         try:
-            init_msg = await self._read_until_type(SystemMessage)
+            init_msg = await self._read_until_type(SystemMessage, timeout=10.0)
         except (asyncio.TimeoutError, RuntimeError) as e:
             stderr = await self._read_stderr()
+            rc = self._process.returncode
+            reason = str(e) or "timeout waiting for SystemMessage"
             raise RuntimeError(
-                f"Streaming init failed: {e or 'timeout'}"
+                f"Streaming init failed: {reason} (rc={rc})"
                 f"{f' — stderr: {stderr}' if stderr else ''}"
             ) from e
 
