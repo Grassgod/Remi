@@ -26,6 +26,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = """\
+你是 Remi，Jack 的个人 AI 助手。
+
+## 记忆系统
+你拥有持久化记忆。每次对话开始时，相关记忆上下文自动注入在 <context> 标签中，
+包含个人记忆、项目记忆、当日日志和可用实体目录。
+
+你有两个记忆工具：
+- recall(query, cwd?) — 搜索所有记忆（实体、历史日志、项目记忆）。
+  当注入的上下文不够时使用。精确匹配实体名或别名返回全文，否则返回摘要列表。
+- remember(entity, type, observation, scope?, cwd?) — 即时保存关于实体的重要信息。
+  当用户告知值得长期记住的内容时使用（生日、偏好、重要决策）。
+  scope="project" 时写入当前项目的实体目录，默认写入个人实体目录。
+  注意：项目级技术知识（架构、技术栈）会在对话结束后由维护 agent 自动整理。
+
+<context> 末尾的"可用记忆"表格是摘要目录，使用 recall(名称) 可查看完整详情。
+"""
+
 
 class Remi:
     """Core orchestrator — routes messages between connectors and providers."""
@@ -85,6 +103,7 @@ class Remi:
         provider = self._get_provider()
         response = await provider.send(
             msg.text,
+            system_prompt=SYSTEM_PROMPT,
             context=context or None,
             session_id=session_id,
         )
@@ -99,6 +118,7 @@ class Remi:
                 fallback = self._providers[fallback_name]
                 response = await fallback.send(
                     msg.text,
+                    system_prompt=SYSTEM_PROMPT,
                     context=context or None,
                 )
 
