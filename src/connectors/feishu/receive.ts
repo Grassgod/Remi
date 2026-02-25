@@ -294,6 +294,7 @@ export type ParsedFeishuMessage = {
   mentionedBot: boolean;
   media: FeishuMediaInfo[];
   quotedContent?: string;
+  rootId?: string;
 };
 
 /** Full message processing pipeline: dedup → parse → resolve sender → resolve media → resolve quote. */
@@ -362,6 +363,7 @@ export async function processFeishuMessageEvent(
     mentionedBot: ctx.mentionedBot,
     media,
     quotedContent,
+    rootId: ctx.rootId,
   };
 }
 

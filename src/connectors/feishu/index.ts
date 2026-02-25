@@ -91,6 +91,7 @@ export class FeishuConnector implements Connector {
         mentionedBot: msg.mentionedBot,
         mediaCount: msg.media.length,
         quotedContent: msg.quotedContent,
+        rootId: msg.rootId,
       },
     };
 

@@ -63,7 +63,7 @@ export class Remi {
   memory: MemoryStore;
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
-  _sessions = new Map<string, string>(); // chatId → sessionId
+  _sessions = new Map<string, string>(); // sessionKey → sessionId
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
 
@@ -109,6 +109,21 @@ export class Remi {
     return this._laneLocks.get(chatId)!;
   }
 
+  // ── Session key resolution (thread-aware) ────────────────
+
+  /**
+   * Resolve session key for a message.
+   * Thread messages (with rootId) get isolated sessions: `${chatId}:thread:${rootId}`.
+   * Main chat messages use plain `chatId`.
+   */
+  _resolveSessionKey(msg: IncomingMessage): string {
+    const rootId = msg.metadata?.rootId as string | undefined;
+    if (rootId) {
+      return `${msg.chatId}:thread:${rootId}`;
+    }
+    return msg.chatId;
+  }
+
   // ── Message handling (the core loop) ─────────────────────
 
   async handleMessage(msg: IncomingMessage): Promise<AgentResponse> {
@@ -122,18 +137,21 @@ export class Remi {
   }
 
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
-    // 0. Handle slash commands
+    // 0. Handle slash commands (thread-aware)
     const cmdResponse = this._tryCommand(msg.text, msg);
     if (cmdResponse) return cmdResponse;
 
-    // 1. Assemble memory context
+    // 1. Resolve session key (threads get isolated sessions)
+    const sessionKey = this._resolveSessionKey(msg);
+
+    // 2. Assemble memory context
     const cwd = (msg.metadata?.cwd as string) ?? undefined;
     const context = this.memory.gatherContext(cwd);
 
-    // 2. Get session for multi-turn
-    const sessionId = this._sessions.get(msg.chatId) ?? undefined;
+    // 3. Get session for multi-turn
+    const sessionId = this._sessions.get(sessionKey) ?? undefined;
 
-    // 3. Route to provider
+    // 4. Route to provider
     const provider = this._getProvider();
     let response = await provider.send(msg.text, {
       systemPrompt: SYSTEM_PROMPT,
@@ -141,7 +159,7 @@ export class Remi {
       sessionId,
     });
 
-    // 4. Fallback if primary fails
+    // 5. Fallback if primary fails
     if (
       response.text.startsWith("[Provider error") ||
       response.text.startsWith("[Provider timeout")
@@ -157,12 +175,12 @@ export class Remi {
       }
     }
 
-    // 5. Update session mapping
+    // 6. Update session mapping
     if (response.sessionId) {
-      this._sessions.set(msg.chatId, response.sessionId);
+      this._sessions.set(sessionKey, response.sessionId);
     }
 
-    // 6. Append to daily notes
+    // 7. Append to daily notes
     this.memory.appendDaily(
       `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
     );
@@ -183,10 +201,13 @@ export class Remi {
 
     if (!Remi.COMMANDS.has(name)) return null; // Unknown command → pass to provider
 
+    const sessionKey = this._resolveSessionKey(msg);
+    const isThread = sessionKey !== msg.chatId;
+
     switch (name) {
       case "clear":
       case "new": {
-        this._sessions.delete(msg.chatId);
+        this._sessions.delete(sessionKey);
         return { text: "上下文已清除，开始新对话。" };
       }
       case "restart": {
@@ -198,14 +219,15 @@ export class Remi {
         return { text: "正在重启 Remi..." };
       }
       case "status": {
-        const hasSession = this._sessions.has(msg.chatId);
-        const sessionId = this._sessions.get(msg.chatId);
+        const hasSession = this._sessions.has(sessionKey);
+        const sessionId = this._sessions.get(sessionKey);
         const providers = [...this._providers.keys()].join(", ");
         const connectors = this._connectors.map((c) => c.name).join(", ");
         return {
           text: [
             `**Remi Status**`,
             `- Session: ${hasSession ? sessionId?.slice(0, 12) + "..." : "无"}`,
+            isThread ? `- Context: Thread (isolated)` : `- Context: Main chat`,
             `- Providers: ${providers}`,
             `- Connectors: ${connectors}`,
           ].join("\n"),
