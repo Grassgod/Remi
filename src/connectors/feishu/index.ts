@@ -122,8 +122,8 @@ export class FeishuConnector implements Connector {
         }
       }
 
-      // Send reply
-      await this._sendReply(msg.chatId, response);
+      // Send reply (threaded under original message)
+      await this._sendReply(msg.chatId, response, msg.messageId);
     } catch (err) {
       console.error(`feishu: failed to process message ${msg.messageId}: ${String(err)}`);
       // Try to send an error reply
@@ -140,7 +140,7 @@ export class FeishuConnector implements Connector {
     }
   }
 
-  private async _sendReply(chatId: string, response: AgentResponse): Promise<void> {
+  private async _sendReply(chatId: string, response: AgentResponse, replyToMessageId?: string): Promise<void> {
     const client = createFeishuClient({
       appId: this._config.appId,
       appSecret: this._config.appSecret,
@@ -151,13 +151,13 @@ export class FeishuConnector implements Connector {
 
     // For longer responses, use streaming card for better UX
     if (text.length > 500) {
-      await this._sendStreamingReply(chatId, text);
+      await this._sendStreamingReply(chatId, text, replyToMessageId);
     } else {
-      await sendMarkdownCardFeishu(client, chatId, text);
+      await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
     }
   }
 
-  private async _sendStreamingReply(chatId: string, text: string): Promise<void> {
+  private async _sendStreamingReply(chatId: string, text: string, replyToMessageId?: string): Promise<void> {
     const creds = {
       appId: this._config.appId,
       appSecret: this._config.appSecret,
@@ -167,7 +167,7 @@ export class FeishuConnector implements Connector {
     const session = new FeishuStreamingSession(client, creds);
 
     try {
-      await session.start(chatId, "chat_id");
+      await session.start(chatId, "chat_id", { replyToMessageId });
 
       // Simulate streaming by sending the text in chunks
       const chunkSize = 100;
@@ -182,7 +182,7 @@ export class FeishuConnector implements Connector {
     } catch (err) {
       // Fallback to regular card if streaming fails
       console.warn(`feishu: streaming failed, falling back to card: ${String(err)}`);
-      await sendMarkdownCardFeishu(client, chatId, text);
+      await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
     }
   }
 }

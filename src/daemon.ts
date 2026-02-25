@@ -10,9 +10,11 @@
  * - Graceful shutdown (SIGTERM/SIGINT)
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import type { Connector } from "./connectors/base.js";
 import type { RemiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { Remi } from "./core.js";
@@ -113,7 +115,7 @@ export class RemiDaemon {
     }
 
     // Register restart handler
-    remi.onRestart(() => this._restart());
+    remi.onRestart((info) => this._restart(info));
 
     return remi;
   }
@@ -162,17 +164,90 @@ export class RemiDaemon {
     throw new Error(`Unknown provider: ${n}`);
   }
 
+  // ── Restart notification ────────────────────────────────
+
+  private get _restartNotifyPath(): string {
+    return join(homedir(), ".remi", "restart-notify.json");
+  }
+
+  private _saveRestartNotify(info: { chatId: string; connectorName?: string }): void {
+    const dir = join(homedir(), ".remi");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(this._restartNotifyPath, JSON.stringify(info));
+  }
+
+  /** After startup, check if we need to notify someone that restart succeeded. */
+  private async _sendRestartNotify(remi: Remi): Promise<void> {
+    const filePath = this._restartNotifyPath;
+    if (!existsSync(filePath)) return;
+
+    let info: { chatId: string; connectorName?: string };
+    try {
+      const raw = readFileSync(filePath, "utf-8");
+      info = JSON.parse(raw);
+      unlinkSync(filePath);
+      console.log(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
+    } catch (e) {
+      console.warn("Restart notify: failed to read file:", e);
+      if (existsSync(filePath)) unlinkSync(filePath);
+      return;
+    }
+
+    // Find the matching connector
+    const connectors = remi["_connectors"] as Connector[];
+    const connector = connectors.find(
+      (c) => c.name === (info.connectorName ?? ""),
+    );
+    if (!connector) {
+      console.warn(
+        `Restart notify: connector "${info.connectorName}" not found (available: ${connectors.map((c) => c.name).join(", ")})`,
+      );
+      return;
+    }
+
+    // Retry — Feishu API may need time to obtain access token on cold start
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await connector.reply(info.chatId, { text: "Remi 重启成功，已上线。" });
+        console.log(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
+        return;
+      } catch (e) {
+        console.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    }
+    console.error("Restart notification failed after all retries.");
+  }
+
   // ── Self-restart ────────────────────────────────────────
 
-  private _restart(): void {
+  private _restart(info: { chatId: string; connectorName?: string }): void {
     console.log("Restart requested — spawning new process and shutting down...");
+
+    // Save notification info so the new process can notify the user
+    this._saveRestartNotify(info);
+
+    // Remove PID file first so the new process won't see us as "already running"
+    this._removePid();
+
+    // Clean env: remove CLAUDECODE which interferes with Claude CLI provider
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.CLAUDECODE;
+
+    // Redirect new process stdout/stderr to log file
+    const logDir = join(homedir(), ".remi", "logs");
+    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+    const logFd = openSync(join(logDir, "remi.log"), "a");
 
     // Spawn a new daemon process (detached so it outlives the parent)
     const child = spawn(process.execPath, process.argv.slice(1), {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
       cwd: process.cwd(),
-      env: process.env,
+      env: cleanEnv,
     });
     child.unref();
 
@@ -190,7 +265,11 @@ export class RemiDaemon {
     const remi = this._buildRemi();
     const scheduler = new Scheduler(remi, this.config);
 
-    console.log(`Remi daemon starting (provider=${this.config.provider.name})`);
+    console.log(`\n${"=".repeat(60)}`);
+    console.log(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
+
+    // Send restart notification after connectors have time to fully initialize
+    setTimeout(() => this._sendRestartNotify(remi), 5000);
 
     try {
       await Promise.all([

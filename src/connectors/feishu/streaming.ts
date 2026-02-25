@@ -68,6 +68,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
+    options?: { replyToMessageId?: string },
   ): Promise<void> {
     if (this.state) return;
 
@@ -102,14 +103,25 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
 
-    const sendRes = await this.client.im.message.create({
-      params: { receive_id_type: receiveIdType },
-      data: {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
-      },
-    });
+    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+
+    // Reply to original message if specified, otherwise send as new message
+    let sendRes;
+    if (options?.replyToMessageId) {
+      sendRes = await this.client.im.message.reply({
+        path: { message_id: options.replyToMessageId },
+        data: { msg_type: "interactive", content: cardContent },
+      });
+    } else {
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          msg_type: "interactive",
+          content: cardContent,
+        },
+      });
+    }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }

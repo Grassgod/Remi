@@ -65,7 +65,7 @@ export class Remi {
   private _connectors: Connector[] = [];
   _sessions = new Map<string, string>(); // chatId → sessionId
   private _laneLocks = new Map<string, AsyncLock>();
-  private _onRestart: (() => void) | null = null;
+  private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
@@ -96,7 +96,7 @@ export class Remi {
   }
 
   /** Register a callback that fires when /restart is invoked. */
-  onRestart(cb: () => void): void {
+  onRestart(cb: (info: { chatId: string; connectorName?: string }) => void): void {
     this._onRestart = cb;
   }
 
@@ -192,7 +192,8 @@ export class Remi {
       case "restart": {
         // Delay restart so the response gets sent first
         if (this._onRestart) {
-          setTimeout(() => this._onRestart!(), 500);
+          const info = { chatId: msg.chatId, connectorName: msg.connectorName };
+          setTimeout(() => this._onRestart!(info), 500);
         }
         return { text: "正在重启 Remi..." };
       }
