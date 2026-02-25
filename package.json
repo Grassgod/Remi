@@ -1,0 +1,22 @@
+{
+  "name": "remi",
+  "version": "0.1.0",
+  "description": "Remi - Personal AI Assistant",
+  "type": "module",
+  "bin": {
+    "remi": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "serve": "bun run src/main.ts serve",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "gray-matter": "^4.0.3",
+    "smol-toml": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
