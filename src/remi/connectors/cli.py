@@ -63,7 +63,12 @@ class CLIConnector:
 
     def _read_input(self) -> str | None:
         try:
-            return input("\nYou: ")
+            sys.stdout.write("\nYou: ")
+            sys.stdout.flush()
+            raw = sys.stdin.buffer.readline()
+            if not raw:
+                return None
+            return raw.decode("utf-8", errors="replace").rstrip("\n")
         except EOFError:
             return None
 
@@ -73,4 +78,20 @@ class CLIConnector:
     async def reply(self, chat_id: str, response: AgentResponse) -> None:
         print(f"\nRemi: {response.text}")
         if response.cost_usd is not None:
-            print(f"  [cost: ${response.cost_usd:.4f}]", file=sys.stderr)
+            parts = [f"cost: ${response.cost_usd:.4f}"]
+            if response.input_tokens is not None:
+                parts.append(f"input: {response.input_tokens} tokens")
+            if response.output_tokens is not None:
+                parts.append(f"output: {response.output_tokens} tokens")
+            if response.duration_ms is not None:
+                total_s = response.duration_ms / 1000
+                if total_s < 60:
+                    parts.append(f"time: {total_s:.1f}s")
+                elif total_s < 3600:
+                    m, s = divmod(int(total_s), 60)
+                    parts.append(f"time: {m}m{s}s")
+                else:
+                    h, rem = divmod(int(total_s), 3600)
+                    m, s = divmod(rem, 60)
+                    parts.append(f"time: {h}h{m}m{s}s")
+            print(f"  [{' | '.join(parts)}]", file=sys.stderr)

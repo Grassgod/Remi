@@ -27,6 +27,9 @@ class AgentResponse:
     text: str
     session_id: str | None = None
     cost_usd: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    duration_ms: int | None = None
     model: str | None = None
     metadata: dict = field(default_factory=dict)
     tool_calls: list[dict] = field(default_factory=list)

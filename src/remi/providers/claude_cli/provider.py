@@ -116,15 +116,6 @@ class ClaudeCLIProvider:
 
         Tries streaming path first, falls back to subprocess.run() on failure.
         """
-        full_prompt = f"<context>\n{context}\n</context>\n\n{message}" if context else message
-
-        if not self._streaming_disabled:
-            try:
-                return await self._send_streaming(full_prompt, system_prompt=system_prompt)
-            except Exception as e:
-                logger.warning("Streaming failed (%s), disabling for this session", e)
-                self._streaming_disabled = True
-
         return await self._send_fallback(
             message,
             system_prompt=system_prompt,
@@ -246,6 +237,8 @@ class ClaudeCLIProvider:
             cmd.extend(["--model", self.model])
         if self.allowed_tools:
             cmd.extend(["--allowedTools", ",".join(self.allowed_tools)])
+        else:
+            cmd.append("--dangerously-skip-permissions")
         if self.mcp_config:
             cmd.extend(["--mcp-config", json.dumps(self.mcp_config)])
         if system_prompt:
@@ -263,10 +256,8 @@ class ClaudeCLIProvider:
                 capture_output=True,
                 text=True,
                 cwd=cwd,
-                timeout=self.timeout,
+                timeout=None,
             )
-        except subprocess.TimeoutExpired:
-            return AgentResponse(text="[Provider timeout — Claude CLI did not respond in time.]")
         except FileNotFoundError:
             return AgentResponse(text="[Error: `claude` CLI not found. Is Claude Code installed?]")
 
@@ -284,6 +275,9 @@ class ClaudeCLIProvider:
             text=data.get("result", result.stdout.strip()),
             session_id=data.get("session_id"),
             cost_usd=data.get("cost_usd") or data.get("total_cost_usd"),
+            input_tokens=data.get("usage", {}).get("input_tokens"),
+            output_tokens=data.get("usage", {}).get("output_tokens"),
+            duration_ms=data.get("duration_ms"),
             model=data.get("model"),
         )
 
