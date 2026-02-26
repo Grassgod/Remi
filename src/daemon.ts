@@ -52,23 +52,53 @@ export class RemiDaemon {
   private _checkExisting(): void {
     if (!existsSync(this.config.pidFile)) return;
 
+    let pid: number;
     try {
-      const pid = parseInt(readFileSync(this.config.pidFile, "utf-8").trim(), 10);
-      // Check if process exists
-      process.kill(pid, 0);
-      console.error(`Remi daemon already running (pid=${pid}). Exiting.`);
-      process.exit(1);
-    } catch (e) {
-      // Process doesn't exist (ESRCH) or no permission — stale PID file
-      if ((e as NodeJS.ErrnoException).code === "ESRCH" || (e as NodeJS.ErrnoException).code === "EPERM") {
-        this._removePid();
-      } else if ((e as Error).message?.includes("NaN")) {
-        this._removePid();
-      } else {
-        // Process still running
-        throw e;
-      }
+      pid = parseInt(readFileSync(this.config.pidFile, "utf-8").trim(), 10);
+    } catch {
+      this._removePid();
+      return;
     }
+    if (isNaN(pid)) {
+      this._removePid();
+      return;
+    }
+
+    // Check if process is still running
+    let alive = false;
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch {
+      // Process doesn't exist — stale PID file
+      this._removePid();
+      return;
+    }
+
+    if (!alive) return;
+
+    // Takeover: send SIGTERM and wait for old process to exit
+    console.log(`Found existing Remi daemon (pid=${pid}), sending SIGTERM to take over...`);
+    try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
+
+    const deadline = Date.now() + 10_000; // 10s timeout
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        // Old process exited
+        console.log(`Old daemon (pid=${pid}) exited.`);
+        this._removePid();
+        return;
+      }
+      Bun.sleepSync(200);
+    }
+
+    // Still alive after timeout — force kill
+    console.warn(`Old daemon (pid=${pid}) did not exit in 10s, sending SIGKILL...`);
+    try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ }
+    Bun.sleepSync(500);
+    this._removePid();
   }
 
   // ── Signal handling ──────────────────────────────────────
@@ -230,8 +260,7 @@ export class RemiDaemon {
     // Save notification info so the new process can notify the user
     this._saveRestartNotify(info);
 
-    // Remove PID file first so the new process won't see us as "already running"
-    this._removePid();
+    // Keep PID file — new process will detect us and send SIGTERM to take over
 
     // Clean env: remove CLAUDECODE which interferes with Claude CLI provider
     const cleanEnv = { ...process.env };

@@ -4,6 +4,9 @@
  */
 
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { FeishuConfig } from "../../config.js";
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeFeishu } from "./client.js";
@@ -11,12 +14,53 @@ import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu } from "./send.js";
 
-// ── Dedup ────────────────────────────────────────────────────
+// ── Dedup (persisted across restarts) ────────────────────────
 const DEDUP_TTL_MS = 30 * 60 * 1000;
 const DEDUP_MAX_SIZE = 1_000;
 const DEDUP_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const DEDUP_CACHE_PATH = join(homedir(), ".remi", "dedup-cache.json");
 const processedMessageIds = new Map<string, number>();
 let lastCleanupTime = Date.now();
+let dedupDirty = false;
+let dedupFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Load persisted dedup cache from disk (best-effort). */
+function loadDedupCache(): void {
+  try {
+    if (!existsSync(DEDUP_CACHE_PATH)) return;
+    const raw = readFileSync(DEDUP_CACHE_PATH, "utf-8");
+    const entries: [string, number][] = JSON.parse(raw);
+    const now = Date.now();
+    for (const [id, ts] of entries) {
+      if (now - ts < DEDUP_TTL_MS) {
+        processedMessageIds.set(id, ts);
+      }
+    }
+    console.log(`feishu: loaded ${processedMessageIds.size} dedup entries from cache`);
+  } catch {
+    // Corrupt or missing — start fresh
+  }
+}
+
+/** Flush dedup cache to disk (debounced, best-effort). */
+function scheduleDedupFlush(): void {
+  if (dedupFlushTimer) return; // already scheduled
+  dedupFlushTimer = setTimeout(() => {
+    dedupFlushTimer = null;
+    if (!dedupDirty) return;
+    try {
+      const dir = join(homedir(), ".remi");
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(DEDUP_CACHE_PATH, JSON.stringify([...processedMessageIds]));
+      dedupDirty = false;
+    } catch {
+      // Non-critical
+    }
+  }, 2000);
+}
+
+// Load on module init
+loadDedupCache();
 
 function tryRecordMessage(messageId: string): boolean {
   const now = Date.now();
@@ -32,6 +76,8 @@ function tryRecordMessage(messageId: string): boolean {
     processedMessageIds.delete(first);
   }
   processedMessageIds.set(messageId, now);
+  dedupDirty = true;
+  scheduleDedupFlush();
   return true;
 }
 
