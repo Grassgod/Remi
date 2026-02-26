@@ -302,6 +302,7 @@ export async function processFeishuMessageEvent(
   client: Lark.Client,
   event: FeishuMessageEvent,
   botOpenId?: string,
+  opts?: { autoReplyGroups?: string[] },
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
 
@@ -311,8 +312,9 @@ export async function processFeishuMessageEvent(
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
 
-  // In groups, only respond if bot is mentioned
-  if (ctx.chatType === "group" && !ctx.mentionedBot) return null;
+  // In groups, only respond if bot is mentioned (unless chat is in autoReplyGroups)
+  const autoReply = opts?.autoReplyGroups?.includes(ctx.chatId) ?? false;
+  if (ctx.chatType === "group" && !ctx.mentionedBot && !autoReply) return null;
 
   // Resolve sender name (best-effort)
   const senderName = await resolveSenderName(client, ctx.senderOpenId);
@@ -390,6 +392,8 @@ export function startWebSocketListener(
   let botOpenId: string | undefined;
   let stopped = false;
 
+  const autoReplyGroups = config.autoReplyGroups ?? [];
+
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
     if (result.ok && result.botOpenId) {
@@ -411,7 +415,7 @@ export function startWebSocketListener(
       if (stopped) return;
       try {
         const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId);
+        const msg = await processFeishuMessageEvent(client, event, botOpenId, { autoReplyGroups });
         if (msg) {
           await onMessage(msg);
         }

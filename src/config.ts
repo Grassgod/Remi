@@ -27,6 +27,8 @@ export interface FeishuConfig {
   domain: "feishu" | "lark" | (string & {});
   connectionMode: "websocket";
   userAccessToken: string;
+  /** Group chat IDs that don't require @mention to trigger a response. */
+  autoReplyGroups: string[];
 }
 
 export interface SchedulerConfig {
@@ -65,6 +67,7 @@ function defaultFeishuConfig(): FeishuConfig {
     domain: "feishu",
     connectionMode: "websocket",
     userAccessToken: "",
+    autoReplyGroups: [],
   };
 }
 
@@ -133,6 +136,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       domain: (env.FEISHU_DOMAIN ?? (feishuData.domain as string) ?? "feishu") as FeishuConfig["domain"],
       connectionMode: "websocket" as const,
       userAccessToken: env.FEISHU_USER_ACCESS_TOKEN ?? (feishuData.user_access_token as string) ?? "",
+      autoReplyGroups: (feishuData.auto_reply_groups as string[]) ?? [],
     },
     scheduler: {
       memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",
