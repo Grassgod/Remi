@@ -101,13 +101,7 @@ export class FeishuStreamingSession {
           },
           { tag: "markdown", content: "Thinking...", element_id: "content" },
           { tag: "hr", element_id: "stats_hr" },
-          {
-            tag: "note",
-            element_id: "stats",
-            elements: [
-              { tag: "plain_text", content: "", element_id: "stats_text" },
-            ],
-          },
+          { tag: "markdown", content: "", element_id: "stats_text" },
         ],
       },
     };
@@ -247,13 +241,7 @@ export class FeishuStreamingSession {
     // Stats footer
     if (stats) {
       elements.push({ tag: "hr", element_id: "stats_hr" });
-      elements.push({
-        tag: "note",
-        element_id: "stats",
-        elements: [
-          { tag: "plain_text", content: stats, element_id: "stats_text" },
-        ],
-      });
+      elements.push({ tag: "markdown", content: stats, element_id: "stats_text" });
     }
 
     // Update the full card with final content + close streaming

@@ -107,12 +107,7 @@ export function buildRichCard(options: {
   // Stats footer
   if (options.stats) {
     elements.push({ tag: "hr" });
-    elements.push({
-      tag: "note",
-      elements: [
-        { tag: "plain_text", content: options.stats },
-      ],
-    });
+    elements.push({ tag: "markdown", content: options.stats });
   }
 
   return {
