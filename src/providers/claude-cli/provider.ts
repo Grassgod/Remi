@@ -10,7 +10,6 @@
  * - Fallback to single-shot subprocess
  */
 
-import { appendFileSync } from "node:fs";
 import type {
   AgentResponse,
   Provider,
@@ -18,15 +17,12 @@ import type {
   ToolDefinition,
 } from "../base.js";
 import { createAgentResponse } from "../base.js";
-
-function debugLog(msg: string): void {
-  appendFileSync("/tmp/remi-debug.log", `[${new Date().toISOString()}] provider: ${msg}\n`);
-}
 import { ClaudeProcessManager } from "./process.js";
 import type {
   ContentDelta,
   ResultMessage,
   ThinkingDelta,
+  ToolResultMessage,
   ToolUseRequest,
 } from "./protocol.js";
 
@@ -146,9 +142,7 @@ export class ClaudeCLIProvider implements Provider {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
 
-    debugLog(`sendStream: ensuring process...`);
     await this._ensureProcess(options?.systemPrompt);
-    debugLog(`sendStream: process ready, sending prompt (${fullPrompt.length} chars)`);
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -158,8 +152,6 @@ export class ClaudeCLIProvider implements Provider {
       fullPrompt,
       this._handleToolCall.bind(this),
     )) {
-      debugLog(`sendStream: got msg kind=${msg.kind ?? (msg as any).type ?? "unknown"}`);
-
       if (msg.kind === "thinking_delta") {
         const text = (msg as ThinkingDelta).thinking;
         thinkingParts.push(text);
@@ -171,6 +163,10 @@ export class ClaudeCLIProvider implements Provider {
       } else if (msg.kind === "tool_use") {
         const tu = msg as ToolUseRequest;
         toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
+        yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input };
+      } else if (msg.kind === "tool_result") {
+        const tr = msg as ToolResultMessage;
+        yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs };
       } else if (msg.kind === "result") {
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");
@@ -216,20 +212,16 @@ export class ClaudeCLIProvider implements Provider {
 
   private async _ensureProcess(systemPrompt?: string | null): Promise<void> {
     if (this._processMgr && this._processMgr.isAlive) {
-      debugLog(`_ensureProcess: process already alive`);
       return;
     }
 
-    debugLog(`_ensureProcess: starting new process...`);
     this._processMgr = new ClaudeProcessManager({
       model: this.model,
       allowedTools: this.allowedTools,
       systemPrompt: systemPrompt ?? this.systemPrompt,
       cwd: this.cwd,
     });
-    debugLog(`_ensureProcess: cmd = ${this._processMgr.buildCommand().join(" ")}`);
     await this._processMgr.start();
-    debugLog(`_ensureProcess: process started, sessionId=${this._processMgr.sessionId}`);
   }
 
   private async _sendStreaming(
@@ -258,6 +250,8 @@ export class ClaudeCLIProvider implements Provider {
           name: tu.name,
           input: tu.input,
         });
+      } else if (msg.kind === "tool_result") {
+        // Non-streaming path — tool_result not needed for final AgentResponse
       } else if (msg.kind === "result") {
         resultMsg = msg as ResultMessage;
       }

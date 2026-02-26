@@ -1,8 +1,14 @@
 /**
  * Feishu streaming card session for real-time AI response updates.
- * Adapted from OpenClaw feishu extension streaming-card.ts — zero OpenClaw dependency.
  *
- * Flow: AI starts → create streaming card → throttled updates → close card
+ * Flow: AI starts -> create streaming card -> throttled element updates -> close card
+ *
+ * Key design decisions (learned from Tika bot_stream patterns):
+ * - Independent throttle per element (thinking vs content don't block each other)
+ * - Fire-and-forget updates (don't block the event consumption loop)
+ * - Guaranteed flush before close (no lost pending updates)
+ * - Safety timeout to auto-close abandoned cards (5 min)
+ * - Retry on transient 5xx API failures
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
@@ -10,13 +16,21 @@ import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string; currentThinking: string };
+type CardState = {
+  cardId: string;
+  messageId: string;
+  sequence: number;
+  currentText: string;
+  currentThinking: string;
+};
 
 export interface StreamingCloseOptions {
   finalText?: string;
   thinking?: string | null;
   stats?: string | null;
 }
+
+// ── Token cache (shared across sessions) ────────────────────
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -27,11 +41,14 @@ async function getToken(creds: Credentials): Promise<string> {
     return cached.token;
   }
 
-  const res = await fetch(`${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
-  });
+  const res = await fetch(
+    `${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
+    },
+  );
   const data = (await res.json()) as {
     code: number;
     msg: string;
@@ -54,6 +71,14 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+// ── Per-element throttle state ──────────────────────────────
+
+interface ElementThrottle {
+  lastSendTime: number;
+  pending: string | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -61,11 +86,14 @@ export class FeishuStreamingSession {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private log: (msg: string) => void;
-  private lastUpdateTime = 0;
-  private pendingText: string | null = null;
-  private pendingThinking: string | null = null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private updateThrottleMs = 500;
+
+  // Independent throttle per element — thinking and content don't interfere
+  private throttles = new Map<string, ElementThrottle>();
+  private throttleMs = 300;
+
+  // Safety timeout: auto-close if no updates for 5 minutes
+  private safetyTimer: ReturnType<typeof setTimeout> | null = null;
+  private static SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -86,7 +114,10 @@ export class FeishuStreamingSession {
       config: {
         streaming_mode: true,
         summary: { content: "[Generating...]" },
-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
+        streaming_config: {
+          print_frequency_ms: { default: 50 },
+          print_step: { default: 2 },
+        },
       },
       body: {
         elements: [
@@ -94,7 +125,9 @@ export class FeishuStreamingSession {
             tag: "collapsible_panel",
             expanded: false,
             background_style: "default",
-            header: { title: { tag: "plain_text", content: "💭 Thinking..." } },
+            header: {
+              title: { tag: "plain_text", content: "💭 Thinking..." },
+            },
             vertical_spacing: "2px",
             element_id: "thinking_panel",
             elements: [
@@ -114,7 +147,10 @@ export class FeishuStreamingSession {
         Authorization: `Bearer ${await getToken(this.creds)}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
+      body: JSON.stringify({
+        type: "card_json",
+        data: JSON.stringify(cardJson),
+      }),
     });
     const createData = (await createRes.json()) as {
       code: number;
@@ -126,9 +162,11 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
 
-    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+    const cardContent = JSON.stringify({
+      type: "card",
+      data: { card_id: cardId },
+    });
 
-    // Reply to original message if specified, otherwise send as new message
     let sendRes;
     if (options?.replyToMessageId) {
       sendRes = await this.client.im.message.reply({
@@ -149,107 +187,193 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "", currentThinking: "" };
-    this.log(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+    this.state = {
+      cardId,
+      messageId: sendRes.data.message_id,
+      sequence: 1,
+      currentText: "",
+      currentThinking: "",
+    };
+    this._resetSafetyTimer();
+    this.log(
+      `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`,
+    );
   }
 
-  private async _updateElementRaw(elementId: string, content: string): Promise<void> {
+  // ── Element update (raw API call with retry on 5xx) ────────
+
+  private async _updateElementRaw(
+    elementId: string,
+    content: string,
+  ): Promise<void> {
     if (!this.state || this.closed) return;
     this.state.sequence += 1;
     const apiBase = resolveApiBase(this.creds.domain);
-    try {
-      const res = await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      });
-      if (!res.ok) {
+    const seq = this.state.sequence;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(
+          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${await getToken(this.creds)}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              content,
+              sequence: seq,
+              uuid: `s_${this.state.cardId}_${seq}`,
+            }),
+          },
+        );
+        if (res.ok) return;
         const body = await res.text().catch(() => "");
-        this.log(`Update ${elementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+        if (attempt === 0 && res.status >= 500) {
+          this.log(`Update ${elementId} HTTP ${res.status}, retrying...`);
+          continue;
+        }
+        this.log(
+          `Update ${elementId} HTTP ${res.status}: ${body.slice(0, 300)}`,
+        );
+        return;
+      } catch (e) {
+        if (attempt === 0) {
+          this.log(`Update ${elementId} failed, retrying: ${String(e)}`);
+          continue;
+        }
+        this.log(`Update ${elementId} failed: ${String(e)}`);
       }
-    } catch (e) {
-      this.log(`Update ${elementId} failed: ${String(e)}`);
     }
   }
 
-  async update(text: string): Promise<void> {
-    if (!this.state || this.closed) return;
+  // ── Per-element throttle helpers ───────────────────────────
 
-    const now = Date.now();
-    if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingText = text;
-      this._scheduleFlush();
-      return;
+  private _getThrottle(elementId: string): ElementThrottle {
+    if (!this.throttles.has(elementId)) {
+      this.throttles.set(elementId, {
+        lastSendTime: 0,
+        pending: null,
+        timer: null,
+      });
     }
-    this.pendingText = null;
-    this.lastUpdateTime = now;
+    return this.throttles.get(elementId)!;
+  }
 
-    this.state.currentText = text;
-    this.queue = this.queue.then(() => this._updateElementRaw("content", text));
-    await this.queue;
+  /**
+   * Fire-and-forget throttled update for a specific element.
+   * Does NOT await the HTTP call — enqueues it and returns immediately,
+   * so the event consumption loop isn't blocked.
+   */
+  private _throttledUpdate(
+    elementId: string,
+    content: string,
+    stateField: "currentText" | "currentThinking",
+  ): void {
+    if (!this.state || this.closed) return;
+    this._resetSafetyTimer();
+
+    const throttle = this._getThrottle(elementId);
+    const now = Date.now();
+
+    if (now - throttle.lastSendTime >= this.throttleMs) {
+      // Enough time passed — send immediately (fire-and-forget)
+      throttle.pending = null;
+      throttle.lastSendTime = now;
+      this.state[stateField] = content;
+      this.queue = this.queue.then(() =>
+        this._updateElementRaw(elementId, content),
+      );
+    } else {
+      // Within throttle window — store pending and schedule deferred flush
+      throttle.pending = content;
+      if (!throttle.timer) {
+        const delay = this.throttleMs - (now - throttle.lastSendTime);
+        throttle.timer = setTimeout(() => {
+          throttle.timer = null;
+          if (this.closed || !this.state) return;
+
+          const text = throttle.pending;
+          if (text === null) return;
+          throttle.pending = null;
+          throttle.lastSendTime = Date.now();
+          this.state![stateField] = text;
+          this.queue = this.queue.then(() =>
+            this._updateElementRaw(elementId, text),
+          );
+        }, delay);
+      }
+    }
+  }
+
+  // ── Public update methods (fire-and-forget, don't block caller) ──
+
+  async update(text: string): Promise<void> {
+    this._throttledUpdate("content", text, "currentText");
   }
 
   async updateThinking(text: string): Promise<void> {
-    if (!this.state || this.closed) return;
+    this._throttledUpdate("thinking_content", text, "currentThinking");
+  }
 
-    // Throttle thinking updates too
-    const now = Date.now();
-    if (now - this.lastUpdateTime < this.updateThrottleMs) {
-      this.pendingThinking = text;
-      this._scheduleFlush();
-      return;
+  // ── Flush all pending throttled updates ────────────────────
+
+  private async _flushAll(): Promise<void> {
+    for (const [elementId, throttle] of this.throttles) {
+      // Cancel any scheduled timer
+      if (throttle.timer) {
+        clearTimeout(throttle.timer);
+        throttle.timer = null;
+      }
+      // Send any pending content
+      if (throttle.pending !== null && this.state) {
+        const text = throttle.pending;
+        throttle.pending = null;
+        const field =
+          elementId === "content" ? "currentText" : "currentThinking";
+        this.state[field] = text;
+        this.queue = this.queue.then(() =>
+          this._updateElementRaw(elementId, text),
+        );
+      }
     }
-    this.pendingThinking = null;
-    this.lastUpdateTime = now;
-
-    this.state.currentThinking = text;
-    this.queue = this.queue.then(() => this._updateElementRaw("thinking_content", text));
+    // Wait for all queued updates to complete
     await this.queue;
   }
 
-  /** Schedule a flush for any pending throttled updates. */
-  private _scheduleFlush(): void {
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(async () => {
-      this.flushTimer = null;
-      if (this.closed || !this.state) return;
-      this.lastUpdateTime = Date.now();
+  // ── Safety timeout ─────────────────────────────────────────
 
-      if (this.pendingThinking) {
-        const text = this.pendingThinking;
-        this.pendingThinking = null;
-        this.state.currentThinking = text;
-        this.queue = this.queue.then(() => this._updateElementRaw("thinking_content", text));
+  private _resetSafetyTimer(): void {
+    if (this.safetyTimer) clearTimeout(this.safetyTimer);
+    this.safetyTimer = setTimeout(() => {
+      if (this.state && !this.closed) {
+        this.log(
+          `Safety timeout: closing abandoned streaming card ${this.state.cardId}`,
+        );
+        this.close().catch((e) =>
+          this.log(`Safety close failed: ${String(e)}`),
+        );
       }
-      if (this.pendingText) {
-        const text = this.pendingText;
-        this.pendingText = null;
-        this.state.currentText = text;
-        this.queue = this.queue.then(() => this._updateElementRaw("content", text));
-      }
-      await this.queue;
-    }, this.updateThrottleMs);
+    }, FeishuStreamingSession.SAFETY_TIMEOUT_MS);
   }
+
+  private _clearSafetyTimer(): void {
+    if (this.safetyTimer) {
+      clearTimeout(this.safetyTimer);
+      this.safetyTimer = null;
+    }
+  }
+
+  // ── Close streaming card ───────────────────────────────────
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
     if (!this.state || this.closed) return;
-    this.closed = true;
 
-    // Cancel pending flush timer
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    this._clearSafetyTimer();
 
-    // Wait for queued updates to finish
-    await this.queue;
+    // Flush all pending throttled updates first
+    await this._flushAll();
 
     // Normalize arguments
     let finalText: string | undefined;
@@ -264,42 +388,48 @@ export class FeishuStreamingSession {
       stats = finalTextOrOptions.stats;
     }
 
-    const text = finalText ?? this.pendingText ?? this.state.currentText;
+    const text = finalText ?? this.state.currentText;
     const thinkingText = thinking ?? this.state.currentThinking;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Send final content update if different from what's displayed
+    // Send final element updates BEFORE setting this.closed
+    // (_updateElementRaw checks this.closed and bails out if true)
     if (text && text !== this.state.currentText) {
       await this._updateElementRaw("content", text);
     }
-
-    // Send final thinking update if different
     if (thinkingText && thinkingText !== this.state.currentThinking) {
       await this._updateElementRaw("thinking_content", thinkingText);
     }
-
-    // Send stats if provided
     if (stats) {
       await this._updateElementRaw("stats_text", stats);
     }
 
-    // Close streaming mode via PATCH /settings (same as OpenClaw)
+    // Now mark closed so no further updates slip through
+    this.closed = true;
+
+    // Close streaming mode via PATCH /settings
     this.state.sequence += 1;
     try {
-      const res = await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json; charset=utf-8",
-        },
-        body: JSON.stringify({
-          settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            settings: JSON.stringify({
+              config: {
+                streaming_mode: false,
+                summary: { content: truncateSummary(text) },
+              },
+            }),
+            sequence: this.state.sequence,
+            uuid: `c_${this.state.cardId}_${this.state.sequence}`,
           }),
-          sequence: this.state.sequence,
-          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      });
+        },
+      );
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);

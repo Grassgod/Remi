@@ -9,6 +9,8 @@ export type StreamCallback = (chunk: string) => void;
 export type StreamEvent =
   | { kind: "thinking_delta"; text: string }
   | { kind: "content_delta"; text: string }
+  | { kind: "tool_use"; name: string; toolUseId: string; input?: Record<string, unknown> }
+  | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number }
   | { kind: "result"; response: AgentResponse };
 
 /** Custom tool that the agent can call, handled within Remi. */

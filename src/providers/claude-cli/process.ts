@@ -12,6 +12,7 @@ import {
   type ResultMessage,
   type SystemMessage,
   type ThinkingDelta,
+  type ToolResultMessage,
   type ToolUseRequest,
   formatToolResult,
   formatUserMessage,
@@ -155,6 +156,14 @@ export class ClaudeProcessManager {
 
         const msg = parseLine(line);
 
+        // Debug: log parsed message kind (remove after investigation)
+        if ("kind" in msg) {
+          console.log(`[claude-proc] event: ${msg.kind}`);
+        } else {
+          const rawType = (msg as Record<string, unknown>).type;
+          if (rawType) console.log(`[claude-proc] raw: ${rawType}`);
+        }
+
         // Tool use start (streaming — input comes via deltas)
         if (msg.kind === "tool_use" && Object.keys(msg.input).length === 0) {
           pendingTool = msg;
@@ -166,8 +175,17 @@ export class ClaudeProcessManager {
         if (msg.kind === "tool_use" && Object.keys(msg.input).length > 0) {
           yield msg;
           if (toolHandler) {
+            const t0 = Date.now();
             const resultText = await toolHandler(msg);
+            const elapsed = Date.now() - t0;
             await this._writeLine(formatToolResult(msg.toolUseId, resultText));
+            yield {
+              kind: "tool_result",
+              toolUseId: msg.toolUseId,
+              name: msg.name,
+              result: resultText.slice(0, 200),
+              durationMs: elapsed,
+            } as ToolResultMessage;
           }
           continue;
         }
@@ -201,8 +219,17 @@ export class ClaudeProcessManager {
 
             yield pendingTool;
             if (toolHandler) {
+              const t0 = Date.now();
               const resultText = await toolHandler(pendingTool);
+              const elapsed = Date.now() - t0;
               await this._writeLine(formatToolResult(pendingTool.toolUseId, resultText));
+              yield {
+                kind: "tool_result",
+                toolUseId: pendingTool.toolUseId,
+                name: pendingTool.name,
+                result: resultText.slice(0, 200),
+                durationMs: elapsed,
+              } as ToolResultMessage;
             }
 
             pendingTool = null;

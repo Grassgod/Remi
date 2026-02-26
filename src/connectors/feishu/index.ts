@@ -6,15 +6,9 @@
  *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
  */
 
-import { appendFileSync } from "node:fs";
 import type { FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
-
-function debugLog(msg: string): void {
-  const ts = new Date().toISOString();
-  appendFileSync("/tmp/remi-debug.log", `[${ts}] ${msg}\n`);
-}
 import { createFeishuClient } from "./client.js";
 import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
 import { FeishuStreamingSession } from "./streaming.js";
@@ -155,6 +149,7 @@ export class FeishuConnector implements Connector {
 
   /**
    * Real streaming: start card immediately, pipe deltas as they arrive.
+   * Falls back to static card if streaming card creation fails.
    */
   private async _handleStreaming(
     incoming: IncomingMessage,
@@ -169,19 +164,25 @@ export class FeishuConnector implements Connector {
     const client = createFeishuClient(creds);
     const session = new FeishuStreamingSession(client, creds);
 
+    // Try to start the streaming card — fall back to blocking handler if it fails
+    try {
+      await session.start(chatId, "chat_id", { replyToMessageId });
+    } catch (err) {
+      console.warn(`feishu: streaming card creation failed, falling back to static reply: ${String(err)}`);
+      if (this._handler) {
+        const response = await this._handler(incoming);
+        await this._sendStaticReply(chatId, response, replyToMessageId);
+      }
+      return;
+    }
+
     let thinkingText = "";
     let contentText = "";
     let finalResponse: AgentResponse | null = null;
+    let toolCount = 0;
 
     try {
-      debugLog(`_handleStreaming: starting card for ${chatId}`);
-      await session.start(chatId, "chat_id", { replyToMessageId });
-      debugLog(`_handleStreaming: card started, iterating stream...`);
-
-      let eventCount = 0;
       for await (const event of this._streamHandler!(incoming)) {
-        eventCount++;
-        debugLog(`_handleStreaming: event #${eventCount} kind=${event.kind}`);
         switch (event.kind) {
           case "thinking_delta":
             thinkingText += event.text;
@@ -191,13 +192,26 @@ export class FeishuConnector implements Connector {
             contentText += event.text;
             await session.update(contentText);
             break;
+          case "tool_use":
+            toolCount++;
+            // Append tool call to thinking panel (Claude Code CLI style)
+            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
+            await session.updateThinking(thinkingText);
+            break;
+          case "tool_result":
+            // Replace trailing ⏳ with ✅ + duration
+            thinkingText = thinkingText.replace(
+              /⏳\n$/,
+              `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
+            );
+            await session.updateThinking(thinkingText);
+            break;
           case "result":
             finalResponse = event.response;
             break;
         }
       }
 
-      debugLog(`_handleStreaming: stream done, ${eventCount} events, closing card`);
       // Close streaming card with final content + stats
       const stats = finalResponse ? this._formatStats(finalResponse) : null;
       await session.close({
@@ -205,15 +219,13 @@ export class FeishuConnector implements Connector {
         thinking: finalResponse?.thinking ?? (thinkingText || null),
         stats,
       });
-      debugLog(`_handleStreaming: card closed`);
     } catch (err) {
-      debugLog(`_handleStreaming: ERROR ${String(err)}`);
-      // Fallback: close the card with whatever we have, or send a static card
+      console.error(`feishu: streaming error: ${String(err)}`);
+      // Always close the streaming card to prevent it from being stuck
       if (session.isActive()) {
-        await session.close({ finalText: contentText || "Error generating response." }).catch(() => {});
-      }
-      if (finalResponse) {
-        await this._sendStaticReply(chatId, finalResponse, replyToMessageId);
+        await session.close({
+          finalText: contentText || `Error: ${String(err)}`,
+        }).catch(() => {});
       }
     }
   }
@@ -258,4 +270,15 @@ export class FeishuConnector implements Connector {
 
     return parts.length > 0 ? parts.join(" | ") : null;
   }
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+/** Format the first meaningful tool input parameter for display. */
+function formatToolInput(input?: Record<string, unknown>): string {
+  if (!input || Object.keys(input).length === 0) return "";
+  const key = Object.keys(input)[0];
+  const val = String(input[key]);
+  const truncated = val.length > 60 ? val.slice(0, 57) + "..." : val;
+  return `\`${key}="${truncated}"\``;
 }

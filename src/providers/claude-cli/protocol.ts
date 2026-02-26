@@ -47,11 +47,20 @@ export interface ResultMessage {
   outputTokens: number | null;
 }
 
+export interface ToolResultMessage {
+  kind: "tool_result";
+  toolUseId: string;
+  name: string;
+  result: string;       // truncated preview (first 200 chars)
+  durationMs: number;
+}
+
 export type ParsedMessage =
   | SystemMessage
   | ContentDelta
   | ThinkingDelta
   | ToolUseRequest
+  | ToolResultMessage
   | ResultMessage
   | Record<string, unknown>;
 
