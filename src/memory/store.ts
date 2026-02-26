@@ -440,15 +440,7 @@ export class MemoryStore {
       }
     }
 
-    // 3. Today's daily log
-    const today = new Date().toISOString().slice(0, 10);
-    const dailyFile = join(this.root, "daily", `${today}.md`);
-    if (existsSync(dailyFile)) {
-      const content = readFileSync(dailyFile, "utf-8");
-      if (content.trim()) {
-        parts.push(`# 当日日志\n${content}`);
-      }
-    }
+    // 3. Today's daily log — not injected into context (available via recall)
 
     // 4. Manifest
     const manifest = this._buildManifest(cwd);
