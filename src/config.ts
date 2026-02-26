@@ -26,6 +26,7 @@ export interface FeishuConfig {
   port: number;
   domain: "feishu" | "lark" | (string & {});
   connectionMode: "websocket";
+  userAccessToken: string;
 }
 
 export interface SchedulerConfig {
@@ -63,6 +64,7 @@ function defaultFeishuConfig(): FeishuConfig {
     port: 9000,
     domain: "feishu",
     connectionMode: "websocket",
+    userAccessToken: "",
   };
 }
 
@@ -130,6 +132,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       port: parseInt(env.FEISHU_PORT ?? String(feishuData.port ?? 9000), 10),
       domain: (env.FEISHU_DOMAIN ?? (feishuData.domain as string) ?? "feishu") as FeishuConfig["domain"],
       connectionMode: "websocket" as const,
+      userAccessToken: env.FEISHU_USER_ACCESS_TOKEN ?? (feishuData.user_access_token as string) ?? "",
     },
     scheduler: {
       memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",

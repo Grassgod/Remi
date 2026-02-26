@@ -12,12 +12,14 @@
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { spawn } from "node:child_process";
 import type { RemiConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { Remi } from "./core.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { Scheduler } from "./scheduler/jobs.js";
 import { getMemoryTools } from "./tools/memory-tools.js";
+import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 
 export class RemiDaemon {
@@ -90,6 +92,9 @@ export class RemiDaemon {
     // Register memory tools on provider (if supported)
     this._registerMemoryTools(provider, remi);
 
+    // Register Feishu document tools if credentials are configured
+    this._registerFeishuTools(provider);
+
     // Register fallback if configured
     if (this.config.provider.fallback) {
       try {
@@ -106,6 +111,9 @@ export class RemiDaemon {
       remi.addConnector(feishu);
       console.log("Registered Feishu connector");
     }
+
+    // Register restart handler
+    remi.onRestart(() => this._restart());
 
     return remi;
   }
@@ -125,6 +133,23 @@ export class RemiDaemon {
     }
   }
 
+  private _registerFeishuTools(provider: unknown): void {
+    if (!this.config.feishu.appId || !this.config.feishu.appSecret) return;
+
+    const registerable = provider as { registerToolsFromDict?: (tools: Record<string, unknown>) => void };
+    if (typeof registerable.registerToolsFromDict !== "function") return;
+
+    try {
+      const tools = getFeishuTools(this.config.feishu);
+      registerable.registerToolsFromDict(tools);
+      console.log(
+        `Registered ${Object.keys(tools).length} feishu tools on ${(provider as { name: string }).name}`,
+      );
+    } catch (e) {
+      console.warn("Failed to register feishu tools:", e);
+    }
+  }
+
   private _buildProvider(name?: string | null) {
     const n = name ?? this.config.provider.name;
     if (n === "claude_cli") {
@@ -135,6 +160,24 @@ export class RemiDaemon {
       });
     }
     throw new Error(`Unknown provider: ${n}`);
+  }
+
+  // ── Self-restart ────────────────────────────────────────
+
+  private _restart(): void {
+    console.log("Restart requested — spawning new process and shutting down...");
+
+    // Spawn a new daemon process (detached so it outlives the parent)
+    const child = spawn(process.execPath, process.argv.slice(1), {
+      detached: true,
+      stdio: "ignore",
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    child.unref();
+
+    // Trigger graceful shutdown of current process
+    this._abortController.abort();
   }
 
   // ── Main run loop ────────────────────────────────────────
