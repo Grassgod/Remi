@@ -104,7 +104,7 @@ describe("Hooks", () => {
     expect(hookResults).toEqual([["test_tool", "result"]]);
   });
 
-  it("unknown tool", async () => {
+  it("unknown tool returns null", async () => {
     const provider = makeProvider();
     const result = await provider._handleToolCall({
       kind: "tool_use",
@@ -112,7 +112,7 @@ describe("Hooks", () => {
       name: "nonexistent",
       input: {},
     });
-    expect(result).toContain("Unknown tool");
+    expect(result).toBeNull();
   });
 
   it("handles tool handler exception", async () => {

@@ -371,7 +371,7 @@ export class ClaudeCLIProvider implements Provider {
 
   // ── Internal: tool handling ───────────────────────────────
 
-  async _handleToolCall(request: ToolUseRequest): Promise<string> {
+  async _handleToolCall(request: ToolUseRequest): Promise<string | null> {
     const toolName = request.name;
     const toolInput = request.input;
 
@@ -383,10 +383,10 @@ export class ClaudeCLIProvider implements Provider {
       }
     }
 
-    // Find and execute tool
+    // Find and execute tool (return null for unregistered/built-in tools)
     const toolDef = this._tools.get(toolName);
     if (!toolDef) {
-      return `[Unknown tool: ${toolName}]`;
+      return null;
     }
 
     let resultStr: string;

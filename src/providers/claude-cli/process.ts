@@ -19,8 +19,8 @@ import {
   parseLine,
 } from "./protocol.js";
 
-/** Tool handler: async (ToolUseRequest) -> string */
-export type ToolHandler = (request: ToolUseRequest) => Promise<string>;
+/** Tool handler: async (ToolUseRequest) -> string (custom tool) or null (built-in, not handled). */
+export type ToolHandler = (request: ToolUseRequest) => Promise<string | null>;
 
 /** Simple promise-based mutex for serializing sends. */
 class AsyncLock {
@@ -149,6 +149,8 @@ export class ClaudeProcessManager {
       // Stream responses, handling tool calls inline
       let pendingTool: ToolUseRequest | null = null;
       let inputChunks: string[] = [];
+      // Track built-in tool timing (tools not handled by Remi)
+      let builtInToolPending: { toolUseId: string; name: string; t0: number } | null = null;
 
       while (true) {
         const line = await this._readline();
@@ -156,12 +158,38 @@ export class ClaudeProcessManager {
 
         const msg = parseLine(line);
 
-        // Debug: log parsed message kind (remove after investigation)
+        // Debug: log parsed message kind
         if ("kind" in msg) {
           console.log(`[claude-proc] event: ${msg.kind}`);
         } else {
           const rawType = (msg as Record<string, unknown>).type;
           if (rawType) console.log(`[claude-proc] raw: ${rawType}`);
+        }
+
+        // Emit tool_result for built-in tools when meaningful content arrives
+        // (indicates the CLI finished executing the tool and Claude resumed)
+        if (builtInToolPending) {
+          const isContentEvent =
+            msg.kind === "thinking_delta" ||
+            msg.kind === "content_delta" ||
+            msg.kind === "tool_use" ||
+            msg.kind === "result";
+          // Also detect content_block_start for text/thinking (new content after tool)
+          const isBlockStart =
+            !("kind" in msg) &&
+            (msg as Record<string, unknown>).type === "content_block_start" &&
+            ((msg as Record<string, unknown>).content_block as Record<string, unknown>)?.type !== "tool_use";
+          if (isContentEvent || isBlockStart) {
+            const elapsed = Date.now() - builtInToolPending.t0;
+            yield {
+              kind: "tool_result",
+              toolUseId: builtInToolPending.toolUseId,
+              name: builtInToolPending.name,
+              result: "",
+              durationMs: elapsed,
+            } as ToolResultMessage;
+            builtInToolPending = null;
+          }
         }
 
         // Tool use start (streaming — input comes via deltas)
@@ -177,15 +205,21 @@ export class ClaudeProcessManager {
           if (toolHandler) {
             const t0 = Date.now();
             const resultText = await toolHandler(msg);
-            const elapsed = Date.now() - t0;
-            await this._writeLine(formatToolResult(msg.toolUseId, resultText));
-            yield {
-              kind: "tool_result",
-              toolUseId: msg.toolUseId,
-              name: msg.name,
-              result: resultText.slice(0, 200),
-              durationMs: elapsed,
-            } as ToolResultMessage;
+            if (resultText !== null) {
+              // Custom tool handled by Remi
+              const elapsed = Date.now() - t0;
+              await this._writeLine(formatToolResult(msg.toolUseId, resultText));
+              yield {
+                kind: "tool_result",
+                toolUseId: msg.toolUseId,
+                name: msg.name,
+                result: resultText.slice(0, 200),
+                durationMs: elapsed,
+              } as ToolResultMessage;
+            } else {
+              // Built-in tool — CLI handles it; track timing
+              builtInToolPending = { toolUseId: msg.toolUseId, name: msg.name, t0 };
+            }
           }
           continue;
         }
@@ -221,15 +255,21 @@ export class ClaudeProcessManager {
             if (toolHandler) {
               const t0 = Date.now();
               const resultText = await toolHandler(pendingTool);
-              const elapsed = Date.now() - t0;
-              await this._writeLine(formatToolResult(pendingTool.toolUseId, resultText));
-              yield {
-                kind: "tool_result",
-                toolUseId: pendingTool.toolUseId,
-                name: pendingTool.name,
-                result: resultText.slice(0, 200),
-                durationMs: elapsed,
-              } as ToolResultMessage;
+              if (resultText !== null) {
+                // Custom tool handled by Remi
+                const elapsed = Date.now() - t0;
+                await this._writeLine(formatToolResult(pendingTool.toolUseId, resultText));
+                yield {
+                  kind: "tool_result",
+                  toolUseId: pendingTool.toolUseId,
+                  name: pendingTool.name,
+                  result: resultText.slice(0, 200),
+                  durationMs: elapsed,
+                } as ToolResultMessage;
+              } else {
+                // Built-in tool — CLI handles it; track timing
+                builtInToolPending = { toolUseId: pendingTool.toolUseId, name: pendingTool.name, t0 };
+              }
             }
 
             pendingTool = null;
