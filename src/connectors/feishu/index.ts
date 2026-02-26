@@ -6,9 +6,15 @@
  *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
  */
 
+import { appendFileSync } from "node:fs";
 import type { FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
+
+function debugLog(msg: string): void {
+  const ts = new Date().toISOString();
+  appendFileSync("/tmp/remi-debug.log", `[${ts}] ${msg}\n`);
+}
 import { createFeishuClient } from "./client.js";
 import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
 import { FeishuStreamingSession } from "./streaming.js";
@@ -96,6 +102,8 @@ export class FeishuConnector implements Connector {
       },
     };
 
+    console.log(`feishu: received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${msg.text.slice(0, 80)}`);
+
     try {
       // Add typing indicator (thinking emoji)
       const client = createFeishuClient({
@@ -166,9 +174,14 @@ export class FeishuConnector implements Connector {
     let finalResponse: AgentResponse | null = null;
 
     try {
+      debugLog(`_handleStreaming: starting card for ${chatId}`);
       await session.start(chatId, "chat_id", { replyToMessageId });
+      debugLog(`_handleStreaming: card started, iterating stream...`);
 
+      let eventCount = 0;
       for await (const event of this._streamHandler!(incoming)) {
+        eventCount++;
+        debugLog(`_handleStreaming: event #${eventCount} kind=${event.kind}`);
         switch (event.kind) {
           case "thinking_delta":
             thinkingText += event.text;
@@ -184,6 +197,7 @@ export class FeishuConnector implements Connector {
         }
       }
 
+      debugLog(`_handleStreaming: stream done, ${eventCount} events, closing card`);
       // Close streaming card with final content + stats
       const stats = finalResponse ? this._formatStats(finalResponse) : null;
       await session.close({
@@ -191,9 +205,10 @@ export class FeishuConnector implements Connector {
         thinking: finalResponse?.thinking ?? (thinkingText || null),
         stats,
       });
+      debugLog(`_handleStreaming: card closed`);
     } catch (err) {
+      debugLog(`_handleStreaming: ERROR ${String(err)}`);
       // Fallback: close the card with whatever we have, or send a static card
-      console.warn(`feishu: streaming failed: ${String(err)}`);
       if (session.isActive()) {
         await session.close({ finalText: contentText || "Error generating response." }).catch(() => {});
       }

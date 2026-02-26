@@ -100,16 +100,17 @@ export class ClaudeProcessManager {
     return cmd;
   }
 
-  async start(): Promise<SystemMessage> {
+  async start(): Promise<void> {
     if (this.isAlive) {
       throw new Error("Process already running");
     }
 
     const cmd = this.buildCommand();
 
-    // Strip CLAUDECODE env var to avoid nested-session detection
+    // Strip Claude env vars to avoid nested-session detection
     const env = { ...process.env };
     delete env.CLAUDECODE;
+    delete env.CLAUDE_CODE_ENTRYPOINT;
 
     this._process = Bun.spawn(cmd, {
       stdin: "pipe",
@@ -125,19 +126,10 @@ export class ClaudeProcessManager {
     this._reader = decoder.readable.getReader();
     this._lineBuffer = "";
 
-    // Wait for system init message
-    const initMsg = await this._readUntilType("system", 10000);
-
-    if (!initMsg || initMsg.kind !== "system") {
-      const stderr = await this._readStderr();
-      throw new Error(
-        `Streaming init failed: expected SystemMessage${stderr ? ` — stderr: ${stderr}` : ""}`,
-      );
-    }
-
-    this._sessionId = initMsg.sessionId;
+    // Note: Claude CLI stream-json mode emits the system init message only after
+    // the first user message is sent. We don't block here — the system message
+    // will be captured in sendAndStream().
     this._started = true;
-    return initMsg;
   }
 
   async *sendAndStream(
@@ -219,6 +211,12 @@ export class ClaudeProcessManager {
           continue;
         }
 
+        // System init (emitted before first response)
+        if (msg.kind === "system") {
+          this._sessionId = (msg as SystemMessage).sessionId;
+          continue;
+        }
+
         // Thinking delta
         if (msg.kind === "thinking_delta") {
           yield msg;
@@ -238,7 +236,7 @@ export class ClaudeProcessManager {
           return;
         }
 
-        // Other events (content_block_start for text, etc.) — skip
+        // Other events (content_block_start, rate_limit_event, etc.) — skip
       }
     } finally {
       this._lock.release();
@@ -315,23 +313,4 @@ export class ClaudeProcessManager {
     await this._process.stdin.flush();
   }
 
-  private async _readUntilType(
-    targetKind: string,
-    timeoutMs: number = 30000,
-  ): Promise<ParsedMessage | null> {
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-      const line = await this._readline();
-      if (line === null) {
-        throw new Error("Process stdout closed before receiving expected message");
-      }
-      const msg = parseLine(line);
-      if ("kind" in msg && msg.kind === targetKind) {
-        return msg;
-      }
-    }
-
-    throw new Error("Timeout waiting for expected message");
-  }
 }

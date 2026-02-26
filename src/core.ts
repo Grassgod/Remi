@@ -10,9 +10,14 @@
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
+import { appendFileSync } from "node:fs";
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import type { AgentResponse, Provider, StreamEvent } from "./providers/base.js";
+
+function debugLog(msg: string): void {
+  appendFileSync("/tmp/remi-debug.log", `[${new Date().toISOString()}] core: ${msg}\n`);
+}
 import { MemoryStore } from "./memory/store.js";
 
 /** Simple promise-based mutex for per-lane serialization. */
@@ -162,10 +167,12 @@ export class Remi {
 
     // If provider supports streaming, use it
     if (typeof provider.sendStream === "function") {
+      debugLog(`_processStream: calling provider.sendStream`);
       for await (const event of provider.sendStream(msg.text, {
         systemPrompt: SYSTEM_PROMPT,
         context: context || undefined,
       })) {
+        debugLog(`_processStream: got event kind=${event.kind}`);
         yield event;
         // On result: update session + daily notes
         if (event.kind === "result") {

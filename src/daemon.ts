@@ -22,7 +22,6 @@ import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { Scheduler } from "./scheduler/jobs.js";
 import { getMemoryTools } from "./tools/memory-tools.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
-import { getSystemTools } from "./tools/system-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 
 export class RemiDaemon {
@@ -145,11 +144,8 @@ export class RemiDaemon {
       console.log("Registered Feishu connector");
     }
 
-    // Register restart handler
+    // Register restart handler (only triggered by /restart slash command)
     remi.onRestart((info) => this._restart(info));
-
-    // Register system tools (restart etc.) — after onRestart so the tool can use it
-    this._registerSystemTools(provider, remi);
 
     return remi;
   }
@@ -183,21 +179,6 @@ export class RemiDaemon {
       );
     } catch (e) {
       console.warn("Failed to register feishu tools:", e);
-    }
-  }
-
-  private _registerSystemTools(provider: unknown, remi: Remi): void {
-    const registerable = provider as { registerToolsFromDict?: (tools: Record<string, unknown>) => void };
-    if (typeof registerable.registerToolsFromDict !== "function") return;
-
-    try {
-      const tools = getSystemTools(remi);
-      registerable.registerToolsFromDict(tools);
-      console.log(
-        `Registered ${Object.keys(tools).length} system tools on ${(provider as { name: string }).name}`,
-      );
-    } catch (e) {
-      console.warn("Failed to register system tools:", e);
     }
   }
 

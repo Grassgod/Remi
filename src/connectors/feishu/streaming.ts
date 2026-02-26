@@ -60,15 +60,17 @@ export class FeishuStreamingSession {
   private state: CardState | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
-  private log?: (msg: string) => void;
+  private log: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100;
+  private pendingThinking: string | null = null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private updateThrottleMs = 500;
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
     this.creds = creds;
-    this.log = log;
+    this.log = log ?? ((msg) => console.log(`[streaming] ${msg}`));
   }
 
   async start(
@@ -148,17 +150,15 @@ export class FeishuStreamingSession {
     }
 
     this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "", currentThinking: "" };
-    this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+    this.log(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
-  async updateElement(elementId: string, content: string): Promise<void> {
+  private async _updateElementRaw(elementId: string, content: string): Promise<void> {
     if (!this.state || this.closed) return;
-
-    this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) return;
-      this.state.sequence += 1;
-      const apiBase = resolveApiBase(this.creds.domain);
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`, {
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    try {
+      const res = await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${await getToken(this.creds)}`,
@@ -169,9 +169,14 @@ export class FeishuStreamingSession {
           sequence: this.state.sequence,
           uuid: `s_${this.state.cardId}_${this.state.sequence}`,
         }),
-      }).catch((e) => this.log?.(`Update ${elementId} failed: ${String(e)}`));
-    });
-    await this.queue;
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`Update ${elementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+    } catch (e) {
+      this.log(`Update ${elementId} failed: ${String(e)}`);
+    }
   }
 
   async update(text: string): Promise<void> {
@@ -180,24 +185,70 @@ export class FeishuStreamingSession {
     const now = Date.now();
     if (now - this.lastUpdateTime < this.updateThrottleMs) {
       this.pendingText = text;
+      this._scheduleFlush();
       return;
     }
     this.pendingText = null;
     this.lastUpdateTime = now;
 
     this.state.currentText = text;
-    await this.updateElement("content", text);
+    this.queue = this.queue.then(() => this._updateElementRaw("content", text));
+    await this.queue;
   }
 
   async updateThinking(text: string): Promise<void> {
     if (!this.state || this.closed) return;
+
+    // Throttle thinking updates too
+    const now = Date.now();
+    if (now - this.lastUpdateTime < this.updateThrottleMs) {
+      this.pendingThinking = text;
+      this._scheduleFlush();
+      return;
+    }
+    this.pendingThinking = null;
+    this.lastUpdateTime = now;
+
     this.state.currentThinking = text;
-    await this.updateElement("thinking_content", text);
+    this.queue = this.queue.then(() => this._updateElementRaw("thinking_content", text));
+    await this.queue;
+  }
+
+  /** Schedule a flush for any pending throttled updates. */
+  private _scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(async () => {
+      this.flushTimer = null;
+      if (this.closed || !this.state) return;
+      this.lastUpdateTime = Date.now();
+
+      if (this.pendingThinking) {
+        const text = this.pendingThinking;
+        this.pendingThinking = null;
+        this.state.currentThinking = text;
+        this.queue = this.queue.then(() => this._updateElementRaw("thinking_content", text));
+      }
+      if (this.pendingText) {
+        const text = this.pendingText;
+        this.pendingText = null;
+        this.state.currentText = text;
+        this.queue = this.queue.then(() => this._updateElementRaw("content", text));
+      }
+      await this.queue;
+    }, this.updateThrottleMs);
   }
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
     if (!this.state || this.closed) return;
     this.closed = true;
+
+    // Cancel pending flush timer
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    // Wait for queued updates to finish
     await this.queue;
 
     // Normalize arguments
@@ -217,56 +268,47 @@ export class FeishuStreamingSession {
     const thinkingText = thinking ?? this.state.currentThinking;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Build final card elements
-    const elements: Array<Record<string, unknown>> = [];
-
-    // Only include thinking panel if there's thinking content
-    if (thinkingText) {
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: false,
-        background_style: "default",
-        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
-        vertical_spacing: "2px",
-        element_id: "thinking_panel",
-        elements: [
-          { tag: "markdown", content: thinkingText, element_id: "thinking_content" },
-        ],
-      });
+    // Send final content update if different from what's displayed
+    if (text && text !== this.state.currentText) {
+      await this._updateElementRaw("content", text);
     }
 
-    // Main content
-    elements.push({ tag: "markdown", content: text, element_id: "content" });
+    // Send final thinking update if different
+    if (thinkingText && thinkingText !== this.state.currentThinking) {
+      await this._updateElementRaw("thinking_content", thinkingText);
+    }
 
-    // Stats footer
+    // Send stats if provided
     if (stats) {
-      elements.push({ tag: "hr", element_id: "stats_hr" });
-      elements.push({ tag: "markdown", content: stats, element_id: "stats_text" });
+      await this._updateElementRaw("stats_text", stats);
     }
 
-    // Update the full card with final content + close streaming
+    // Close streaming mode via PATCH /settings (same as OpenClaw)
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        card: JSON.stringify({
-          schema: "2.0",
-          config: {
-            streaming_mode: false,
-            summary: { content: truncateSummary(text) },
-          },
-          body: { elements },
+    try {
+      const res = await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          settings: JSON.stringify({
+            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+          }),
+          sequence: this.state.sequence,
+          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
         }),
-        sequence: this.state.sequence,
-        uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-      }),
-    }).catch((e) => this.log?.(`Close failed: ${String(e)}`));
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+    } catch (e) {
+      this.log(`Close failed: ${String(e)}`);
+    }
 
-    this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
+    this.log(`Closed streaming: cardId=${this.state.cardId}`);
   }
 
   isActive(): boolean {
