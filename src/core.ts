@@ -140,7 +140,9 @@ export class Remi {
     const lock = this._getLaneLock(msg.chatId);
     await lock.acquire();
     try {
-      yield* this._processStream(msg);
+      for await (const event of this._processStream(msg)) {
+        yield event;
+      }
     } finally {
       lock.release();
     }
@@ -162,10 +164,12 @@ export class Remi {
 
     // If provider supports streaming, use it
     if (typeof provider.sendStream === "function") {
+      console.log(`[core] starting provider.sendStream iteration`);
       for await (const event of provider.sendStream(msg.text, {
         systemPrompt: SYSTEM_PROMPT,
         context: context || undefined,
       })) {
+        console.log(`[core] received event: ${event.kind}`);
         yield event;
         // On result: update session + daily notes
         if (event.kind === "result") {

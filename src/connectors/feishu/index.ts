@@ -183,6 +183,7 @@ export class FeishuConnector implements Connector {
 
     try {
       for await (const event of this._streamHandler!(incoming)) {
+        console.log(`[feishu] received event: ${event.kind}`);
         switch (event.kind) {
           case "thinking_delta":
             thinkingText += event.text;

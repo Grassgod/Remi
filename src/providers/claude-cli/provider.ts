@@ -155,18 +155,22 @@ export class ClaudeCLIProvider implements Provider {
       if (msg.kind === "thinking_delta") {
         const text = (msg as ThinkingDelta).thinking;
         thinkingParts.push(text);
-        yield { kind: "thinking_delta", text };
+        console.log(`[provider] yield thinking_delta (${text.length} chars)`);
+        yield { kind: "thinking_delta", text } as StreamEvent;
       } else if (msg.kind === "content_delta") {
         const text = (msg as ContentDelta).text;
         textParts.push(text);
-        yield { kind: "content_delta", text };
+        console.log(`[provider] yield content_delta (${text.length} chars)`);
+        yield { kind: "content_delta", text } as StreamEvent;
       } else if (msg.kind === "tool_use") {
         const tu = msg as ToolUseRequest;
         toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
-        yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input };
+        console.log(`[provider] yield tool_use: ${tu.name}`);
+        yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input } as StreamEvent;
       } else if (msg.kind === "tool_result") {
         const tr = msg as ToolResultMessage;
-        yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs };
+        console.log(`[provider] yield tool_result: ${tr.name} (${tr.durationMs}ms)`);
+        yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs } as StreamEvent;
       } else if (msg.kind === "result") {
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");
