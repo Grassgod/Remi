@@ -12,7 +12,7 @@
 
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
-import type { AgentResponse, Provider } from "./providers/base.js";
+import type { AgentResponse, Provider, StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
 
 /** Simple promise-based mutex for per-lane serialization. */
@@ -66,10 +66,6 @@ export class Remi {
   _sessions = new Map<string, string>(); // sessionKey → sessionId
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
-  /** Current message being processed — available to tool handlers. */
-  private _currentMsg: IncomingMessage | null = null;
-  /** Pending restart request set by triggerRestart(), executed after response. */
-  private _pendingRestart: { chatId: string; connectorName?: string } | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
@@ -104,23 +100,6 @@ export class Remi {
     this._onRestart = cb;
   }
 
-  /**
-   * Trigger a restart — callable from tools (natural language) or slash commands.
-   * Queues the restart to execute after the current response is sent.
-   */
-  triggerRestart(reason?: string): string {
-    if (!this._onRestart) {
-      return "重启功能未配置（仅 daemon 模式支持重启）。";
-    }
-    const msg = this._currentMsg;
-    if (!msg) {
-      return "无法确定当前消息上下文，重启取消。";
-    }
-    this._pendingRestart = { chatId: msg.chatId, connectorName: msg.connectorName };
-    const reasonStr = reason ? `（原因：${reason}）` : "";
-    return `重启已排队，将在回复发送后执行${reasonStr}。`;
-  }
-
   // ── Lane Queue (per-chat serialization) ──────────────────
 
   private _getLaneLock(chatId: string): AsyncLock {
@@ -151,21 +130,69 @@ export class Remi {
     const lock = this._getLaneLock(msg.chatId);
     await lock.acquire();
     try {
-      this._currentMsg = msg;
-      const response = await this._process(msg);
-
-      // Execute pending restart (queued by restart_remi tool) after response is ready
-      if (this._pendingRestart && this._onRestart) {
-        const info = this._pendingRestart;
-        this._pendingRestart = null;
-        setTimeout(() => this._onRestart!(info), 500);
-      }
-
-      return response;
+      return await this._process(msg);
     } finally {
-      this._currentMsg = null;
       lock.release();
     }
+  }
+
+  async *handleMessageStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
+    const lock = this._getLaneLock(msg.chatId);
+    await lock.acquire();
+    try {
+      yield* this._processStream(msg);
+    } finally {
+      lock.release();
+    }
+  }
+
+  private async *_processStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
+    // Handle slash commands — emit as immediate result
+    const cmdResponse = this._tryCommand(msg.text, msg);
+    if (cmdResponse) {
+      yield { kind: "result", response: cmdResponse };
+      return;
+    }
+
+    const sessionKey = this._resolveSessionKey(msg);
+    const cwd = (msg.metadata?.cwd as string) ?? undefined;
+    const context = this.memory.gatherContext(cwd);
+
+    const provider = this._getProvider();
+
+    // If provider supports streaming, use it
+    if (typeof provider.sendStream === "function") {
+      for await (const event of provider.sendStream(msg.text, {
+        systemPrompt: SYSTEM_PROMPT,
+        context: context || undefined,
+      })) {
+        yield event;
+        // On result: update session + daily notes
+        if (event.kind === "result") {
+          if (event.response.sessionId) {
+            this._sessions.set(sessionKey, event.response.sessionId);
+          }
+          this.memory.appendDaily(
+            `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
+          );
+        }
+      }
+      return;
+    }
+
+    // Fallback: non-streaming provider
+    const response = await provider.send(msg.text, {
+      systemPrompt: SYSTEM_PROMPT,
+      context: context || undefined,
+      sessionId: this._sessions.get(sessionKey),
+    });
+    if (response.sessionId) {
+      this._sessions.set(sessionKey, response.sessionId);
+    }
+    this.memory.appendDaily(
+      `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
+    );
+    yield { kind: "result", response };
   }
 
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
@@ -277,7 +304,9 @@ export class Remi {
       throw new Error("No providers registered. Call addProvider() first.");
     }
 
-    const tasks = this._connectors.map((c) => c.start(this.handleMessage.bind(this)));
+    const tasks = this._connectors.map((c) =>
+      c.start(this.handleMessage.bind(this), this.handleMessageStream.bind(this)),
+    );
     if (tasks.length > 0) {
       await Promise.all(tasks);
     }

@@ -10,7 +10,13 @@ import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type CardState = { cardId: string; messageId: string; sequence: number; currentText: string };
+type CardState = { cardId: string; messageId: string; sequence: number; currentText: string; currentThinking: string };
+
+export interface StreamingCloseOptions {
+  finalText?: string;
+  thinking?: string | null;
+  stats?: string | null;
+}
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -81,7 +87,28 @@ export class FeishuStreamingSession {
         streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 2 } },
       },
       body: {
-        elements: [{ tag: "markdown", content: "Thinking...", element_id: "content" }],
+        elements: [
+          {
+            tag: "collapsible_panel",
+            expanded: false,
+            background_style: "default",
+            header: { title: { tag: "plain_text", content: "💭 Thinking..." } },
+            vertical_spacing: "2px",
+            element_id: "thinking_panel",
+            elements: [
+              { tag: "markdown", content: "", element_id: "thinking_content" },
+            ],
+          },
+          { tag: "markdown", content: "Thinking...", element_id: "content" },
+          { tag: "hr", element_id: "stats_hr" },
+          {
+            tag: "note",
+            element_id: "stats",
+            elements: [
+              { tag: "plain_text", content: "", element_id: "stats_text" },
+            ],
+          },
+        ],
       },
     };
 
@@ -126,8 +153,31 @@ export class FeishuStreamingSession {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
-    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "" };
+    this.state = { cardId, messageId: sendRes.data.message_id, sequence: 1, currentText: "", currentThinking: "" };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+  }
+
+  async updateElement(elementId: string, content: string): Promise<void> {
+    if (!this.state || this.closed) return;
+
+    this.queue = this.queue.then(async () => {
+      if (!this.state || this.closed) return;
+      this.state.sequence += 1;
+      const apiBase = resolveApiBase(this.creds.domain);
+      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content,
+          sequence: this.state.sequence,
+          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+        }),
+      }).catch((e) => this.log?.(`Update ${elementId} failed: ${String(e)}`));
+    });
+    await this.queue;
   }
 
   async update(text: string): Promise<void> {
@@ -141,62 +191,87 @@ export class FeishuStreamingSession {
     this.pendingText = null;
     this.lastUpdateTime = now;
 
-    this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) return;
-      this.state.currentText = text;
-      this.state.sequence += 1;
-      const apiBase = resolveApiBase(this.creds.domain);
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch((e) => this.log?.(`Update failed: ${String(e)}`));
-    });
-    await this.queue;
+    this.state.currentText = text;
+    await this.updateElement("content", text);
   }
 
-  async close(finalText?: string): Promise<void> {
+  async updateThinking(text: string): Promise<void> {
+    if (!this.state || this.closed) return;
+    this.state.currentThinking = text;
+    await this.updateElement("thinking_content", text);
+  }
+
+  async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
     if (!this.state || this.closed) return;
     this.closed = true;
     await this.queue;
 
-    const text = finalText ?? this.pendingText ?? this.state.currentText;
-    const apiBase = resolveApiBase(this.creds.domain);
+    // Normalize arguments
+    let finalText: string | undefined;
+    let thinking: string | null | undefined;
+    let stats: string | null | undefined;
 
-    if (text && text !== this.state.currentText) {
-      this.state.sequence += 1;
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch(() => {});
-      this.state.currentText = text;
+    if (typeof finalTextOrOptions === "string") {
+      finalText = finalTextOrOptions;
+    } else if (finalTextOrOptions) {
+      finalText = finalTextOrOptions.finalText;
+      thinking = finalTextOrOptions.thinking;
+      stats = finalTextOrOptions.stats;
     }
 
+    const text = finalText ?? this.pendingText ?? this.state.currentText;
+    const thinkingText = thinking ?? this.state.currentThinking;
+    const apiBase = resolveApiBase(this.creds.domain);
+
+    // Build final card elements
+    const elements: Array<Record<string, unknown>> = [];
+
+    // Only include thinking panel if there's thinking content
+    if (thinkingText) {
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        background_style: "default",
+        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+        vertical_spacing: "2px",
+        element_id: "thinking_panel",
+        elements: [
+          { tag: "markdown", content: thinkingText, element_id: "thinking_content" },
+        ],
+      });
+    }
+
+    // Main content
+    elements.push({ tag: "markdown", content: text, element_id: "content" });
+
+    // Stats footer
+    if (stats) {
+      elements.push({ tag: "hr", element_id: "stats_hr" });
+      elements.push({
+        tag: "note",
+        element_id: "stats",
+        elements: [
+          { tag: "plain_text", content: stats, element_id: "stats_text" },
+        ],
+      });
+    }
+
+    // Update the full card with final content + close streaming
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
-      method: "PATCH",
+    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}`, {
+      method: "PUT",
       headers: {
         Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        settings: JSON.stringify({
-          config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+        card: JSON.stringify({
+          schema: "2.0",
+          config: {
+            streaming_mode: false,
+            summary: { content: truncateSummary(text) },
+          },
+          body: { elements },
         }),
         sequence: this.state.sequence,
         uuid: `c_${this.state.cardId}_${this.state.sequence}`,

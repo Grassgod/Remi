@@ -11,6 +11,7 @@ import {
   type ParsedMessage,
   type ResultMessage,
   type SystemMessage,
+  type ThinkingDelta,
   type ToolUseRequest,
   formatToolResult,
   formatUserMessage,
@@ -215,6 +216,12 @@ export class ClaudeProcessManager {
             pendingTool = null;
             inputChunks = [];
           }
+          continue;
+        }
+
+        // Thinking delta
+        if (msg.kind === "thinking_delta") {
+          yield msg;
           continue;
         }
 

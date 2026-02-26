@@ -79,6 +79,49 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   };
 }
 
+/** Build a rich Feishu card with optional thinking panel and stats footer. */
+export function buildRichCard(options: {
+  text: string;
+  thinking?: string | null;
+  stats?: string | null;
+}): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [];
+
+  // Collapsible thinking panel
+  if (options.thinking) {
+    elements.push({
+      tag: "collapsible_panel",
+      expanded: false,
+      background_style: "default",
+      header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+      vertical_spacing: "2px",
+      elements: [
+        { tag: "markdown", content: options.thinking },
+      ],
+    });
+  }
+
+  // Main content
+  elements.push({ tag: "markdown", content: options.text });
+
+  // Stats footer
+  if (options.stats) {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "note",
+      elements: [
+        { tag: "plain_text", content: options.stats },
+      ],
+    });
+  }
+
+  return {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: { elements },
+  };
+}
+
 /** Send a card message. */
 export async function sendCardFeishu(
   client: Lark.Client,

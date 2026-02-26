@@ -22,6 +22,12 @@ export interface ContentDelta {
   index: number;
 }
 
+export interface ThinkingDelta {
+  kind: "thinking_delta";
+  thinking: string;
+  index: number;
+}
+
 export interface ToolUseRequest {
   kind: "tool_use";
   toolUseId: string;
@@ -37,11 +43,14 @@ export interface ResultMessage {
   model: string;
   isError: boolean;
   durationMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
 }
 
 export type ParsedMessage =
   | SystemMessage
   | ContentDelta
+  | ThinkingDelta
   | ToolUseRequest
   | ResultMessage
   | Record<string, unknown>;
@@ -73,6 +82,13 @@ export function parseLine(line: string): ParsedMessage {
         index: (data.index as number) ?? 0,
       };
     }
+    if (delta.type === "thinking_delta") {
+      return {
+        kind: "thinking_delta",
+        thinking: (delta.thinking as string) ?? "",
+        index: (data.index as number) ?? 0,
+      };
+    }
     // input_json_delta and others: return raw dict for accumulation
     return data;
   }
@@ -88,6 +104,7 @@ export function parseLine(line: string): ParsedMessage {
         input: (block.input as Record<string, unknown>) ?? {},
       };
     }
+    // thinking block start — return raw dict (like text block)
     return data;
   }
 
@@ -110,6 +127,7 @@ export function parseLine(line: string): ParsedMessage {
 
   // Result (end of turn)
   if (msgType === "result") {
+    const usage = (data.usage as Record<string, unknown>) ?? {};
     return {
       kind: "result",
       result: (data.result as string) ?? "",
@@ -118,6 +136,8 @@ export function parseLine(line: string): ParsedMessage {
       model: (data.model as string) ?? "",
       isError: (data.is_error as boolean) ?? false,
       durationMs: (data.duration_ms as number) ?? null,
+      inputTokens: (usage.input_tokens as number) ?? null,
+      outputTokens: (usage.output_tokens as number) ?? null,
     };
   }
 

@@ -2,15 +2,15 @@
  * FeishuConnector — implements Remi Connector interface for Feishu/Lark.
  *
  * Message flow:
- *   Feishu WebSocket → parse + dedup + resolve → IncomingMessage → handler()
- *   AgentResponse → streaming card (if streaming) or markdown card → Feishu
+ *   Feishu WebSocket → parse + dedup + resolve → IncomingMessage → streamHandler()
+ *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
  */
 
 import type { FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
-import type { Connector, MessageHandler, IncomingMessage } from "../base.js";
+import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import { createFeishuClient } from "./client.js";
-import { sendMarkdownCardFeishu } from "./send.js";
+import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
 import { FeishuStreamingSession } from "./streaming.js";
 import {
   startWebSocketListener,
@@ -23,17 +23,19 @@ export class FeishuConnector implements Connector {
   private _config: FeishuConfig & { domain?: string; connectionMode?: string };
   private _wsHandle: FeishuWSHandle | null = null;
   private _handler: MessageHandler | null = null;
+  private _streamHandler: StreamingHandler | null = null;
 
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
   }
 
-  async start(handler: MessageHandler): Promise<void> {
+  async start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void> {
     if (!this._config.appId || !this._config.appSecret) {
       throw new Error("Feishu connector: appId and appSecret are required");
     }
 
     this._handler = handler;
+    this._streamHandler = streamHandler ?? null;
     console.log("feishu: starting connector...");
 
     this._wsHandle = startWebSocketListener(this._config, async (msg: ParsedFeishuMessage) => {
@@ -41,9 +43,6 @@ export class FeishuConnector implements Connector {
     });
 
     // Keep alive — WebSocket listener runs in background
-    // The promise resolves when the connector is stopped, but the WS client
-    // keeps running via the event loop. We return a never-resolving promise
-    // that gets cancelled on stop().
     return new Promise<void>(() => {
       // Intentionally never resolves — connector runs until stop() is called
     });
@@ -55,6 +54,7 @@ export class FeishuConnector implements Connector {
       this._wsHandle = null;
     }
     this._handler = null;
+    this._streamHandler = null;
     console.log("feishu: connector stopped");
   }
 
@@ -65,10 +65,11 @@ export class FeishuConnector implements Connector {
       domain: this._config.domain,
     });
 
-    // Use streaming card for longer responses, plain card for short ones
     const text = response.text;
-    if (text.length > 500) {
-      await this._sendStreamingReply(chatId, text);
+    const stats = this._formatStats(response);
+    if (response.thinking || stats) {
+      const card = buildRichCard({ text, thinking: response.thinking, stats });
+      await sendCardFeishu(client, chatId, card);
     } else {
       await sendMarkdownCardFeishu(client, chatId, text);
     }
@@ -111,7 +112,14 @@ export class FeishuConnector implements Connector {
         // Non-critical: skip typing indicator if it fails
       }
 
-      const response = await this._handler(incoming);
+      // Use real streaming if streamHandler is available
+      if (this._streamHandler) {
+        await this._handleStreaming(incoming, msg.chatId, msg.messageId);
+      } else {
+        // Fallback: blocking handler → static card
+        const response = await this._handler(incoming);
+        await this._sendStaticReply(msg.chatId, response, msg.messageId);
+      }
 
       // Remove typing indicator
       if (thinkingReactionId) {
@@ -122,12 +130,8 @@ export class FeishuConnector implements Connector {
           // Non-critical
         }
       }
-
-      // Send reply (threaded under original message)
-      await this._sendReply(msg.chatId, response, msg.messageId);
     } catch (err) {
       console.error(`feishu: failed to process message ${msg.messageId}: ${String(err)}`);
-      // Try to send an error reply
       try {
         const client = createFeishuClient({
           appId: this._config.appId,
@@ -141,24 +145,14 @@ export class FeishuConnector implements Connector {
     }
   }
 
-  private async _sendReply(chatId: string, response: AgentResponse, replyToMessageId?: string): Promise<void> {
-    const client = createFeishuClient({
-      appId: this._config.appId,
-      appSecret: this._config.appSecret,
-      domain: this._config.domain,
-    });
-
-    const text = response.text;
-
-    // For longer responses, use streaming card for better UX
-    if (text.length > 500) {
-      await this._sendStreamingReply(chatId, text, replyToMessageId);
-    } else {
-      await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
-    }
-  }
-
-  private async _sendStreamingReply(chatId: string, text: string, replyToMessageId?: string): Promise<void> {
+  /**
+   * Real streaming: start card immediately, pipe deltas as they arrive.
+   */
+  private async _handleStreaming(
+    incoming: IncomingMessage,
+    chatId: string,
+    replyToMessageId: string,
+  ): Promise<void> {
     const creds = {
       appId: this._config.appId,
       appSecret: this._config.appSecret,
@@ -167,23 +161,86 @@ export class FeishuConnector implements Connector {
     const client = createFeishuClient(creds);
     const session = new FeishuStreamingSession(client, creds);
 
+    let thinkingText = "";
+    let contentText = "";
+    let finalResponse: AgentResponse | null = null;
+
     try {
       await session.start(chatId, "chat_id", { replyToMessageId });
 
-      // Simulate streaming by sending the text in chunks
-      const chunkSize = 100;
-      for (let i = 0; i < text.length; i += chunkSize) {
-        const chunk = text.slice(0, i + chunkSize);
-        await session.update(chunk);
-        // Small delay between updates for the typewriter effect
-        await new Promise((resolve) => setTimeout(resolve, 50));
+      for await (const event of this._streamHandler!(incoming)) {
+        switch (event.kind) {
+          case "thinking_delta":
+            thinkingText += event.text;
+            await session.updateThinking(thinkingText);
+            break;
+          case "content_delta":
+            contentText += event.text;
+            await session.update(contentText);
+            break;
+          case "result":
+            finalResponse = event.response;
+            break;
+        }
       }
 
-      await session.close(text);
+      // Close streaming card with final content + stats
+      const stats = finalResponse ? this._formatStats(finalResponse) : null;
+      await session.close({
+        finalText: finalResponse?.text ?? contentText,
+        thinking: finalResponse?.thinking ?? (thinkingText || null),
+        stats,
+      });
     } catch (err) {
-      // Fallback to regular card if streaming fails
-      console.warn(`feishu: streaming failed, falling back to card: ${String(err)}`);
+      // Fallback: close the card with whatever we have, or send a static card
+      console.warn(`feishu: streaming failed: ${String(err)}`);
+      if (session.isActive()) {
+        await session.close({ finalText: contentText || "Error generating response." }).catch(() => {});
+      }
+      if (finalResponse) {
+        await this._sendStaticReply(chatId, finalResponse, replyToMessageId);
+      }
+    }
+  }
+
+  /**
+   * Static reply — for non-streaming path or short responses.
+   */
+  private async _sendStaticReply(chatId: string, response: AgentResponse, replyToMessageId?: string): Promise<void> {
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+
+    const text = response.text;
+    const stats = this._formatStats(response);
+    if (response.thinking || stats) {
+      const card = buildRichCard({ text, thinking: response.thinking, stats });
+      await sendCardFeishu(client, chatId, card, { replyToMessageId });
+    } else {
       await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
     }
+  }
+
+  private _formatStats(response: AgentResponse): string | null {
+    const parts: string[] = [];
+
+    if (response.durationMs != null) {
+      parts.push(`⏱ ${(response.durationMs / 1000).toFixed(1)}s`);
+    }
+    if (response.inputTokens != null || response.outputTokens != null) {
+      const inTok = response.inputTokens ?? "?";
+      const outTok = response.outputTokens ?? "?";
+      parts.push(`📥 ${inTok} → 📤 ${outTok} tokens`);
+    }
+    if (response.toolCalls && response.toolCalls.length > 0) {
+      parts.push(`🔧 ${response.toolCalls.length} tools`);
+    }
+    if (response.costUsd != null) {
+      parts.push(`💰 $${response.costUsd.toFixed(4)}`);
+    }
+
+    return parts.length > 0 ? parts.join(" | ") : null;
   }
 }

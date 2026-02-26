@@ -5,6 +5,12 @@
 /** Callback for streaming text chunks. */
 export type StreamCallback = (chunk: string) => void;
 
+/** Streaming event emitted during real-time generation. */
+export type StreamEvent =
+  | { kind: "thinking_delta"; text: string }
+  | { kind: "content_delta"; text: string }
+  | { kind: "result"; response: AgentResponse };
+
 /** Custom tool that the agent can call, handled within Remi. */
 export interface ToolDefinition {
   name: string;
@@ -16,6 +22,7 @@ export interface ToolDefinition {
 /** Response from an AI provider. */
 export interface AgentResponse {
   text: string;
+  thinking?: string | null;
   sessionId?: string | null;
   costUsd?: number | null;
   inputTokens?: number | null;
@@ -40,12 +47,22 @@ export interface Provider {
     },
   ): Promise<AgentResponse>;
 
+  /** Stream events in real-time. Optional — connectors fall back to send() if absent. */
+  sendStream?(
+    message: string,
+    options?: {
+      systemPrompt?: string | null;
+      context?: string | null;
+    },
+  ): AsyncGenerator<StreamEvent>;
+
   healthCheck(): Promise<boolean>;
 }
 
 /** Create a default AgentResponse with sensible defaults. */
 export function createAgentResponse(partial: Partial<AgentResponse> & { text: string }): AgentResponse {
   return {
+    thinking: null,
     sessionId: null,
     costUsd: null,
     inputTokens: null,

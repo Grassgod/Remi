@@ -2,7 +2,7 @@
  * Connector protocol and shared types.
  */
 
-import type { AgentResponse } from "../providers/base.js";
+import type { AgentResponse, StreamEvent } from "../providers/base.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -13,15 +13,18 @@ export interface IncomingMessage {
   metadata?: Record<string, unknown>;
 }
 
-/** Callback type: core Remi.handleMessage */
+/** Callback type: core Remi.handleMessage (blocking, returns full response) */
 export type MessageHandler = (msg: IncomingMessage) => Promise<AgentResponse>;
+
+/** Callback type: core Remi.handleMessageStream (real-time streaming) */
+export type StreamingHandler = (msg: IncomingMessage) => AsyncGenerator<StreamEvent>;
 
 /** Protocol that all input connectors must implement. */
 export interface Connector {
   readonly name: string;
 
-  /** Start listening for messages. Call handler for each incoming message. */
-  start(handler: MessageHandler): Promise<void>;
+  /** Start listening for messages. Receives both blocking and streaming handlers. */
+  start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void>;
 
   /** Gracefully stop the connector. */
   stop(): Promise<void>;

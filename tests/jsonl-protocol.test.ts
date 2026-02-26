@@ -5,6 +5,7 @@ import {
   formatToolResult,
   type SystemMessage,
   type ContentDelta,
+  type ThinkingDelta,
   type ToolUseRequest,
   type ResultMessage,
 } from "../src/providers/claude-cli/protocol.js";
@@ -166,6 +167,62 @@ describe("parseLine", () => {
     const line = JSON.stringify({ type: "content_block_stop", index: 0 });
     const msg = parseLine(line);
     expect("kind" in msg).toBe(false);
+  });
+
+  it("parses thinking_delta", () => {
+    const line = JSON.stringify({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "Let me think about this..." },
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("thinking_delta");
+    const td = msg as ThinkingDelta;
+    expect(td.thinking).toBe("Let me think about this...");
+    expect(td.index).toBe(0);
+  });
+
+  it("returns dict for thinking content_block_start", () => {
+    const line = JSON.stringify({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "" },
+    });
+    const msg = parseLine(line);
+    expect("kind" in msg).toBe(false);
+  });
+
+  it("parses result with usage", () => {
+    const line = JSON.stringify({
+      type: "result",
+      result: "Hello",
+      session_id: "sess-abc",
+      cost_usd: 0.01,
+      model: "claude-sonnet-4-5-20250929",
+      is_error: false,
+      duration_ms: 2500,
+      usage: { input_tokens: 1234, output_tokens: 567 },
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("result");
+    const res = msg as ResultMessage;
+    expect(res.inputTokens).toBe(1234);
+    expect(res.outputTokens).toBe(567);
+    expect(res.durationMs).toBe(2500);
+  });
+
+  it("parses result without usage gracefully", () => {
+    const line = JSON.stringify({
+      type: "result",
+      result: "Hello",
+      session_id: "sess-abc",
+      is_error: false,
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("result");
+    const res = msg as ResultMessage;
+    expect(res.inputTokens).toBeNull();
+    expect(res.outputTokens).toBeNull();
   });
 
   it("throws on invalid JSON", () => {

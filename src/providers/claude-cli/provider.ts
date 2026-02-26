@@ -13,6 +13,7 @@
 import type {
   AgentResponse,
   Provider,
+  StreamEvent,
   ToolDefinition,
 } from "../base.js";
 import { createAgentResponse } from "../base.js";
@@ -20,6 +21,7 @@ import { ClaudeProcessManager } from "./process.js";
 import type {
   ContentDelta,
   ResultMessage,
+  ThinkingDelta,
   ToolUseRequest,
 } from "./protocol.js";
 
@@ -135,17 +137,49 @@ export class ClaudeCLIProvider implements Provider {
       systemPrompt?: string | null;
       context?: string | null;
     },
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<StreamEvent> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
 
     await this._ensureProcess(options?.systemPrompt);
+
+    const textParts: string[] = [];
+    const thinkingParts: string[] = [];
+    const toolCalls: Array<Record<string, unknown>> = [];
+
     for await (const msg of this._processMgr!.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
     )) {
-      if (msg.kind === "content_delta") {
-        yield (msg as ContentDelta).text;
+      if (msg.kind === "thinking_delta") {
+        const text = (msg as ThinkingDelta).thinking;
+        thinkingParts.push(text);
+        yield { kind: "thinking_delta", text };
+      } else if (msg.kind === "content_delta") {
+        const text = (msg as ContentDelta).text;
+        textParts.push(text);
+        yield { kind: "content_delta", text };
+      } else if (msg.kind === "tool_use") {
+        const tu = msg as ToolUseRequest;
+        toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
+      } else if (msg.kind === "result") {
+        const resultMsg = msg as ResultMessage;
+        const fullText = textParts.join("");
+        const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
+        yield {
+          kind: "result",
+          response: createAgentResponse({
+            text: resultMsg.result || fullText,
+            thinking,
+            sessionId: resultMsg.sessionId,
+            costUsd: resultMsg.costUsd,
+            model: resultMsg.model,
+            inputTokens: resultMsg.inputTokens,
+            outputTokens: resultMsg.outputTokens,
+            durationMs: resultMsg.durationMs,
+            toolCalls,
+          }),
+        };
       }
     }
   }
@@ -192,6 +226,7 @@ export class ClaudeCLIProvider implements Provider {
     await this._ensureProcess(options?.systemPrompt);
 
     const textParts: string[] = [];
+    const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     let resultMsg: ResultMessage | null = null;
 
@@ -199,7 +234,9 @@ export class ClaudeCLIProvider implements Provider {
       prompt,
       this._handleToolCall.bind(this),
     )) {
-      if (msg.kind === "content_delta") {
+      if (msg.kind === "thinking_delta") {
+        thinkingParts.push((msg as ThinkingDelta).thinking);
+      } else if (msg.kind === "content_delta") {
         textParts.push((msg as ContentDelta).text);
       } else if (msg.kind === "tool_use") {
         const tu = msg as ToolUseRequest;
@@ -214,18 +251,23 @@ export class ClaudeCLIProvider implements Provider {
     }
 
     const fullText = textParts.join("");
+    const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
 
     if (resultMsg) {
       return createAgentResponse({
         text: resultMsg.result || fullText,
+        thinking,
         sessionId: resultMsg.sessionId,
         costUsd: resultMsg.costUsd,
         model: resultMsg.model,
+        inputTokens: resultMsg.inputTokens,
+        outputTokens: resultMsg.outputTokens,
+        durationMs: resultMsg.durationMs,
         toolCalls,
       });
     }
 
-    return createAgentResponse({ text: fullText, toolCalls });
+    return createAgentResponse({ text: fullText, thinking, toolCalls });
   }
 
   // ── Internal: fallback path (original subprocess) ─────────
