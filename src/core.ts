@@ -66,6 +66,10 @@ export class Remi {
   _sessions = new Map<string, string>(); // sessionKey → sessionId
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
+  /** Current message being processed — available to tool handlers. */
+  private _currentMsg: IncomingMessage | null = null;
+  /** Pending restart request set by triggerRestart(), executed after response. */
+  private _pendingRestart: { chatId: string; connectorName?: string } | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
@@ -100,6 +104,23 @@ export class Remi {
     this._onRestart = cb;
   }
 
+  /**
+   * Trigger a restart — callable from tools (natural language) or slash commands.
+   * Queues the restart to execute after the current response is sent.
+   */
+  triggerRestart(reason?: string): string {
+    if (!this._onRestart) {
+      return "重启功能未配置（仅 daemon 模式支持重启）。";
+    }
+    const msg = this._currentMsg;
+    if (!msg) {
+      return "无法确定当前消息上下文，重启取消。";
+    }
+    this._pendingRestart = { chatId: msg.chatId, connectorName: msg.connectorName };
+    const reasonStr = reason ? `（原因：${reason}）` : "";
+    return `重启已排队，将在回复发送后执行${reasonStr}。`;
+  }
+
   // ── Lane Queue (per-chat serialization) ──────────────────
 
   private _getLaneLock(chatId: string): AsyncLock {
@@ -130,8 +151,19 @@ export class Remi {
     const lock = this._getLaneLock(msg.chatId);
     await lock.acquire();
     try {
-      return await this._process(msg);
+      this._currentMsg = msg;
+      const response = await this._process(msg);
+
+      // Execute pending restart (queued by restart_remi tool) after response is ready
+      if (this._pendingRestart && this._onRestart) {
+        const info = this._pendingRestart;
+        this._pendingRestart = null;
+        setTimeout(() => this._onRestart!(info), 500);
+      }
+
+      return response;
     } finally {
+      this._currentMsg = null;
       lock.release();
     }
   }

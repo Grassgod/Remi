@@ -119,7 +119,14 @@ export class ClaudeCLIProvider implements Provider {
       sessionId?: string | null;
     },
   ): Promise<AgentResponse> {
-    return this._sendFallback(message, options);
+    const context = options?.context;
+    const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
+    try {
+      return await this._sendStreaming(fullPrompt, { systemPrompt: options?.systemPrompt });
+    } catch (e) {
+      console.warn(`Streaming send failed, falling back to one-shot subprocess: ${e}`);
+      return this._sendFallback(message, options);
+    }
   }
 
   async *sendStream(

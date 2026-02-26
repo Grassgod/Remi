@@ -90,6 +90,8 @@ export class ClaudeProcessManager {
     }
     if (this.allowedTools.length > 0) {
       cmd.push("--allowedTools", this.allowedTools.join(","));
+    } else {
+      cmd.push("--dangerously-skip-permissions");
     }
     if (this.systemPrompt) {
       cmd.push("--append-system-prompt", this.systemPrompt);
