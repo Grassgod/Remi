@@ -123,7 +123,7 @@ export class FeishuStreamingSession {
         elements: [
           {
             tag: "collapsible_panel",
-            expanded: false,
+            expanded: true,
             background_style: "default",
             header: {
               title: { tag: "plain_text", content: "💭 Thinking..." },
@@ -134,7 +134,7 @@ export class FeishuStreamingSession {
               { tag: "markdown", content: "", element_id: "thinking_content" },
             ],
           },
-          { tag: "markdown", content: "Thinking...", element_id: "content" },
+          { tag: "markdown", content: "", element_id: "content" },
           { tag: "hr", element_id: "stats_hr" },
           { tag: "markdown", content: "", element_id: "stats_text" },
         ],
@@ -315,6 +315,27 @@ export class FeishuStreamingSession {
 
   async updateThinking(text: string): Promise<void> {
     this._throttledUpdate("thinking_content", text, "currentThinking");
+  }
+
+  /** Collapse the thinking panel by replacing the full panel element. */
+  async collapseThinking(): Promise<void> {
+    if (!this.state || this.closed) return;
+    const panelJson = JSON.stringify({
+      tag: "collapsible_panel",
+      expanded: false,
+      background_style: "default",
+      header: {
+        title: { tag: "plain_text", content: "💭 Thinking" },
+      },
+      vertical_spacing: "2px",
+      element_id: "thinking_panel",
+      elements: [
+        { tag: "markdown", content: this.state.currentThinking, element_id: "thinking_content" },
+      ],
+    });
+    this.queue = this.queue.then(() =>
+      this._updateElementRaw("thinking_panel", panelJson),
+    );
   }
 
   // ── Flush all pending throttled updates ────────────────────

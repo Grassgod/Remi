@@ -209,6 +209,10 @@ export class FeishuConnector implements Connector {
             break;
           case "result":
             finalResponse = event.response;
+            // Collapse thinking panel now that we have the final answer
+            if (thinkingText) {
+              await session.collapseThinking();
+            }
             break;
         }
       }
