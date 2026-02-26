@@ -195,7 +195,12 @@ export class FeishuConnector implements Connector {
             break;
           case "tool_use":
             toolCount++;
-            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)}\n`;
+            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
+            await session.updateThinking(thinkingText);
+            break;
+          case "tool_result":
+            // Replace trailing ⏳ with ✅
+            thinkingText = thinkingText.replace(/⏳\n$/, `✅\n`);
             await session.updateThinking(thinkingText);
             break;
           case "result":
