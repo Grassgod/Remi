@@ -44,10 +44,16 @@ export class ClaudeCLIProvider implements Provider {
   cwd: string | null;
   mcpConfig: Record<string, unknown> | null;
 
-  private _processMgr: ClaudeProcessManager | null = null;
+  private _pool = new Map<string, ClaudeProcessManager>();
+  private _lastUsed = new Map<string, number>();
+  private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _tools = new Map<string, ToolDefinition>();
   private _preHooks: PreToolHook[] = [];
   private _postHooks: PostToolHook[] = [];
+
+  private static DEFAULT_CHAT_ID = "__default__";
+  private static IDLE_TIMEOUT_MS = 10 * 60 * 1000;    // 10 minutes
+  private static CLEANUP_INTERVAL_MS = 60 * 1000;      // check every minute
 
   constructor(options: {
     allowedTools?: string[];
@@ -120,12 +126,16 @@ export class ClaudeCLIProvider implements Provider {
       context?: string | null;
       cwd?: string | null;
       sessionId?: string | null;
+      chatId?: string | null;
     },
   ): Promise<AgentResponse> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
     try {
-      return await this._sendStreaming(fullPrompt, { systemPrompt: options?.systemPrompt });
+      return await this._sendStreaming(fullPrompt, {
+        systemPrompt: options?.systemPrompt,
+        chatId: options?.chatId,
+      });
     } catch (e) {
       console.warn(`Streaming send failed, falling back to one-shot subprocess: ${e}`);
       return this._sendFallback(message, options);
@@ -137,18 +147,19 @@ export class ClaudeCLIProvider implements Provider {
     options?: {
       systemPrompt?: string | null;
       context?: string | null;
+      chatId?: string | null;
     },
   ): AsyncGenerator<StreamEvent> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
 
-    await this._ensureProcess(options?.systemPrompt);
+    const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt);
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
 
-    for await (const msg of this._processMgr!.sendAndStream(
+    for await (const msg of mgr.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
     )) {
@@ -205,41 +216,112 @@ export class ClaudeCLIProvider implements Provider {
     }
   }
 
-  async close(): Promise<void> {
-    if (this._processMgr) {
-      await this._processMgr.stop();
-      this._processMgr = null;
+  async clearSession(chatId?: string): Promise<void> {
+    if (chatId) {
+      const mgr = this._pool.get(chatId);
+      if (mgr && mgr.isAlive) {
+        await mgr.clearSession();
+      }
+    } else {
+      // Clear all sessions
+      for (const mgr of this._pool.values()) {
+        if (mgr.isAlive) {
+          await mgr.clearSession();
+        }
+      }
     }
+  }
+
+  async close(): Promise<void> {
+    if (this._cleanupTimer) {
+      clearInterval(this._cleanupTimer);
+      this._cleanupTimer = null;
+    }
+    const stops = [...this._pool.values()].map((mgr) => mgr.stop());
+    await Promise.all(stops);
+    this._pool.clear();
+    this._lastUsed.clear();
   }
 
   // ── Internal: streaming path ──────────────────────────────
 
-  private async _ensureProcess(systemPrompt?: string | null): Promise<void> {
-    if (this._processMgr && this._processMgr.isAlive) {
-      return;
+  private async _ensureProcess(
+    chatId?: string | null,
+    systemPrompt?: string | null,
+  ): Promise<ClaudeProcessManager> {
+    const key = chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
+
+    let mgr = this._pool.get(key);
+    if (mgr && mgr.isAlive) {
+      this._lastUsed.set(key, Date.now());
+      return mgr;
     }
 
-    this._processMgr = new ClaudeProcessManager({
+    mgr = new ClaudeProcessManager({
       model: this.model,
       allowedTools: this.allowedTools,
       systemPrompt: systemPrompt ?? this.systemPrompt,
       cwd: this.cwd,
     });
-    await this._processMgr.start();
+    await mgr.start();
+
+    this._pool.set(key, mgr);
+    this._lastUsed.set(key, Date.now());
+    this._ensureCleanupTimer();
+
+    console.log(`[provider] Process started for chatId="${key}" (pool size: ${this._pool.size})`);
+    return mgr;
+  }
+
+  private _ensureCleanupTimer(): void {
+    if (this._cleanupTimer) return;
+    this._cleanupTimer = setInterval(
+      () => this._cleanupIdleProcesses(),
+      ClaudeCLIProvider.CLEANUP_INTERVAL_MS,
+    );
+    if (typeof this._cleanupTimer.unref === "function") {
+      this._cleanupTimer.unref();
+    }
+  }
+
+  private async _cleanupIdleProcesses(): Promise<void> {
+    const now = Date.now();
+    const toRemove: string[] = [];
+
+    for (const [key, lastUsed] of this._lastUsed) {
+      if (now - lastUsed > ClaudeCLIProvider.IDLE_TIMEOUT_MS) {
+        toRemove.push(key);
+      }
+    }
+
+    for (const key of toRemove) {
+      const mgr = this._pool.get(key);
+      if (mgr) {
+        console.log(`[provider] Cleaning up idle process for chatId="${key}"`);
+        await mgr.stop();
+      }
+      this._pool.delete(key);
+      this._lastUsed.delete(key);
+    }
+
+    if (this._pool.size === 0 && this._cleanupTimer) {
+      clearInterval(this._cleanupTimer);
+      this._cleanupTimer = null;
+    }
   }
 
   private async _sendStreaming(
     prompt: string,
-    options?: { systemPrompt?: string | null },
+    options?: { systemPrompt?: string | null; chatId?: string | null },
   ): Promise<AgentResponse> {
-    await this._ensureProcess(options?.systemPrompt);
+    const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt);
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     let resultMsg: ResultMessage | null = null;
 
-    for await (const msg of this._processMgr!.sendAndStream(
+    for await (const msg of mgr.sendAndStream(
       prompt,
       this._handleToolCall.bind(this),
     )) {

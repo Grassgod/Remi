@@ -127,7 +127,8 @@ export class Remi {
   // ── Message handling (the core loop) ─────────────────────
 
   async handleMessage(msg: IncomingMessage): Promise<AgentResponse> {
-    const lock = this._getLaneLock(msg.chatId);
+    const sessionKey = this._resolveSessionKey(msg);
+    const lock = this._getLaneLock(sessionKey);
     await lock.acquire();
     try {
       return await this._process(msg);
@@ -137,7 +138,8 @@ export class Remi {
   }
 
   async *handleMessageStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
-    const lock = this._getLaneLock(msg.chatId);
+    const sessionKey = this._resolveSessionKey(msg);
+    const lock = this._getLaneLock(sessionKey);
     await lock.acquire();
     try {
       for await (const event of this._processStream(msg)) {
@@ -150,7 +152,7 @@ export class Remi {
 
   private async *_processStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
     // Handle slash commands — emit as immediate result
-    const cmdResponse = this._tryCommand(msg.text, msg);
+    const cmdResponse = await this._tryCommand(msg.text, msg);
     if (cmdResponse) {
       yield { kind: "result", response: cmdResponse };
       return;
@@ -168,6 +170,7 @@ export class Remi {
       for await (const event of provider.sendStream(msg.text, {
         systemPrompt: SYSTEM_PROMPT,
         context: context || undefined,
+        chatId: this._resolveSessionKey(msg),
       })) {
         console.log(`[core] received event: ${event.kind}`);
         yield event;
@@ -189,6 +192,7 @@ export class Remi {
       systemPrompt: SYSTEM_PROMPT,
       context: context || undefined,
       sessionId: this._sessions.get(sessionKey),
+      chatId: this._resolveSessionKey(msg),
     });
     if (response.sessionId) {
       this._sessions.set(sessionKey, response.sessionId);
@@ -201,7 +205,7 @@ export class Remi {
 
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
     // 0. Handle slash commands (thread-aware)
-    const cmdResponse = this._tryCommand(msg.text, msg);
+    const cmdResponse = await this._tryCommand(msg.text, msg);
     if (cmdResponse) return cmdResponse;
 
     // 1. Resolve session key (threads get isolated sessions)
@@ -220,6 +224,7 @@ export class Remi {
       systemPrompt: SYSTEM_PROMPT,
       context: context || undefined,
       sessionId,
+      chatId: this._resolveSessionKey(msg),
     });
 
     // 5. Fallback if primary fails
@@ -234,6 +239,7 @@ export class Remi {
         response = await fallback.send(msg.text, {
           systemPrompt: SYSTEM_PROMPT,
           context: context || undefined,
+          chatId: this._resolveSessionKey(msg),
         });
       }
     }
@@ -255,7 +261,7 @@ export class Remi {
 
   private static COMMANDS = new Set(["clear", "new", "status", "restart"]);
 
-  private _tryCommand(text: string, msg: IncomingMessage): AgentResponse | null {
+  private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
     if (!trimmed.startsWith("/")) return null;
 
@@ -271,6 +277,11 @@ export class Remi {
       case "clear":
       case "new": {
         this._sessions.delete(sessionKey);
+        // Also clear the underlying provider's conversation context
+        const provider = this._getProvider();
+        if ("clearSession" in provider && typeof provider.clearSession === "function") {
+          await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
+        }
         return { text: "上下文已清除，开始新对话。" };
       }
       case "restart": {

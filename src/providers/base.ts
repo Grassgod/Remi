@@ -46,6 +46,7 @@ export interface Provider {
       context?: string | null;
       cwd?: string | null;
       sessionId?: string | null;
+      chatId?: string | null;
     },
   ): Promise<AgentResponse>;
 
@@ -55,6 +56,7 @@ export interface Provider {
     options?: {
       systemPrompt?: string | null;
       context?: string | null;
+      chatId?: string | null;
     },
   ): AsyncGenerator<StreamEvent>;
 

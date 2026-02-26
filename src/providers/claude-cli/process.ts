@@ -372,6 +372,27 @@ export class ClaudeProcessManager {
     }
   }
 
+  /**
+   * Send /clear to the subprocess to reset conversation context.
+   */
+  async clearSession(): Promise<void> {
+    if (!this.isAlive) return;
+    await this._lock.acquire();
+    try {
+      await this._writeLine(formatUserMessage("/clear"));
+      this._sessionId = null;
+      // Drain any response lines until we get a result (the CLI will ack the clear)
+      while (true) {
+        const line = await this._readline();
+        if (line === null) break;
+        const msg = parseLine(line);
+        if (msg.kind === "result") break;
+      }
+    } finally {
+      this._lock.release();
+    }
+  }
+
   private async _writeLine(data: string): Promise<void> {
     if (!this._process || !this._process.stdin) {
       throw new Error("Process stdin not available");
