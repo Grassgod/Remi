@@ -219,16 +219,19 @@ export class ClaudeCLIProvider implements Provider {
   async clearSession(chatId?: string): Promise<void> {
     if (chatId) {
       const mgr = this._pool.get(chatId);
-      if (mgr && mgr.isAlive) {
-        await mgr.clearSession();
+      if (mgr) {
+        await mgr.stop();
+        this._pool.delete(chatId);
+        this._lastUsed.delete(chatId);
+        console.log(`[provider] Session cleared for chatId="${chatId}" (process killed, will respawn on next message)`);
       }
     } else {
       // Clear all sessions
-      for (const mgr of this._pool.values()) {
-        if (mgr.isAlive) {
-          await mgr.clearSession();
-        }
-      }
+      const stops = [...this._pool.values()].map((mgr) => mgr.stop());
+      await Promise.all(stops);
+      this._pool.clear();
+      this._lastUsed.clear();
+      console.log(`[provider] All sessions cleared (processes killed)`);
     }
   }
 
