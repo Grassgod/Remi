@@ -12,6 +12,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("enqueue");
 
 async function main(): Promise<void> {
   const queueDir = join(homedir(), ".remi", "queue");
@@ -54,4 +57,4 @@ async function main(): Promise<void> {
   writeFileSync(outputPath, JSON.stringify(entry) + "\n", "utf-8");
 }
 
-main().catch(console.error);
+main().catch((e) => log.error("enqueue failed:", e));

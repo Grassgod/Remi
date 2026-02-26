@@ -20,6 +20,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { buildMaintenancePrompt } from "./maintenance.js";
 import type { MemoryStore } from "./store.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("mem-daemon");
 
 const LOCK_FILE = ".maintenance.lock";
 const LOCK_TIMEOUT = 60; // seconds
@@ -47,13 +50,13 @@ export class MemoryDaemon {
   }
 
   async run(shutdownSignal?: AbortSignal): Promise<void> {
-    console.log(`MemoryDaemon started, watching ${this.queueDir}`);
+    log.info(`MemoryDaemon started, watching ${this.queueDir}`);
 
     while (!shutdownSignal?.aborted) {
       try {
         await this._processQueue();
       } catch (e) {
-        console.error("Queue processing error:", e);
+        log.error("Queue processing error:", e);
       }
 
       // Wait for poll interval or shutdown
@@ -68,7 +71,7 @@ export class MemoryDaemon {
       });
     }
 
-    console.log("MemoryDaemon stopped.");
+    log.info("MemoryDaemon stopped.");
   }
 
   private async _processQueue(): Promise<void> {
@@ -106,7 +109,7 @@ export class MemoryDaemon {
     try {
       data = JSON.parse(readFileSync(jsonlFile, "utf-8"));
     } catch (e) {
-      console.error(`Failed to read ${jsonlFile}:`, e);
+      log.error(`Failed to read ${jsonlFile}:`, e);
       return;
     }
 
@@ -128,7 +131,7 @@ export class MemoryDaemon {
       return;
     }
 
-    console.log(`Processing queued transcript: ${jsonlFile.split("/").pop()}`);
+    log.info(`Processing queued transcript: ${jsonlFile.split("/").pop()}`);
 
     // Build prompt (placeholder for LLM integration)
     const prompt = buildMaintenancePrompt(
@@ -139,7 +142,7 @@ export class MemoryDaemon {
     );
 
     // TODO: call LLM with prompt, parse response, execute actions
-    console.log(`Maintenance prompt built (${prompt.length} chars), LLM call pending`);
+    log.info(`Maintenance prompt built (${prompt.length} chars), LLM call pending`);
 
     // Record as processed
     appendFileSync(processedFile, `${contentHash}\n`, "utf-8");

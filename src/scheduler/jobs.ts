@@ -9,6 +9,7 @@
 
 import type { RemiConfig } from "../config.js";
 import type { Remi } from "../core.js";
+import { createLogger } from "../logger.js";
 import {
   existsSync,
   readFileSync,
@@ -20,6 +21,8 @@ import {
   appendFileSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
+
+const log = createLogger("scheduler");
 
 function parseCronHour(cronExpr: string): number {
   const parts = cronExpr.split(" ");
@@ -44,7 +47,7 @@ export class Scheduler {
   }
 
   async start(shutdownSignal: AbortSignal): Promise<void> {
-    console.log(
+    log.info(
       `Scheduler started (heartbeat=${this._heartbeatInterval}s, compact@${String(this._compactHour).padStart(2, "0")}:00)`,
     );
 
@@ -79,7 +82,7 @@ export class Scheduler {
       }
     }
 
-    console.log("Scheduler stopped.");
+    log.info("Scheduler stopped.");
   }
 
   private async _heartbeat(): Promise<void> {
@@ -87,10 +90,10 @@ export class Scheduler {
       try {
         const healthy = await provider.healthCheck();
         if (!healthy) {
-          console.warn(`Provider ${name} health check failed`);
+          log.warn(`Provider ${name} health check failed`);
         }
       } catch (e) {
-        console.error(`Provider ${name} health check error:`, e);
+        log.error(`Provider ${name} health check error:`, e);
       }
     }
   }
@@ -103,7 +106,7 @@ export class Scheduler {
       return;
     }
 
-    console.log(`Compacting daily notes for ${yesterday}`);
+    log.info(`Compacting daily notes for ${yesterday}`);
 
     try {
       const provider = this._remi._getProvider();
@@ -135,7 +138,7 @@ export class Scheduler {
 
         if (summaryText) {
           this._remi.memory.appendMemory(`\n## From ${yesterday}\n\n${summaryText}`);
-          console.log(`Appended compacted memory from ${yesterday}`);
+          log.info(`Appended compacted memory from ${yesterday}`);
         }
 
         // Update rolling summary
@@ -148,7 +151,7 @@ export class Scheduler {
       // Archive very old logs
       this._archiveOldLogs();
     } catch (e) {
-      console.error("Memory compaction failed:", e);
+      log.error("Memory compaction failed:", e);
     }
   }
 
@@ -164,7 +167,7 @@ export class Scheduler {
         this._remi.memory.createEntity(name, etype, observation, "agent-inferred");
       }
     } catch (e) {
-      console.warn(`Failed to process entity ${name}:`, e);
+      log.warn(`Failed to process entity ${name}:`, e);
     }
   }
 
@@ -178,7 +181,7 @@ export class Scheduler {
       const entry = `\n## ${dateStr}\n${summary}\n`;
       writeFileSync(summaryFile, existing + entry, "utf-8");
     } catch (e) {
-      console.warn("Failed to update rolling summary:", e);
+      log.warn("Failed to update rolling summary:", e);
     }
   }
 
@@ -254,7 +257,7 @@ export class Scheduler {
     const removedDaily = this._remi.memory.cleanupOldDailies(30);
     const removedVersions = this._remi.memory.cleanupOldVersions(50);
     if (removedDaily || removedVersions) {
-      console.log(
+      log.info(
         `Cleanup: removed ${removedDaily} old dailies, ${removedVersions} old versions`,
       );
     }

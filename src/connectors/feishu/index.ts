@@ -9,6 +9,9 @@
 import type { FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
+import { createLogger } from "../../logger.js";
+
+const log = createLogger("feishu");
 import { createFeishuClient } from "./client.js";
 import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
 import { FeishuStreamingSession } from "./streaming.js";
@@ -36,7 +39,7 @@ export class FeishuConnector implements Connector {
 
     this._handler = handler;
     this._streamHandler = streamHandler ?? null;
-    console.log("feishu: starting connector...");
+    log.info("starting connector...");
 
     this._wsHandle = startWebSocketListener(this._config, async (msg: ParsedFeishuMessage) => {
       await this._handleFeishuMessage(msg);
@@ -55,7 +58,7 @@ export class FeishuConnector implements Connector {
     }
     this._handler = null;
     this._streamHandler = null;
-    console.log("feishu: connector stopped");
+    log.info("connector stopped");
   }
 
   async reply(chatId: string, response: AgentResponse): Promise<void> {
@@ -96,7 +99,7 @@ export class FeishuConnector implements Connector {
       },
     };
 
-    console.log(`feishu: received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${msg.text.slice(0, 80)}`);
+    log.info(`received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${msg.text.slice(0, 80)}`);
 
     try {
       // Add typing indicator (thinking emoji)
@@ -133,7 +136,7 @@ export class FeishuConnector implements Connector {
         }
       }
     } catch (err) {
-      console.error(`feishu: failed to process message ${msg.messageId}: ${String(err)}`);
+      log.error(`failed to process message ${msg.messageId}: ${String(err)}`);
       try {
         const client = createFeishuClient({
           appId: this._config.appId,
@@ -168,7 +171,7 @@ export class FeishuConnector implements Connector {
     try {
       await session.start(chatId, "chat_id", { replyToMessageId });
     } catch (err) {
-      console.warn(`feishu: streaming card creation failed, falling back to static reply: ${String(err)}`);
+      log.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
       if (this._handler) {
         const response = await this._handler(incoming);
         await this._sendStaticReply(chatId, response, replyToMessageId);
@@ -183,7 +186,7 @@ export class FeishuConnector implements Connector {
 
     try {
       for await (const event of this._streamHandler!(incoming)) {
-        console.log(`[feishu] received event: ${event.kind}`);
+        log.debug(`received event: ${event.kind}`);
         switch (event.kind) {
           case "thinking_delta":
             thinkingText += event.text;
@@ -220,7 +223,7 @@ export class FeishuConnector implements Connector {
         stats,
       });
     } catch (err) {
-      console.error(`feishu: streaming error: ${String(err)}`);
+      log.error(`streaming error: ${String(err)}`);
       // Always close the streaming card to prevent it from being stuck
       if (session.isActive()) {
         await session.close({

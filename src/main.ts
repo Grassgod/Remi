@@ -9,9 +9,13 @@
 import { loadConfig } from "./config.js";
 import { CLIConnector } from "./connectors/cli.js";
 import { RemiDaemon } from "./daemon.js";
+import { setLogLevel, createLogger } from "./logger.js";
+
+const log = createLogger("main");
 
 function runCli(): void {
   const config = loadConfig();
+  setLogLevel(config.logLevel);
 
   const daemon = new RemiDaemon(config);
   const remi = daemon._buildRemi();
@@ -21,7 +25,7 @@ function runCli(): void {
 
   remi.start().catch((e: Error) => {
     if (e.name !== "AbortError") {
-      console.error("Error:", e);
+      log.error("Error:", e);
       process.exit(1);
     }
   });
@@ -29,10 +33,11 @@ function runCli(): void {
 
 function runServe(): void {
   const config = loadConfig();
+  setLogLevel(config.logLevel);
 
   const daemon = new RemiDaemon(config);
   daemon.run().catch((e: Error) => {
-    console.error("Daemon error:", e);
+    log.error("Daemon error:", e);
     process.exit(1);
   });
 }
@@ -49,9 +54,9 @@ function main(): void {
       runServe();
       break;
     default:
-      console.log("Usage: bun run src/main.ts [chat|serve]");
-      console.log("  chat   — Interactive CLI REPL (default)");
-      console.log("  serve  — Daemon mode with connectors + scheduler");
+      log.info("Usage: bun run src/main.ts [chat|serve]");
+      log.info("  chat   — Interactive CLI REPL (default)");
+      log.info("  serve  — Daemon mode with connectors + scheduler");
       process.exit(1);
   }
 }

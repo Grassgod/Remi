@@ -19,6 +19,9 @@ import {
 } from "node:fs";
 import { join, relative, dirname, basename, resolve } from "node:path";
 import matter from "gray-matter";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("memory");
 
 const PLURAL_MAP: Record<string, string> = {
   person: "people",
@@ -401,7 +404,7 @@ export class MemoryStore {
     this._ensureInitialized();
     let context = this._assemble(cwd ?? null);
     if (context.length > CONTEXT_WARN_THRESHOLD) {
-      console.warn(
+      log.warn(
         `记忆上下文 ${context.length} 字符（阈值：${CONTEXT_WARN_THRESHOLD}）`,
       );
       context +=
@@ -565,7 +568,7 @@ export class MemoryStore {
     const baseDir = join(this.root, "entities");
     const path = this._resolveEntityPath(name, type, baseDir);
     if (existsSync(path)) {
-      console.warn(`Entity ${name} already exists at ${path}`);
+      log.warn(`Entity ${name} already exists at ${path}`);
       return;
     }
     const rendered = this._renderNewEntity(name, type, content, source);
@@ -580,7 +583,7 @@ export class MemoryStore {
   updateEntity(name: string, content: string): void {
     const path = this._findEntityByName(name);
     if (!path) {
-      console.warn(`Entity ${name} not found for update`);
+      log.warn(`Entity ${name} not found for update`);
       return;
     }
     this._backup(path);
@@ -592,7 +595,7 @@ export class MemoryStore {
   appendObservation(name: string, observation: string): void {
     const path = this._findEntityByName(name);
     if (!path) {
-      console.warn(`Entity ${name} not found for observation`);
+      log.warn(`Entity ${name} not found for observation`);
       return;
     }
     this._backup(path);
@@ -609,7 +612,7 @@ export class MemoryStore {
   ): void {
     const memoryFile = join(projectPath, ".remi", "memory.md");
     if (!existsSync(memoryFile)) {
-      console.warn(`Project memory not found: ${memoryFile}`);
+      log.warn(`Project memory not found: ${memoryFile}`);
       return;
     }
 
@@ -641,7 +644,7 @@ export class MemoryStore {
   deleteEntity(name: string): void {
     const path = this._findEntityByName(name);
     if (!path) {
-      console.warn(`Entity ${name} not found for deletion`);
+      log.warn(`Entity ${name} not found for deletion`);
       return;
     }
     this._backup(path);

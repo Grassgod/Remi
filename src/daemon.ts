@@ -23,6 +23,9 @@ import { Scheduler } from "./scheduler/jobs.js";
 import { getMemoryTools } from "./tools/memory-tools.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("daemon");
 
 export class RemiDaemon {
   config: RemiConfig;
@@ -40,7 +43,7 @@ export class RemiDaemon {
       mkdirSync(dir, { recursive: true });
     }
     writeFileSync(this.config.pidFile, String(process.pid));
-    console.log(`PID file written: ${this.config.pidFile} (pid=${process.pid})`);
+    log.info(`PID file written: ${this.config.pidFile} (pid=${process.pid})`);
   }
 
   private _removePid(): void {
@@ -78,7 +81,7 @@ export class RemiDaemon {
     if (!alive) return;
 
     // Takeover: send SIGTERM and wait for old process to exit
-    console.log(`Found existing Remi daemon (pid=${pid}), sending SIGTERM to take over...`);
+    log.info(`Found existing Remi daemon (pid=${pid}), sending SIGTERM to take over...`);
     try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
 
     const deadline = Date.now() + 10_000; // 10s timeout
@@ -87,7 +90,7 @@ export class RemiDaemon {
         process.kill(pid, 0);
       } catch {
         // Old process exited
-        console.log(`Old daemon (pid=${pid}) exited.`);
+        log.info(`Old daemon (pid=${pid}) exited.`);
         this._removePid();
         return;
       }
@@ -95,7 +98,7 @@ export class RemiDaemon {
     }
 
     // Still alive after timeout — force kill
-    console.warn(`Old daemon (pid=${pid}) did not exit in 10s, sending SIGKILL...`);
+    log.warn(`Old daemon (pid=${pid}) did not exit in 10s, sending SIGKILL...`);
     try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ }
     Bun.sleepSync(500);
     this._removePid();
@@ -105,7 +108,7 @@ export class RemiDaemon {
 
   private _setupSignals(): void {
     const handler = (sig: string) => {
-      console.log(`Received ${sig}, shutting down...`);
+      log.info(`Received ${sig}, shutting down...`);
       this._abortController.abort();
     };
     process.on("SIGTERM", () => handler("SIGTERM"));
@@ -133,7 +136,7 @@ export class RemiDaemon {
         const fallback = this._buildProvider(this.config.provider.fallback);
         remi.addProvider(fallback);
       } catch (e) {
-        console.warn("Failed to build fallback provider:", e);
+        log.warn("Failed to build fallback provider:", e);
       }
     }
 
@@ -141,7 +144,7 @@ export class RemiDaemon {
     if (this.config.feishu.appId && this.config.feishu.appSecret) {
       const feishu = new FeishuConnector(this.config.feishu);
       remi.addConnector(feishu);
-      console.log("Registered Feishu connector");
+      log.info("Registered Feishu connector");
     }
 
     // Register restart handler (only triggered by /restart slash command)
@@ -157,11 +160,11 @@ export class RemiDaemon {
     try {
       const tools = getMemoryTools(remi.memory);
       registerable.registerToolsFromDict(tools);
-      console.log(
+      log.info(
         `Registered ${Object.keys(tools).length} memory tools on ${(provider as { name: string }).name}`,
       );
     } catch (e) {
-      console.warn("Failed to register memory tools:", e);
+      log.warn("Failed to register memory tools:", e);
     }
   }
 
@@ -174,11 +177,11 @@ export class RemiDaemon {
     try {
       const tools = getFeishuTools(this.config.feishu);
       registerable.registerToolsFromDict(tools);
-      console.log(
+      log.info(
         `Registered ${Object.keys(tools).length} feishu tools on ${(provider as { name: string }).name}`,
       );
     } catch (e) {
-      console.warn("Failed to register feishu tools:", e);
+      log.warn("Failed to register feishu tools:", e);
     }
   }
 
@@ -216,9 +219,9 @@ export class RemiDaemon {
       const raw = readFileSync(filePath, "utf-8");
       info = JSON.parse(raw);
       unlinkSync(filePath);
-      console.log(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
+      log.info(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
     } catch (e) {
-      console.warn("Restart notify: failed to read file:", e);
+      log.warn("Restart notify: failed to read file:", e);
       if (existsSync(filePath)) unlinkSync(filePath);
       return;
     }
@@ -229,7 +232,7 @@ export class RemiDaemon {
       (c) => c.name === (info.connectorName ?? ""),
     );
     if (!connector) {
-      console.warn(
+      log.warn(
         `Restart notify: connector "${info.connectorName}" not found (available: ${connectors.map((c) => c.name).join(", ")})`,
       );
       return;
@@ -240,22 +243,22 @@ export class RemiDaemon {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         await connector.reply(info.chatId, { text: "Remi 重启成功，已上线。" });
-        console.log(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
+        log.info(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
         return;
       } catch (e) {
-        console.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
+        log.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
         if (attempt < maxRetries) {
           await new Promise((r) => setTimeout(r, 3000));
         }
       }
     }
-    console.error("Restart notification failed after all retries.");
+    log.error("Restart notification failed after all retries.");
   }
 
   // ── Self-restart ────────────────────────────────────────
 
   private _restart(info: { chatId: string; connectorName?: string }): void {
-    console.log("Restart requested — spawning new process and shutting down...");
+    log.info("Restart requested — spawning new process and shutting down...");
 
     // Save notification info so the new process can notify the user
     this._saveRestartNotify(info);
@@ -294,8 +297,8 @@ export class RemiDaemon {
     const remi = this._buildRemi();
     const scheduler = new Scheduler(remi, this.config);
 
-    console.log(`\n${"=".repeat(60)}`);
-    console.log(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
+    log.info("=".repeat(60));
+    log.info(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
 
     // Send restart notification after connectors have time to fully initialize
     setTimeout(() => this._sendRestartNotify(remi), 5000);
@@ -312,7 +315,7 @@ export class RemiDaemon {
     } finally {
       await remi.stop();
       this._removePid();
-      console.log("Remi daemon stopped.");
+      log.info("Remi daemon stopped.");
     }
   }
 }

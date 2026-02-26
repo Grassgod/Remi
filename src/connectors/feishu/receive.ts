@@ -8,6 +8,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { FeishuConfig } from "../../config.js";
+import { createLogger } from "../../logger.js";
+
+const log = createLogger("feishu");
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeFeishu } from "./client.js";
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
@@ -36,7 +39,7 @@ function loadDedupCache(): void {
         processedMessageIds.set(id, ts);
       }
     }
-    console.log(`feishu: loaded ${processedMessageIds.size} dedup entries from cache`);
+    log.info(`loaded ${processedMessageIds.size} dedup entries from cache`);
   } catch {
     // Corrupt or missing — start fresh
   }
@@ -314,6 +317,7 @@ export async function processFeishuMessageEvent(
 
   // In groups, only respond if bot is mentioned (unless chat is in autoReplyGroups)
   const autoReply = opts?.autoReplyGroups?.includes(ctx.chatId) ?? false;
+  log.debug(`chatId=${ctx.chatId}, chatType=${ctx.chatType}, mentionedBot=${ctx.mentionedBot}, autoReply=${autoReply}, autoReplyGroups=${JSON.stringify(opts?.autoReplyGroups)}`);
   if (ctx.chatType === "group" && !ctx.mentionedBot && !autoReply) return null;
 
   // Resolve sender name (best-effort)
@@ -398,9 +402,9 @@ export function startWebSocketListener(
   probeFeishu(creds).then((result) => {
     if (result.ok && result.botOpenId) {
       botOpenId = result.botOpenId;
-      console.log(`feishu: bot open_id resolved: ${botOpenId} (${result.botName ?? ""})`);
+      log.info(`bot open_id resolved: ${botOpenId} (${result.botName ?? ""})`);
     } else {
-      console.warn(`feishu: failed to resolve bot open_id: ${result.error ?? "unknown"}`);
+      log.warn(`failed to resolve bot open_id: ${result.error ?? "unknown"}`);
     }
   });
 
@@ -420,7 +424,7 @@ export function startWebSocketListener(
           await onMessage(msg);
         }
       } catch (err) {
-        console.error(`feishu: error handling message: ${String(err)}`);
+        log.error(`error handling message: ${String(err)}`);
       }
     },
     "im.message.message_read_v1": async () => {
@@ -428,17 +432,17 @@ export function startWebSocketListener(
     },
     "im.chat.member.bot.added_v1": async (data) => {
       const event = data as unknown as { chat_id: string };
-      console.log(`feishu: bot added to chat ${event.chat_id}`);
+      log.info(`bot added to chat ${event.chat_id}`);
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       const event = data as unknown as { chat_id: string };
-      console.log(`feishu: bot removed from chat ${event.chat_id}`);
+      log.info(`bot removed from chat ${event.chat_id}`);
     },
   });
 
   const wsClient = createFeishuWSClient(creds);
   wsClient.start({ eventDispatcher });
-  console.log("feishu: WebSocket client started");
+  log.info("WebSocket client started");
 
   return {
     stop() {

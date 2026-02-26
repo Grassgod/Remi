@@ -18,6 +18,9 @@ import {
   formatUserMessage,
   parseLine,
 } from "./protocol.js";
+import { createLogger } from "../../logger.js";
+
+const log = createLogger("claude-proc");
 
 /** Tool handler: async (ToolUseRequest) -> string (custom tool) or null (built-in, not handled). */
 export type ToolHandler = (request: ToolUseRequest) => Promise<string | null>;
@@ -160,10 +163,10 @@ export class ClaudeProcessManager {
 
         // Debug: log parsed message kind
         if ("kind" in msg) {
-          console.log(`[claude-proc] event: ${msg.kind}`);
+          log.debug(`event: ${msg.kind}`);
         } else {
           const rawType = (msg as Record<string, unknown>).type;
-          if (rawType) console.log(`[claude-proc] raw: ${rawType}`);
+          if (rawType) log.debug(`raw: ${rawType}`);
         }
 
         // Emit tool_result for built-in tools when meaningful content arrives
@@ -247,7 +250,7 @@ export class ClaudeProcessManager {
               try {
                 pendingTool.input = JSON.parse(fullJson);
               } catch {
-                console.warn("Failed to parse tool input:", fullJson.slice(0, 200));
+                log.warn("Failed to parse tool input:", fullJson.slice(0, 200));
               }
             }
 

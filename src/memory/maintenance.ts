@@ -6,6 +6,9 @@
  */
 
 import type { MemoryStore } from "./store.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("maintenance");
 
 const MAINTENANCE_PROMPT_TEMPLATE = `\
 你是 Remi 的记忆维护 agent。审查以下对话（最近 10 轮 + 对话摘要），
@@ -88,7 +91,7 @@ export function parseMaintenanceResponse(responseText: string): MaintenanceActio
         try {
           data = JSON.parse(match[0]);
         } catch {
-          console.warn("Failed to parse maintenance action:", trimmed);
+          log.warn("Failed to parse maintenance action: %s", trimmed);
           continue;
         }
       }
@@ -143,10 +146,10 @@ export function executeMaintenanceActions(
           executed++;
           break;
         default:
-          console.warn(`Unknown maintenance action: ${action.action}`);
+          log.warn(`Unknown maintenance action: ${action.action}`);
       }
     } catch (e) {
-      console.error(
+      log.error(
         `Failed to execute action ${action.action} on ${action.target}:`,
         e,
       );

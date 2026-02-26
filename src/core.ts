@@ -14,6 +14,9 @@ import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import type { AgentResponse, Provider, StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("core");
 
 /** Simple promise-based mutex for per-lane serialization. */
 class AsyncLock {
@@ -166,13 +169,13 @@ export class Remi {
 
     // If provider supports streaming, use it
     if (typeof provider.sendStream === "function") {
-      console.log(`[core] starting provider.sendStream iteration`);
+      log.debug("starting provider.sendStream iteration");
       for await (const event of provider.sendStream(msg.text, {
         systemPrompt: SYSTEM_PROMPT,
         context: context || undefined,
         chatId: this._resolveSessionKey(msg),
       })) {
-        console.log(`[core] received event: ${event.kind}`);
+        log.debug(`received event: ${event.kind}`);
         yield event;
         // On result: update session + daily notes
         if (event.kind === "result") {
@@ -234,7 +237,7 @@ export class Remi {
     ) {
       const fallbackName = this.config.provider.fallback;
       if (fallbackName && this._providers.has(fallbackName)) {
-        console.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
+        log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
         const fallback = this._providers.get(fallbackName)!;
         response = await fallback.send(msg.text, {
           systemPrompt: SYSTEM_PROMPT,
