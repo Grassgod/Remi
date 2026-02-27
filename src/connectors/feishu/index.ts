@@ -222,6 +222,26 @@ export class FeishuConnector implements Connector {
         thinking: finalResponse?.thinking ?? (thinkingText || null),
         stats,
       });
+
+      // Notify sender in group chats via @mention (card patch doesn't trigger notifications)
+      if (incoming.metadata?.chatType === "group" && incoming.metadata?.senderOpenId) {
+        try {
+          const postContent = JSON.stringify({
+            zh_cn: {
+              content: [[
+                { tag: "at", user_id: incoming.metadata.senderOpenId as string },
+                { tag: "text", text: " ✅" },
+              ]],
+            },
+          });
+          await client.im.message.reply({
+            path: { message_id: replyToMessageId },
+            data: { content: postContent, msg_type: "post" },
+          });
+        } catch (e) {
+          log.warn(`@mention notification failed: ${String(e)}`);
+        }
+      }
     } catch (err) {
       log.error(`streaming error: ${String(err)}`);
       // Always close the streaming card to prevent it from being stuck
