@@ -195,16 +195,7 @@ export class FeishuConnector implements Connector {
             break;
           case "tool_use":
             toolCount++;
-            // Append tool call to thinking panel (Claude Code CLI style)
-            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
-            await session.updateThinking(thinkingText);
-            break;
-          case "tool_result":
-            // Replace trailing ⏳ with ✅ + duration
-            thinkingText = thinkingText.replace(
-              /⏳\n$/,
-              `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
-            );
+            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)}\n`;
             await session.updateThinking(thinkingText);
             break;
           case "result":
