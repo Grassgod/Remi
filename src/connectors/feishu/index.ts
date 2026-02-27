@@ -199,8 +199,11 @@ export class FeishuConnector implements Connector {
             await session.updateThinking(thinkingText);
             break;
           case "tool_result":
-            // Replace trailing ⏳ with ✅
-            thinkingText = thinkingText.replace(/⏳\n$/, `✅\n`);
+            // Replace trailing ⏳ with ✅ + duration
+            thinkingText = thinkingText.replace(
+              /⏳\n$/,
+              `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
+            );
             await session.updateThinking(thinkingText);
             break;
           case "result":
