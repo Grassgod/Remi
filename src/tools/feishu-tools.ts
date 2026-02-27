@@ -221,13 +221,16 @@ async function readFeishuDoc(
   urlOrToken: string,
   apiBase: string,
   config: FeishuConfig & { userAccessToken?: string },
+  tokenProvider?: () => Promise<string>,
 ): Promise<string> {
-  if (!config.appId || !config.appSecret) {
+  if (!tokenProvider && (!config.appId || !config.appSecret)) {
     return "[错误] 飞书凭据未配置。请在 remi.toml 或环境变量中设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。";
   }
 
   const parsed = parseFeishuUrl(urlOrToken);
-  const accessToken = await getAccessToken(apiBase, config);
+  const accessToken = tokenProvider
+    ? await tokenProvider()
+    : await getAccessToken(apiBase, config);
 
   let title = "";
   let content = "";
@@ -280,12 +283,13 @@ async function readFeishuDoc(
  */
 export function getFeishuTools(
   config: FeishuConfig & { userAccessToken?: string },
+  tokenProvider?: () => Promise<string>,
 ): Record<string, (...args: unknown[]) => Promise<string>> {
   const apiBase = resolveApiBase(config.domain as "feishu" | "lark" | undefined);
 
   async function read_feishu_doc(url: string): Promise<string> {
     try {
-      return await readFeishuDoc(String(url), apiBase, config);
+      return await readFeishuDoc(String(url), apiBase, config, tokenProvider);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return `[读取飞书文档失败] ${msg}`;

@@ -96,6 +96,15 @@ export class Scheduler {
         log.error(`Provider ${name} health check error:`, e);
       }
     }
+
+    // Auth token refresh check
+    if (this._remi.authStore) {
+      try {
+        await this._remi.authStore.checkAndRefreshAll();
+      } catch (e) {
+        log.error("Auth token refresh check error:", e);
+      }
+    }
   }
 
   private async _compactMemory(): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "../src/config.js";
@@ -120,6 +120,7 @@ function makeConfig(tmpDir: string): RemiConfig {
     logLevel: "INFO",
     contextWarnThreshold: 6000,
     queueDir: join(tmpDir, "queue"),
+    sessionsFile: join(tmpDir, "sessions.json"),
   };
 }
 
@@ -391,5 +392,83 @@ describe("RemiCore", () => {
     // Only 1 thread session created
     const threadSessions = [...remi._sessions.keys()].filter(k => k.includes(":thread:"));
     expect(threadSessions.length).toBe(1);
+  });
+
+  // ── Session persistence ─────────────────────────────────
+
+  it("stop flushes sessions to disk", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    await remi.handleMessage({
+      text: "Hello",
+      chatId: "chat-persist",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(remi._sessions.get("chat-persist")).toBe("sess-mock");
+    await remi.stop();
+
+    // sessions.json should exist
+    expect(existsSync(config.sessionsFile)).toBe(true);
+    const data = JSON.parse(readFileSync(config.sessionsFile, "utf-8"));
+    expect(data.entries).toBeInstanceOf(Array);
+    const found = data.entries.find((e: [string, string]) => e[0] === "chat-persist");
+    expect(found).toBeTruthy();
+    expect(found[1]).toBe("sess-mock");
+  });
+
+  it("constructor restores sessions from disk", async () => {
+    // Write a sessions file
+    const sessData = {
+      entries: [["restored-chat", "sess-restored"]],
+      savedAt: Date.now(),
+    };
+    writeFileSync(config.sessionsFile, JSON.stringify(sessData), "utf-8");
+
+    const remi = new Remi(config);
+    expect(remi._sessions.get("restored-chat")).toBe("sess-restored");
+  });
+
+  it("discards expired sessions file (>7 days)", async () => {
+    const sessData = {
+      entries: [["old-chat", "sess-old"]],
+      savedAt: Date.now() - 8 * 24 * 60 * 60 * 1000, // 8 days ago
+    };
+    writeFileSync(config.sessionsFile, JSON.stringify(sessData), "utf-8");
+
+    const remi = new Remi(config);
+    expect(remi._sessions.has("old-chat")).toBe(false);
+    expect(remi._sessions.size).toBe(0);
+  });
+
+  it("/clear removes session and flushes to disk", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    // Create a session
+    await remi.handleMessage({
+      text: "Hello",
+      chatId: "chat-clear",
+      sender: "user",
+      connectorName: "cli",
+    });
+    expect(remi._sessions.has("chat-clear")).toBe(true);
+
+    // Clear it
+    await remi.handleMessage({
+      text: "/clear",
+      chatId: "chat-clear",
+      sender: "user",
+      connectorName: "cli",
+    });
+    expect(remi._sessions.has("chat-clear")).toBe(false);
+
+    // Flush and verify
+    await remi.stop();
+    const data = JSON.parse(readFileSync(config.sessionsFile, "utf-8"));
+    const found = data.entries.find((e: [string, string]) => e[0] === "chat-clear");
+    expect(found).toBeUndefined();
   });
 });

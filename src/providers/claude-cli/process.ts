@@ -55,6 +55,7 @@ export class ClaudeProcessManager {
   allowedTools: string[];
   systemPrompt: string | null;
   cwd: string | null;
+  resumeSessionId: string | null;
 
   private _process: Subprocess | null = null;
   private _sessionId: string | null = null;
@@ -68,11 +69,13 @@ export class ClaudeProcessManager {
     allowedTools?: string[];
     systemPrompt?: string | null;
     cwd?: string | null;
+    resumeSessionId?: string | null;
   } = {}) {
     this.model = options.model ?? null;
     this.allowedTools = options.allowedTools ?? [];
     this.systemPrompt = options.systemPrompt ?? null;
     this.cwd = options.cwd ?? null;
+    this.resumeSessionId = options.resumeSessionId ?? null;
   }
 
   get isAlive(): boolean {
@@ -100,6 +103,9 @@ export class ClaudeProcessManager {
     }
     if (this.systemPrompt) {
       cmd.push("--append-system-prompt", this.systemPrompt);
+    }
+    if (this.resumeSessionId) {
+      cmd.push("--resume", this.resumeSessionId);
     }
     return cmd;
   }

@@ -57,6 +57,7 @@ export interface Provider {
       systemPrompt?: string | null;
       context?: string | null;
       chatId?: string | null;
+      sessionId?: string | null;
     },
   ): AsyncGenerator<StreamEvent>;
 

@@ -146,12 +146,13 @@ export class ClaudeCLIProvider implements Provider {
       systemPrompt?: string | null;
       context?: string | null;
       chatId?: string | null;
+      sessionId?: string | null;
     },
   ): AsyncGenerator<StreamEvent> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
 
-    const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt);
+    const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt, options?.sessionId);
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -249,6 +250,7 @@ export class ClaudeCLIProvider implements Provider {
   private async _ensureProcess(
     chatId?: string | null,
     systemPrompt?: string | null,
+    sessionId?: string | null,
   ): Promise<ClaudeProcessManager> {
     const key = chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
@@ -263,6 +265,7 @@ export class ClaudeCLIProvider implements Provider {
       allowedTools: this.allowedTools,
       systemPrompt: systemPrompt ?? this.systemPrompt,
       cwd: this.cwd,
+      resumeSessionId: sessionId,
     });
     await mgr.start();
 

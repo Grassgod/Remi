@@ -426,21 +426,30 @@ export class MemoryStore {
       }
     }
 
-    // 2. Project memory
+    // 2. Project + module memory (both loaded when they differ)
     const projectRoot = cwd ? this._projectRoot(cwd) : null;
     const currentMemory = cwd ? join(cwd, ".remi", "memory.md") : null;
+    const rootMemory = projectRoot
+      ? join(projectRoot, ".remi", "memory.md")
+      : null;
+
+    // 2a. Project root memory
+    if (
+      rootMemory &&
+      existsSync(rootMemory) &&
+      resolve(rootMemory) !== resolve(currentMemory ?? "")
+    ) {
+      parts.push(
+        `# 项目记忆 (${basename(projectRoot!)})\n${readFileSync(rootMemory, "utf-8")}`,
+      );
+    }
+
+    // 2b. Current module memory (sub-project level)
     if (currentMemory && existsSync(currentMemory)) {
       const label = basename(cwd!);
       parts.push(
         `# 当前模块记忆 (${label})\n${readFileSync(currentMemory, "utf-8")}`,
       );
-    } else if (projectRoot) {
-      const rootMemory = join(projectRoot, ".remi", "memory.md");
-      if (existsSync(rootMemory)) {
-        parts.push(
-          `# 项目记忆 (${basename(projectRoot)})\n${readFileSync(rootMemory, "utf-8")}`,
-        );
-      }
     }
 
     // 3. Today's daily log — not injected into context (available via recall)

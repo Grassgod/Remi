@@ -23,6 +23,7 @@ import { Scheduler } from "./scheduler/jobs.js";
 import { getMemoryTools } from "./tools/memory-tools.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
+import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("daemon");
@@ -120,15 +121,28 @@ export class RemiDaemon {
   _buildRemi(): Remi {
     const remi = new Remi(this.config);
 
-    // Register providers
+    // 1. Initialize AuthStore (1Passport)
+    const authStore = new AuthStore(join(homedir(), ".remi", "auth"));
+    const hasFeishuCreds = !!(this.config.feishu.appId && this.config.feishu.appSecret);
+    if (hasFeishuCreds) {
+      authStore.registerAdapter(
+        new FeishuAuthAdapter({
+          appId: this.config.feishu.appId,
+          appSecret: this.config.feishu.appSecret,
+          domain: this.config.feishu.domain,
+          userAccessToken: this.config.feishu.userAccessToken || undefined,
+        }),
+      );
+    }
+    remi.authStore = authStore;
+
+    // 2. Register providers
     const provider = this._buildProvider();
     remi.addProvider(provider);
 
-    // Register memory tools on provider (if supported)
+    // 3. Register tools with token provider from AuthStore
     this._registerMemoryTools(provider, remi);
-
-    // Register Feishu document tools if credentials are configured
-    this._registerFeishuTools(provider);
+    this._registerFeishuTools(provider, hasFeishuCreds ? authStore : undefined);
 
     // Register fallback if configured
     if (this.config.provider.fallback) {
@@ -140,11 +154,12 @@ export class RemiDaemon {
       }
     }
 
-    // Register Feishu connector if credentials are configured
-    if (this.config.feishu.appId && this.config.feishu.appSecret) {
+    // 4. Register Feishu connector with token provider
+    if (hasFeishuCreds) {
       const feishu = new FeishuConnector(this.config.feishu);
+      feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       remi.addConnector(feishu);
-      log.info("Registered Feishu connector");
+      log.info("Registered Feishu connector (with 1Passport)");
     }
 
     // Register restart handler (only triggered by /restart slash command)
@@ -168,14 +183,25 @@ export class RemiDaemon {
     }
   }
 
-  private _registerFeishuTools(provider: unknown): void {
+  private _registerFeishuTools(provider: unknown, authStore?: AuthStore): void {
     if (!this.config.feishu.appId || !this.config.feishu.appSecret) return;
 
     const registerable = provider as { registerToolsFromDict?: (tools: Record<string, unknown>) => void };
     if (typeof registerable.registerToolsFromDict !== "function") return;
 
+    // Token provider for document tools: prefer user token, fall back to tenant
+    const tokenProvider = authStore
+      ? async () => {
+          try {
+            return await authStore.getToken("feishu", "user");
+          } catch {
+            return authStore.getToken("feishu", "tenant");
+          }
+        }
+      : undefined;
+
     try {
-      const tools = getFeishuTools(this.config.feishu);
+      const tools = getFeishuTools(this.config.feishu, tokenProvider);
       registerable.registerToolsFromDict(tools);
       log.info(
         `Registered ${Object.keys(tools).length} feishu tools on ${(provider as { name: string }).name}`,

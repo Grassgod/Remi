@@ -111,6 +111,8 @@ interface ElementThrottle {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+export type TokenProvider = () => Promise<string>;
+
 export class FeishuStreamingSession {
   private client: Client;
   private creds: Credentials;
@@ -118,6 +120,7 @@ export class FeishuStreamingSession {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private log: (msg: string) => void;
+  private _tokenProvider: TokenProvider | null;
 
   // Independent throttle per element — thinking and content don't interfere
   private throttles = new Map<string, ElementThrottle>();
@@ -127,10 +130,24 @@ export class FeishuStreamingSession {
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private static SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    options?: {
+      log?: (msg: string) => void;
+      tokenProvider?: TokenProvider;
+    },
+  ) {
     this.client = client;
     this.creds = creds;
-    this.log = log ?? ((msg) => console.log(`[streaming] ${msg}`));
+    this.log = options?.log ?? ((msg) => console.log(`[streaming] ${msg}`));
+    this._tokenProvider = options?.tokenProvider ?? null;
+  }
+
+  /** Get token via 1Passport provider or fall back to direct fetch. */
+  private async _getToken(): Promise<string> {
+    if (this._tokenProvider) return this._tokenProvider();
+    return getToken(this.creds);
   }
 
   async start(
@@ -176,7 +193,7 @@ export class FeishuStreamingSession {
     const createRes = await fetch(`${apiBase}/cardkit/v1/cards`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
+        Authorization: `Bearer ${await this._getToken()}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -250,7 +267,7 @@ export class FeishuStreamingSession {
           {
             method: "PUT",
             headers: {
-              Authorization: `Bearer ${await getToken(this.creds)}`,
+              Authorization: `Bearer ${await this._getToken()}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -447,7 +464,7 @@ export class FeishuStreamingSession {
         {
           method: "PATCH",
           headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
+            Authorization: `Bearer ${await this._getToken()}`,
             "Content-Type": "application/json; charset=utf-8",
           },
           body: JSON.stringify({

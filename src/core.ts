@@ -10,10 +10,13 @@
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
+import type { AuthStore } from "./auth/store.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("core");
@@ -44,7 +47,7 @@ class AsyncLock {
 }
 
 export const SYSTEM_PROMPT = `\
-你是 Remi，Jack 的个人 AI 助手。
+你是 Remi，Jack的个人伙伴, 是我的协作者, 伙伴和监督者, 必要时可以问具有挑战性的问题
 
 ## 记忆系统
 你拥有持久化记忆。每次对话开始时，相关记忆上下文自动注入在 <context> 标签中，
@@ -61,18 +64,25 @@ export const SYSTEM_PROMPT = `\
 <context> 末尾的"可用记忆"表格是摘要目录，使用 recall(名称) 可查看完整详情。
 `;
 
+/** Max age for persisted sessions — 7 days. */
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export class Remi {
   config: RemiConfig;
   memory: MemoryStore;
+  authStore: AuthStore | null = null;
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
   _sessions = new Map<string, string>(); // sessionKey → sessionId
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
+  private _sessDirty = false;
+  private _sessFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
     this.memory = new MemoryStore(config.memoryDir);
+    this._loadSessions();
   }
 
   // ── Provider management ──────────────────────────────────
@@ -164,10 +174,13 @@ export class Remi {
     const sessionKey = this._resolveSessionKey(msg);
     const cwd = (msg.metadata?.cwd as string) ?? undefined;
     const context = this.memory.gatherContext(cwd);
+    const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
+    log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
     const streamOptions = {
       systemPrompt: SYSTEM_PROMPT,
       context: context || undefined,
       chatId: this._resolveSessionKey(msg),
+      sessionId: existingSessionId,
     };
 
     const provider = this._getProvider();
@@ -211,6 +224,8 @@ export class Remi {
     if (resultResponse) {
       if (resultResponse.sessionId) {
         this._sessions.set(sessionKey, resultResponse.sessionId);
+        log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..."`);
+        this._scheduleSessFlush();
       }
       this.memory.appendDaily(
         `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
@@ -251,6 +266,7 @@ export class Remi {
       case "clear":
       case "new": {
         this._sessions.delete(sessionKey);
+        this._scheduleSessFlush();
         // Also clear the underlying provider's conversation context
         const provider = this._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
@@ -271,15 +287,22 @@ export class Remi {
         const sessionId = this._sessions.get(sessionKey);
         const providers = [...this._providers.keys()].join(", ");
         const connectors = this._connectors.map((c) => c.name).join(", ");
-        return {
-          text: [
-            `**Remi Status**`,
-            `- Session: ${hasSession ? sessionId?.slice(0, 12) + "..." : "无"}`,
-            isThread ? `- Context: Thread (isolated)` : `- Context: Main chat`,
-            `- Providers: ${providers}`,
-            `- Connectors: ${connectors}`,
-          ].join("\n"),
-        };
+        const lines = [
+          `**Remi Status**`,
+          `- Session: ${hasSession ? sessionId?.slice(0, 12) + "..." : "无"}`,
+          isThread ? `- Context: Thread (isolated)` : `- Context: Main chat`,
+          `- Providers: ${providers}`,
+          `- Connectors: ${connectors}`,
+        ];
+        if (this.authStore) {
+          for (const s of this.authStore.status()) {
+            const ttl = Math.round((s.expiresAt - Date.now()) / 1000 / 60);
+            lines.push(
+              `- Token ${s.service}/${s.type}: ${s.valid ? `valid (${ttl}min)` : "expired"}`,
+            );
+          }
+        }
+        return { text: lines.join("\n") };
       }
       default:
         return null;
@@ -302,6 +325,8 @@ export class Remi {
   }
 
   async stop(): Promise<void> {
+    this.flushSessions();
+
     for (const connector of this._connectors) {
       await connector.stop();
     }
@@ -312,5 +337,70 @@ export class Remi {
         await closeable.close();
       }
     }
+  }
+
+  // ── Session persistence ───────────────────────────────────
+
+  /** Load sessions from disk. Discard if older than TTL. */
+  private _loadSessions(): void {
+    try {
+      if (!existsSync(this.config.sessionsFile)) return;
+      const raw = readFileSync(this.config.sessionsFile, "utf-8");
+      const data = JSON.parse(raw) as { entries?: [string, string][]; savedAt?: number };
+      if (!data.entries || !Array.isArray(data.entries)) return;
+      if (data.savedAt && Date.now() - data.savedAt > SESSION_TTL_MS) {
+        log.info("Persisted sessions expired (>7d), discarding");
+        return;
+      }
+      for (const [key, id] of data.entries) {
+        this._sessions.set(key, id);
+      }
+      log.info(`Loaded ${data.entries.length} persisted session(s)`);
+    } catch (e) {
+      log.warn("Failed to load sessions file:", e);
+    }
+  }
+
+  /** Schedule a debounced flush (2 s). */
+  private _scheduleSessFlush(): void {
+    this._sessDirty = true;
+    if (this._sessFlushTimer) return;
+    this._sessFlushTimer = setTimeout(() => {
+      this._sessFlushTimer = null;
+      this._flushSessionsSync();
+    }, 2000);
+    if (typeof this._sessFlushTimer.unref === "function") {
+      this._sessFlushTimer.unref();
+    }
+  }
+
+  /** Synchronously write sessions to disk. */
+  private _flushSessionsSync(): void {
+    if (!this._sessDirty) return;
+    this._sessDirty = false;
+    try {
+      const dir = dirname(this.config.sessionsFile);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      const data = {
+        entries: [...this._sessions.entries()],
+        savedAt: Date.now(),
+      };
+      writeFileSync(this.config.sessionsFile, JSON.stringify(data), "utf-8");
+      log.debug(`Flushed ${data.entries.length} session(s) to disk`);
+    } catch (e) {
+      log.warn("Failed to write sessions file:", e);
+    }
+  }
+
+  /** Flush sessions to disk immediately. Called by stop(). */
+  flushSessions(): void {
+    if (this._sessFlushTimer) {
+      clearTimeout(this._sessFlushTimer);
+      this._sessFlushTimer = null;
+    }
+    this._sessDirty = true;
+    this._flushSessionsSync();
   }
 }

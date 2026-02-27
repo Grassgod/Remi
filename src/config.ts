@@ -45,6 +45,7 @@ export interface RemiConfig {
   logLevel: string;
   contextWarnThreshold: number;
   queueDir: string;
+  sessionsFile: string;
 }
 
 function defaultProviderConfig(): ProviderConfig {
@@ -88,6 +89,7 @@ export function defaultRemiConfig(): RemiConfig {
     logLevel: "INFO",
     contextWarnThreshold: 6000,
     queueDir: join(homedir(), ".remi", "queue"),
+    sessionsFile: join(homedir(), ".remi", "sessions.json"),
   };
 }
 
@@ -150,5 +152,6 @@ export function loadConfig(configPath?: string | null): RemiConfig {
     logLevel: env.REMI_LOG_LEVEL ?? (fileData.log_level as string) ?? "INFO",
     contextWarnThreshold: 6000,
     queueDir: join(homedir(), ".remi", "queue"),
+    sessionsFile: join(homedir(), ".remi", "sessions.json"),
   };
 }

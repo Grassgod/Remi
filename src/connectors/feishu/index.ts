@@ -14,7 +14,7 @@ import { createLogger } from "../../logger.js";
 const log = createLogger("feishu");
 import { createFeishuClient } from "./client.js";
 import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
-import { FeishuStreamingSession } from "./streaming.js";
+import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
 import {
   startWebSocketListener,
   type FeishuWSHandle,
@@ -27,9 +27,15 @@ export class FeishuConnector implements Connector {
   private _wsHandle: FeishuWSHandle | null = null;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
+  private _tokenProvider: TokenProvider | null = null;
 
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
+  }
+
+  /** Set the token provider (from 1Passport AuthStore). */
+  setTokenProvider(provider: TokenProvider): void {
+    this._tokenProvider = provider;
   }
 
   async start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void> {
@@ -165,7 +171,9 @@ export class FeishuConnector implements Connector {
       domain: this._config.domain,
     };
     const client = createFeishuClient(creds);
-    const session = new FeishuStreamingSession(client, creds);
+    const session = new FeishuStreamingSession(client, creds, {
+      tokenProvider: this._tokenProvider ?? undefined,
+    });
 
     // Try to start the streaming card — fall back to blocking handler if it fails
     try {
