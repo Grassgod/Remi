@@ -83,7 +83,6 @@ function buildFinalCard(opts: {
     elements.push({
       tag: "collapsible_panel",
       expanded: false,
-      background_style: "default",
       header: { title: { tag: "plain_text", content: "💭 Thinking" } },
       vertical_spacing: "2px",
       elements: [{ tag: "markdown", content: opts.thinking }],
