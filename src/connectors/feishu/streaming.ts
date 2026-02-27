@@ -71,6 +71,39 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+/** Build the final static card JSON (thinking panel collapsed). */
+function buildFinalCard(opts: {
+  text: string;
+  thinking?: string | null;
+  stats?: string | null;
+}): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [];
+
+  if (opts.thinking) {
+    elements.push({
+      tag: "collapsible_panel",
+      expanded: false,
+      background_style: "default",
+      header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+      vertical_spacing: "2px",
+      elements: [{ tag: "markdown", content: opts.thinking }],
+    });
+  }
+
+  elements.push({ tag: "markdown", content: opts.text || "" });
+
+  if (opts.stats) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: opts.stats });
+  }
+
+  return {
+    schema: "2.0",
+    config: { summary: { content: truncateSummary(opts.text) } },
+    body: { elements },
+  };
+}
+
 // ── Per-element throttle state ──────────────────────────────
 
 interface ElementThrottle {
@@ -317,27 +350,6 @@ export class FeishuStreamingSession {
     this._throttledUpdate("thinking_content", text, "currentThinking");
   }
 
-  /** Collapse the thinking panel by replacing the full panel element. */
-  async collapseThinking(): Promise<void> {
-    if (!this.state || this.closed) return;
-    const panelJson = JSON.stringify({
-      tag: "collapsible_panel",
-      expanded: false,
-      background_style: "default",
-      header: {
-        title: { tag: "plain_text", content: "💭 Thinking" },
-      },
-      vertical_spacing: "2px",
-      element_id: "thinking_panel",
-      elements: [
-        { tag: "markdown", content: this.state.currentThinking, element_id: "thinking_content" },
-      ],
-    });
-    this.queue = this.queue.then(() =>
-      this._updateElementRaw("thinking_panel", panelJson),
-    );
-  }
-
   // ── Flush all pending throttled updates ────────────────────
 
   private async _flushAll(): Promise<void> {
@@ -457,6 +469,17 @@ export class FeishuStreamingSession {
       }
     } catch (e) {
       this.log(`Close failed: ${String(e)}`);
+    }
+
+    // Replace with static card — thinking panel collapsed
+    try {
+      const finalCard = buildFinalCard({ text, thinking: thinkingText, stats });
+      await this.client.im.message.patch({
+        path: { message_id: this.state.messageId },
+        data: { content: JSON.stringify(finalCard) },
+      });
+    } catch (e) {
+      this.log(`Final card patch failed: ${String(e)}`);
     }
 
     this.log(`Closed streaming: cardId=${this.state.cardId}`);
