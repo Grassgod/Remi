@@ -182,7 +182,7 @@ export class FeishuAuthAdapter implements AuthAdapter {
     const appToken = await this.getToken("tenant");
 
     const resp = await fetch(
-      `${this._apiBase}/authen/v1/oidc/refresh_access_token`,
+      `${this._apiBase}/authen/v1/refresh_access_token`,
       {
         method: "POST",
         headers: {

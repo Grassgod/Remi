@@ -10,6 +10,7 @@ import { loadConfig } from "./config.js";
 import { CLIConnector } from "./connectors/cli.js";
 import { RemiDaemon } from "./daemon.js";
 import { setLogLevel, createLogger } from "./logger.js";
+import { runAuth } from "./auth/oauth-cli.js";
 
 const log = createLogger("main");
 
@@ -53,10 +54,17 @@ function main(): void {
     case "serve":
       runServe();
       break;
+    case "auth":
+      runAuth().catch((e: Error) => {
+        log.error("Auth error:", e);
+        process.exit(1);
+      });
+      break;
     default:
-      log.info("Usage: bun run src/main.ts [chat|serve]");
+      log.info("Usage: bun run src/main.ts [chat|serve|auth]");
       log.info("  chat   — Interactive CLI REPL (default)");
       log.info("  serve  — Daemon mode with connectors + scheduler");
+      log.info("  auth   — Feishu OAuth authorization (obtain user_access_token)");
       process.exit(1);
   }
 }

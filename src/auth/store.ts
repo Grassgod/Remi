@@ -52,6 +52,9 @@ export class AuthStore {
 
   /** Proactively check and refresh all tokens (called by Scheduler heartbeat). */
   async checkAndRefreshAll(): Promise<void> {
+    // Reload tokens from disk (picks up tokens written externally, e.g. by `auth` CLI)
+    this._reloadFromDisk();
+
     for (const [service, adapter] of this._adapters) {
       try {
         await adapter.checkAndRefresh();
@@ -83,16 +86,29 @@ export class AuthStore {
     }
   }
 
-  /** Immediately persist all tokens to disk. */
+  /** Reload tokens from disk into adapters (picks up external writes). */
+  private _reloadFromDisk(): void {
+    const all = this._persistence.load();
+    for (const [service, adapter] of this._adapters) {
+      const saved = all[service];
+      if (saved && adapter.restoreTokens) {
+        adapter.restoreTokens(saved);
+      }
+    }
+  }
+
+  /** Immediately persist all tokens to disk, merging with existing data. */
   private _persistNow(): void {
-    const data: Record<string, Record<string, TokenEntry>> = {};
+    // Merge with existing disk data to avoid overwriting tokens from external tools
+    const existing = this._persistence.load();
     for (const [service, adapter] of this._adapters) {
       if (adapter.exportTokens) {
-        data[service] = adapter.exportTokens();
+        const exported = adapter.exportTokens();
+        existing[service] = { ...existing[service], ...exported };
       }
     }
     try {
-      this._persistence.save(data);
+      this._persistence.save(existing);
       log.debug("Tokens persisted to disk");
     } catch (e) {
       log.warn("Failed to persist tokens:", e);
