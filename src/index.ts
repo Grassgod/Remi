@@ -27,7 +27,6 @@ export { CLIConnector } from "./connectors/cli.js";
 
 // Memory
 export { MemoryStore } from "./memory/store.js";
-export { getMemoryTools } from "./tools/memory-tools.js";
 
 // Daemon
 export { RemiDaemon } from "./daemon.js";

@@ -20,7 +20,6 @@ import { loadConfig } from "./config.js";
 import { Remi } from "./core.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { Scheduler } from "./scheduler/jobs.js";
-import { getMemoryTools } from "./tools/memory-tools.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
@@ -142,7 +141,7 @@ export class RemiDaemon {
     remi.addProvider(provider);
 
     // 3. Register tools with token provider from AuthStore
-    this._registerMemoryTools(provider, remi);
+    // Note: memory tools (recall/remember) are now provided via MCP server (src/mcp/memory-server.ts)
     this._registerFeishuTools(provider, hasFeishuCreds ? authStore : undefined);
 
     // Register fallback if configured
@@ -167,21 +166,6 @@ export class RemiDaemon {
     remi.onRestart((info) => this._restart(info));
 
     return remi;
-  }
-
-  private _registerMemoryTools(provider: unknown, remi: Remi): void {
-    const registerable = provider as { registerToolsFromDict?: (tools: Record<string, unknown>) => void };
-    if (typeof registerable.registerToolsFromDict !== "function") return;
-
-    try {
-      const tools = getMemoryTools(remi.memory);
-      registerable.registerToolsFromDict(tools);
-      log.info(
-        `Registered ${Object.keys(tools).length} memory tools on ${(provider as { name: string }).name}`,
-      );
-    } catch (e) {
-      log.warn("Failed to register memory tools:", e);
-    }
   }
 
   private _registerFeishuTools(provider: unknown, authStore?: AuthStore): void {
