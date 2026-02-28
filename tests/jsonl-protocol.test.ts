@@ -102,11 +102,24 @@ describe("parseLine", () => {
     expect(tu.input).toEqual({ content: "hello" });
   });
 
-  it("returns dict for assistant message without tools", () => {
+  it("parses text-only assistant message as content_delta", () => {
     const line = JSON.stringify({
       type: "assistant",
       message: {
         content: [{ type: "text", text: "Just text." }],
+      },
+    });
+    const msg = parseLine(line) as { kind: string; text: string; index: number };
+    expect(msg.kind).toBe("content_delta");
+    expect(msg.text).toBe("Just text.");
+    expect(msg.index).toBe(0);
+  });
+
+  it("returns dict for assistant message with empty text", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "text", text: "" }],
       },
     });
     const msg = parseLine(line);

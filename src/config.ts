@@ -31,6 +31,22 @@ export interface FeishuConfig {
   autoReplyGroups: string[];
 }
 
+export interface BriefingConfig {
+  enabled: boolean;
+  /** Hour to start generating the briefing (default: 2 AM). */
+  generateHour: number;
+  /** Hour to push the briefing to feishu (default: 9). */
+  pushHour: number;
+  /** Minute within pushHour to push (default: 50, i.e. 9:50 AM). */
+  pushMinute: number;
+  /** Chat IDs to push the briefing to (open_id, chat_id, etc.). */
+  pushTargets: string[];
+  /** Connector name to use for pushing (default: "feishu"). */
+  connectorName: string;
+  /** Directory to store briefing files. */
+  briefingDir: string;
+}
+
 export interface SchedulerConfig {
   memoryCompactCron: string;
   heartbeatInterval: number;
@@ -40,6 +56,7 @@ export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
   scheduler: SchedulerConfig;
+  briefing: BriefingConfig;
   memoryDir: string;
   pidFile: string;
   logLevel: string;
@@ -72,6 +89,18 @@ function defaultFeishuConfig(): FeishuConfig {
   };
 }
 
+function defaultBriefingConfig(): BriefingConfig {
+  return {
+    enabled: false,
+    generateHour: 2,
+    pushHour: 9,
+    pushMinute: 50,
+    pushTargets: [],
+    connectorName: "feishu",
+    briefingDir: join(homedir(), ".remi", "briefings"),
+  };
+}
+
 function defaultSchedulerConfig(): SchedulerConfig {
   return {
     memoryCompactCron: "0 3 * * *",
@@ -84,6 +113,7 @@ export function defaultRemiConfig(): RemiConfig {
     provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
     scheduler: defaultSchedulerConfig(),
+    briefing: defaultBriefingConfig(),
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: "INFO",
@@ -118,6 +148,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const providerData = (fileData.provider ?? {}) as Record<string, unknown>;
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
+  const briefingData = (fileData.briefing ?? {}) as Record<string, unknown>;
 
   const env = process.env;
 
@@ -146,6 +177,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
         env.REMI_HEARTBEAT ?? String(schedulerData.heartbeat_interval ?? 300),
         10,
       ),
+    },
+    briefing: {
+      enabled: (briefingData.enabled as boolean) ?? false,
+      generateHour: parseInt(String(briefingData.generate_hour ?? 2), 10),
+      pushHour: parseInt(String(briefingData.push_hour ?? 9), 10),
+      pushMinute: parseInt(String(briefingData.push_minute ?? 50), 10),
+      pushTargets: (briefingData.push_targets as string[]) ?? [],
+      connectorName: (briefingData.connector_name as string) ?? "feishu",
+      briefingDir: (briefingData.briefing_dir as string) ?? join(homedir(), ".remi", "briefings"),
     },
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),

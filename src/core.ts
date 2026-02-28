@@ -11,7 +11,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
@@ -171,6 +171,13 @@ export class Remi {
       return;
     }
 
+    // Handle briefing detail request
+    const briefingResponse = this._tryBriefingDetail(msg.text);
+    if (briefingResponse) {
+      yield { kind: "result", response: briefingResponse };
+      return;
+    }
+
     const sessionKey = this._resolveSessionKey(msg);
     const cwd = (msg.metadata?.cwd as string) ?? undefined;
     const context = this.memory.gatherContext(cwd);
@@ -307,6 +314,30 @@ export class Remi {
       default:
         return null;
     }
+  }
+
+  // ── Briefing detail on demand ────────────────────────────
+
+  private _tryBriefingDetail(text: string): AgentResponse | null {
+    const trimmed = text.trim();
+    if (!trimmed.includes("详细报告")) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const briefingPath = join(this.config.briefing.briefingDir, `${today}.md`);
+
+    if (!existsSync(briefingPath)) {
+      return { text: `今天（${today}）还没有生成日报，请稍后再试。` };
+    }
+
+    const content = readFileSync(briefingPath, "utf-8");
+    const separator = "# 📋 AI 日报详细报告";
+    const idx = content.indexOf(separator);
+
+    if (idx < 0) {
+      return { text: "今天的日报没有详细报告部分。" };
+    }
+
+    return { text: content.slice(idx).trim() };
   }
 
   // ── Lifecycle ─────────────────────────────────────────────
