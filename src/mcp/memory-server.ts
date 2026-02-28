@@ -165,12 +165,26 @@ function handleRequest(req: JsonRpcRequest): Record<string, unknown> | null {
   }
 }
 
-// ── Stdio transport (Content-Length framing) ─────────────────
+// ── Stdio transport (auto-detect: Content-Length framing OR NDJSON) ──
 
 function sendMessage(msg: Record<string, unknown>): void {
   const body = JSON.stringify(msg);
   const header = `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`;
   process.stdout.write(header + body);
+}
+
+function processJsonRpc(json: string): void {
+  try {
+    const req = JSON.parse(json) as JsonRpcRequest;
+    process.stderr.write(`[${SERVER_NAME}] <- ${req.method}\n`);
+    const response = handleRequest(req);
+    if (response) {
+      sendMessage(response);
+      process.stderr.write(`[${SERVER_NAME}] -> response for ${req.method}\n`);
+    }
+  } catch (e) {
+    process.stderr.write(`[${SERVER_NAME}] Parse error: ${e}\n`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -185,15 +199,14 @@ async function main(): Promise<void> {
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // Parse Content-Length framed messages
-    while (true) {
+    // Try Content-Length framing first
+    while (buffer.includes("Content-Length:")) {
       const headerEnd = buffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) break;
 
       const header = buffer.slice(0, headerEnd);
       const match = header.match(/Content-Length:\s*(\d+)/i);
       if (!match) {
-        // Skip malformed header
         buffer = buffer.slice(headerEnd + 4);
         continue;
       }
@@ -202,22 +215,22 @@ async function main(): Promise<void> {
       const bodyStart = headerEnd + 4;
       const bodyEnd = bodyStart + contentLength;
 
-      if (buffer.length < bodyEnd) break; // Wait for more data
+      if (buffer.length < bodyEnd) break;
 
       const body = buffer.slice(bodyStart, bodyEnd);
       buffer = buffer.slice(bodyEnd);
+      processJsonRpc(body);
+    }
 
-      try {
-        const req = JSON.parse(body) as JsonRpcRequest;
-        process.stderr.write(`[${SERVER_NAME}] <- ${req.method}\n`);
-        const response = handleRequest(req);
-        if (response) {
-          sendMessage(response);
-          process.stderr.write(`[${SERVER_NAME}] -> response for ${req.method}\n`);
-        }
-      } catch (e) {
-        process.stderr.write(`[${SERVER_NAME}] Parse error: ${e}\n`);
-      }
+    // Fallback: NDJSON (newline-delimited JSON)
+    let newlineIdx: number;
+    while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIdx).trim();
+      buffer = buffer.slice(newlineIdx + 1);
+      if (!line) continue;
+      // Skip if it looks like a Content-Length header (will be handled above)
+      if (line.startsWith("Content-Length:")) continue;
+      processJsonRpc(line);
     }
   }
 
