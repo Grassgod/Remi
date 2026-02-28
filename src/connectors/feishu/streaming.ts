@@ -172,7 +172,7 @@ export class FeishuStreamingSession {
         elements: [
           {
             tag: "collapsible_panel",
-            expanded: true,
+            expanded: false,
             background_style: "default",
             header: {
               title: { tag: "plain_text", content: "💭 Thinking..." },
