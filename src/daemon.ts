@@ -219,6 +219,7 @@ export class RemiDaemon {
         model: this.config.provider.model,
         timeout: this.config.provider.timeout,
         allowedTools: this.config.provider.allowedTools,
+        cwd: homedir(),
       });
     }
     throw new Error(`Unknown provider: ${n}`);
