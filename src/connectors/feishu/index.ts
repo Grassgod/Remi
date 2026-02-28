@@ -192,73 +192,79 @@ export class FeishuConnector implements Connector {
     let finalResponse: AgentResponse | null = null;
     let toolCount = 0;
 
-    try {
-      for await (const event of this._streamHandler!(incoming)) {
-        log.debug(`received event: ${event.kind}`);
-        switch (event.kind) {
-          case "thinking_delta":
-            thinkingText += event.text;
-            await session.updateThinking(thinkingText);
-            break;
-          case "content_delta":
-            contentText += event.text;
-            await session.update(contentText);
-            break;
-          case "tool_use":
-            toolCount++;
-            thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
-            await session.updateThinking(thinkingText);
-            break;
-          case "tool_result":
-            // Replace trailing ⏳ with ✅ + duration
-            thinkingText = thinkingText.replace(
-              /⏳\n$/,
-              `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
-            );
-            await session.updateThinking(thinkingText);
-            break;
-          case "result":
-            finalResponse = event.response;
-            break;
+    // Use callback pattern: the lane lock in core.ts covers this entire consumer,
+    // so card close + @mention complete before the next message starts processing.
+    await this._streamHandler!(incoming, async (stream) => {
+      try {
+        for await (const event of stream) {
+          log.debug(`received event: ${event.kind}`);
+          switch (event.kind) {
+            case "thinking_delta":
+              thinkingText += event.text;
+              await session.updateThinking(thinkingText);
+              break;
+            case "content_delta":
+              contentText += event.text;
+              await session.update(contentText);
+              break;
+            case "tool_use":
+              toolCount++;
+              thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
+              await session.updateThinking(thinkingText);
+              break;
+            case "tool_result":
+              // Replace trailing ⏳ with ✅ + duration
+              thinkingText = thinkingText.replace(
+                /⏳\n$/,
+                `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
+              );
+              await session.updateThinking(thinkingText);
+              break;
+            case "result":
+              finalResponse = event.response;
+              break;
+          }
         }
-      }
 
-      // Close streaming card with final content + stats
-      const stats = finalResponse ? this._formatStats(finalResponse) : null;
-      await session.close({
-        finalText: finalResponse?.text ?? contentText,
-        thinking: thinkingText || finalResponse?.thinking || null,
-        stats,
-      });
-
-      // Notify sender in group chats via @mention (card patch doesn't trigger notifications)
-      if (incoming.metadata?.chatType === "group" && incoming.metadata?.senderOpenId) {
-        try {
-          const postContent = JSON.stringify({
-            zh_cn: {
-              content: [[
-                { tag: "at", user_id: incoming.metadata.senderOpenId as string },
-                { tag: "text", text: " ✅" },
-              ]],
-            },
-          });
-          await client.im.message.reply({
-            path: { message_id: replyToMessageId },
-            data: { content: postContent, msg_type: "post" },
-          });
-        } catch (e) {
-          log.warn(`@mention notification failed: ${String(e)}`);
-        }
-      }
-    } catch (err) {
-      log.error(`streaming error: ${String(err)}`);
-      // Always close the streaming card to prevent it from being stuck
-      if (session.isActive()) {
+        // Close streaming card with final content + stats
+        const stats = finalResponse ? this._formatStats(finalResponse) : null;
         await session.close({
-          finalText: contentText || `Error: ${String(err)}`,
-        }).catch(() => {});
+          finalText: finalResponse?.text ?? contentText,
+          thinking: thinkingText || finalResponse?.thinking || null,
+          stats,
+        });
+
+        // Notify sender in group chats via @mention (card patch doesn't trigger notifications)
+        // Delay slightly to let Feishu propagate the card close before notification arrives
+        await new Promise((r) => setTimeout(r, 800));
+        if (incoming.metadata?.chatType === "group" && incoming.metadata?.senderOpenId) {
+          try {
+            const postContent = JSON.stringify({
+              zh_cn: {
+                content: [[
+                  { tag: "at", user_id: incoming.metadata.senderOpenId as string },
+                  { tag: "text", text: " ✅" },
+                ]],
+              },
+            });
+            await client.im.message.reply({
+              path: { message_id: replyToMessageId },
+              data: { content: postContent, msg_type: "post" },
+            });
+          } catch (e) {
+            log.warn(`@mention notification failed: ${String(e)}`);
+          }
+        }
+      } catch (err) {
+        log.error(`streaming error: ${String(err)}`);
+        // Always close the streaming card to prevent it from being stuck
+        if (session.isActive()) {
+          await session.close({
+            finalText: contentText || `Error: ${String(err)}`,
+          }).catch(() => {});
+        }
       }
-    }
+    });
   }
 
   /**

@@ -51,15 +51,11 @@ export class Scheduler {
   }
 
   async start(shutdownSignal: AbortSignal): Promise<void> {
-    const initBriefing = this._config.briefing;
     const skillNames = this._config.scheduledSkills
       .filter((s) => s.enabled)
       .map((s) => s.name);
     log.info(
       `Scheduler started (heartbeat=${this._heartbeatInterval}s, compact@${String(this._compactHour).padStart(2, "0")}:00` +
-        (initBriefing.enabled
-          ? `, briefing: generate@${String(initBriefing.generateHour).padStart(2, "0")}:00 push@${String(initBriefing.pushHour).padStart(2, "0")}:${String(initBriefing.pushMinute).padStart(2, "0")}`
-          : "") +
         (skillNames.length > 0
           ? `, scheduled_skills: [${skillNames.join(", ")}]`
           : "") +
@@ -67,8 +63,6 @@ export class Scheduler {
     );
 
     let lastCompactDate: string | null = null;
-    let lastBriefingGenDate: string | null = null;
-    let lastBriefingPushDate: string | null = null;
     // Per-skill tracking: name → { lastGenDate, lastPushDate }
     const skillTracker = new Map<string, { lastGenDate: string | null; lastPushDate: string | null }>();
 
@@ -92,7 +86,6 @@ export class Scheduler {
       await this._heartbeat();
 
       // Hot-reload configs from remi.toml
-      this._reloadBriefingConfig();
       this._reloadScheduledSkillsConfig();
 
       const now = new Date();
@@ -103,28 +96,6 @@ export class Scheduler {
         await this._compactMemory();
         await this._cleanup();
         lastCompactDate = today;
-      }
-
-      // Daily briefing generation (read from this._config for hot-reload)
-      const briefing = this._config.briefing;
-      if (
-        briefing.enabled &&
-        now.getHours() === briefing.generateHour &&
-        lastBriefingGenDate !== today
-      ) {
-        await this._generateDailyBriefing(today);
-        lastBriefingGenDate = today;
-      }
-
-      // Daily briefing push
-      if (
-        briefing.enabled &&
-        now.getHours() === briefing.pushHour &&
-        now.getMinutes() >= briefing.pushMinute &&
-        lastBriefingPushDate !== today
-      ) {
-        await this._pushDailyBriefing(today);
-        lastBriefingPushDate = today;
       }
 
       // Scheduled skills — generic skill execution loop
@@ -179,37 +150,6 @@ export class Scheduler {
       } catch (e) {
         log.error("Auth token refresh check error:", e);
       }
-    }
-  }
-
-  private _reloadBriefingConfig(): void {
-    try {
-      const newConfig = loadConfig();
-      const oldB = this._config.briefing;
-      const newB = newConfig.briefing;
-
-      // Compare briefing config fields
-      if (
-        oldB.enabled !== newB.enabled ||
-        oldB.generateHour !== newB.generateHour ||
-        oldB.pushHour !== newB.pushHour ||
-        oldB.pushMinute !== newB.pushMinute ||
-        oldB.connectorName !== newB.connectorName ||
-        oldB.briefingDir !== newB.briefingDir ||
-        JSON.stringify(oldB.pushTargets) !== JSON.stringify(newB.pushTargets)
-      ) {
-        this._config.briefing = newB;
-        // Also update core's config so _tryBriefingDetail uses new briefingDir
-        this._remi.config.briefing = newB;
-        log.info(
-          `Briefing config hot-reloaded: enabled=${newB.enabled}, ` +
-            `generate@${String(newB.generateHour).padStart(2, "0")}:00, ` +
-            `push@${String(newB.pushHour).padStart(2, "0")}:${String(newB.pushMinute).padStart(2, "0")}, ` +
-            `targets=[${newB.pushTargets.join(",")}]`,
-        );
-      }
-    } catch (e) {
-      log.warn("Failed to reload config:", e);
     }
   }
 
@@ -364,146 +304,6 @@ export class Scheduler {
           if (!existsSync(archiveDir)) mkdirSync(archiveDir, { recursive: true });
           renameSync(fullPath, join(archiveDir, file));
         }
-      }
-    }
-  }
-
-  // ── Daily Briefing ─────────────────────────────────────────
-
-  private get _briefingDir(): string {
-    return this._config.briefing.briefingDir;
-  }
-
-  private _briefingPath(dateStr: string): string {
-    return join(this._briefingDir, `${dateStr}.md`);
-  }
-
-  private async _generateDailyBriefing(today: string): Promise<void> {
-    log.info(`Generating daily AI briefing for ${today}`);
-
-    try {
-      const provider = this._remi._getProvider();
-
-      const prompt = `你是一位 AI 行业分析师。请搜索并整理**昨天**（以及最近 2-3 天）AI/大模型领域最火爆、最重要的 5 件事。
-
-要求：
-1. 使用 WebSearch 搜索以下关键词获取最新信息：
-   - "AI agent news today"、"LLM news today"
-   - "AI breakthrough latest"、"GPT Claude Gemini latest news"
-   - "GitHub trending AI"、"AI open source trending"
-   - "AI startup funding"、"AI product launch"
-2. 从搜索结果中筛选出最重要的 5 件事（按影响力、新颖性、热度排序）
-3. 输出两部分内容：
-
-**第一部分：精简简报**（30 秒内读完）
-
-# 🤖 AI 日报 | ${today}
-
-> 昨日 AI 领域最值得关注的 5 件事
-
-**1. [一句话标题]**
-→ [核心要点，不超过 50 字]
-
-**2. [一句话标题]**
-→ [核心要点，不超过 50 字]
-
-（以此类推共 5 条）
-
----
-🔥 今日最火仓库: [repo-name] ⭐ [stars] — [一句话描述]
-
-**第二部分：详细报告**（紧接简报后）
-
----
-
-# 📋 AI 日报详细报告 | ${today}
-
-## 1. [事件标题]
-**概述**: [2-3 句话]
-**为什么重要**: [影响分析]
-**相关链接**: [来源 URL]
-
-（以此类推共 5 条）
-
-## 🔥 热门开源项目
-| 项目 | Stars | 语言 | 亮点 |
-|------|-------|------|------|
-（列出 3-5 个热门仓库）
-
-## 📊 行业观察
-[2-3 句话宏观趋势总结]
-
-注意事项：
-- 每条消息必须有具体的名字、数字或事实，不要模糊
-- 中文输出，技术术语保留英文
-- 信息必须来自搜索结果，标注来源`;
-
-      const response = await provider.send(prompt);
-      const text = response.text.trim();
-
-      if (!text || text.startsWith("[Provider error") || text.startsWith("[Provider timeout")) {
-        log.error(`Daily briefing generation failed: ${text.slice(0, 100)}`);
-        return;
-      }
-
-      // Save to file
-      if (!existsSync(this._briefingDir)) {
-        mkdirSync(this._briefingDir, { recursive: true });
-      }
-      writeFileSync(this._briefingPath(today), text, "utf-8");
-      log.info(`Daily briefing saved to ${this._briefingPath(today)}`);
-    } catch (e) {
-      log.error("Daily briefing generation error:", e);
-    }
-  }
-
-  private async _pushDailyBriefing(today: string): Promise<void> {
-    const briefingPath = this._briefingPath(today);
-    if (!existsSync(briefingPath)) {
-      log.warn(`No briefing found for ${today}, skipping push`);
-      return;
-    }
-
-    const content = readFileSync(briefingPath, "utf-8");
-    if (!content.trim()) {
-      log.warn(`Briefing for ${today} is empty, skipping push`);
-      return;
-    }
-
-    const cfg = this._config.briefing;
-    const connectors = this._remi["_connectors"] as Connector[];
-    const connector = connectors.find((c) => c.name === cfg.connectorName);
-
-    if (!connector) {
-      log.error(
-        `Briefing push: connector "${cfg.connectorName}" not found (available: ${connectors.map((c) => c.name).join(", ")})`,
-      );
-      return;
-    }
-
-    // Split into brief + detailed report if content is too long for one message
-    // Feishu markdown card has content limits, so send briefing first, then details
-    const separator = "# 📋 AI 日报详细报告";
-    const separatorIdx = content.indexOf(separator);
-
-    let briefPart: string;
-    let detailPart: string | null = null;
-
-    if (separatorIdx > 0) {
-      briefPart = content.slice(0, separatorIdx).trim();
-      detailPart = content.slice(separatorIdx).trim();
-    } else {
-      briefPart = content;
-    }
-
-    for (const target of cfg.pushTargets) {
-      try {
-        // Only push the brief summary; detailed report stays on disk for on-demand retrieval
-        const footer = detailPart ? "\n\n> 回复「详细报告」查看完整分析" : "";
-        await connector.reply(target, { text: briefPart + footer });
-        log.info(`Briefing pushed to ${target}`);
-      } catch (e) {
-        log.error(`Failed to push briefing to ${target}:`, e);
       }
     }
   }

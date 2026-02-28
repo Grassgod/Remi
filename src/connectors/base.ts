@@ -16,8 +16,15 @@ export interface IncomingMessage {
 /** Callback type: core Remi.handleMessage (blocking, returns full response) */
 export type MessageHandler = (msg: IncomingMessage) => Promise<AgentResponse>;
 
-/** Callback type: core Remi.handleMessageStream (real-time streaming) */
-export type StreamingHandler = (msg: IncomingMessage) => AsyncGenerator<StreamEvent>;
+/**
+ * Callback type: core Remi.handleMessageStream (real-time streaming).
+ * Uses callback pattern so the lane lock covers the entire consumer lifecycle
+ * (including card close + notifications), preventing concurrent message overlap.
+ */
+export type StreamingHandler = (
+  msg: IncomingMessage,
+  consumer: (stream: AsyncIterable<StreamEvent>) => Promise<void>,
+) => Promise<void>;
 
 /** Protocol that all input connectors must implement. */
 export interface Connector {

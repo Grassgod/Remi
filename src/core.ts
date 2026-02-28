@@ -147,14 +147,15 @@ export class Remi {
     }
   }
 
-  async *handleMessageStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
+  async handleMessageStream(
+    msg: IncomingMessage,
+    consumer: (stream: AsyncIterable<StreamEvent>) => Promise<void>,
+  ): Promise<void> {
     const sessionKey = this._resolveSessionKey(msg);
     const lock = this._getLaneLock(sessionKey);
     await lock.acquire();
     try {
-      for await (const event of this._processStream(msg)) {
-        yield event;
-      }
+      await consumer(this._processStream(msg));
     } finally {
       lock.release();
     }
@@ -168,10 +169,10 @@ export class Remi {
       return;
     }
 
-    // Handle briefing detail request
-    const briefingResponse = this._tryBriefingDetail(msg.text);
-    if (briefingResponse) {
-      yield { kind: "result", response: briefingResponse };
+    // Handle report detail request
+    const reportResponse = this._tryReportDetail(msg.text);
+    if (reportResponse) {
+      yield { kind: "result", response: reportResponse };
       return;
     }
 
@@ -315,32 +316,17 @@ export class Remi {
 
   // ── Report detail on demand ─────────────────────────────
 
-  private _tryBriefingDetail(text: string): AgentResponse | null {
+  private _tryReportDetail(text: string): AgentResponse | null {
     const trimmed = text.trim();
     if (!trimmed.includes("详细报告") && !trimmed.includes("完整报告")) return null;
 
     const today = new Date().toISOString().slice(0, 10);
 
-    // Check legacy briefing first
-    const briefingPath = join(this.config.briefing.briefingDir, `${today}.md`);
-    if (existsSync(briefingPath)) {
-      const content = readFileSync(briefingPath, "utf-8");
-      const separator = "# 📋 AI 日报详细报告";
-      const idx = content.indexOf(separator);
-      if (idx >= 0) {
-        return { text: content.slice(idx).trim() };
-      }
-      // If no separator, return full content
-      return { text: content.trim() };
-    }
-
-    // Check scheduled skills' output directories
     for (const skill of this.config.scheduledSkills) {
       if (!skill.enabled) continue;
       const reportPath = join(skill.outputDir, `${today}.md`);
       if (existsSync(reportPath)) {
-        const content = readFileSync(reportPath, "utf-8");
-        return { text: content.trim() };
+        return { text: readFileSync(reportPath, "utf-8").trim() };
       }
     }
 
