@@ -313,28 +313,38 @@ export class Remi {
     }
   }
 
-  // ── Briefing detail on demand ────────────────────────────
+  // ── Report detail on demand ─────────────────────────────
 
   private _tryBriefingDetail(text: string): AgentResponse | null {
     const trimmed = text.trim();
-    if (!trimmed.includes("详细报告")) return null;
+    if (!trimmed.includes("详细报告") && !trimmed.includes("完整报告")) return null;
 
     const today = new Date().toISOString().slice(0, 10);
+
+    // Check legacy briefing first
     const briefingPath = join(this.config.briefing.briefingDir, `${today}.md`);
-
-    if (!existsSync(briefingPath)) {
-      return { text: `今天（${today}）还没有生成日报，请稍后再试。` };
+    if (existsSync(briefingPath)) {
+      const content = readFileSync(briefingPath, "utf-8");
+      const separator = "# 📋 AI 日报详细报告";
+      const idx = content.indexOf(separator);
+      if (idx >= 0) {
+        return { text: content.slice(idx).trim() };
+      }
+      // If no separator, return full content
+      return { text: content.trim() };
     }
 
-    const content = readFileSync(briefingPath, "utf-8");
-    const separator = "# 📋 AI 日报详细报告";
-    const idx = content.indexOf(separator);
-
-    if (idx < 0) {
-      return { text: "今天的日报没有详细报告部分。" };
+    // Check scheduled skills' output directories
+    for (const skill of this.config.scheduledSkills) {
+      if (!skill.enabled) continue;
+      const reportPath = join(skill.outputDir, `${today}.md`);
+      if (existsSync(reportPath)) {
+        const content = readFileSync(reportPath, "utf-8");
+        return { text: content.trim() };
+      }
     }
 
-    return { text: content.slice(idx).trim() };
+    return { text: `今天（${today}）还没有生成报告，请稍后再试。` };
   }
 
   // ── Lifecycle ─────────────────────────────────────────────

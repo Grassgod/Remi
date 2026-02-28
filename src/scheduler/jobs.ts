@@ -5,9 +5,10 @@
  * - Heartbeat: check provider health
  * - Memory compaction: archive daily notes → long-term memory + entity extraction
  * - Cleanup: remove old dailies and version files
+ * - Scheduled skills: config-driven skill execution and push
  */
 
-import type { RemiConfig } from "../config.js";
+import type { RemiConfig, ScheduledSkillConfig } from "../config.js";
 import { loadConfig } from "../config.js";
 import type { Remi } from "../core.js";
 import type { Connector } from "../connectors/base.js";
@@ -23,6 +24,7 @@ import {
   appendFileSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 
 const log = createLogger("scheduler");
 
@@ -50,16 +52,25 @@ export class Scheduler {
 
   async start(shutdownSignal: AbortSignal): Promise<void> {
     const initBriefing = this._config.briefing;
+    const skillNames = this._config.scheduledSkills
+      .filter((s) => s.enabled)
+      .map((s) => s.name);
     log.info(
       `Scheduler started (heartbeat=${this._heartbeatInterval}s, compact@${String(this._compactHour).padStart(2, "0")}:00` +
         (initBriefing.enabled
-          ? `, briefing: generate@${String(initBriefing.generateHour).padStart(2, "0")}:00 push@${String(initBriefing.pushHour).padStart(2, "0")}:${String(initBriefing.pushMinute).padStart(2, "0")})`
-          : ")"),
+          ? `, briefing: generate@${String(initBriefing.generateHour).padStart(2, "0")}:00 push@${String(initBriefing.pushHour).padStart(2, "0")}:${String(initBriefing.pushMinute).padStart(2, "0")}`
+          : "") +
+        (skillNames.length > 0
+          ? `, scheduled_skills: [${skillNames.join(", ")}]`
+          : "") +
+        ")",
     );
 
     let lastCompactDate: string | null = null;
     let lastBriefingGenDate: string | null = null;
     let lastBriefingPushDate: string | null = null;
+    // Per-skill tracking: name → { lastGenDate, lastPushDate }
+    const skillTracker = new Map<string, { lastGenDate: string | null; lastPushDate: string | null }>();
 
     while (!shutdownSignal.aborted) {
       // Wait for heartbeat interval or shutdown
@@ -80,8 +91,9 @@ export class Scheduler {
       // Heartbeat
       await this._heartbeat();
 
-      // Hot-reload briefing config from remi.toml
+      // Hot-reload configs from remi.toml
       this._reloadBriefingConfig();
+      this._reloadScheduledSkillsConfig();
 
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
@@ -113,6 +125,35 @@ export class Scheduler {
       ) {
         await this._pushDailyBriefing(today);
         lastBriefingPushDate = today;
+      }
+
+      // Scheduled skills — generic skill execution loop
+      for (const skill of this._config.scheduledSkills) {
+        if (!skill.enabled || !skill.name) continue;
+
+        if (!skillTracker.has(skill.name)) {
+          skillTracker.set(skill.name, { lastGenDate: null, lastPushDate: null });
+        }
+        const tracker = skillTracker.get(skill.name)!;
+
+        // Generate
+        if (
+          now.getHours() === skill.generateHour &&
+          tracker.lastGenDate !== today
+        ) {
+          await this._generateSkillReport(skill, today);
+          tracker.lastGenDate = today;
+        }
+
+        // Push
+        if (
+          now.getHours() === skill.pushHour &&
+          now.getMinutes() >= skill.pushMinute &&
+          tracker.lastPushDate !== today
+        ) {
+          await this._pushSkillReport(skill, today);
+          tracker.lastPushDate = today;
+        }
       }
     }
 
@@ -474,6 +515,125 @@ export class Scheduler {
       log.info(
         `Cleanup: removed ${removedDaily} old dailies, ${removedVersions} old versions`,
       );
+    }
+  }
+
+  // ── Scheduled Skills (generic config-driven) ───────────────
+
+  /**
+   * Load a skill's SKILL.md content, strip YAML frontmatter,
+   * and substitute date placeholders.
+   */
+  private _loadSkillPrompt(skillName: string, dateStr: string): string | null {
+    const skillPath = join(
+      homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md",
+    );
+
+    if (!existsSync(skillPath)) {
+      log.error(`Skill file not found: ${skillPath}`);
+      return null;
+    }
+
+    let content = readFileSync(skillPath, "utf-8");
+
+    // Strip YAML frontmatter (--- ... ---)
+    const frontmatterMatch = content.match(/^---\n[\s\S]*?\n---\n/);
+    if (frontmatterMatch) {
+      content = content.slice(frontmatterMatch[0].length);
+    }
+
+    // Substitute date placeholders
+    content = content.replace(/YYYY-MM-DD/g, dateStr);
+
+    return content.trim();
+  }
+
+  private _reloadScheduledSkillsConfig(): void {
+    try {
+      const newConfig = loadConfig();
+      const oldSkills = this._config.scheduledSkills;
+      const newSkills = newConfig.scheduledSkills;
+
+      if (JSON.stringify(oldSkills) !== JSON.stringify(newSkills)) {
+        this._config.scheduledSkills = newSkills;
+        this._remi.config.scheduledSkills = newSkills;
+        const names = newSkills.filter((s) => s.enabled).map((s) => s.name);
+        log.info(`Scheduled skills hot-reloaded: [${names.join(", ")}]`);
+      }
+    } catch (e) {
+      log.warn("Failed to reload scheduled skills config:", e);
+    }
+  }
+
+  private async _generateSkillReport(skill: ScheduledSkillConfig, today: string): Promise<void> {
+    log.info(`Generating scheduled skill report: ${skill.name} for ${today}`);
+
+    try {
+      const prompt = this._loadSkillPrompt(skill.name, today);
+      if (!prompt) return;
+
+      const provider = this._remi._getProvider();
+      const response = await provider.send(prompt);
+      const text = response.text.trim();
+
+      if (!text || text.startsWith("[Provider error") || text.startsWith("[Provider timeout")) {
+        log.error(`Skill report generation failed (${skill.name}): ${text.slice(0, 100)}`);
+        return;
+      }
+
+      if (!existsSync(skill.outputDir)) {
+        mkdirSync(skill.outputDir, { recursive: true });
+      }
+
+      const reportPath = join(skill.outputDir, `${today}.md`);
+      writeFileSync(reportPath, text, "utf-8");
+      log.info(`Skill report saved: ${skill.name} → ${reportPath}`);
+    } catch (e) {
+      log.error(`Skill report generation error (${skill.name}):`, e);
+    }
+  }
+
+  private async _pushSkillReport(skill: ScheduledSkillConfig, today: string): Promise<void> {
+    const reportPath = join(skill.outputDir, `${today}.md`);
+    if (!existsSync(reportPath)) {
+      log.warn(`No report found for skill ${skill.name} on ${today}, skipping push`);
+      return;
+    }
+
+    const content = readFileSync(reportPath, "utf-8");
+    if (!content.trim()) {
+      log.warn(`Report for skill ${skill.name} on ${today} is empty, skipping push`);
+      return;
+    }
+
+    const connectors = this._remi["_connectors"] as Connector[];
+    const connector = connectors.find((c) => c.name === skill.connectorName);
+
+    if (!connector) {
+      log.error(
+        `Skill push (${skill.name}): connector "${skill.connectorName}" not found`,
+      );
+      return;
+    }
+
+    let pushContent = content;
+
+    // Truncate if too long
+    if (pushContent.length > skill.maxPushLength) {
+      // Try to cut at a section boundary (## heading)
+      const truncated = pushContent.slice(0, skill.maxPushLength);
+      const lastSection = truncated.lastIndexOf("\n## ");
+      const cutPoint = lastSection > skill.maxPushLength * 0.5 ? lastSection : skill.maxPushLength;
+      pushContent = pushContent.slice(0, cutPoint).trim() + "\n\n> 回复「完整报告」查看完整内容";
+    }
+
+    for (const target of skill.pushTargets) {
+      try {
+        await connector.reply(target, { text: pushContent });
+        log.info(`Skill report pushed: ${skill.name} → ${target}`);
+      } catch (e) {
+        log.error(`Failed to push skill report (${skill.name}) to ${target}:`, e);
+      }
     }
   }
 }

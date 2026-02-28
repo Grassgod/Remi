@@ -47,6 +47,26 @@ export interface BriefingConfig {
   briefingDir: string;
 }
 
+export interface ScheduledSkillConfig {
+  /** Skill name — maps to .claude/skills/{name}/SKILL.md under Remi data dir. */
+  name: string;
+  enabled: boolean;
+  /** Hour to generate the report (0-23). */
+  generateHour: number;
+  /** Hour to push the report (0-23). */
+  pushHour: number;
+  /** Minute within pushHour to push. */
+  pushMinute: number;
+  /** Chat IDs to push the report to. */
+  pushTargets: string[];
+  /** Connector name to use for pushing (default: "feishu"). */
+  connectorName: string;
+  /** Directory to store generated report files. */
+  outputDir: string;
+  /** Max content length before truncation on push (default: 4000). */
+  maxPushLength: number;
+}
+
 export interface SchedulerConfig {
   memoryCompactCron: string;
   heartbeatInterval: number;
@@ -57,6 +77,7 @@ export interface RemiConfig {
   feishu: FeishuConfig;
   scheduler: SchedulerConfig;
   briefing: BriefingConfig;
+  scheduledSkills: ScheduledSkillConfig[];
   memoryDir: string;
   pidFile: string;
   logLevel: string;
@@ -114,6 +135,7 @@ export function defaultRemiConfig(): RemiConfig {
     feishu: defaultFeishuConfig(),
     scheduler: defaultSchedulerConfig(),
     briefing: defaultBriefingConfig(),
+    scheduledSkills: [],
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: "INFO",
@@ -149,6 +171,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const briefingData = (fileData.briefing ?? {}) as Record<string, unknown>;
+  const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
 
   const env = process.env;
 
@@ -187,6 +210,17 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       connectorName: (briefingData.connector_name as string) ?? "feishu",
       briefingDir: (briefingData.briefing_dir as string) ?? join(homedir(), ".remi", "briefings"),
     },
+    scheduledSkills: scheduledSkillsData.map((s) => ({
+      name: (s.name as string) ?? "",
+      enabled: (s.enabled as boolean) ?? true,
+      generateHour: parseInt(String(s.generate_hour ?? 6), 10),
+      pushHour: parseInt(String(s.push_hour ?? 9), 10),
+      pushMinute: parseInt(String(s.push_minute ?? 0), 10),
+      pushTargets: (s.push_targets as string[]) ?? [],
+      connectorName: (s.connector_name as string) ?? "feishu",
+      outputDir: (s.output_dir as string) ?? join(homedir(), ".remi", "skill-reports", (s.name as string) ?? "unknown"),
+      maxPushLength: parseInt(String(s.max_push_length ?? 4000), 10),
+    })),
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: env.REMI_LOG_LEVEL ?? (fileData.log_level as string) ?? "INFO",

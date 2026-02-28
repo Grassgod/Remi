@@ -46,7 +46,7 @@ export interface WebDashboardOptions {
 }
 
 export function startWebDashboard(opts: WebDashboardOptions = {}): { port: number } {
-  const port = opts.port ?? parseInt(process.env.REMI_WEB_PORT ?? "3456", 10);
+  const port = opts.port ?? parseInt(process.env.REMI_WEB_PORT ?? "612", 10);
   const authToken = opts.authToken ?? process.env.REMI_WEB_AUTH_TOKEN ?? "";
   const devMode = opts.devMode ?? false;
   const staticDir = join(import.meta.dir, "frontend", "dist");
