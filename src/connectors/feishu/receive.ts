@@ -131,7 +131,7 @@ function parseTextContent(content: string, messageType: string): string {
   }
 }
 
-function parsePostContent(content: string): { textContent: string; imageKeys: string[] } {
+export function parsePostContent(content: string): { textContent: string; imageKeys: string[] } {
   try {
     const parsed = JSON.parse(content);
     const title = parsed.title || "";

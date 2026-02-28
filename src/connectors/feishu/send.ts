@@ -8,6 +8,7 @@ import type { FeishuSendResult } from "./types.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { resolveReceiveIdType } from "./client.js";
+import { parsePostContent } from "./receive.js";
 
 /** Build Feishu post message payload (rich text with markdown support). */
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
@@ -225,9 +226,11 @@ export async function getMessageFeishu(
 
     let content = item.body?.content ?? "";
     try {
-      const parsed = JSON.parse(content);
-      if (item.msg_type === "text" && parsed.text) {
-        content = parsed.text;
+      if (item.msg_type === "text") {
+        const parsed = JSON.parse(content);
+        if (parsed.text) content = parsed.text;
+      } else if (item.msg_type === "post") {
+        content = parsePostContent(content).textContent;
       }
     } catch {
       // Keep raw content

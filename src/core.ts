@@ -12,7 +12,7 @@
 
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
-import type { AgentResponse, Provider, StreamEvent } from "./providers/base.js";
+import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
 import { createLogger } from "./logger.js";
 
@@ -164,100 +164,71 @@ export class Remi {
     const sessionKey = this._resolveSessionKey(msg);
     const cwd = (msg.metadata?.cwd as string) ?? undefined;
     const context = this.memory.gatherContext(cwd);
+    const streamOptions = {
+      systemPrompt: SYSTEM_PROMPT,
+      context: context || undefined,
+      chatId: this._resolveSessionKey(msg),
+    };
 
     const provider = this._getProvider();
+    if (typeof provider.sendStream !== "function") {
+      throw new Error(`Provider "${provider.name}" does not support streaming`);
+    }
 
-    // If provider supports streaming, use it
-    if (typeof provider.sendStream === "function") {
-      log.debug("starting provider.sendStream iteration");
-      for await (const event of provider.sendStream(msg.text, {
-        systemPrompt: SYSTEM_PROMPT,
-        context: context || undefined,
-        chatId: this._resolveSessionKey(msg),
-      })) {
-        log.debug(`received event: ${event.kind}`);
-        yield event;
-        // On result: update session + daily notes
-        if (event.kind === "result") {
-          if (event.response.sessionId) {
-            this._sessions.set(sessionKey, event.response.sessionId);
-          }
-          this.memory.appendDaily(
-            `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
-          );
-        }
+    log.debug("starting provider.sendStream iteration");
+    let resultResponse: AgentResponse | null = null;
+    for await (const event of provider.sendStream(msg.text, streamOptions)) {
+      log.debug(`received event: ${event.kind}`);
+      yield event;
+      if (event.kind === "result") {
+        resultResponse = event.response;
       }
-      return;
     }
 
-    // Fallback: non-streaming provider
-    const response = await provider.send(msg.text, {
-      systemPrompt: SYSTEM_PROMPT,
-      context: context || undefined,
-      sessionId: this._sessions.get(sessionKey),
-      chatId: this._resolveSessionKey(msg),
-    });
-    if (response.sessionId) {
-      this._sessions.set(sessionKey, response.sessionId);
-    }
-    this.memory.appendDaily(
-      `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
-    );
-    yield { kind: "result", response };
-  }
-
-  private async _process(msg: IncomingMessage): Promise<AgentResponse> {
-    // 0. Handle slash commands (thread-aware)
-    const cmdResponse = await this._tryCommand(msg.text, msg);
-    if (cmdResponse) return cmdResponse;
-
-    // 1. Resolve session key (threads get isolated sessions)
-    const sessionKey = this._resolveSessionKey(msg);
-
-    // 2. Assemble memory context
-    const cwd = (msg.metadata?.cwd as string) ?? undefined;
-    const context = this.memory.gatherContext(cwd);
-
-    // 3. Get session for multi-turn
-    const sessionId = this._sessions.get(sessionKey) ?? undefined;
-
-    // 4. Route to provider
-    const provider = this._getProvider();
-    let response = await provider.send(msg.text, {
-      systemPrompt: SYSTEM_PROMPT,
-      context: context || undefined,
-      sessionId,
-      chatId: this._resolveSessionKey(msg),
-    });
-
-    // 5. Fallback if primary fails
+    // Fallback: if primary result was an error, try fallback provider
     if (
-      response.text.startsWith("[Provider error") ||
-      response.text.startsWith("[Provider timeout")
+      resultResponse &&
+      (resultResponse.text.startsWith("[Provider error") ||
+        resultResponse.text.startsWith("[Provider timeout"))
     ) {
       const fallbackName = this.config.provider.fallback;
       if (fallbackName && this._providers.has(fallbackName)) {
         log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
         const fallback = this._providers.get(fallbackName)!;
-        response = await fallback.send(msg.text, {
-          systemPrompt: SYSTEM_PROMPT,
-          context: context || undefined,
-          chatId: this._resolveSessionKey(msg),
-        });
+        if (typeof fallback.sendStream === "function") {
+          for await (const event of fallback.sendStream(msg.text, streamOptions)) {
+            yield event;
+            if (event.kind === "result") resultResponse = event.response;
+          }
+        } else {
+          resultResponse = await fallback.send(msg.text, streamOptions);
+          yield { kind: "result", response: resultResponse };
+        }
       }
     }
 
-    // 6. Update session mapping
-    if (response.sessionId) {
-      this._sessions.set(sessionKey, response.sessionId);
+    // Update session + daily notes
+    if (resultResponse) {
+      if (resultResponse.sessionId) {
+        this._sessions.set(sessionKey, resultResponse.sessionId);
+      }
+      this.memory.appendDaily(
+        `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
+      );
     }
+  }
 
-    // 7. Append to daily notes
-    this.memory.appendDaily(
-      `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
-    );
-
-    return response;
+  private async _process(msg: IncomingMessage): Promise<AgentResponse> {
+    let lastResponse: AgentResponse | null = null;
+    for await (const event of this._processStream(msg)) {
+      if (event.kind === "result") {
+        lastResponse = event.response;
+      }
+    }
+    if (!lastResponse) {
+      return createAgentResponse({ text: "[Error: no result from provider]" });
+    }
+    return lastResponse;
   }
 
   // ── Slash commands ───────────────────────────────────────

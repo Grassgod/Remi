@@ -134,15 +134,10 @@ export class ClaudeCLIProvider implements Provider {
   ): Promise<AgentResponse> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
-    try {
-      return await this._sendStreaming(fullPrompt, {
-        systemPrompt: options?.systemPrompt,
-        chatId: options?.chatId,
-      });
-    } catch (e) {
-      log.warn(`Streaming send failed, falling back to one-shot subprocess: ${e}`);
-      return this._sendFallback(message, options);
-    }
+    return this._sendStreaming(fullPrompt, {
+      systemPrompt: options?.systemPrompt,
+      chatId: options?.chatId,
+    });
   }
 
   async *sendStream(
@@ -367,94 +362,6 @@ export class ClaudeCLIProvider implements Provider {
     }
 
     return createAgentResponse({ text: fullText, thinking, toolCalls });
-  }
-
-  // ── Internal: fallback path (original subprocess) ─────────
-
-  private async _sendFallback(
-    message: string,
-    options?: {
-      systemPrompt?: string | null;
-      context?: string | null;
-      cwd?: string | null;
-      sessionId?: string | null;
-    },
-  ): Promise<AgentResponse> {
-    const cmd = ["claude", "-p", "--output-format", "json"];
-
-    if (options?.sessionId) {
-      cmd.push("--resume", options.sessionId);
-    }
-    if (this.model) {
-      cmd.push("--model", this.model);
-    }
-    if (this.allowedTools.length > 0) {
-      cmd.push("--allowedTools", this.allowedTools.join(","));
-    } else {
-      cmd.push("--dangerously-skip-permissions");
-    }
-    if (this.mcpConfig) {
-      cmd.push("--mcp-config", JSON.stringify(this.mcpConfig));
-    }
-    if (options?.systemPrompt) {
-      cmd.push("--append-system-prompt", options.systemPrompt);
-    }
-
-    const context = options?.context;
-    const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
-    cmd.push(fullPrompt);
-
-    try {
-      // Strip CLAUDECODE env var to avoid nested-session detection
-      const env = { ...process.env };
-      delete env.CLAUDECODE;
-
-      const proc = Bun.spawn(cmd, {
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd: options?.cwd ?? undefined,
-        env,
-      });
-
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      const exitCode = await proc.exited;
-
-      if (exitCode !== 0) {
-        const stderrTrimmed = stderr.trim();
-        log.error(`claude CLI error (rc=${exitCode}): ${stderrTrimmed}`);
-        return createAgentResponse({
-          text: `[Provider error: ${stderrTrimmed || "unknown error"}]`,
-        });
-      }
-
-      try {
-        const data = JSON.parse(stdout) as Record<string, unknown>;
-        const usage = (data.usage as Record<string, unknown>) ?? {};
-        return createAgentResponse({
-          text: (data.result as string) ?? stdout.trim(),
-          sessionId: (data.session_id as string) ?? null,
-          costUsd: (data.cost_usd as number) ?? (data.total_cost_usd as number) ?? null,
-          inputTokens: (usage.input_tokens as number) ?? null,
-          outputTokens: (usage.output_tokens as number) ?? null,
-          durationMs: (data.duration_ms as number) ?? null,
-          model: (data.model as string) ?? null,
-        });
-      } catch {
-        return createAgentResponse({ text: stdout.trim() });
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("ENOENT")) {
-        return createAgentResponse({
-          text: "[Error: `claude` CLI not found. Is Claude Code installed?]",
-        });
-      }
-      return createAgentResponse({
-        text: `[Provider error: ${err instanceof Error ? err.message : String(err)}]`,
-      });
-    }
   }
 
   // ── Internal: tool handling ───────────────────────────────

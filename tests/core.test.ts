@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "../src/config.js";
 import type { IncomingMessage } from "../src/connectors/base.js";
-import type { AgentResponse, Provider } from "../src/providers/base.js";
+import type { AgentResponse, Provider, StreamEvent } from "../src/providers/base.js";
 import { createAgentResponse } from "../src/providers/base.js";
 import { Remi } from "../src/core.js";
 
@@ -42,6 +42,25 @@ class MockProvider implements Provider {
     });
   }
 
+  async *sendStream(
+    message: string,
+    options?: {
+      systemPrompt?: string | null;
+      context?: string | null;
+      chatId?: string | null;
+    },
+  ): AsyncGenerator<StreamEvent> {
+    this.lastMessage = message;
+    this.lastContext = options?.context ?? null;
+    yield {
+      kind: "result",
+      response: createAgentResponse({
+        text: this._responseText,
+        sessionId: "sess-mock",
+      }),
+    };
+  }
+
   async healthCheck(): Promise<boolean> {
     return true;
   }
@@ -58,6 +77,17 @@ class MockFailProvider implements Provider {
 
   async send(_message: string): Promise<AgentResponse> {
     return createAgentResponse({ text: "[Provider error: boom]" });
+  }
+
+  async *sendStream(
+    _message: string,
+    _options?: {
+      systemPrompt?: string | null;
+      context?: string | null;
+      chatId?: string | null;
+    },
+  ): AsyncGenerator<StreamEvent> {
+    yield { kind: "result", response: createAgentResponse({ text: "[Provider error: boom]" }) };
   }
 
   async healthCheck(): Promise<boolean> {
