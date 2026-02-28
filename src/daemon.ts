@@ -25,6 +25,7 @@ import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
 import { createLogger } from "./logger.js";
+import { startWebDashboard, stopWebDashboard } from "../web/server.js";
 
 const log = createLogger("daemon");
 
@@ -326,6 +327,14 @@ export class RemiDaemon {
     log.info("=".repeat(60));
     log.info(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
 
+    // Start Web Dashboard
+    try {
+      const { port } = startWebDashboard();
+      log.info(`Web Dashboard started on port ${port}`);
+    } catch (e) {
+      log.warn("Web Dashboard failed to start:", e);
+    }
+
     // Send restart notification after connectors have time to fully initialize
     setTimeout(() => this._sendRestartNotify(remi), 5000);
 
@@ -339,6 +348,7 @@ export class RemiDaemon {
         throw e;
       }
     } finally {
+      stopWebDashboard();
       await remi.stop();
       this._removePid();
       log.info("Remi daemon stopped.");
