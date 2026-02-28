@@ -117,10 +117,23 @@ export function parseLine(line: string): ParsedMessage {
     return data;
   }
 
-  // Assistant message with complete tool_use blocks (non-streaming path)
+  // Assistant message with complete content blocks (non-streaming path)
   if (msgType === "assistant") {
     const message = (data.message as Record<string, unknown>) ?? {};
     const content = (message.content as Array<Record<string, unknown>>) ?? [];
+
+    // Thinking blocks — emit as thinking_delta so downstream can display
+    const thinkingBlocks = content.filter((b) => b.type === "thinking");
+    if (thinkingBlocks.length > 0) {
+      const block = thinkingBlocks[0];
+      return {
+        kind: "thinking_delta",
+        thinking: (block.thinking as string) ?? "",
+        index: 0,
+      };
+    }
+
+    // Tool use blocks
     const toolBlocks = content.filter((b) => b.type === "tool_use");
     if (toolBlocks.length > 0) {
       const block = toolBlocks[0];
@@ -131,6 +144,20 @@ export function parseLine(line: string): ParsedMessage {
         input: (block.input as Record<string, unknown>) ?? {},
       };
     }
+
+    // Text blocks — emit as content_delta for real-time card updates
+    const textBlocks = content.filter((b) => b.type === "text");
+    if (textBlocks.length > 0) {
+      const text = (textBlocks[0].text as string) ?? "";
+      if (text) {
+        return {
+          kind: "content_delta",
+          text,
+          index: 0,
+        };
+      }
+    }
+
     return data;
   }
 
