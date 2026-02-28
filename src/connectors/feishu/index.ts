@@ -227,7 +227,7 @@ export class FeishuConnector implements Connector {
       const stats = finalResponse ? this._formatStats(finalResponse) : null;
       await session.close({
         finalText: finalResponse?.text ?? contentText,
-        thinking: finalResponse?.thinking ?? (thinkingText || null),
+        thinking: thinkingText || finalResponse?.thinking || null,
         stats,
       });
 
