@@ -317,8 +317,10 @@ export async function processFeishuMessageEvent(
 
   // In groups, only respond if bot is mentioned (unless chat is in autoReplyGroups)
   const autoReply = opts?.autoReplyGroups?.includes(ctx.chatId) ?? false;
-  log.debug(`chatId=${ctx.chatId}, chatType=${ctx.chatType}, mentionedBot=${ctx.mentionedBot}, autoReply=${autoReply}, autoReplyGroups=${JSON.stringify(opts?.autoReplyGroups)}`);
-  if (ctx.chatType === "group" && !ctx.mentionedBot && !autoReply) return null;
+  if (ctx.chatType === "group" && !ctx.mentionedBot && !autoReply) {
+    log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, mentionedBot=false, autoReply=false)`);
+    return null;
+  }
 
   // Resolve sender name (best-effort)
   const senderName = await resolveSenderName(client, ctx.senderOpenId);
