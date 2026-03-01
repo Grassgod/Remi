@@ -149,6 +149,12 @@ function handleRequest(req: JsonRpcRequest): Record<string, unknown> | null {
           (args.scope as "personal" | "project") || "personal",
           (args.cwd as string) || null,
         );
+        // Regenerate bridge so Claude Code's next session sees updated memory
+        try {
+          store.regenerateBridge();
+        } catch (e) {
+          process.stderr.write(`[${SERVER_NAME}] Bridge regeneration failed: ${e}\n`);
+        }
         return jsonRpcResult(req.id, {
           content: [{ type: "text", text: result }],
         });

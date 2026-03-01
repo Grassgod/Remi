@@ -16,8 +16,12 @@ import {
   readdirSync,
   statSync,
   renameSync,
+  lstatSync,
+  realpathSync,
+  symlinkSync,
 } from "node:fs";
 import { join, relative, dirname, basename, resolve } from "node:path";
+import { homedir } from "node:os";
 import matter from "gray-matter";
 import { createLogger } from "../logger.js";
 
@@ -756,5 +760,319 @@ export class MemoryStore {
       removed++;
     }
     return removed;
+  }
+
+  // ── 2.8 Claude Code Bridge ─────────────────────────────────
+
+  private static BRIDGE_FILE = "claude-bridge.md";
+  private static BRIDGE_SNAPSHOT = ".bridge-snapshot";
+  private static BRIDGE_MAX_LINES = 150;
+  private static CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+
+  /**
+   * Regenerate the bridge file that Claude Code reads via auto-injection.
+   * Content is curated from Remi's authoritative stores, kept ≤150 lines.
+   */
+  regenerateBridge(): void {
+    const bridgePath = join(this.root, MemoryStore.BRIDGE_FILE);
+    const sections: string[] = [];
+
+    // 1. Core sections from MEMORY.md (identity + preferences + paths)
+    const globalMem = this.readMemory();
+    const coreSection = this._extractCoreSections(globalMem);
+    if (coreSection) sections.push(coreSection);
+
+    // 2. Key entities summary (top 10 by most recently updated)
+    const entitySummary = this._buildEntitySummary(10);
+    if (entitySummary) sections.push(entitySummary);
+
+    // 3. Recent decisions
+    const decisionsSummary = this._buildDecisionsSummary(5);
+    if (decisionsSummary) sections.push(decisionsSummary);
+
+    // 4. Recent daily log summaries from MEMORY.md (compacted)
+    const recentSummaries = this._extractRecentSummaries(globalMem, 3);
+    if (recentSummaries) sections.push(recentSummaries);
+
+    let content = sections.join("\n\n");
+
+    // Enforce line limit
+    const lines = content.split("\n");
+    if (lines.length > MemoryStore.BRIDGE_MAX_LINES) {
+      content = lines.slice(0, MemoryStore.BRIDGE_MAX_LINES).join("\n");
+    }
+
+    // Atomic write: write to tmp then rename
+    const tmpPath = bridgePath + ".tmp";
+    writeFileSync(tmpPath, content, "utf-8");
+    renameSync(tmpPath, bridgePath);
+
+    // Update snapshot for diffing
+    writeFileSync(join(this.root, MemoryStore.BRIDGE_SNAPSHOT), content, "utf-8");
+
+    log.info(`Bridge regenerated: ${content.split("\n").length} lines`);
+  }
+
+  /**
+   * Detect content that Claude Code's auto-memory appended to the bridge file,
+   * and ingest it into Remi's proper memory stores.
+   */
+  ingestBridgeChanges(): string[] {
+    const bridgePath = join(this.root, MemoryStore.BRIDGE_FILE);
+    const snapshotPath = join(this.root, MemoryStore.BRIDGE_SNAPSHOT);
+
+    if (!existsSync(bridgePath)) return [];
+
+    const current = readFileSync(bridgePath, "utf-8");
+    let lastKnown = "";
+    if (existsSync(snapshotPath)) {
+      lastKnown = readFileSync(snapshotPath, "utf-8");
+    }
+
+    if (current === lastKnown) return [];
+
+    // Find lines in current that are not in lastKnown
+    const oldLines = new Set(lastKnown.split("\n").map((l) => l.trim()));
+    const newLines = current
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !oldLines.has(l))
+      // Skip markdown headers and table formatting
+      .filter((l) => !l.startsWith("#") && !l.startsWith("|") && !l.startsWith("---"));
+
+    const ingested: string[] = [];
+    for (const line of newLines) {
+      this._routeToStore(line);
+      ingested.push(line);
+    }
+
+    if (ingested.length > 0) {
+      log.info(`Ingested ${ingested.length} new items from Claude bridge`);
+    }
+
+    // Update snapshot to current state
+    writeFileSync(snapshotPath, current, "utf-8");
+    return ingested;
+  }
+
+  /**
+   * Scan all Claude Code project MEMORY.md files and ingest
+   * non-symlinked project memories into Remi's store.
+   */
+  syncAllClaudeProjectMemories(): void {
+    const projectsDir = MemoryStore.CLAUDE_PROJECTS_DIR;
+    if (!existsSync(projectsDir)) return;
+
+    const bridgeRealPath = join(this.root, MemoryStore.BRIDGE_FILE);
+
+    for (const projDir of readdirSync(projectsDir)) {
+      const memPath = join(projectsDir, projDir, "memory", "MEMORY.md");
+      if (!existsSync(memPath)) continue;
+
+      // Skip if this is a symlink to our bridge file
+      try {
+        if (lstatSync(memPath).isSymbolicLink()) {
+          const target = realpathSync(memPath);
+          if (target === bridgeRealPath) continue;
+        }
+      } catch {
+        continue;
+      }
+
+      // Read and diff against our global memory
+      try {
+        const content = readFileSync(memPath, "utf-8");
+        const globalMem = this.readMemory();
+
+        // Extract bullet-point lines not already in our memory
+        const existingLines = new Set(globalMem.split("\n").map((l) => l.trim()));
+        const newBullets = content
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l.startsWith("- ") && !existingLines.has(l));
+
+        if (newBullets.length > 0) {
+          // Convert project dir name back to path
+          const projectPath = "/" + projDir.slice(1).replace(/-/g, "/");
+          const section = `## From Claude Code (${projectPath})`;
+
+          // Check if we already have this section
+          if (!globalMem.includes(section)) {
+            this.appendMemory(`\n${section}\n${newBullets.join("\n")}`);
+            log.info(`Ingested ${newBullets.length} items from Claude project: ${projDir}`);
+          }
+        }
+      } catch (e) {
+        log.warn(`Failed to sync Claude project memory ${projDir}:`, e);
+      }
+    }
+  }
+
+  // ── Bridge helper methods ──────────────────────────────────
+
+  /**
+   * Extract stable core sections (关于主人, 用户偏好, 重要路径) from MEMORY.md.
+   */
+  private _extractCoreSections(globalMem: string): string {
+    const coreSectionNames = ["关于主人", "用户偏好", "重要路径", "长期目标", "近期焦点"];
+    const lines = globalMem.split("\n");
+    const parts: string[] = ["# 全局记忆"];
+    let capturing = false;
+
+    for (const line of lines) {
+      if (line.startsWith("## ")) {
+        const heading = line.replace(/^## /, "").trim();
+        if (coreSectionNames.includes(heading)) {
+          capturing = true;
+          parts.push("", line);
+          continue;
+        } else {
+          capturing = false;
+        }
+      }
+      if (capturing) {
+        parts.push(line);
+      }
+    }
+
+    return parts.length > 1 ? parts.join("\n").trimEnd() : "";
+  }
+
+  /**
+   * Build a compact summary of the N most recently updated entities.
+   */
+  private _buildEntitySummary(limit: number): string {
+    const entries: Array<{ name: string; type: string; summary: string; updated: number }> = [];
+
+    for (const [pathStr, meta] of this._index) {
+      let updated = 0;
+      try {
+        const fm = this._parseFrontmatter(pathStr);
+        if (fm.updated) {
+          updated = new Date(fm.updated as string).getTime();
+        } else {
+          updated = statSync(pathStr).mtimeMs;
+        }
+      } catch {
+        try { updated = statSync(pathStr).mtimeMs; } catch { /* skip */ }
+      }
+      entries.push({ name: meta.name, type: meta.type, summary: meta.summary, updated });
+    }
+
+    entries.sort((a, b) => b.updated - a.updated);
+    const top = entries.slice(0, limit);
+
+    if (top.length === 0) return "";
+
+    const lines = ["## 关键实体"];
+    for (const e of top) {
+      const desc = e.summary ? ` — ${e.summary}` : "";
+      lines.push(`- **${e.name}** (${e.type})${desc}`);
+    }
+    return lines.join("\n");
+  }
+
+  /**
+   * Build a compact summary of recent decisions.
+   */
+  private _buildDecisionsSummary(limit: number): string {
+    const decisions: Array<{ name: string; summary: string; updated: number }> = [];
+
+    for (const [pathStr, meta] of this._index) {
+      if (meta.type !== "decision") continue;
+      let updated = 0;
+      try { updated = statSync(pathStr).mtimeMs; } catch { /* skip */ }
+      decisions.push({ name: meta.name, summary: meta.summary, updated });
+    }
+
+    decisions.sort((a, b) => b.updated - a.updated);
+    const top = decisions.slice(0, limit);
+
+    if (top.length === 0) return "";
+
+    const lines = ["## 近期决策"];
+    for (const d of top) {
+      const desc = d.summary ? ` — ${d.summary}` : "";
+      lines.push(`- **${d.name}**${desc}`);
+    }
+    return lines.join("\n");
+  }
+
+  /**
+   * Extract the last N "## From YYYY-MM-DD" sections from MEMORY.md.
+   */
+  private _extractRecentSummaries(globalMem: string, limit: number): string {
+    const sections: Array<{ header: string; body: string }> = [];
+    const lines = globalMem.split("\n");
+    let current: { header: string; body: string[] } | null = null;
+
+    for (const line of lines) {
+      if (line.startsWith("## From ")) {
+        if (current) {
+          sections.push({ header: current.header, body: current.body.join("\n").trimEnd() });
+        }
+        current = { header: line, body: [] };
+      } else if (current) {
+        current.body.push(line);
+      }
+    }
+    if (current) {
+      sections.push({ header: current.header, body: current.body.join("\n").trimEnd() });
+    }
+
+    // Take last N
+    const recent = sections.slice(-limit);
+    if (recent.length === 0) return "";
+
+    const parts: string[] = [];
+    for (const s of recent) {
+      // Compact: only take first 10 lines of each section body
+      const bodyLines = s.body.split("\n").slice(0, 10);
+      parts.push(`${s.header}\n${bodyLines.join("\n")}`);
+    }
+    return parts.join("\n\n");
+  }
+
+  /**
+   * Route a new line from Claude Code's auto-memory to the appropriate store.
+   * Heuristic: bullet points starting with "- " are appended to global MEMORY.md.
+   */
+  private _routeToStore(line: string): void {
+    // Strip leading "- " for analysis
+    const clean = line.startsWith("- ") ? line.slice(2).trim() : line.trim();
+    if (!clean) return;
+
+    // Try to match known entity names
+    for (const [, meta] of this._index) {
+      if (clean.toLowerCase().includes(meta.name.toLowerCase()) && meta.name.length > 2) {
+        this._appendObservationByName(meta.name, clean);
+        return;
+      }
+    }
+
+    // Default: append to global MEMORY.md in a dedicated section
+    const globalMem = this.readMemory();
+    const section = "## Claude Code 新增";
+    if (!globalMem.includes(section)) {
+      this.appendMemory(`\n${section}\n- ${clean}`);
+    } else {
+      // Append under existing section
+      const lines = globalMem.split("\n");
+      const idx = lines.findIndex((l) => l.trim() === section);
+      if (idx >= 0) {
+        lines.splice(idx + 1, 0, `- ${clean}`);
+        this.writeMemory(lines.join("\n"));
+      }
+    }
+  }
+
+  private _appendObservationByName(name: string, observation: string): void {
+    const path = this._findEntityByName(name);
+    if (path) {
+      this._backup(path);
+      this._appendObservation(path, observation);
+      this._updateFrontmatterTimestamp(path);
+      this._invalidateIndex(path);
+    }
   }
 }

@@ -12,6 +12,7 @@ import type { RemiConfig, ScheduledSkillConfig } from "../config.js";
 import { loadConfig } from "../config.js";
 import type { Remi } from "../core.js";
 import type { Connector } from "../connectors/base.js";
+import { CliUsageScanner } from "../metrics/cli-parser.js";
 import { createLogger } from "../logger.js";
 import {
   existsSync,
@@ -100,6 +101,7 @@ export class Scheduler {
       if (now.getHours() === this._compactHour && lastCompactDate !== today) {
         await this._compactMemory();
         await this._cleanup();
+        this._aggregateCliMetrics();
         lastCompactDate = today;
       }
 
@@ -210,6 +212,18 @@ export class Scheduler {
 
       // Archive very old logs
       this._archiveOldLogs();
+
+      // Sync Claude Code's auto-memory into Remi's store
+      try {
+        const ingested = this._remi.memory.ingestBridgeChanges();
+        if (ingested.length > 0) {
+          log.info(`Ingested ${ingested.length} new items from Claude bridge`);
+        }
+        this._remi.memory.syncAllClaudeProjectMemories();
+        this._remi.memory.regenerateBridge();
+      } catch (e) {
+        log.error("Claude memory bridge sync failed:", e);
+      }
     } catch (e) {
       log.error("Memory compaction failed:", e);
     }
@@ -310,6 +324,21 @@ export class Scheduler {
           renameSync(fullPath, join(archiveDir, file));
         }
       }
+    }
+  }
+
+  private _aggregateCliMetrics(): void {
+    try {
+      const scanner = new CliUsageScanner(this._remi.metrics.metricsDir);
+      const entries = scanner.scanNew();
+      for (const entry of entries) {
+        this._remi.metrics.record(entry);
+      }
+      if (entries.length > 0) {
+        log.info(`Aggregated ${entries.length} CLI metric entries`);
+      }
+    } catch (e) {
+      log.error("CLI metrics aggregation failed:", e);
     }
   }
 
