@@ -79,3 +79,12 @@ export const updateProject = (alias: string, path: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "PUT", body: JSON.stringify({ path }) });
 export const deleteProject = (alias: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });
+
+// Analytics
+export const getAnalyticsSummary = () => request<import("./types").AnalyticsSummary>("/api/v1/analytics/summary");
+export const getAnalyticsDaily = (start: string, end: string) =>
+  request<import("./types").DailySummary[]>(`/api/v1/analytics/daily?start=${start}&end=${end}`);
+export const getRecentMetrics = (limit = 50) =>
+  request<import("./types").TokenMetricEntry[]>(`/api/v1/analytics/recent?limit=${limit}`);
+export const scanCliUsage = () =>
+  request<{ count: number }>("/api/v1/analytics/scan-cli", { method: "POST" });

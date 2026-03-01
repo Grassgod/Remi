@@ -10,6 +10,8 @@ import { join, basename, extname, dirname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
+import { CliUsageScanner } from "../src/metrics/cli-parser.js";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -85,10 +87,21 @@ function isoNow(): string {
 export class RemiData {
   readonly root: string;       // ~/.remi
   readonly memoryDir: string;  // ~/.remi/memory
+  private _metrics: MetricsCollector;
+  private _analyticsCache: { data: AnalyticsSummary; ts: number } | null = null;
+  private readonly _cacheTTL = 60_000; // 60s
 
   constructor(remiDir?: string) {
     this.root = remiDir ?? join(homedir(), ".remi");
     this.memoryDir = join(this.root, "memory");
+    this._metrics = new MetricsCollector(this.root);
+
+    // Auto-scan CLI metrics on first startup
+    try {
+      const scanner = new CliUsageScanner(this._metrics.metricsDir);
+      const entries = scanner.scanNew();
+      for (const entry of entries) this._metrics.record(entry);
+    } catch { /* non-critical */ }
   }
 
   // ── Memory: MEMORY.md ──────────────────────────────
@@ -533,6 +546,41 @@ export class RemiData {
         latestLog: dailyLogs[0]?.date ?? null,
       },
     };
+  }
+
+  // ── Analytics ──────────────────────────────────────
+
+  getAnalyticsSummary(): AnalyticsSummary {
+    const now = Date.now();
+    if (this._analyticsCache && now - this._analyticsCache.ts < this._cacheTTL) {
+      return this._analyticsCache.data;
+    }
+    const data = this._metrics.getAnalytics();
+    this._analyticsCache = { data, ts: now };
+    return data;
+  }
+
+  getAnalyticsDaily(start: string, end: string): DailySummary[] {
+    return this._metrics.getSummary(start, end);
+  }
+
+  getRecentMetrics(limit: number): TokenMetricEntry[] {
+    return this._metrics.getRecent(limit);
+  }
+
+  async refreshUsageQuotas(): Promise<void> {
+    await this._metrics.fetchUsageFromAPI();
+    this._analyticsCache = null;
+  }
+
+  scanCliUsage(): { count: number } {
+    const scanner = new CliUsageScanner(this._metrics.metricsDir);
+    const entries = scanner.scanNew();
+    for (const entry of entries) {
+      this._metrics.record(entry);
+    }
+    this._analyticsCache = null; // invalidate cache
+    return { count: entries.length };
   }
 
   // ── Backup ─────────────────────────────────────────

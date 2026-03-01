@@ -18,6 +18,7 @@ import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
 import type { AuthStore } from "./auth/store.js";
+import { MetricsCollector } from "./metrics/collector.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("core");
@@ -69,6 +70,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export class Remi {
   config: RemiConfig;
   memory: MemoryStore;
+  metrics: MetricsCollector;
   authStore: AuthStore | null = null;
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
@@ -82,6 +84,7 @@ export class Remi {
   constructor(config: RemiConfig) {
     this.config = config;
     this.memory = new MemoryStore(config.memoryDir);
+    this.metrics = new MetricsCollector(dirname(config.memoryDir));
     this._loadSessions();
   }
 
@@ -204,6 +207,8 @@ export class Remi {
       yield event;
       if (event.kind === "result") {
         resultResponse = event.response;
+      } else if (event.kind === "rate_limit" && event.rateLimitType) {
+        this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
       }
     }
 
@@ -239,6 +244,24 @@ export class Remi {
       this.memory.appendDaily(
         `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
       );
+
+      // Record token metrics
+      if (resultResponse.inputTokens || resultResponse.outputTokens) {
+        this.metrics.record({
+          ts: new Date().toISOString(),
+          src: "remi",
+          sid: resultResponse.sessionId ?? null,
+          model: resultResponse.model ?? null,
+          in: resultResponse.inputTokens ?? 0,
+          out: resultResponse.outputTokens ?? 0,
+          cacheCreate: 0,
+          cacheRead: 0,
+          cost: resultResponse.costUsd ?? null,
+          dur: resultResponse.durationMs ?? null,
+          project: cwd ?? null,
+          connector: msg.connectorName ?? null,
+        });
+      }
     }
   }
 

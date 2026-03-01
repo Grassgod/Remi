@@ -422,7 +422,11 @@ export class FeishuConnector implements Connector {
         }
 
         // Close streaming card with final content + stats + tool entries
+        // @mention is embedded in the final card for group chats (single message)
         const stats = finalResponse ? this._formatStats(finalResponse) : null;
+        const mentionOpenId = incoming.metadata?.chatType === "group"
+          ? (incoming.metadata?.senderOpenId as string | undefined)
+          : undefined;
         await session.close({
           finalText: finalResponse?.text ?? contentText,
           thinking: thinkingText || finalResponse?.thinking || null,
@@ -430,29 +434,8 @@ export class FeishuConnector implements Connector {
           trailingThinking: currentThinkingSegment || undefined,
           toolCount: toolCount > 0 ? toolCount : undefined,
           stats,
+          mentionOpenId,
         });
-
-        // Notify sender in group chats via @mention (card patch doesn't trigger notifications)
-        // Delay slightly to let Feishu propagate the card close before notification arrives
-        await new Promise((r) => setTimeout(r, 800));
-        if (incoming.metadata?.chatType === "group" && incoming.metadata?.senderOpenId) {
-          try {
-            const postContent = JSON.stringify({
-              zh_cn: {
-                content: [[
-                  { tag: "at", user_id: incoming.metadata.senderOpenId as string },
-                  { tag: "text", text: " ✅" },
-                ]],
-              },
-            });
-            await client.im.message.reply({
-              path: { message_id: replyToMessageId },
-              data: { content: postContent, msg_type: "post" },
-            });
-          } catch (e) {
-            log.warn(`@mention notification failed: ${String(e)}`);
-          }
-        }
       } catch (err) {
         log.error(`streaming error: ${String(err)}`);
         // Always close the streaming card to prevent it from being stuck

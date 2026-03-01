@@ -302,6 +302,7 @@ export class ClaudeProcessManager {
             .map((s) => `${s.name}:${s.status}`)
             .join(", ");
           log.info(`session=${sysMsg.sessionId.slice(0, 12)}... model=${sysMsg.model} mcp=[${mcpInfo}]`);
+          yield msg;  // Pass to provider so it can capture model
           continue;
         }
 

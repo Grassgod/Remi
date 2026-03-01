@@ -8,6 +8,7 @@ import { Sessions } from "./pages/Sessions";
 import { Auth } from "./pages/Auth";
 import { Config } from "./pages/Config";
 import { Projects } from "./pages/Projects";
+import { Analytics } from "./pages/Analytics";
 import { Layout } from "./components/Layout";
 
 function Placeholder({ title }: { title: string }) {
@@ -46,6 +47,7 @@ export function App() {
         <Route path="/auth" component={Auth} />
         <Route path="/config" component={Config} />
         <Route path="/projects" component={Projects} />
+        <Route path="/analytics" component={Analytics} />
         <Route path="/scheduler">{() => <Placeholder title="Scheduler" />}</Route>
         <Route path="/tools">{() => <Placeholder title="Tools" />}</Route>
         <Route path="/monitor">{() => <Placeholder title="Monitor" />}</Route>

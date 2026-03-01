@@ -94,7 +94,7 @@ export function buildRichCard(options: {
       tag: "collapsible_panel",
       expanded: false,
       background_style: "default",
-      header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+      header: { title: { tag: "plain_text", content: "⚙️ Process" } },
       vertical_spacing: "2px",
       elements: [
         { tag: "markdown", content: options.thinking },

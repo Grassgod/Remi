@@ -23,6 +23,7 @@ import type {
   ErrorEvent,
   RateLimitEvent,
   ResultMessage,
+  SystemMessage,
   ThinkingDelta,
   ToolResultMessage,
   ToolUseRequest,
@@ -160,12 +161,17 @@ export class ClaudeCLIProvider implements Provider {
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
+    let sessionModel: string | null = null;
 
     for await (const msg of mgr.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
     )) {
-      if (msg.kind === "thinking_delta") {
+      if (msg.kind === "system") {
+        const sys = msg as SystemMessage;
+        if (sys.model) sessionModel = sys.model;
+        continue;
+      } else if (msg.kind === "thinking_delta") {
         const text = (msg as ThinkingDelta).thinking;
         thinkingParts.push(text);
         log.debug(`yield thinking_delta (${text.length} chars)`);
@@ -186,8 +192,8 @@ export class ClaudeCLIProvider implements Provider {
         yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs } as StreamEvent;
       } else if (msg.kind === "rate_limit") {
         const rl = msg as RateLimitEvent;
-        log.debug(`yield rate_limit: ${rl.retryAfterMs}ms`);
-        yield { kind: "rate_limit", retryAfterMs: rl.retryAfterMs } as StreamEvent;
+        log.debug(`yield rate_limit: ${rl.retryAfterMs}ms type=${rl.rateLimitType} status=${rl.status}`);
+        yield { kind: "rate_limit", retryAfterMs: rl.retryAfterMs, rateLimitType: rl.rateLimitType, resetsAt: rl.resetsAt, status: rl.status } as StreamEvent;
       } else if (msg.kind === "error") {
         const err = msg as ErrorEvent;
         log.debug(`yield error: ${err.error}`);
@@ -203,7 +209,7 @@ export class ClaudeCLIProvider implements Provider {
             thinking,
             sessionId: resultMsg.sessionId,
             costUsd: resultMsg.costUsd,
-            model: resultMsg.model,
+            model: resultMsg.model || sessionModel || null,
             inputTokens: resultMsg.inputTokens,
             outputTokens: resultMsg.outputTokens,
             durationMs: resultMsg.durationMs,

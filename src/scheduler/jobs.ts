@@ -158,6 +158,13 @@ export class Scheduler {
         log.error("Auth token refresh check error:", e);
       }
     }
+
+    // Fetch usage quotas from Anthropic OAuth API (every heartbeat cycle)
+    try {
+      await this._remi.metrics.fetchUsageFromAPI();
+    } catch (e) {
+      log.debug("Usage quota fetch failed:", e);
+    }
   }
 
   private async _compactMemory(): Promise<void> {

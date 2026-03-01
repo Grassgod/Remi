@@ -64,6 +64,9 @@ export interface ParseError {
 export interface RateLimitEvent {
   kind: "rate_limit";
   retryAfterMs: number;
+  rateLimitType?: string;   // "five_hour" | "seven_day" | "seven_day_sonnet" | "seven_day_opus"
+  resetsAt?: string;        // ISO-8601
+  status?: string;          // "allowed" | "rate_limited"
 }
 
 export interface ErrorEvent {
@@ -188,10 +191,34 @@ export function parseLine(line: string): ParsedMessage {
   }
 
   // Rate limit event
+  // Claude CLI nests fields in rate_limit_info; also handle flat layouts
   if (msgType === "rate_limit_event" || msgType === "rate_limit") {
+    const info = (data.rate_limit_info as Record<string, unknown>) ?? {};
+    const retryMs = (data.retry_after_ms as number)
+      ?? ((data.retry_after as number) ?? 0) * 1000;
+
+    // rateLimitType: try info first, then top-level
+    const rateLimitType =
+      (info.rateLimitType as string) ?? (data.rateLimitType as string) ?? (data.rate_limit_type as string) ?? undefined;
+
+    // resetsAt: may be Unix seconds (number) or ISO string
+    let resetsAt: string | undefined;
+    const rawResets = info.resetsAt ?? data.resetsAt ?? data.resets_at;
+    if (typeof rawResets === "number" && rawResets > 0) {
+      resetsAt = new Date(rawResets * 1000).toISOString();
+    } else if (typeof rawResets === "string") {
+      resetsAt = rawResets;
+    }
+
+    // status: "allowed" | "rate_limited"
+    const status = (info.status as string) ?? undefined;
+
     return {
       kind: "rate_limit",
-      retryAfterMs: (data.retry_after_ms as number) ?? ((data.retry_after as number) ?? 0) * 1000,
+      retryAfterMs: retryMs,
+      rateLimitType,
+      resetsAt,
+      status,
     };
   }
 

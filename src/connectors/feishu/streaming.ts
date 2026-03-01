@@ -23,6 +23,7 @@ type CardState = {
   sequence: number;
   currentText: string;
   currentThinking: string;
+  currentStatus: string;
 };
 
 export interface StreamingCloseOptions {
@@ -32,7 +33,11 @@ export interface StreamingCloseOptions {
   toolEntries?: ToolEntry[];
   /** Thinking text after the last tool call. */
   trailingThinking?: string | null;
+  /** Number of tool calls for the process panel header. */
+  toolCount?: number;
   stats?: string | null;
+  /** Sender open ID — if provided, an @mention is embedded in the final card. */
+  mentionOpenId?: string;
 }
 
 // ── Token cache (shared across sessions) ────────────────────
@@ -88,7 +93,9 @@ function buildFinalCard(opts: {
   thinking?: string | null;
   toolEntries?: ToolEntry[];
   trailingThinking?: string | null;
+  toolCount?: number;
   stats?: string | null;
+  mentionOpenId?: string;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -125,10 +132,11 @@ function buildFinalCard(opts: {
         thinkingElements.push({ tag: "markdown", content: opts.thinking });
       }
 
+      const toolLabel = opts.toolCount ? ` (${opts.toolCount} tools)` : "";
       elements.push({
         tag: "collapsible_panel",
         expanded: false,
-        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+        header: { title: { tag: "plain_text", content: `⚙️ Process${toolLabel}` } },
         vertical_spacing: "2px",
         elements: thinkingElements,
       });
@@ -137,7 +145,7 @@ function buildFinalCard(opts: {
       elements.push({
         tag: "collapsible_panel",
         expanded: false,
-        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+        header: { title: { tag: "plain_text", content: "⚙️ Process" } },
         vertical_spacing: "2px",
         elements: [{ tag: "markdown", content: opts.thinking! }],
       });
@@ -146,9 +154,14 @@ function buildFinalCard(opts: {
 
   elements.push({ tag: "markdown", content: opts.text || "" });
 
-  if (opts.stats) {
+  // Stats bar with optional @mention
+  const statsContent = opts.mentionOpenId
+    ? `<at id=${opts.mentionOpenId}></at> ${opts.stats ?? "✅"}`
+    : opts.stats;
+
+  if (statsContent) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: opts.stats });
+    elements.push({ tag: "markdown", content: statsContent });
   }
 
   return {
@@ -184,6 +197,9 @@ export class FeishuStreamingSession {
   // Safety timeout: auto-close if no updates for 5 minutes
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private static SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
+
+  // Overflow protection: max bytes for process content (~10KB)
+  private static PROCESS_BUDGET = 10000;
 
   constructor(
     client: Client,
@@ -225,17 +241,18 @@ export class FeishuStreamingSession {
       },
       body: {
         elements: [
+          { tag: "markdown", content: "", element_id: "status_bar" },
           {
             tag: "collapsible_panel",
             expanded: false,
             background_style: "default",
             header: {
-              title: { tag: "plain_text", content: "💭 Thinking..." },
+              title: { tag: "plain_text", content: "⚙️ Process" },
             },
             vertical_spacing: "2px",
-            element_id: "thinking_panel",
+            element_id: "process_panel",
             elements: [
-              { tag: "markdown", content: "", element_id: "thinking_content" },
+              { tag: "markdown", content: "", element_id: "process_content" },
             ],
           },
           { tag: "markdown", content: "", element_id: "content" },
@@ -297,6 +314,7 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       currentThinking: "",
+      currentStatus: "",
     };
     this._resetSafetyTimer();
     this.log(
@@ -373,7 +391,7 @@ export class FeishuStreamingSession {
   private _throttledUpdate(
     elementId: string,
     content: string,
-    stateField: "currentText" | "currentThinking",
+    stateField: "currentText" | "currentThinking" | "currentStatus",
   ): void {
     if (!this.state || this.closed) return;
     this._resetSafetyTimer();
@@ -418,7 +436,11 @@ export class FeishuStreamingSession {
   }
 
   async updateThinking(text: string): Promise<void> {
-    this._throttledUpdate("thinking_content", text, "currentThinking");
+    this._throttledUpdate("process_content", this._truncateIfNeeded(text), "currentThinking");
+  }
+
+  async updateStatus(text: string): Promise<void> {
+    this._throttledUpdate("status_bar", text, "currentStatus");
   }
 
   // ── Flush all pending throttled updates ────────────────────
@@ -435,7 +457,9 @@ export class FeishuStreamingSession {
         const text = throttle.pending;
         throttle.pending = null;
         const field =
-          elementId === "content" ? "currentText" : "currentThinking";
+          elementId === "content" ? "currentText"
+          : elementId === "status_bar" ? "currentStatus"
+          : "currentThinking";
         this.state[field] = text;
         this.queue = this.queue.then(() =>
           this._updateElementRaw(elementId, text),
@@ -469,6 +493,32 @@ export class FeishuStreamingSession {
     }
   }
 
+  // ── Overflow protection ────────────────────────────────────
+
+  /**
+   * Truncate process content from the head to stay within the 30KB card limit.
+   * Keeps the most recent thinking + tool entries visible.
+   */
+  private _truncateIfNeeded(text: string): string {
+    if (Buffer.byteLength(text, "utf-8") <= FeishuStreamingSession.PROCESS_BUDGET) {
+      return text;
+    }
+    const marker = "... *(earlier content truncated)*\n\n---\n\n";
+    let start = 0;
+    while (
+      Buffer.byteLength(marker + text.slice(start), "utf-8") >
+      FeishuStreamingSession.PROCESS_BUDGET
+    ) {
+      const nextBreak = text.indexOf("\n---\n", start + 1);
+      if (nextBreak === -1) {
+        start += 500;
+        break;
+      }
+      start = nextBreak + 5; // skip past "\n---\n"
+    }
+    return marker + text.slice(start);
+  }
+
   // ── Close streaming card ───────────────────────────────────
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
@@ -484,7 +534,9 @@ export class FeishuStreamingSession {
     let thinking: string | null | undefined;
     let toolEntries: ToolEntry[] | undefined;
     let trailingThinking: string | null | undefined;
+    let toolCount: number | undefined;
     let stats: string | null | undefined;
+    let mentionOpenId: string | undefined;
 
     if (typeof finalTextOrOptions === "string") {
       finalText = finalTextOrOptions;
@@ -493,7 +545,9 @@ export class FeishuStreamingSession {
       thinking = finalTextOrOptions.thinking;
       toolEntries = finalTextOrOptions.toolEntries;
       trailingThinking = finalTextOrOptions.trailingThinking;
+      toolCount = finalTextOrOptions.toolCount;
       stats = finalTextOrOptions.stats;
+      mentionOpenId = finalTextOrOptions.mentionOpenId;
     }
 
     const text = finalText ?? this.state.currentText;
@@ -506,7 +560,7 @@ export class FeishuStreamingSession {
       await this._updateElementRaw("content", text);
     }
     if (thinkingText && thinkingText !== this.state.currentThinking) {
-      await this._updateElementRaw("thinking_content", thinkingText);
+      await this._updateElementRaw("process_content", thinkingText);
     }
     if (stats) {
       await this._updateElementRaw("stats_text", stats);
@@ -548,7 +602,7 @@ export class FeishuStreamingSession {
 
     // Replace with static card — thinking panel collapsed
     try {
-      const finalCard = buildFinalCard({ text, thinking: thinkingText, toolEntries, trailingThinking, stats });
+      const finalCard = buildFinalCard({ text, thinking: thinkingText, toolEntries, trailingThinking, toolCount, stats, mentionOpenId });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: JSON.stringify(finalCard) },
