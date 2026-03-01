@@ -23,3 +23,10 @@ bun.lock
 
 # Testing
 coverage/
+
+# Playwright MCP logs/screenshots
+.playwright-mcp/
+
+# Dashboard screenshots (dev artifacts)
+remi-dashboard-*.png
+remi-jarvis-*.png

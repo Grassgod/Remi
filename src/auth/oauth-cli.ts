@@ -109,11 +109,12 @@ export async function runAuth(): Promise<void> {
   const apiBase = resolveApiBase(domain);
 
   // Step 1: Build auth URL
+  // Omit scope param — Feishu defaults to all app-configured user scopes.
+  // This avoids URL length issues and never needs updating when new scopes are added.
   const authUrl =
     `${apiBase}/authen/v1/authorize?app_id=${appId}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     `&response_type=code` +
-    `&scope=offline_access` +
     `&state=remi_auth`;
 
   console.log("\n📋 请在浏览器中打开以下链接完成授权：\n");

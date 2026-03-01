@@ -1,0 +1,12 @@
+[project]
+name = "remi-lark-mcp"
+version = "0.1.0"
+description = "MCP server wrapping bytedance.lark_parser SDK for Lark document fetching"
+requires-python = ">=3.11"
+dependencies = [
+    "bytedance.lark_parser>=1.1.8",
+]
+
+[[tool.uv.index]]
+url = "https://bytedpypi.byted.org/simple"
+default = true
