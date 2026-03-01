@@ -51,15 +51,22 @@ function scheduleDedupFlush(): void {
   dedupFlushTimer = setTimeout(() => {
     dedupFlushTimer = null;
     if (!dedupDirty) return;
-    try {
-      const dir = join(homedir(), ".remi");
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(DEDUP_CACHE_PATH, JSON.stringify([...processedMessageIds]));
-      dedupDirty = false;
-    } catch {
-      // Non-critical
-    }
+    flushDedupCacheSync();
   }, 2000);
+}
+
+/** Synchronously flush dedup cache to disk. Called on connector stop to prevent
+ *  message re-delivery after restart (the 2s debounce may not fire before exit). */
+export function flushDedupCacheSync(): void {
+  if (!dedupDirty) return;
+  try {
+    const dir = join(homedir(), ".remi");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(DEDUP_CACHE_PATH, JSON.stringify([...processedMessageIds]));
+    dedupDirty = false;
+  } catch {
+    // Non-critical
+  }
 }
 
 // Load on module init

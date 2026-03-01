@@ -22,9 +22,90 @@ import {
 } from "./tool-formatters.js";
 import {
   startWebSocketListener,
+  flushDedupCacheSync,
   type FeishuWSHandle,
   type ParsedFeishuMessage,
 } from "./receive.js";
+
+// ── Plan task tracking for status bar ──────────────────────
+
+interface PlanTask {
+  id: string;
+  subject: string;
+  status: string;
+}
+
+interface ActiveAgent {
+  toolUseId: string;
+  description: string;
+  startTime: number;
+}
+
+/** Tool names that manage plan/task state. */
+const PLAN_TOOLS = new Set(["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList"]);
+
+/** Render the full plan task list as status bar markdown. */
+function renderPlanStatus(tasks: PlanTask[]): string {
+  if (tasks.length === 0) return "";
+  const completed = tasks.filter((t) => t.status === "completed").length;
+  const lines = [`📋 **Plan** (${completed}/${tasks.length})`];
+  for (const t of tasks) {
+    const icon =
+      t.status === "completed" ? "✅"
+      : t.status === "in_progress" ? "⏳"
+      : "◻";
+    lines.push(`${icon} ${t.subject}`);
+  }
+  return lines.join("\n");
+}
+
+/** Render combined plan + active agents status for the status bar. */
+function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]): string {
+  const parts: string[] = [];
+
+  if (planTasks.length > 0) {
+    parts.push(renderPlanStatus(planTasks));
+  }
+
+  if (activeAgents.length > 0) {
+    const agentLines = [`🤖 **Agents** (${activeAgents.length} active)`];
+    for (const a of activeAgents) {
+      const elapsed = ((Date.now() - a.startTime) / 1000).toFixed(0);
+      agentLines.push(`⏳ ${a.description} (${elapsed}s)`);
+    }
+    parts.push(agentLines.join("\n"));
+  }
+
+  return parts.join("\n\n");
+}
+
+/** Generate a human-readable status line from a tool call for the status bar. */
+function formatToolStatus(name: string, input?: Record<string, unknown>): string {
+  const str = (v: unknown) => (v == null ? "" : String(v));
+  const trunc = (s: string, max: number) => s.length <= max ? s : s.slice(0, max - 3) + "...";
+
+  switch (name) {
+    case "Read":
+      return `📖 Reading ${trunc(str(input?.file_path), 60)}...`;
+    case "Bash":
+      return `⚙️ Running: ${trunc(str(input?.command), 60)}...`;
+    case "Grep":
+      return `🔍 Searching: ${trunc(str(input?.pattern), 60)}...`;
+    case "Edit":
+    case "Write":
+      return `✏️ Editing ${trunc(str(input?.file_path), 60)}...`;
+    case "Glob":
+      return `📂 Finding: ${trunc(str(input?.pattern), 60)}...`;
+    case "WebFetch":
+      return `🌐 Fetching: ${trunc(str(input?.url), 60)}...`;
+    case "WebSearch":
+      return `🌐 Searching: ${trunc(str(input?.query), 60)}...`;
+    case "Agent":
+      return `🤖 Agent: ${trunc(str(input?.description ?? input?.prompt), 60)}...`;
+    default:
+      return `🔧 Tool: ${name}...`;
+  }
+}
 
 export class FeishuConnector implements Connector {
   readonly name = "feishu";
@@ -67,6 +148,9 @@ export class FeishuConnector implements Connector {
       this._wsHandle.stop();
       this._wsHandle = null;
     }
+    // Flush dedup cache synchronously so the new process (after restart)
+    // won't re-process messages that were already handled before exit.
+    flushDedupCacheSync();
     this._handler = null;
     this._streamHandler = null;
     log.info("connector stopped");
@@ -201,6 +285,11 @@ export class FeishuConnector implements Connector {
     const toolEntries: ToolEntry[] = [];
     let currentThinkingSegment = "";
 
+    // Plan task tracking for status bar
+    const planTasks: PlanTask[] = [];
+    // Active sub-agent tracking
+    const activeAgents: ActiveAgent[] = [];
+
     // Use callback pattern: the lane lock in core.ts covers this entire consumer,
     // so card close + @mention complete before the next message starts processing.
     await this._streamHandler!(incoming, async (stream) => {
@@ -211,14 +300,66 @@ export class FeishuConnector implements Connector {
             case "thinking_delta":
               thinkingText += event.text;
               currentThinkingSegment += event.text;
+              if (planTasks.length === 0 && activeAgents.length === 0) {
+                await session.updateStatus("🤔 Thinking...");
+              }
               await session.updateThinking(thinkingText);
               break;
             case "content_delta":
               contentText += event.text;
+              if (planTasks.length === 0 && activeAgents.length === 0) {
+                await session.updateStatus("✍️ Writing...");
+              }
               await session.update(contentText);
               break;
             case "tool_use": {
               toolCount++;
+
+              // Plan task tracking
+              if (event.name === "TodoWrite" && event.input?.todos) {
+                const todos = event.input.todos as Array<Record<string, unknown>>;
+                planTasks.length = 0;
+                for (const t of todos) {
+                  planTasks.push({
+                    id: String(t.id ?? planTasks.length),
+                    subject: String(t.content ?? t.subject ?? ""),
+                    status: String(t.status ?? "pending"),
+                  });
+                }
+                await session.updateStatus(renderPlanStatus(planTasks));
+              } else if (event.name === "TaskCreate" && event.input) {
+                planTasks.push({
+                  id: `_pending_${event.toolUseId}`,
+                  subject: String(event.input.subject ?? ""),
+                  status: "pending",
+                });
+                await session.updateStatus(renderPlanStatus(planTasks));
+              } else if (event.name === "TaskUpdate" && event.input) {
+                const task = planTasks.find((t) => t.id === String(event.input!.taskId));
+                if (task) {
+                  if (event.input.status === "deleted") {
+                    const idx = planTasks.indexOf(task);
+                    if (idx !== -1) planTasks.splice(idx, 1);
+                  } else {
+                    if (event.input.status) task.status = String(event.input.status);
+                    if (event.input.subject) task.subject = String(event.input.subject);
+                  }
+                  await session.updateStatus(renderPlanStatus(planTasks));
+                }
+              } else if (event.name === "Agent") {
+                activeAgents.push({
+                  toolUseId: event.toolUseId,
+                  description: String(event.input?.description ?? event.input?.prompt ?? "").slice(0, 60),
+                  startTime: Date.now(),
+                });
+                await session.updateStatus(renderCombinedStatus(planTasks, activeAgents));
+              } else if (!PLAN_TOOLS.has(event.name)) {
+                // Non-plan/non-agent tool: only update status bar if no plan or agents active
+                if (planTasks.length === 0 && activeAgents.length === 0) {
+                  await session.updateStatus(formatToolStatus(event.name, event.input));
+                }
+              }
+
               // Record entry for final card rebuild
               toolEntries.push({
                 name: event.name,
@@ -235,6 +376,22 @@ export class FeishuConnector implements Connector {
               break;
             }
             case "tool_result": {
+              // Fix TaskCreate temp IDs with real IDs from result
+              if (event.name === "TaskCreate" && event.resultPreview) {
+                const match = event.resultPreview.match(/Task #(\S+)/);
+                if (match) {
+                  const task = planTasks.find((t) => t.id === `_pending_${event.toolUseId}`);
+                  if (task) task.id = match[1];
+                }
+              }
+              // Remove completed agent
+              if (event.name === "Agent") {
+                const idx = activeAgents.findIndex((a) => a.toolUseId === event.toolUseId);
+                if (idx !== -1) activeAgents.splice(idx, 1);
+              }
+              // Update status bar
+              const combined = renderCombinedStatus(planTasks, activeAgents);
+              await session.updateStatus(combined || "🤔 Thinking...");
               // Update the matching pending entry
               const entry = toolEntries.findLast((e) => e.status === "pending");
               if (entry) {
@@ -250,6 +407,7 @@ export class FeishuConnector implements Connector {
               break;
             }
             case "rate_limit":
+              await session.updateStatus(`⚠️ Rate limited, retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...`);
               thinkingText += `\n⚠️ **Rate limited** — retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...\n`;
               await session.updateThinking(thinkingText);
               break;
@@ -270,6 +428,7 @@ export class FeishuConnector implements Connector {
           thinking: thinkingText || finalResponse?.thinking || null,
           toolEntries: toolEntries.length > 0 ? toolEntries : undefined,
           trailingThinking: currentThinkingSegment || undefined,
+          toolCount: toolCount > 0 ? toolCount : undefined,
           stats,
         });
 
