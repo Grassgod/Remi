@@ -33,6 +33,10 @@ export const IconMonitor = () => (
   <svg {...s}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
 );
 
+export const IconProjects = () => (
+  <svg {...s}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+);
+
 export const IconActivity = () => (
   <svg {...s} width={13} height={13}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
 );

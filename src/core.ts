@@ -11,7 +11,8 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import type { RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
@@ -71,6 +72,7 @@ export class Remi {
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
   _sessions = new Map<string, string>(); // sessionKey → sessionId
+  _sessionCwd = new Map<string, string>(); // sessionKey → project cwd
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
   private _sessDirty = false;
@@ -177,7 +179,7 @@ export class Remi {
     }
 
     const sessionKey = this._resolveSessionKey(msg);
-    const cwd = (msg.metadata?.cwd as string) ?? undefined;
+    const cwd = this._sessionCwd.get(sessionKey) ?? (msg.metadata?.cwd as string) ?? undefined;
     const context = this.memory.gatherContext(cwd);
     const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
     log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
@@ -186,6 +188,7 @@ export class Remi {
       context: context || undefined,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
+      cwd: cwd ?? undefined,
     };
 
     const provider = this._getProvider();
@@ -253,7 +256,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -287,15 +290,75 @@ export class Remi {
         }
         return { text: "正在重启 Remi..." };
       }
+      case "p": {
+        const arg = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+
+        if (!arg) {
+          // Show current project + list
+          const currentCwd = this._sessionCwd.get(sessionKey);
+          const projects = this.config.projects;
+          const aliases = Object.keys(projects);
+          const lines = [`📍 当前: ${currentCwd ?? "~ (默认)"}`];
+          if (aliases.length > 0) {
+            lines.push("", "可用项目:");
+            for (const [alias, path] of Object.entries(projects)) {
+              const marker = currentCwd === path ? " ◀" : "";
+              lines.push(`  ${alias}  →  ${path}${marker}`);
+            }
+          } else {
+            lines.push("", "暂无注册项目，请在 Dashboard → Projects 中添加。");
+          }
+          return { text: lines.join("\n") };
+        }
+
+        if (arg === "reset") {
+          this._sessionCwd.delete(sessionKey);
+          this._sessions.delete(sessionKey);
+          this._scheduleSessFlush();
+          const provider = this._getProvider();
+          if ("clearSession" in provider && typeof provider.clearSession === "function") {
+            await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
+          }
+          return { text: "已清除项目绑定，下条消息将在默认目录启动。" };
+        }
+
+        // Resolve alias or direct path
+        let targetPath: string;
+        if (this.config.projects[arg]) {
+          targetPath = this.config.projects[arg];
+        } else {
+          // Treat as direct path, expand ~
+          targetPath = arg.startsWith("~") ? arg.replace("~", homedir()) : resolve(arg);
+        }
+
+        if (!existsSync(targetPath)) {
+          return { text: `路径不存在: ${targetPath}` };
+        }
+
+        // Kill old process, bind new cwd
+        this._sessionCwd.set(sessionKey, targetPath);
+        this._sessions.delete(sessionKey);
+        this._scheduleSessFlush();
+        const provider = this._getProvider();
+        if ("clearSession" in provider && typeof provider.clearSession === "function") {
+          await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
+        }
+
+        // Find alias name for display
+        const aliasName = Object.entries(this.config.projects).find(([, p]) => p === targetPath)?.[0];
+        return { text: `项目已切换: ${aliasName ? `${aliasName} (${targetPath})` : targetPath}\n下条消息将在新目录启动 Claude。` };
+      }
       case "status": {
         const hasSession = this._sessions.has(sessionKey);
         const sessionId = this._sessions.get(sessionKey);
         const providers = [...this._providers.keys()].join(", ");
         const connectors = this._connectors.map((c) => c.name).join(", ");
+        const currentCwd = this._sessionCwd.get(sessionKey);
         const lines = [
           `**Remi Status**`,
           `- Session: ${hasSession ? sessionId?.slice(0, 12) + "..." : "无"}`,
           isThread ? `- Context: Thread (isolated)` : `- Context: Main chat`,
+          currentCwd ? `- Project: ${currentCwd}` : `- Project: ~ (默认)`,
           `- Providers: ${providers}`,
           `- Connectors: ${connectors}`,
         ];
@@ -370,7 +433,7 @@ export class Remi {
     try {
       if (!existsSync(this.config.sessionsFile)) return;
       const raw = readFileSync(this.config.sessionsFile, "utf-8");
-      const data = JSON.parse(raw) as { entries?: [string, string][]; savedAt?: number };
+      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; savedAt?: number };
       if (!data.entries || !Array.isArray(data.entries)) return;
       if (data.savedAt && Date.now() - data.savedAt > SESSION_TTL_MS) {
         log.info("Persisted sessions expired (>7d), discarding");
@@ -379,7 +442,12 @@ export class Remi {
       for (const [key, id] of data.entries) {
         this._sessions.set(key, id);
       }
-      log.info(`Loaded ${data.entries.length} persisted session(s)`);
+      if (Array.isArray(data.cwdMap)) {
+        for (const [key, cwd] of data.cwdMap) {
+          this._sessionCwd.set(key, cwd);
+        }
+      }
+      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s)`);
     } catch (e) {
       log.warn("Failed to load sessions file:", e);
     }
@@ -409,6 +477,7 @@ export class Remi {
       }
       const data = {
         entries: [...this._sessions.entries()],
+        cwdMap: [...this._sessionCwd.entries()],
         savedAt: Date.now(),
       };
       writeFileSync(this.config.sessionsFile, JSON.stringify(data), "utf-8");

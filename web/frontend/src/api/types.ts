@@ -62,3 +62,6 @@ export interface TokenStatus {
 export interface RemiConfig {
   [key: string]: unknown;
 }
+
+// Projects
+export type ProjectMap = Record<string, string>; // alias → path

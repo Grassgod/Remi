@@ -70,3 +70,12 @@ export const getTokenStatus = () => request<import("./types").TokenStatus[]>("/a
 export const getConfig = () => request<import("./types").RemiConfig>("/api/v1/config");
 export const updateConfig = (patch: Record<string, unknown>) =>
   request("/api/v1/config", { method: "PUT", body: JSON.stringify(patch) });
+
+// Projects
+export const getProjects = () => request<import("./types").ProjectMap>("/api/v1/projects");
+export const createProject = (alias: string, path: string) =>
+  request("/api/v1/projects", { method: "POST", body: JSON.stringify({ alias, path }) });
+export const updateProject = (alias: string, path: string) =>
+  request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "PUT", body: JSON.stringify({ path }) });
+export const deleteProject = (alias: string) =>
+  request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });

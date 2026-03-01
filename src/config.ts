@@ -61,6 +61,8 @@ export interface RemiConfig {
   feishu: FeishuConfig;
   scheduler: SchedulerConfig;
   scheduledSkills: ScheduledSkillConfig[];
+  /** Registered project aliases: alias → absolute path. */
+  projects: Record<string, string>;
   memoryDir: string;
   pidFile: string;
   logLevel: string;
@@ -106,6 +108,7 @@ export function defaultRemiConfig(): RemiConfig {
     feishu: defaultFeishuConfig(),
     scheduler: defaultSchedulerConfig(),
     scheduledSkills: [],
+    projects: {},
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: "INFO",
@@ -141,6 +144,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
+  const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
 
@@ -181,6 +185,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       outputDir: (s.output_dir as string) ?? join(homedir(), ".remi", "skill-reports", (s.name as string) ?? "unknown"),
       maxPushLength: parseInt(String(s.max_push_length ?? 4000), 10),
     })),
+    projects: projectsData,
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: env.REMI_LOG_LEVEL ?? (fileData.log_level as string) ?? "INFO",

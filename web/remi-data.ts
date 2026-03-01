@@ -434,6 +434,50 @@ export class RemiData {
     }
   }
 
+  // ── Projects ─────────────────────────────────────────
+
+  readProjects(): Record<string, string> {
+    const config = this._readRawConfig();
+    return (config.projects ?? {}) as Record<string, string>;
+  }
+
+  saveProject(alias: string, path: string): boolean {
+    const config = this._readRawConfig();
+    if (!config.projects) config.projects = {};
+    (config.projects as Record<string, string>)[alias] = path;
+    return this._writeRawConfig(config);
+  }
+
+  deleteProject(alias: string): boolean {
+    const config = this._readRawConfig();
+    if (!config.projects || !(alias in (config.projects as Record<string, string>))) return false;
+    delete (config.projects as Record<string, string>)[alias];
+    return this._writeRawConfig(config);
+  }
+
+  private _readRawConfig(): Record<string, any> {
+    const paths = [
+      join(process.cwd(), "remi.toml"),
+      join(this.root, "remi.toml"),
+    ];
+    for (const p of paths) {
+      if (existsSync(p)) {
+        try {
+          return parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
+        } catch { return {}; }
+      }
+    }
+    return {};
+  }
+
+  private _writeRawConfig(config: Record<string, any>): boolean {
+    const p = join(this.root, "remi.toml");
+    try {
+      writeFileSync(p, stringifyToml(config), "utf-8");
+      return true;
+    } catch { return false; }
+  }
+
   // ── Daemon ─────────────────────────────────────────
 
   getDaemonPid(): number | null {
