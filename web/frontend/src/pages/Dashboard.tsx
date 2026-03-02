@@ -32,7 +32,7 @@ export function Dashboard() {
   return (
     <Layout title="Dashboard" subtitle="SYSTEM OVERVIEW">
       {/* Status Cards */}
-      <div className="status-grid mb-5 grid grid-cols-4 gap-3">
+      <div className="status-grid mb-3 grid grid-cols-2 gap-2 sm:mb-5 sm:grid-cols-4 sm:gap-3">
         <ArcCard
           label="Daemon Status"
           value={status?.daemon.alive ? "ONLINE" : "OFFLINE"}
@@ -60,7 +60,7 @@ export function Dashboard() {
       </div>
 
       {/* Panels */}
-      <div className="panels-grid grid grid-cols-[1.2fr_0.8fr] gap-3.5">
+      <div className="panels-grid grid grid-cols-1 gap-2.5 sm:grid-cols-[1.2fr_0.8fr] sm:gap-3.5">
         {/* Activity Feed */}
         <HudPanel
           title="Activity Stream"
@@ -76,9 +76,9 @@ export function Dashboard() {
               feedItems.map((item, i) => (
                 <div
                   key={i}
-                  className="flex items-baseline gap-3 border-l-2 border-transparent px-4 py-2 transition-colors hover:border-l-border hover:bg-accent/30"
+                  className="flex items-baseline gap-2 border-l-2 border-transparent px-3 py-1.5 transition-colors hover:border-l-border hover:bg-accent/30 sm:gap-3 sm:px-4 sm:py-2"
                 >
-                  <span className="min-w-[36px] shrink-0 font-mono text-[10px] text-muted-foreground">
+                  <span className="min-w-[32px] shrink-0 font-mono text-[10px] text-muted-foreground sm:min-w-[36px]">
                     {item.time}
                   </span>
                   <span className="desktop-only inline-block shrink-0 rounded-sm border border-border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wide text-muted-foreground">
@@ -94,7 +94,7 @@ export function Dashboard() {
         </HudPanel>
 
         {/* Right Column */}
-        <div className="flex flex-col gap-3.5">
+        <div className="flex flex-col gap-2.5 sm:gap-3.5">
           {/* Tokens */}
           <HudPanel
             title="Auth Tokens"
@@ -109,16 +109,16 @@ export function Dashboard() {
               tokens.map((t, i) => (
                 <div
                   key={i}
-                  className="grid grid-cols-[1fr_auto_auto] items-center gap-2.5 px-4 py-2.5 transition-colors hover:bg-accent/30"
+                  className="grid grid-cols-[1fr_auto_auto] items-center gap-1.5 px-3 py-2 transition-colors hover:bg-accent/30 sm:gap-2.5 sm:px-4 sm:py-2.5"
                 >
-                  <div>
-                    <div className="text-xs font-semibold text-foreground">{t.service}</div>
-                    <div className="font-mono text-[9px] text-muted-foreground">{t.type}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold text-foreground">{t.service}</div>
+                    <div className="truncate font-mono text-[9px] text-muted-foreground">{t.type}</div>
                   </div>
-                  <span className={`font-mono text-[10px] ${t.valid ? "text-success" : "text-destructive"}`}>
+                  <span className={`hidden font-mono text-[10px] sm:inline ${t.valid ? "text-success" : "text-destructive"}`}>
                     {t.expiresIn}
                   </span>
-                  <span className={`rounded-sm border px-2 py-0.5 font-mono text-[8px] uppercase tracking-wide
+                  <span className={`shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wide sm:px-2
                     ${t.valid
                       ? "border-success/30 bg-success/[0.06] text-success"
                       : "border-destructive/30 bg-destructive/[0.06] text-destructive"
@@ -144,16 +144,16 @@ export function Dashboard() {
               entities.map((e, i) => (
                 <div
                   key={i}
-                  className="flex cursor-pointer items-center gap-2.5 px-4 py-2 transition-colors hover:bg-accent/30"
+                  className="flex cursor-pointer items-center gap-2 px-3 py-1.5 transition-colors hover:bg-accent/30 sm:gap-2.5 sm:px-4 sm:py-2"
                   onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
                 >
-                  <span className={`entity-badge-${e.type} min-w-[56px] shrink-0 rounded-sm px-1.5 py-0.5 text-center font-mono text-[8px] uppercase tracking-wide`}>
+                  <span className={`entity-badge-${e.type} min-w-[48px] shrink-0 rounded-sm px-1.5 py-0.5 text-center font-mono text-[8px] uppercase tracking-wide sm:min-w-[56px]`}>
                     {e.type}
                   </span>
-                  <span className="flex-1 text-sm font-medium text-foreground">
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                     {e.name}
                   </span>
-                  <span className="font-mono text-[9px] text-muted-foreground">
+                  <span className="hidden font-mono text-[9px] text-muted-foreground sm:inline">
                     {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
                   </span>
                 </div>
@@ -182,11 +182,6 @@ export function Dashboard() {
       </div>
 
       <style>{`
-        @media (max-width: 768px) {
-          .status-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .panels-grid { grid-template-columns: 1fr !important; }
-          .main-content { padding: 14px !important; padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 14px) !important; }
-        }
         @media (max-width: 360px) {
           .status-grid { grid-template-columns: 1fr !important; }
         }

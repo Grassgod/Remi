@@ -94,6 +94,11 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes sheet-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* ═══ Entity type badges ═══ */
 .entity-badge-person       { border: 1px solid oklch(0.7 0.15 250 / 30%); color: oklch(0.7 0.15 250); background: oklch(0.7 0.15 250 / 6%); }
 .entity-badge-project      { border: 1px solid oklch(0.65 0.18 145 / 30%); color: oklch(0.65 0.18 145); background: oklch(0.65 0.18 145 / 6%); }
@@ -107,6 +112,10 @@ body {
 @media (max-width: 768px) {
   .desktop-only { display: none !important; }
   .mobile-only { display: block !important; }
+  .main-content {
+    padding: 12px !important;
+    padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 12px) !important;
+  }
 }
 @media (min-width: 769px) {
   .mobile-only { display: none !important; }

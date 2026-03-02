@@ -60,11 +60,32 @@ export interface SchedulerConfig {
   heartbeatInterval: number;
 }
 
+export interface ServiceConfig {
+  /** Display name (used as PM2 app name). */
+  name: string;
+  /** Main script/file to run. */
+  script: string;
+  /** Runtime interpreter: bun, python3, node, etc. */
+  interpreter: string;
+  /** Arguments passed after the script. */
+  args: string[];
+  /** Working directory. */
+  cwd: string;
+  /** Optional shell command to run before starting (e.g. build step). */
+  build: string;
+  /** Optional port number (for display/monitoring). */
+  port: number | null;
+  /** Whether this service is enabled (default: true). */
+  enabled: boolean;
+}
+
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
   scheduler: SchedulerConfig;
   scheduledSkills: ScheduledSkillConfig[];
+  /** Registered services managed by PM2. */
+  services: ServiceConfig[];
   /** Registered project aliases: alias → absolute path. */
   projects: Record<string, string>;
   memoryDir: string;
@@ -114,6 +135,7 @@ export function defaultRemiConfig(): RemiConfig {
     feishu: defaultFeishuConfig(),
     scheduler: defaultSchedulerConfig(),
     scheduledSkills: [],
+    services: [],
     projects: {},
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
@@ -150,6 +172,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
+  const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
@@ -193,6 +216,16 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       connectorName: (s.connector_name as string) ?? "feishu",
       outputDir: (s.output_dir as string) ?? join(homedir(), ".remi", "skill-reports", (s.name as string) ?? "unknown"),
       maxPushLength: parseInt(String(s.max_push_length ?? 4000), 10),
+    })),
+    services: servicesData.map((s) => ({
+      name: (s.name as string) ?? "unnamed",
+      script: (s.script as string) ?? "",
+      interpreter: (s.interpreter as string) ?? "bun",
+      args: (s.args as string[]) ?? [],
+      cwd: (s.cwd as string) ?? homedir(),
+      build: (s.build as string) ?? "",
+      port: (s.port as number) ?? null,
+      enabled: (s.enabled as boolean) ?? true,
     })),
     projects: projectsData,
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,

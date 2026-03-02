@@ -10,7 +10,7 @@
  * - Graceful shutdown (SIGTERM/SIGINT)
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, openSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -25,7 +25,7 @@ import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
 import { createLogger } from "./logger.js";
-import { startWebDashboard, stopWebDashboard } from "../web/server.js";
+import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
 
 const log = createLogger("daemon");
 
@@ -271,37 +271,25 @@ export class RemiDaemon {
   // ── Self-restart ────────────────────────────────────────
 
   private _restart(info: { chatId: string; connectorName?: string }): void {
-    log.info("Restart requested — spawning new process and shutting down...");
+    log.info("Restart requested — rebuilding services and triggering PM2 restart...");
 
-    // Save notification info so the new process can notify the user
     this._saveRestartNotify(info);
-
-    // Flush dedup cache BEFORE spawning — the new process loads it at module init,
-    // before _checkExisting() runs, so it must be on disk already.
     flushDedupCacheSync();
 
-    // Keep PID file — new process will detect us and send SIGTERM to take over
+    // Run build steps for services that need them
+    runBuildsSync(this.config);
 
-    // Clean env: remove CLAUDECODE which interferes with Claude CLI provider
-    const cleanEnv = { ...process.env };
-    delete cleanEnv.CLAUDECODE;
+    // Regenerate ecosystem config (picks up any config changes)
+    writeEcosystem(this.config);
 
-    // Redirect new process stdout/stderr to log file
-    const logDir = join(homedir(), ".remi", "logs");
-    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
-    const logFd = openSync(join(logDir, "remi.log"), "a");
-
-    // Spawn a new daemon process (detached so it outlives the parent)
-    const child = spawn(process.execPath, process.argv.slice(1), {
+    // Trigger PM2 restart (detached so it outlives our process)
+    const child = spawn("pm2", ["restart", getEcosystemPath(), "--update-env"], {
       detached: true,
-      stdio: ["ignore", logFd, logFd],
-      cwd: process.cwd(),
-      env: cleanEnv,
+      stdio: "ignore",
     });
     child.unref();
 
-    // Trigger graceful shutdown of current process
-    this._abortController.abort();
+    // PM2 will send SIGTERM which triggers our graceful shutdown
   }
 
   // ── Main run loop ────────────────────────────────────────
@@ -317,14 +305,6 @@ export class RemiDaemon {
     log.info("=".repeat(60));
     log.info(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
 
-    // Start Web Dashboard
-    try {
-      const { port } = startWebDashboard();
-      log.info(`Web Dashboard started on port ${port}`);
-    } catch (e) {
-      log.warn("Web Dashboard failed to start:", e);
-    }
-
     // Send restart notification after connectors have time to fully initialize
     setTimeout(() => this._sendRestartNotify(remi), 5000);
 
@@ -338,7 +318,6 @@ export class RemiDaemon {
         throw e;
       }
     } finally {
-      stopWebDashboard();
       await remi.stop();
       this._removePid();
       log.info("Remi daemon stopped.");

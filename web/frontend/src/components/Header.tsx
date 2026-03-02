@@ -25,20 +25,17 @@ export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal 
   }, []);
 
   return (
-    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-4 border-b border-border bg-sidebar px-6">
+    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-2 border-b border-border bg-sidebar px-3 sm:gap-4 sm:px-6">
       <span className="text-sm font-semibold tracking-wide text-foreground">
         {title}
       </span>
       {subtitle && (
-        <>
-          <span className="text-xs text-muted-foreground">/</span>
-          <span className="font-mono text-xs text-muted-foreground">
-            {subtitle}
-          </span>
-        </>
+        <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
+          / {subtitle}
+        </span>
       )}
       <div className="flex-1" />
-      <span className="font-mono text-xs tracking-wider text-muted-foreground">
+      <span className="hidden font-mono text-xs tracking-wider text-muted-foreground sm:inline">
         {clock}
       </span>
       <div className="flex items-center gap-1.5">

@@ -11,6 +11,7 @@ import { CLIConnector } from "./connectors/cli.js";
 import { RemiDaemon } from "./daemon.js";
 import { setLogLevel, createLogger } from "./logger.js";
 import { runAuth } from "./auth/oauth-cli.js";
+import { pm2Start, pm2Stop } from "./pm2.js";
 
 const log = createLogger("main");
 
@@ -43,6 +44,26 @@ function runServe(): void {
   });
 }
 
+function runPm2(): void {
+  const config = loadConfig();
+  setLogLevel(config.logLevel);
+
+  const sub = process.argv[3] ?? "start";
+  switch (sub) {
+    case "start":
+      pm2Start(config);
+      break;
+    case "stop":
+      pm2Stop();
+      break;
+    default:
+      log.info("Usage: remi pm2 [start|stop]");
+      log.info("  start — Build services, generate ecosystem config, start all with PM2");
+      log.info("  stop  — Stop all PM2-managed services");
+      process.exit(1);
+  }
+}
+
 function main(): void {
   const cmd = process.argv[2] ?? "chat";
 
@@ -60,11 +81,15 @@ function main(): void {
         process.exit(1);
       });
       break;
+    case "pm2":
+      runPm2();
+      break;
     default:
-      log.info("Usage: bun run src/main.ts [chat|serve|auth]");
+      log.info("Usage: bun run src/main.ts [chat|serve|auth|pm2]");
       log.info("  chat   — Interactive CLI REPL (default)");
       log.info("  serve  — Daemon mode with connectors + scheduler");
       log.info("  auth   — Feishu OAuth authorization (obtain user_access_token)");
+      log.info("  pm2    — Manage all services with PM2 (start/stop)");
       process.exit(1);
   }
 }

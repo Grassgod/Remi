@@ -71,3 +71,11 @@ export const IconConfigLg = () => (
 export const IconMonitorLg = () => (
   <svg {...m}><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
 );
+
+export const IconMoreLg = () => (
+  <svg {...m}><circle cx="12" cy="5" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.5" fill="currentColor" stroke="none"/></svg>
+);
+
+export const IconAnalyticsLg = () => (
+  <svg {...m}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/><line x1="2" y1="20" x2="22" y2="20" strokeDasharray="2 2" opacity="0.4"/></svg>
+);

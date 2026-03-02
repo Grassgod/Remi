@@ -17,16 +17,16 @@ const colorMap = {
 export function StatCard({ label, value, sub, color = "default" }: StatCardProps) {
   return (
     <div
-      className="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50"
+      className="rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/50 sm:p-4"
       style={{ animation: "fade-in 0.3s ease-out both" }}
     >
-      <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+      <div className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground sm:text-[10px]">
         {label}
       </div>
-      <div className={`mt-2 text-2xl font-bold leading-none tracking-tight ${colorMap[color]}`}>
+      <div className={`mt-1.5 text-lg font-bold leading-none tracking-tight sm:mt-2 sm:text-2xl ${colorMap[color]}`}>
         {value}
       </div>
-      <div className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+      <div className="mt-1 truncate font-mono text-[9px] text-muted-foreground sm:mt-1.5 sm:text-[10px]">
         {sub}
       </div>
     </div>
