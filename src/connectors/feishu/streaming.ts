@@ -14,6 +14,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
+import { type ToolEntry, buildToolCollapsible } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -27,6 +28,10 @@ type CardState = {
 export interface StreamingCloseOptions {
   finalText?: string;
   thinking?: string | null;
+  /** Tool entries for building nested collapsible panels in the final card. */
+  toolEntries?: ToolEntry[];
+  /** Thinking text after the last tool call. */
+  trailingThinking?: string | null;
   stats?: string | null;
 }
 
@@ -71,22 +76,72 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-/** Build the final static card JSON (thinking panel collapsed). */
+/**
+ * Build the final static card JSON (thinking panel collapsed).
+ *
+ * When toolEntries are provided, the thinking panel contains interleaved:
+ *   markdown (thinking text) → nested collapsible_panel (tool) → markdown → ...
+ * Each tool becomes a nested collapsible_panel with full input/output details.
+ */
 function buildFinalCard(opts: {
   text: string;
   thinking?: string | null;
+  toolEntries?: ToolEntry[];
+  trailingThinking?: string | null;
   stats?: string | null;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
-  if (opts.thinking) {
-    elements.push({
-      tag: "collapsible_panel",
-      expanded: false,
-      header: { title: { tag: "plain_text", content: "💭 Thinking" } },
-      vertical_spacing: "2px",
-      elements: [{ tag: "markdown", content: opts.thinking }],
-    });
+  const hasTools = opts.toolEntries && opts.toolEntries.length > 0;
+  const hasThinking = opts.thinking || hasTools;
+
+  if (hasThinking) {
+    if (hasTools) {
+      // Build structured thinking panel with nested tool collapsible blocks
+      const thinkingElements: Record<string, unknown>[] = [];
+
+      for (const entry of opts.toolEntries!) {
+        // Thinking text before this tool
+        if (entry.thinkingBefore?.trim()) {
+          thinkingElements.push({
+            tag: "markdown",
+            content: entry.thinkingBefore,
+          });
+        }
+        // Nested collapsible panel for the tool
+        thinkingElements.push(buildToolCollapsible(entry));
+      }
+
+      // Trailing thinking text after the last tool
+      if (opts.trailingThinking?.trim()) {
+        thinkingElements.push({
+          tag: "markdown",
+          content: opts.trailingThinking,
+        });
+      }
+
+      // Fallback: if no elements were created, use raw thinking text
+      if (thinkingElements.length === 0 && opts.thinking) {
+        thinkingElements.push({ tag: "markdown", content: opts.thinking });
+      }
+
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+        vertical_spacing: "2px",
+        elements: thinkingElements,
+      });
+    } else {
+      // No tools — simple thinking panel with plain markdown
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        header: { title: { tag: "plain_text", content: "💭 Thinking" } },
+        vertical_spacing: "2px",
+        elements: [{ tag: "markdown", content: opts.thinking! }],
+      });
+    }
   }
 
   elements.push({ tag: "markdown", content: opts.text || "" });
@@ -427,6 +482,8 @@ export class FeishuStreamingSession {
     // Normalize arguments
     let finalText: string | undefined;
     let thinking: string | null | undefined;
+    let toolEntries: ToolEntry[] | undefined;
+    let trailingThinking: string | null | undefined;
     let stats: string | null | undefined;
 
     if (typeof finalTextOrOptions === "string") {
@@ -434,6 +491,8 @@ export class FeishuStreamingSession {
     } else if (finalTextOrOptions) {
       finalText = finalTextOrOptions.finalText;
       thinking = finalTextOrOptions.thinking;
+      toolEntries = finalTextOrOptions.toolEntries;
+      trailingThinking = finalTextOrOptions.trailingThinking;
       stats = finalTextOrOptions.stats;
     }
 
@@ -489,7 +548,7 @@ export class FeishuStreamingSession {
 
     // Replace with static card — thinking panel collapsed
     try {
-      const finalCard = buildFinalCard({ text, thinking: thinkingText, stats });
+      const finalCard = buildFinalCard({ text, thinking: thinkingText, toolEntries, trailingThinking, stats });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: JSON.stringify(finalCard) },

@@ -51,8 +51,30 @@ export interface ToolResultMessage {
   kind: "tool_result";
   toolUseId: string;
   name: string;
-  result: string;       // truncated preview (first 200 chars)
+  result: string;       // truncated preview (first 1500 chars)
   durationMs: number;
+}
+
+export interface ParseError {
+  kind: "parse_error";
+  rawLine: string;
+  error: string;
+}
+
+export interface RateLimitEvent {
+  kind: "rate_limit";
+  retryAfterMs: number;
+}
+
+export interface ErrorEvent {
+  kind: "error";
+  error: string;
+  code: string;
+}
+
+export interface AssistantBlocks {
+  kind: "assistant_blocks";
+  blocks: ParsedMessage[];
 }
 
 export type ParsedMessage =
@@ -62,12 +84,25 @@ export type ParsedMessage =
   | ToolUseRequest
   | ToolResultMessage
   | ResultMessage
+  | ParseError
+  | RateLimitEvent
+  | ErrorEvent
+  | AssistantBlocks
   | Record<string, unknown>;
 
 // ── Parsing (stdout line -> typed message) ─────────────────────
 
 export function parseLine(line: string): ParsedMessage {
-  const data = JSON.parse(line) as Record<string, unknown>;
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(line) as Record<string, unknown>;
+  } catch (e) {
+    return {
+      kind: "parse_error",
+      rawLine: line.slice(0, 500),
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
   const msgType = (data.type as string) ?? "";
 
   // System init
@@ -122,43 +157,51 @@ export function parseLine(line: string): ParsedMessage {
     const message = (data.message as Record<string, unknown>) ?? {};
     const content = (message.content as Array<Record<string, unknown>>) ?? [];
 
-    // Thinking blocks — emit as thinking_delta so downstream can display
-    const thinkingBlocks = content.filter((b) => b.type === "thinking");
-    if (thinkingBlocks.length > 0) {
-      const block = thinkingBlocks[0];
-      return {
-        kind: "thinking_delta",
-        thinking: (block.thinking as string) ?? "",
-        index: 0,
-      };
-    }
-
-    // Tool use blocks
-    const toolBlocks = content.filter((b) => b.type === "tool_use");
-    if (toolBlocks.length > 0) {
-      const block = toolBlocks[0];
-      return {
-        kind: "tool_use",
-        toolUseId: (block.id as string) ?? "",
-        name: (block.name as string) ?? "",
-        input: (block.input as Record<string, unknown>) ?? {},
-      };
-    }
-
-    // Text blocks — emit as content_delta for real-time card updates
-    const textBlocks = content.filter((b) => b.type === "text");
-    if (textBlocks.length > 0) {
-      const text = (textBlocks[0].text as string) ?? "";
-      if (text) {
-        return {
-          kind: "content_delta",
-          text,
+    // Parse all blocks into typed messages
+    const parsed: ParsedMessage[] = [];
+    for (const block of content) {
+      if (block.type === "thinking") {
+        parsed.push({
+          kind: "thinking_delta",
+          thinking: (block.thinking as string) ?? "",
           index: 0,
-        };
+        });
+      } else if (block.type === "tool_use") {
+        parsed.push({
+          kind: "tool_use",
+          toolUseId: (block.id as string) ?? "",
+          name: (block.name as string) ?? "",
+          input: (block.input as Record<string, unknown>) ?? {},
+        });
+      } else if (block.type === "text" && (block.text as string)) {
+        parsed.push({
+          kind: "content_delta",
+          text: (block.text as string),
+          index: 0,
+        });
       }
     }
 
-    return data;
+    if (parsed.length === 0) return data;
+    if (parsed.length === 1) return parsed[0];
+    return { kind: "assistant_blocks", blocks: parsed };
+  }
+
+  // Rate limit event
+  if (msgType === "rate_limit_event" || msgType === "rate_limit") {
+    return {
+      kind: "rate_limit",
+      retryAfterMs: (data.retry_after_ms as number) ?? ((data.retry_after as number) ?? 0) * 1000,
+    };
+  }
+
+  // Error event
+  if (msgType === "error") {
+    return {
+      kind: "error",
+      error: (data.error as string) ?? JSON.stringify(data),
+      code: (data.code as string) ?? "unknown",
+    };
   }
 
   // Result (end of turn)

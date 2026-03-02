@@ -11,6 +11,8 @@ export type StreamEvent =
   | { kind: "content_delta"; text: string }
   | { kind: "tool_use"; name: string; toolUseId: string; input?: Record<string, unknown> }
   | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number }
+  | { kind: "rate_limit"; retryAfterMs: number }
+  | { kind: "error"; error: string; code?: string }
   | { kind: "result"; response: AgentResponse };
 
 /** Custom tool that the agent can call, handled within Remi. */

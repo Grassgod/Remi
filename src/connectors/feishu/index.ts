@@ -16,6 +16,11 @@ import { createFeishuClient } from "./client.js";
 import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
 import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
 import {
+  type ToolEntry,
+  formatToolEntryMarkdown,
+  replaceLastPending,
+} from "./tool-formatters.js";
+import {
   startWebSocketListener,
   type FeishuWSHandle,
   type ParsedFeishuMessage,
@@ -192,6 +197,10 @@ export class FeishuConnector implements Connector {
     let finalResponse: AgentResponse | null = null;
     let toolCount = 0;
 
+    // Collect tool entries for final card nested collapsible panels
+    const toolEntries: ToolEntry[] = [];
+    let currentThinkingSegment = "";
+
     // Use callback pattern: the lane lock in core.ts covers this entire consumer,
     // so card close + @mention complete before the next message starts processing.
     await this._streamHandler!(incoming, async (stream) => {
@@ -201,24 +210,52 @@ export class FeishuConnector implements Connector {
           switch (event.kind) {
             case "thinking_delta":
               thinkingText += event.text;
+              currentThinkingSegment += event.text;
               await session.updateThinking(thinkingText);
               break;
             case "content_delta":
               contentText += event.text;
               await session.update(contentText);
               break;
-            case "tool_use":
+            case "tool_use": {
               toolCount++;
-              thinkingText += `\n🔧 **${event.name}** ${formatToolInput(event.input)} ⏳\n`;
-              await session.updateThinking(thinkingText);
-              break;
-            case "tool_result":
-              // Replace trailing ⏳ with ✅ + duration
-              thinkingText = thinkingText.replace(
-                /⏳\n$/,
-                `✅ ${((event.durationMs ?? 0) / 1000).toFixed(1)}s\n`,
+              // Record entry for final card rebuild
+              toolEntries.push({
+                name: event.name,
+                input: event.input,
+                status: "pending",
+                thinkingBefore: currentThinkingSegment,
+              });
+              currentThinkingSegment = "";
+              // Streaming: append rich tool entry to thinking
+              thinkingText += formatToolEntryMarkdown(
+                event.name, event.input, undefined, undefined, "pending",
               );
               await session.updateThinking(thinkingText);
+              break;
+            }
+            case "tool_result": {
+              // Update the matching pending entry
+              const entry = toolEntries.findLast((e) => e.status === "pending");
+              if (entry) {
+                entry.status = "done";
+                entry.durationMs = event.durationMs;
+                entry.resultPreview = event.resultPreview;
+              }
+              // Replace ⏳ with ✅ + result preview in thinking text
+              thinkingText = replaceLastPending(
+                thinkingText, event.name, event.resultPreview, event.durationMs,
+              );
+              await session.updateThinking(thinkingText);
+              break;
+            }
+            case "rate_limit":
+              thinkingText += `\n⚠️ **Rate limited** — retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...\n`;
+              await session.updateThinking(thinkingText);
+              break;
+            case "error":
+              contentText += `\n\n**Error:** ${event.error}\n`;
+              await session.update(contentText);
               break;
             case "result":
               finalResponse = event.response;
@@ -226,11 +263,13 @@ export class FeishuConnector implements Connector {
           }
         }
 
-        // Close streaming card with final content + stats
+        // Close streaming card with final content + stats + tool entries
         const stats = finalResponse ? this._formatStats(finalResponse) : null;
         await session.close({
           finalText: finalResponse?.text ?? contentText,
           thinking: thinkingText || finalResponse?.thinking || null,
+          toolEntries: toolEntries.length > 0 ? toolEntries : undefined,
+          trailingThinking: currentThinkingSegment || undefined,
           stats,
         });
 
@@ -309,13 +348,3 @@ export class FeishuConnector implements Connector {
   }
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-
-/** Format the first meaningful tool input parameter for display. */
-function formatToolInput(input?: Record<string, unknown>): string {
-  if (!input || Object.keys(input).length === 0) return "";
-  const key = Object.keys(input)[0];
-  const val = String(input[key]);
-  const truncated = val.length > 60 ? val.slice(0, 57) + "..." : val;
-  return `\`${key}="${truncated}"\``;
-}

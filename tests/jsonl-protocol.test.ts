@@ -8,6 +8,10 @@ import {
   type ThinkingDelta,
   type ToolUseRequest,
   type ResultMessage,
+  type ParseError,
+  type RateLimitEvent,
+  type ErrorEvent,
+  type AssistantBlocks,
 } from "../src/providers/claude-cli/protocol.js";
 
 describe("parseLine", () => {
@@ -238,8 +242,84 @@ describe("parseLine", () => {
     expect(res.outputTokens).toBeNull();
   });
 
-  it("throws on invalid JSON", () => {
-    expect(() => parseLine("not valid json")).toThrow();
+  it("returns ParseError on invalid JSON", () => {
+    const msg = parseLine("not valid json");
+    expect(msg.kind).toBe("parse_error");
+    const err = msg as ParseError;
+    expect(err.rawLine).toBe("not valid json");
+    expect(err.error).toBeTruthy();
+  });
+
+  it("parses rate_limit_event", () => {
+    const line = JSON.stringify({
+      type: "rate_limit_event",
+      retry_after_ms: 5000,
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("rate_limit");
+    expect((msg as RateLimitEvent).retryAfterMs).toBe(5000);
+  });
+
+  it("parses error event", () => {
+    const line = JSON.stringify({
+      type: "error",
+      error: "Permission denied",
+      code: "permission_error",
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("error");
+    const err = msg as ErrorEvent;
+    expect(err.error).toBe("Permission denied");
+    expect(err.code).toBe("permission_error");
+  });
+
+  it("parses multi-block assistant message as AssistantBlocks", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "Let me think..." },
+          { type: "text", text: "Here is the answer." },
+          {
+            type: "tool_use",
+            id: "toolu_789",
+            name: "Read",
+            input: { file_path: "/foo.ts" },
+          },
+        ],
+      },
+    });
+    const msg = parseLine(line);
+    expect(msg.kind).toBe("assistant_blocks");
+    const blocks = (msg as AssistantBlocks).blocks;
+    expect(blocks.length).toBe(3);
+    expect(blocks[0].kind).toBe("thinking_delta");
+    expect(blocks[1].kind).toBe("content_delta");
+    expect(blocks[2].kind).toBe("tool_use");
+  });
+
+  it("parses assistant message with text + tool_use (was previously losing text)", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Let me check." },
+          {
+            type: "tool_use",
+            id: "toolu_456",
+            name: "write_memory",
+            input: { content: "hello" },
+          },
+        ],
+      },
+    });
+    const msg = parseLine(line);
+    // Now returns AssistantBlocks with both blocks instead of just the tool_use
+    expect(msg.kind).toBe("assistant_blocks");
+    const blocks = (msg as AssistantBlocks).blocks;
+    expect(blocks.length).toBe(2);
+    expect(blocks[0].kind).toBe("content_delta");
+    expect(blocks[1].kind).toBe("tool_use");
   });
 });
 

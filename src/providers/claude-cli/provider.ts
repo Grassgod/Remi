@@ -20,6 +20,8 @@ import { createAgentResponse } from "../base.js";
 import { ClaudeProcessManager } from "./process.js";
 import type {
   ContentDelta,
+  ErrorEvent,
+  RateLimitEvent,
   ResultMessage,
   ThinkingDelta,
   ToolResultMessage,
@@ -182,6 +184,14 @@ export class ClaudeCLIProvider implements Provider {
         const tr = msg as ToolResultMessage;
         log.debug(`yield tool_result: ${tr.name} (${tr.durationMs}ms)`);
         yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs } as StreamEvent;
+      } else if (msg.kind === "rate_limit") {
+        const rl = msg as RateLimitEvent;
+        log.debug(`yield rate_limit: ${rl.retryAfterMs}ms`);
+        yield { kind: "rate_limit", retryAfterMs: rl.retryAfterMs } as StreamEvent;
+      } else if (msg.kind === "error") {
+        const err = msg as ErrorEvent;
+        log.debug(`yield error: ${err.error}`);
+        yield { kind: "error", error: err.error, code: err.code } as StreamEvent;
       } else if (msg.kind === "result") {
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");

@@ -7,6 +7,7 @@
 
 import type { Subprocess } from "bun";
 import {
+  type AssistantBlocks,
   type ContentDelta,
   type ParsedMessage,
   type ResultMessage,
@@ -167,6 +168,12 @@ export class ClaudeProcessManager {
 
         const msg = parseLine(line);
 
+        // Skip unparseable lines (bad JSON, etc.)
+        if (msg.kind === "parse_error") {
+          log.warn(`Parse error: ${msg.error} | line: ${msg.rawLine.slice(0, 100)}`);
+          continue;
+        }
+
         // Debug: log parsed message kind
         if ("kind" in msg) {
           log.debug(`event: ${msg.kind}`);
@@ -222,7 +229,7 @@ export class ClaudeProcessManager {
                 kind: "tool_result",
                 toolUseId: msg.toolUseId,
                 name: msg.name,
-                result: resultText.slice(0, 200),
+                result: resultText.slice(0, 1500),
                 durationMs: elapsed,
               } as ToolResultMessage;
             } else {
@@ -272,7 +279,7 @@ export class ClaudeProcessManager {
                   kind: "tool_result",
                   toolUseId: pendingTool.toolUseId,
                   name: pendingTool.name,
-                  result: resultText.slice(0, 200),
+                  result: resultText.slice(0, 1500),
                   durationMs: elapsed,
                 } as ToolResultMessage;
               } else {
@@ -312,7 +319,54 @@ export class ClaudeProcessManager {
           return;
         }
 
-        // Other events (content_block_start, rate_limit_event, etc.) — skip
+        // Assistant blocks (non-streaming path with multiple content blocks)
+        if (msg.kind === "assistant_blocks") {
+          for (const block of (msg as AssistantBlocks).blocks) {
+            if (block.kind === "thinking_delta" || block.kind === "content_delta") {
+              yield block;
+            } else if (block.kind === "tool_use") {
+              yield block;
+              if (toolHandler) {
+                const t0 = Date.now();
+                const resultText = await toolHandler(block as ToolUseRequest);
+                if (resultText !== null) {
+                  const elapsed = Date.now() - t0;
+                  await this._writeLine(formatToolResult((block as ToolUseRequest).toolUseId, resultText));
+                  yield {
+                    kind: "tool_result",
+                    toolUseId: (block as ToolUseRequest).toolUseId,
+                    name: (block as ToolUseRequest).name,
+                    result: resultText.slice(0, 1500),
+                    durationMs: elapsed,
+                  } as ToolResultMessage;
+                } else {
+                  builtInToolPending = {
+                    toolUseId: (block as ToolUseRequest).toolUseId,
+                    name: (block as ToolUseRequest).name,
+                    t0: Date.now(),
+                  };
+                }
+              }
+            }
+          }
+          continue;
+        }
+
+        // Rate limit — yield so downstream can show warning
+        if (msg.kind === "rate_limit") {
+          log.warn(`Rate limited: retry after ${msg.retryAfterMs}ms`);
+          yield msg;
+          continue;
+        }
+
+        // Error event
+        if (msg.kind === "error") {
+          log.error(`CLI error event: ${msg.error} (${msg.code})`);
+          yield msg;
+          continue;
+        }
+
+        // Other events (content_block_start, etc.) — skip
       }
     } finally {
       this._lock.release();
