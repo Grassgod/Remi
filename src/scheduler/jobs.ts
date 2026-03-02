@@ -28,6 +28,11 @@ import { homedir } from "node:os";
 
 const log = createLogger("scheduler");
 
+/** Format a Date as YYYY-MM-DD in local timezone (not UTC). */
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function parseCronHour(cronExpr: string): number {
   const parts = cronExpr.split(" ");
   if (parts.length >= 2) {
@@ -89,7 +94,7 @@ export class Scheduler {
       this._reloadScheduledSkillsConfig();
 
       const now = new Date();
-      const today = now.toISOString().slice(0, 10);
+      const today = localDateStr(now);
 
       // Daily compaction (run once per day at configured hour)
       if (now.getHours() === this._compactHour && lastCompactDate !== today) {
@@ -154,7 +159,7 @@ export class Scheduler {
   }
 
   private async _compactMemory(): Promise<void> {
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const yesterday = localDateStr(new Date(Date.now() - 86400000));
     const daily = this._remi.memory.readDaily(yesterday);
 
     if (!daily || daily.trim().length < 50) {
