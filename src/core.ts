@@ -193,6 +193,7 @@ export class Remi {
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,
+      media: msg.media,
     };
 
     const provider = this._getProvider();

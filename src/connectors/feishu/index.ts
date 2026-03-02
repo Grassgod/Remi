@@ -9,7 +9,11 @@
 import type { FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
+import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
 import { createLogger } from "../../logger.js";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const log = createLogger("feishu");
 import { createFeishuClient } from "./client.js";
@@ -178,11 +182,38 @@ export class FeishuConnector implements Connector {
   private async _handleFeishuMessage(msg: ParsedFeishuMessage): Promise<void> {
     if (!this._handler) return;
 
+    // Convert Feishu media to protocol MediaAttachment
+    const media: MediaAttachment[] = msg.media.map((m) => ({
+      buffer: m.buffer,
+      contentType: m.contentType ?? "application/octet-stream",
+      fileName: m.fileName,
+      mediaType: this._inferMediaType(m.placeholder),
+    }));
+
+    // Save non-image files to temp directory so Claude can read them
+    let text = msg.text;
+    for (const m of media) {
+      if (m.mediaType !== "image" && m.mediaType !== "sticker") {
+        const dir = join(tmpdir(), "remi-media", msg.chatId.slice(0, 16));
+        mkdirSync(dir, { recursive: true });
+        const name = m.fileName ?? `${Date.now()}.bin`;
+        const filePath = join(dir, name);
+        writeFileSync(filePath, m.buffer);
+        // Replace placeholder with actual file path hint
+        text = text.replace(
+          m.mediaType === "file" ? "<media:document>" : `<media:${m.mediaType}>`,
+          `[文件已保存: ${filePath}]`,
+        );
+        log.info(`saved ${m.mediaType} to ${filePath} (${m.buffer.length} bytes)`);
+      }
+    }
+
     const incoming: IncomingMessage = {
-      text: msg.text,
+      text,
       chatId: msg.chatId,
       sender: msg.senderName ?? msg.senderOpenId,
       connectorName: this.name,
+      media: media.length > 0 ? media : undefined,
       metadata: {
         messageId: msg.messageId,
         chatType: msg.chatType,
@@ -195,7 +226,7 @@ export class FeishuConnector implements Connector {
       },
     };
 
-    log.info(`received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${msg.text.slice(0, 80)}`);
+    log.info(`received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${text.slice(0, 80)}${media.length > 0 ? ` [+${media.length} media]` : ""}`);
 
     try {
       // Add typing indicator (thinking emoji)
@@ -467,6 +498,14 @@ export class FeishuConnector implements Connector {
     } else {
       await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });
     }
+  }
+
+  private _inferMediaType(placeholder: string): MediaAttachment["mediaType"] {
+    if (placeholder.includes("image")) return "image";
+    if (placeholder.includes("audio")) return "audio";
+    if (placeholder.includes("video")) return "video";
+    if (placeholder.includes("sticker")) return "sticker";
+    return "file";
   }
 
   private _formatStats(response: AgentResponse): string | null {

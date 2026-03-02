@@ -69,8 +69,8 @@ export class Scheduler {
     );
 
     let lastCompactDate: string | null = null;
-    // Per-skill tracking: name → { lastGenDate, lastPushDate }
-    const skillTracker = new Map<string, { lastGenDate: string | null; lastPushDate: string | null }>();
+    // Per-skill tracking — persisted to disk so restarts don't re-trigger
+    const skillTracker = this._loadSkillTracker();
 
     while (!shutdownSignal.aborted) {
       // Wait for heartbeat interval or shutdown
@@ -121,6 +121,7 @@ export class Scheduler {
         ) {
           await this._generateSkillReport(skill, today);
           tracker.lastGenDate = today;
+          this._saveSkillTracker(skillTracker);
         }
 
         // Push
@@ -131,6 +132,7 @@ export class Scheduler {
         ) {
           await this._pushSkillReport(skill, today);
           tracker.lastPushDate = today;
+          this._saveSkillTracker(skillTracker);
         }
       }
     }
@@ -356,6 +358,36 @@ export class Scheduler {
       log.info(
         `Cleanup: removed ${removedDaily} old dailies, ${removedVersions} old versions`,
       );
+    }
+  }
+
+  // ── Skill tracker persistence ───────────────────────────────
+
+  private get _trackerPath(): string {
+    return join(homedir(), ".remi", "scheduler-state.json");
+  }
+
+  private _loadSkillTracker(): Map<string, { lastGenDate: string | null; lastPushDate: string | null }> {
+    const tracker = new Map<string, { lastGenDate: string | null; lastPushDate: string | null }>();
+    try {
+      if (existsSync(this._trackerPath)) {
+        const data = JSON.parse(readFileSync(this._trackerPath, "utf-8"));
+        for (const [name, state] of Object.entries(data)) {
+          tracker.set(name, state as { lastGenDate: string | null; lastPushDate: string | null });
+        }
+      }
+    } catch (e) {
+      log.warn("Failed to load scheduler state:", e);
+    }
+    return tracker;
+  }
+
+  private _saveSkillTracker(tracker: Map<string, { lastGenDate: string | null; lastPushDate: string | null }>): void {
+    try {
+      const obj = Object.fromEntries(tracker);
+      writeFileSync(this._trackerPath, JSON.stringify(obj, null, 2));
+    } catch (e) {
+      log.warn("Failed to save scheduler state:", e);
     }
   }
 

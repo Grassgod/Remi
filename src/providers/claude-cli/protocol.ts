@@ -252,10 +252,54 @@ export function parseLine(line: string): ParsedMessage {
 
 // ── Formatting (Remi -> CLI stdin) ─────────────────────────────
 
-export function formatUserMessage(text: string): string {
+/** Media attachment for multimodal messages. */
+export interface MediaAttachment {
+  buffer: Buffer;
+  contentType: string;
+  fileName?: string;
+  mediaType: "image" | "file" | "audio" | "video" | "sticker";
+}
+
+/** Image MIME types that Claude vision supports. */
+const IMAGE_MIME_TYPES = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp",
+]);
+
+export function formatUserMessage(text: string, media?: MediaAttachment[]): string {
+  // Filter to only images that Claude can understand via vision
+  const images = media?.filter(
+    (m) => m.mediaType === "image" || m.mediaType === "sticker",
+  ) ?? [];
+
+  if (images.length === 0) {
+    // Pure text — fast path, no overhead
+    return JSON.stringify({
+      type: "user",
+      message: { role: "user", content: text },
+    });
+  }
+
+  // Multimodal: content is an array of blocks
+  const content: Array<Record<string, unknown>> = [
+    { type: "text", text },
+  ];
+  for (const img of images) {
+    const mimeType = IMAGE_MIME_TYPES.has(img.contentType)
+      ? img.contentType
+      : "image/png"; // fallback for stickers etc.
+    content.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: mimeType,
+        data: img.buffer.toString("base64"),
+      },
+    });
+  }
+
   return JSON.stringify({
     type: "user",
-    message: { role: "user", content: text },
+    message: { role: "user", content },
   });
 }
 

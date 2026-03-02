@@ -9,6 +9,7 @@ import type { Subprocess } from "bun";
 import {
   type AssistantBlocks,
   type ContentDelta,
+  type MediaAttachment,
   type ParsedMessage,
   type ResultMessage,
   type SystemMessage,
@@ -146,6 +147,7 @@ export class ClaudeProcessManager {
   async *sendAndStream(
     text: string,
     toolHandler?: ToolHandler | null,
+    media?: MediaAttachment[],
   ): AsyncGenerator<ParsedMessage> {
     await this._lock.acquire();
     try {
@@ -153,8 +155,8 @@ export class ClaudeProcessManager {
         throw new Error("Process not running — call start() first");
       }
 
-      // Send user message
-      await this._writeLine(formatUserMessage(text));
+      // Send user message (with optional media for multimodal)
+      await this._writeLine(formatUserMessage(text, media));
 
       // Stream responses, handling tool calls inline
       let pendingTool: ToolUseRequest | null = null;

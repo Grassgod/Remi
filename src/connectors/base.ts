@@ -3,6 +3,7 @@
  */
 
 import type { AgentResponse, StreamEvent } from "../providers/base.js";
+import type { MediaAttachment } from "../providers/claude-cli/protocol.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {
@@ -10,6 +11,7 @@ export interface IncomingMessage {
   chatId: string;
   sender?: string;
   connectorName?: string;
+  media?: MediaAttachment[];
   metadata?: Record<string, unknown>;
 }
 

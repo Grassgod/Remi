@@ -37,30 +37,32 @@ export interface AgentResponse {
   toolCalls?: Array<Record<string, unknown>>;
 }
 
+/** Media attachment for multimodal messages (re-exported for convenience). */
+export type { MediaAttachment } from "./claude-cli/protocol.js";
+
+/** Common options for send/sendStream. */
+export interface SendOptions {
+  systemPrompt?: string | null;
+  context?: string | null;
+  cwd?: string | null;
+  sessionId?: string | null;
+  chatId?: string | null;
+  media?: import("./claude-cli/protocol.js").MediaAttachment[];
+}
+
 /** Protocol that all provider backends must implement. */
 export interface Provider {
   readonly name: string;
 
   send(
     message: string,
-    options?: {
-      systemPrompt?: string | null;
-      context?: string | null;
-      cwd?: string | null;
-      sessionId?: string | null;
-      chatId?: string | null;
-    },
+    options?: SendOptions,
   ): Promise<AgentResponse>;
 
   /** Stream events in real-time. Optional — connectors fall back to send() if absent. */
   sendStream?(
     message: string,
-    options?: {
-      systemPrompt?: string | null;
-      context?: string | null;
-      chatId?: string | null;
-      sessionId?: string | null;
-    },
+    options?: SendOptions,
   ): AsyncGenerator<StreamEvent>;
 
   healthCheck(): Promise<boolean>;

@@ -13,6 +13,7 @@
 import type {
   AgentResponse,
   Provider,
+  SendOptions,
   StreamEvent,
   ToolDefinition,
 } from "../base.js";
@@ -127,31 +128,20 @@ export class ClaudeCLIProvider implements Provider {
 
   async send(
     message: string,
-    options?: {
-      systemPrompt?: string | null;
-      context?: string | null;
-      cwd?: string | null;
-      sessionId?: string | null;
-      chatId?: string | null;
-    },
+    options?: SendOptions,
   ): Promise<AgentResponse> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
     return this._sendStreaming(fullPrompt, {
       systemPrompt: options?.systemPrompt,
       chatId: options?.chatId,
+      media: options?.media,
     });
   }
 
   async *sendStream(
     message: string,
-    options?: {
-      systemPrompt?: string | null;
-      context?: string | null;
-      chatId?: string | null;
-      sessionId?: string | null;
-      cwd?: string | null;
-    },
+    options?: SendOptions,
   ): AsyncGenerator<StreamEvent> {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
@@ -166,6 +156,7 @@ export class ClaudeCLIProvider implements Provider {
     for await (const msg of mgr.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
+      options?.media,
     )) {
       if (msg.kind === "system") {
         const sys = msg as SystemMessage;
@@ -334,7 +325,7 @@ export class ClaudeCLIProvider implements Provider {
 
   private async _sendStreaming(
     prompt: string,
-    options?: { systemPrompt?: string | null; chatId?: string | null },
+    options?: { systemPrompt?: string | null; chatId?: string | null; media?: import("./protocol.js").MediaAttachment[] },
   ): Promise<AgentResponse> {
     const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt);
 
@@ -346,6 +337,7 @@ export class ClaudeCLIProvider implements Provider {
     for await (const msg of mgr.sendAndStream(
       prompt,
       this._handleToolCall.bind(this),
+      options?.media,
     )) {
       if (msg.kind === "thinking_delta") {
         thinkingParts.push((msg as ThinkingDelta).thinking);
