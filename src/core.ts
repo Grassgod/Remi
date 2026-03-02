@@ -177,6 +177,8 @@ export class Remi {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));
       throw e;
     } finally {
+      // Guarantee span is always recorded — SpanImpl._ended prevents double-write
+      rootSpan.end();
       lock.release();
     }
   }

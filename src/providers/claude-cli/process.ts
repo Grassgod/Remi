@@ -166,7 +166,18 @@ export class ClaudeProcessManager {
 
       while (true) {
         const line = await this._readline();
-        if (line === null) break;
+        if (line === null) {
+          // Distinguish timeout/hang from graceful EOF
+          if (this._process && !this._process.killed) {
+            log.error("readline returned null while process still alive — possible hang or timeout");
+            yield {
+              kind: "error",
+              error: "CLI process stopped responding (timeout). The task may have exceeded context limits.",
+              code: "process_hang",
+            } as import("./protocol.js").ErrorEvent;
+          }
+          break;
+        }
 
         const msg = parseLine(line);
 
@@ -419,8 +430,17 @@ export class ClaudeProcessManager {
     }
   }
 
-  private async _readline(): Promise<string | null> {
+  /** Default read timeout: 5 minutes. Long enough for big tool calls, short enough to detect hangs. */
+  private static READLINE_TIMEOUT_MS = 5 * 60 * 1000;
+
+  private async _readline(timeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS): Promise<string | null> {
     if (!this._reader) return null;
+
+    // Check if process died while we're trying to read
+    if (this._process && this._process.killed) {
+      log.warn("Process already killed, aborting readline");
+      return null;
+    }
 
     try {
       while (true) {
@@ -433,8 +453,20 @@ export class ClaudeProcessManager {
           continue;
         }
 
-        // Read more data
-        const { value, done } = await this._reader.read();
+        // Read more data with timeout to prevent permanent hangs
+        const readResult = await Promise.race([
+          this._reader.read(),
+          new Promise<{ value: undefined; done: true; timedOut: true }>((resolve) =>
+            setTimeout(() => resolve({ value: undefined, done: true, timedOut: true }), timeoutMs),
+          ),
+        ]);
+
+        if ("timedOut" in readResult) {
+          log.error(`readline timed out after ${timeoutMs}ms — process likely hung`);
+          return null;
+        }
+
+        const { value, done } = readResult;
         if (done) return null;
         this._lineBuffer += value;
       }
