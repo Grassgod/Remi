@@ -83,12 +83,11 @@ describe("parseLine", () => {
     expect(tu.name).toBe("read_memory");
   });
 
-  it("parses tool use from assistant message", () => {
+  it("parses single-tool assistant message as tool_use (single block)", () => {
     const line = JSON.stringify({
       type: "assistant",
       message: {
         content: [
-          { type: "text", text: "Let me check." },
           {
             type: "tool_use",
             id: "toolu_456",

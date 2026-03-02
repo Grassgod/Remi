@@ -6,8 +6,7 @@
     },
     "remi-lark": {
       "command": "uv",
-      "args": ["run", "--project", "/data00/home/hehuajie/project/remi/src/mcp/lark-server", "python", "server.py"],
-      "cwd": "/data00/home/hehuajie/project/remi/src/mcp/lark-server"
+      "args": ["run", "--project", "/data00/home/hehuajie/project/remi/src/mcp/lark-server", "python", "/data00/home/hehuajie/project/remi/src/mcp/lark-server/server.py"]
     }
   }
 }

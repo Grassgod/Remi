@@ -296,7 +296,12 @@ export class ClaudeProcessManager {
 
         // System init (emitted before first response)
         if (msg.kind === "system") {
-          this._sessionId = (msg as SystemMessage).sessionId;
+          const sysMsg = msg as SystemMessage;
+          this._sessionId = sysMsg.sessionId;
+          const mcpInfo = sysMsg.mcpServers
+            .map((s) => `${s.name}:${s.status}`)
+            .join(", ");
+          log.info(`session=${sysMsg.sessionId.slice(0, 12)}... model=${sysMsg.model} mcp=[${mcpInfo}]`);
           continue;
         }
 
