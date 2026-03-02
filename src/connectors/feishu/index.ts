@@ -188,6 +188,7 @@ export class FeishuConnector implements Connector {
         chatType: msg.chatType,
         senderOpenId: msg.senderOpenId,
         mentionedBot: msg.mentionedBot,
+        monitored: msg.monitored,
         mediaCount: msg.media.length,
         quotedContent: msg.quotedContent,
         rootId: msg.rootId,

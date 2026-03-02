@@ -302,6 +302,8 @@ export type ParsedFeishuMessage = {
   messageId: string;
   chatType: "p2p" | "group";
   mentionedBot: boolean;
+  /** True if this message was admitted via monitor mode (not @mention). */
+  monitored: boolean;
   media: FeishuMediaInfo[];
   quotedContent?: string;
   rootId?: string;
@@ -312,7 +314,7 @@ export async function processFeishuMessageEvent(
   client: Lark.Client,
   event: FeishuMessageEvent,
   botOpenId?: string,
-  opts?: { autoReplyGroups?: string[] },
+  opts?: { allowedGroups?: string[]; monitorGroups?: string[] },
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
 
@@ -322,11 +324,22 @@ export async function processFeishuMessageEvent(
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
 
-  // In groups, only respond if bot is mentioned (unless chat is in autoReplyGroups)
-  const autoReply = opts?.autoReplyGroups?.includes(ctx.chatId) ?? false;
-  if (ctx.chatType === "group" && !ctx.mentionedBot && !autoReply) {
-    log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, mentionedBot=false, autoReply=false)`);
-    return null;
+  // Two-layer group message filtering:
+  // 1) allowedGroups (whitelist) — empty means no restriction
+  // 2) monitorGroups — these groups don't require @mention
+  let monitored = false;
+  if (ctx.chatType === "group") {
+    const allowed = !opts?.allowedGroups?.length || opts.allowedGroups.includes(ctx.chatId);
+    if (!allowed) {
+      log.info(`blocked group message ${messageId} (chatId=${ctx.chatId}, not in allowedGroups)`);
+      return null;
+    }
+    const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) ?? false;
+    if (!ctx.mentionedBot && !isMonitor) {
+      log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
+      return null;
+    }
+    monitored = isMonitor && !ctx.mentionedBot;
   }
 
   // Resolve sender name (best-effort)
@@ -376,6 +389,7 @@ export async function processFeishuMessageEvent(
     messageId: ctx.messageId,
     chatType: ctx.chatType,
     mentionedBot: ctx.mentionedBot,
+    monitored,
     media,
     quotedContent,
     rootId: ctx.rootId,
@@ -405,7 +419,8 @@ export function startWebSocketListener(
   let botOpenId: string | undefined;
   let stopped = false;
 
-  const autoReplyGroups = config.autoReplyGroups ?? [];
+  const allowedGroups = config.allowedGroups ?? [];
+  const monitorGroups = config.monitorGroups ?? [];
 
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
@@ -428,7 +443,7 @@ export function startWebSocketListener(
       if (stopped) return;
       try {
         const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId, { autoReplyGroups });
+        const msg = await processFeishuMessageEvent(client, event, botOpenId, { allowedGroups, monitorGroups });
         if (msg) {
           await onMessage(msg);
         }

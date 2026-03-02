@@ -27,8 +27,12 @@ export interface FeishuConfig {
   domain: "feishu" | "lark" | (string & {});
   connectionMode: "websocket";
   userAccessToken: string;
-  /** Group chat IDs that don't require @mention to trigger a response. */
+  /** @deprecated Use `allowedGroups` + `monitorGroups` instead. */
   autoReplyGroups: string[];
+  /** Whitelist of group chat IDs allowed to interact with Remi. Empty = no restriction. */
+  allowedGroups: string[];
+  /** Group chat IDs where Remi reads all messages without requiring @mention. */
+  monitorGroups: string[];
 }
 
 export interface ScheduledSkillConfig {
@@ -92,6 +96,8 @@ function defaultFeishuConfig(): FeishuConfig {
     connectionMode: "websocket",
     userAccessToken: "",
     autoReplyGroups: [],
+    allowedGroups: [],
+    monitorGroups: [],
   };
 }
 
@@ -166,6 +172,9 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       connectionMode: "websocket" as const,
       userAccessToken: env.FEISHU_USER_ACCESS_TOKEN ?? (feishuData.user_access_token as string) ?? "",
       autoReplyGroups: (feishuData.auto_reply_groups as string[]) ?? [],
+      allowedGroups: (feishuData.allowed_groups as string[]) ?? [],
+      monitorGroups: (feishuData.monitor_groups as string[]) ??
+                     (feishuData.auto_reply_groups as string[]) ?? [],
     },
     scheduler: {
       memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",
