@@ -1,4 +1,4 @@
-import { useLocation, useRoute } from "wouter";
+import { useLocation } from "wouter";
 import {
   IconDashboard, IconMemory, IconSessions, IconAuth,
   IconScheduler, IconTools, IconConfig, IconMonitor, IconProjects, IconAnalytics,
@@ -32,94 +32,46 @@ export function Sidebar({ daemonPid }: { daemonPid: number | null }) {
   const [location, setLocation] = useLocation();
 
   return (
-    <aside className="desktop-only" style={{
-      width: "var(--sidebar-width)",
-      background: "var(--bg-surface)",
-      borderRight: "1px solid var(--border-glow)",
-      flexDirection: "column",
-      flexShrink: 0,
-      backdropFilter: "blur(20px)",
-    }}>
+    <aside className="desktop-only w-[var(--sidebar-width)] shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
       {/* Brand */}
-      <div style={{
-        height: "var(--header-height)",
-        display: "flex",
-        alignItems: "center",
-        padding: "0 16px",
-        borderBottom: "1px solid var(--border-glow)",
-        gap: 10,
-      }}>
-        <div style={{
-          width: 30, height: 30, borderRadius: "50%",
-          border: "1.5px solid var(--glow-primary)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          animation: "ring-pulse 3s ease-in-out infinite",
-          boxShadow: "0 0 12px rgba(var(--glow-primary-rgb), 0.3), inset 0 0 8px rgba(var(--glow-primary-rgb), 0.1)",
-        }}>
-          <span style={{
-            fontFamily: "var(--font-display)", fontSize: 11,
-            fontWeight: 700, color: "var(--glow-primary)", letterSpacing: 1,
-          }}>R</span>
+      <div className="flex h-[var(--header-height)] items-center gap-3 border-b border-sidebar-border px-4">
+        <div className="flex h-7 w-7 items-center justify-center rounded-full border border-border">
+          <span className="text-xs font-bold text-foreground">R</span>
         </div>
-        <span style={{
-          fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600,
-          color: "var(--glow-primary)", letterSpacing: 3, textTransform: "uppercase",
-        }}>Remi</span>
-        <span style={{
-          fontFamily: "var(--font-mono)", fontSize: 9,
-          color: "var(--text-muted)", marginLeft: "auto",
-        }}>0.1.0</span>
+        <span className="text-sm font-semibold tracking-widest text-foreground">
+          Remi
+        </span>
+        <span className="ml-auto font-mono text-[9px] text-muted-foreground">
+          0.1.0
+        </span>
       </div>
 
       {/* Nav */}
-      <nav style={{ flex: 1, padding: "8px 6px", overflowY: "auto" }}>
+      <nav className="flex-1 overflow-y-auto px-2 py-2">
         {navItems.map(group => (
           <div key={group.group}>
-            <div style={{
-              fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 2,
-              textTransform: "uppercase", color: "var(--text-dim)",
-              padding: "14px 12px 5px",
-            }}>{group.group}</div>
+            <div className="px-3 pb-1 pt-4 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+              {group.group}
+            </div>
             {group.items.map(item => {
               const active = isActive(item.path, location);
               return (
                 <div
                   key={item.path}
                   onClick={() => setLocation(item.path)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    padding: "8px 12px", borderRadius: 4, cursor: "pointer",
-                    fontFamily: "var(--font-body)", fontSize: 13.5, fontWeight: 500,
-                    letterSpacing: 0.5, position: "relative",
-                    color: active ? "var(--glow-primary)" : "var(--text-muted)",
-                    background: active ? "rgba(var(--glow-primary-rgb), 0.06)" : "transparent",
-                    border: `1px solid ${active ? "rgba(var(--glow-primary-rgb), 0.2)" : "transparent"}`,
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={e => {
-                    if (!active) {
-                      e.currentTarget.style.color = "var(--text-primary)";
-                      e.currentTarget.style.background = "var(--bg-hover)";
-                      e.currentTarget.style.borderColor = "var(--border-glow)";
+                  className={`
+                    relative flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2
+                    text-sm font-medium transition-colors
+                    ${active
+                      ? "bg-sidebar-accent text-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
                     }
-                  }}
-                  onMouseLeave={e => {
-                    if (!active) {
-                      e.currentTarget.style.color = "var(--text-muted)";
-                      e.currentTarget.style.background = "transparent";
-                      e.currentTarget.style.borderColor = "transparent";
-                    }
-                  }}
+                  `}
                 >
                   {active && (
-                    <div style={{
-                      position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)",
-                      width: 2, height: 16, background: "var(--glow-primary)",
-                      boxShadow: "0 0 8px rgba(var(--glow-primary-rgb), 0.6)",
-                      borderRadius: "0 1px 1px 0",
-                    }} />
+                    <div className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-r bg-foreground" />
                   )}
-                  <span style={{ opacity: active ? 1 : 0.5, flexShrink: 0 }}>
+                  <span className={active ? "opacity-100" : "opacity-60"}>
                     <item.icon />
                   </span>
                   {item.label}
@@ -131,20 +83,10 @@ export function Sidebar({ daemonPid }: { daemonPid: number | null }) {
       </nav>
 
       {/* Footer */}
-      <div style={{ padding: "10px 14px", borderTop: "1px solid var(--border-glow)" }}>
-        <div style={{
-          display: "flex", alignItems: "center", gap: 8,
-          fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)",
-        }}>
-          <div style={{
-            width: 6, height: 6, borderRadius: "50%",
-            background: daemonPid ? "var(--glow-green)" : "var(--glow-red)",
-            boxShadow: daemonPid
-              ? "0 0 8px rgba(var(--glow-green-rgb), 0.6)"
-              : "0 0 8px rgba(var(--glow-red-rgb), 0.6)",
-            animation: daemonPid ? "pulse-dot 2s ease-in-out infinite" : "none",
-          }} />
-          <span>{daemonPid ? `DAEMON PID ${daemonPid}` : "DAEMON OFFLINE"}</span>
+      <div className="border-t border-sidebar-border px-4 py-3">
+        <div className="flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+          <div className={`h-1.5 w-1.5 rounded-full ${daemonPid ? "bg-success" : "bg-destructive"}`} />
+          <span>{daemonPid ? `PID ${daemonPid}` : "Daemon offline"}</span>
         </div>
       </div>
     </aside>

@@ -1,68 +1,41 @@
 import type { ReactNode } from "react";
 
-interface HudPanelProps {
+interface PanelProps {
   title: string;
   icon?: ReactNode;
   action?: { label: string; onClick: () => void };
   children: ReactNode;
   maxHeight?: number;
-  delay?: number;
 }
 
-export function HudPanel({ title, icon, action, children, maxHeight = 360, delay = 0.24 }: HudPanelProps) {
+export function Panel({ title, icon, action, children, maxHeight = 360 }: PanelProps) {
   return (
     <div
-      className="hud-panel-corners"
-      style={{
-        background: "var(--bg-panel)",
-        border: "1px solid var(--border-glow)",
-        borderRadius: 6,
-        overflow: "hidden",
-        backdropFilter: "blur(10px)",
-        animation: `hud-in 0.5s ease-out both`,
-        animationDelay: `${delay}s`,
-      }}
+      className="overflow-hidden rounded-lg border border-border bg-card"
+      style={{ animation: "fade-in 0.3s ease-out both" }}
     >
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "12px 16px",
-        borderBottom: "1px solid var(--border-glow)",
-      }}>
-        <div style={{
-          fontFamily: "var(--font-display)", fontSize: 10, fontWeight: 600,
-          letterSpacing: 2, textTransform: "uppercase",
-          color: "var(--glow-secondary)",
-          display: "flex", alignItems: "center", gap: 8,
-        }}>
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-foreground">
           {icon}
           {title}
         </div>
         {action && (
           <button
             onClick={action.onClick}
-            style={{
-              fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1,
-              textTransform: "uppercase", color: "var(--glow-primary)",
-              padding: "3px 10px", border: "1px solid rgba(var(--glow-primary-rgb), 0.2)",
-              borderRadius: 3, background: "rgba(var(--glow-primary-rgb), 0.04)",
-              cursor: "pointer", transition: "all 0.2s",
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.1)";
-              e.currentTarget.style.borderColor = "rgba(var(--glow-primary-rgb), 0.4)";
-              e.currentTarget.style.boxShadow = "0 0 10px rgba(var(--glow-primary-rgb), 0.15)";
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.04)";
-              e.currentTarget.style.borderColor = "rgba(var(--glow-primary-rgb), 0.2)";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-          >{action.label}</button>
+            className="rounded-md border border-border bg-transparent px-3 py-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {action.label}
+          </button>
         )}
       </div>
-      <div style={{ maxHeight, overflowY: "auto" }}>
+      {/* Content */}
+      <div style={{ maxHeight }} className="overflow-y-auto">
         {children}
       </div>
     </div>
   );
 }
+
+// Backward-compatible alias
+export { Panel as HudPanel };

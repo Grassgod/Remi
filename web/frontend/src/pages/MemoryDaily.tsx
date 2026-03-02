@@ -20,35 +20,29 @@ export function MemoryDaily() {
 
   return (
     <Layout title="Memory" subtitle={`DAILY / ${date}`}>
-      <button onClick={() => setLocation("/memory")} style={{
-        fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: 1,
-        color: "var(--glow-primary)", background: "transparent",
-        border: "1px solid rgba(var(--glow-primary-rgb), 0.2)",
-        borderRadius: 3, padding: "4px 12px", cursor: "pointer",
-        marginBottom: 16, transition: "all 0.2s",
-      }}>← BACK</button>
+      <button
+        onClick={() => setLocation("/memory")}
+        className="mb-4 rounded-md border border-border bg-transparent px-3 py-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >← Back</button>
 
-      {/* Date navigation */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      <div className="mb-4 flex flex-wrap gap-2">
         {dailyDates.map(entry => (
-          <button key={entry.date} onClick={() => setLocation(`/memory/daily/${entry.date}`)} style={{
-            fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: 1,
-            padding: "4px 10px", borderRadius: 3, cursor: "pointer",
-            border: `1px solid ${entry.date === date ? "rgba(var(--glow-primary-rgb), 0.4)" : "var(--border-glow)"}`,
-            background: entry.date === date ? "rgba(var(--glow-primary-rgb), 0.08)" : "transparent",
-            color: entry.date === date ? "var(--glow-primary)" : "var(--text-muted)",
-            transition: "all 0.2s",
-          }}>{entry.date}</button>
+          <button
+            key={entry.date}
+            onClick={() => setLocation(`/memory/daily/${entry.date}`)}
+            className={`rounded-md border px-2.5 py-1 font-mono text-[10px] tracking-wide transition-colors
+              ${entry.date === date
+                ? "border-foreground/20 bg-accent text-foreground"
+                : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+          >{entry.date}</button>
         ))}
       </div>
 
-      <HudPanel title={`Log — ${date}`} maxHeight={700} delay={0}>
-        <pre style={{
-          padding: 16, margin: 0,
-          fontFamily: "var(--font-mono)", fontSize: 11,
-          lineHeight: 1.7, color: "var(--text-primary)",
-          whiteSpace: "pre-wrap", wordBreak: "break-word",
-        }}>{dailyContent || "No data for this date."}</pre>
+      <HudPanel title={`Log — ${date}`} maxHeight={700}>
+        <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground">
+          {dailyContent || "No data for this date."}
+        </pre>
       </HudPanel>
     </Layout>
   );

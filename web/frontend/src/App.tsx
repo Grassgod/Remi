@@ -13,22 +13,16 @@ import { Layout } from "./components/Layout";
 
 function Placeholder({ title }: { title: string }) {
   return (
-    <Layout title={title} subtitle="COMING SOON">
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "center",
-        height: "60vh",
-      }}>
-        <div style={{
-          textAlign: "center",
-          fontFamily: "var(--font-display)", fontSize: 14,
-          color: "var(--text-dim)", letterSpacing: 3,
-        }}>
-          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>◇</div>
-          {title.toUpperCase()} MODULE
-          <div style={{
-            fontFamily: "var(--font-mono)", fontSize: 10,
-            marginTop: 8, letterSpacing: 1,
-          }}>PHASE 2 IMPLEMENTATION</div>
+    <Layout title={title} subtitle="Coming Soon">
+      <div className="flex h-[60vh] items-center justify-center">
+        <div className="text-center text-muted-foreground">
+          <div className="mb-3 text-4xl opacity-30">--</div>
+          <div className="text-sm font-semibold uppercase tracking-widest">
+            {title} Module
+          </div>
+          <div className="mt-2 font-mono text-[10px] tracking-wide">
+            Phase 2 Implementation
+          </div>
         </div>
       </div>
     </Layout>

@@ -20,29 +20,15 @@ export function Config() {
 
   return (
     <Layout title="Config" subtitle="REMI.TOML">
-      <HudPanel
-        title="Configuration"
-        action={{ label: "Reload", onClick: fetchConfig }}
-        maxHeight={700}
-        delay={0}
-      >
+      <HudPanel title="Configuration" action={{ label: "Reload", onClick: fetchConfig }} maxHeight={700}>
         {loading ? (
-          <div style={{
-            padding: 40, textAlign: "center",
-            fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-dim)",
-          }}>LOADING...</div>
+          <div className="p-10 text-center font-mono text-xs text-muted-foreground">LOADING...</div>
         ) : config ? (
-          <pre style={{
-            padding: 16, margin: 0,
-            fontFamily: "var(--font-mono)", fontSize: 11,
-            lineHeight: 1.6, color: "var(--text-primary)",
-            whiteSpace: "pre-wrap", wordBreak: "break-word",
-          }}>{JSON.stringify(config, null, 2)}</pre>
+          <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground">
+            {JSON.stringify(config, null, 2)}
+          </pre>
         ) : (
-          <div style={{
-            padding: 40, textAlign: "center",
-            fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-dim)",
-          }}>NO CONFIG FILE FOUND</div>
+          <div className="p-10 text-center font-mono text-xs text-muted-foreground">NO CONFIG FILE FOUND</div>
         )}
       </HudPanel>
     </Layout>
