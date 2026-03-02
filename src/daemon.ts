@@ -22,6 +22,7 @@ import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { Scheduler } from "./scheduler/jobs.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
+import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
 import { createLogger } from "./logger.js";
 import { startWebDashboard, stopWebDashboard } from "../web/server.js";
@@ -274,6 +275,10 @@ export class RemiDaemon {
 
     // Save notification info so the new process can notify the user
     this._saveRestartNotify(info);
+
+    // Flush dedup cache BEFORE spawning — the new process loads it at module init,
+    // before _checkExisting() runs, so it must be on disk already.
+    flushDedupCacheSync();
 
     // Keep PID file — new process will detect us and send SIGTERM to take over
 
