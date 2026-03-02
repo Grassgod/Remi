@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import {
   IconDashboardLg, IconMemoryLg, IconSessionsLg, IconAnalyticsLg, IconMoreLg,
   IconProjects, IconAuth, IconScheduler, IconTools, IconConfig, IconMonitor,
+  IconTraces, IconLogs,
 } from "./icons";
 
 const primaryTabs = [
@@ -13,6 +14,8 @@ const primaryTabs = [
 ];
 
 const moreItems = [
+  { path: "/traces", label: "Traces", icon: IconTraces },
+  { path: "/logs", label: "Logs", icon: IconLogs },
   { path: "/projects", label: "Projects", icon: IconProjects },
   { path: "/auth", label: "Auth", icon: IconAuth },
   { path: "/config", label: "Config", icon: IconConfig },

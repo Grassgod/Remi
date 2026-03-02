@@ -2,6 +2,7 @@ import { useLocation } from "wouter";
 import {
   IconDashboard, IconMemory, IconSessions, IconAuth,
   IconScheduler, IconTools, IconConfig, IconMonitor, IconProjects, IconAnalytics,
+  IconTraces, IconLogs,
 } from "./icons";
 
 const navItems = [
@@ -13,6 +14,8 @@ const navItems = [
     { path: "/sessions", label: "Sessions", icon: IconSessions },
     { path: "/projects", label: "Projects", icon: IconProjects },
     { path: "/analytics", label: "Analytics", icon: IconAnalytics },
+    { path: "/traces", label: "Traces", icon: IconTraces },
+    { path: "/logs", label: "Logs", icon: IconLogs },
   ]},
   { group: "System", items: [
     { path: "/auth", label: "Auth", icon: IconAuth },

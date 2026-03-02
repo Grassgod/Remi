@@ -9,6 +9,9 @@ import { Auth } from "./pages/Auth";
 import { Config } from "./pages/Config";
 import { Projects } from "./pages/Projects";
 import { Analytics } from "./pages/Analytics";
+import { Traces } from "./pages/Traces";
+import { Logs } from "./pages/Logs";
+import { Monitor } from "./pages/Monitor";
 import { Layout } from "./components/Layout";
 
 function Placeholder({ title }: { title: string }) {
@@ -42,9 +45,11 @@ export function App() {
         <Route path="/config" component={Config} />
         <Route path="/projects" component={Projects} />
         <Route path="/analytics" component={Analytics} />
+        <Route path="/traces" component={Traces} />
+        <Route path="/logs" component={Logs} />
+        <Route path="/monitor" component={Monitor} />
         <Route path="/scheduler">{() => <Placeholder title="Scheduler" />}</Route>
         <Route path="/tools">{() => <Placeholder title="Tools" />}</Route>
-        <Route path="/monitor">{() => <Placeholder title="Monitor" />}</Route>
         <Route>{() => <Placeholder title="Not Found" />}</Route>
       </Switch>
     </WouterRouter>

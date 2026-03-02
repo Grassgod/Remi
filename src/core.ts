@@ -19,7 +19,8 @@ import { createAgentResponse, type AgentResponse, type Provider, type StreamEven
 import { MemoryStore } from "./memory/store.js";
 import type { AuthStore } from "./auth/store.js";
 import { MetricsCollector } from "./metrics/collector.js";
-import { createLogger } from "./logger.js";
+import { createLogger, flushLogs } from "./logger.js";
+import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
 
 const log = createLogger("core");
 
@@ -71,6 +72,7 @@ export class Remi {
   config: RemiConfig;
   memory: MemoryStore;
   metrics: MetricsCollector;
+  traceCollector: TraceCollector;
   authStore: AuthStore | null = null;
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
@@ -85,6 +87,7 @@ export class Remi {
     this.config = config;
     this.memory = new MemoryStore(config.memoryDir);
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
+    this.traceCollector = new TraceCollector(config.tracing.tracesDir);
     this._loadSessions();
   }
 
@@ -160,14 +163,25 @@ export class Remi {
     const sessionKey = this._resolveSessionKey(msg);
     const lock = this._getLaneLock(sessionKey);
     await lock.acquire();
+    // Create root trace span
+    const rootSpan = this.traceCollector.startTrace("core.handle", {
+      "chat.id": msg.chatId,
+      "session.key": sessionKey,
+      "connector.name": msg.connectorName ?? "",
+      "message.text": msg.text.slice(0, 200),
+    });
     try {
-      await consumer(this._processStream(msg));
+      await consumer(this._processStream(msg, rootSpan.context()));
+      rootSpan.end();
+    } catch (e) {
+      rootSpan.endWithError(e instanceof Error ? e.message : String(e));
+      throw e;
     } finally {
       lock.release();
     }
   }
 
-  private async *_processStream(msg: IncomingMessage): AsyncGenerator<StreamEvent> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext): AsyncGenerator<StreamEvent> {
     // Handle slash commands — emit as immediate result
     const cmdResponse = await this._tryCommand(msg.text, msg);
     if (cmdResponse) {
@@ -184,7 +198,12 @@ export class Remi {
 
     const sessionKey = this._resolveSessionKey(msg);
     const cwd = this._sessionCwd.get(sessionKey) ?? (msg.metadata?.cwd as string) ?? undefined;
+
+    // Span: memory context assembly
+    const memSpan = traceCtx?.startSpan("memory.assemble", { "session.key": sessionKey });
     const context = this.memory.gatherContext(cwd);
+    memSpan?.end();
+
     const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
     log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
     const streamOptions = {
@@ -201,8 +220,16 @@ export class Remi {
       throw new Error(`Provider "${provider.name}" does not support streaming`);
     }
 
+    // Span: provider chat
+    const providerSpan = traceCtx?.startSpan("provider.chat", {
+      "provider.name": provider.name,
+      "session.id": existingSessionId ?? "new",
+    });
+
     log.debug("starting provider.sendStream iteration");
     let resultResponse: AgentResponse | null = null;
+    const toolSpans = new Map<string, Span>(); // toolUseId → Span
+
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
       log.debug(`received event: ${event.kind}`);
       yield event;
@@ -210,7 +237,36 @@ export class Remi {
         resultResponse = event.response;
       } else if (event.kind === "rate_limit" && event.rateLimitType) {
         this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
+        providerSpan?.addEvent("rate_limit", { type: event.rateLimitType });
+      } else if (event.kind === "tool_use" && providerSpan) {
+        const toolSpan = providerSpan.context().startSpan(`tool.${event.name}`, {
+          "tool.name": event.name,
+          "tool.use_id": event.toolUseId,
+        });
+        toolSpans.set(event.toolUseId, toolSpan);
+      } else if (event.kind === "tool_result") {
+        const toolSpan = toolSpans.get(event.toolUseId);
+        if (toolSpan) {
+          if (event.durationMs != null) toolSpan.setAttribute("tool.duration_ms", event.durationMs);
+          toolSpan.end();
+          toolSpans.delete(event.toolUseId);
+        }
       }
+    }
+
+    // End any unclosed tool spans
+    for (const [, s] of toolSpans) s.end();
+    toolSpans.clear();
+
+    // Attach result attributes to provider span
+    if (resultResponse && providerSpan) {
+      providerSpan.setAttributes({
+        "llm.model": resultResponse.model ?? "unknown",
+        "llm.input_tokens": resultResponse.inputTokens ?? 0,
+        "llm.output_tokens": resultResponse.outputTokens ?? 0,
+        "llm.cost_usd": resultResponse.costUsd ?? 0,
+        "llm.duration_ms": resultResponse.durationMs ?? 0,
+      });
     }
 
     // Fallback: if primary result was an error, try fallback provider
@@ -219,9 +275,14 @@ export class Remi {
       (resultResponse.text.startsWith("[Provider error") ||
         resultResponse.text.startsWith("[Provider timeout"))
     ) {
+      providerSpan?.endWithError("primary provider failed");
+
       const fallbackName = this.config.provider.fallback;
       if (fallbackName && this._providers.has(fallbackName)) {
         log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
+        const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
+          "provider.name": fallbackName,
+        });
         const fallback = this._providers.get(fallbackName)!;
         if (typeof fallback.sendStream === "function") {
           for await (const event of fallback.sendStream(msg.text, streamOptions)) {
@@ -232,7 +293,10 @@ export class Remi {
           resultResponse = await fallback.send(msg.text, streamOptions);
           yield { kind: "result", response: resultResponse };
         }
+        fallbackSpan?.end();
       }
+    } else {
+      providerSpan?.end();
     }
 
     // Update session + daily notes
@@ -438,6 +502,7 @@ export class Remi {
 
   async stop(): Promise<void> {
     this.flushSessions();
+    flushLogs();
 
     for (const connector of this._connectors) {
       await connector.stop();
