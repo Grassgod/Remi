@@ -128,37 +128,45 @@ export class JobRunner {
     const daily = remi.memory.readDaily(yesterday);
     if (!daily || daily.trim().length < 50) return;
 
-    log.info(`Compacting daily notes for ${yesterday}`);
+    // Skip if already compacted for this date
+    const existingMemory = remi.memory.readMemory();
+    if (existingMemory.includes(`## From ${yesterday}`)) {
+      log.info(`Skipping compaction for ${yesterday}: already exists in MEMORY.md`);
+    } else {
+      log.info(`Compacting daily notes for ${yesterday}`);
 
-    const provider = remi._getProvider();
-    const prompt =
-      `Below are my daily notes from ${yesterday}. ` +
-      "Extract any important facts, decisions, or preferences that should be " +
-      "remembered long-term. Format as bullet points. " +
-      "If nothing is worth remembering long-term, respond with 'SKIP'.\n\n" +
-      `Also identify any people, organizations, or decisions mentioned. ` +
-      `For each, output a line: ENTITY: name (type) - observation\n\n` +
-      daily;
+      const provider = remi._getProvider();
+      const prompt =
+        `Below are my daily notes from ${yesterday}.\n\n` +
+        "Here is my EXISTING long-term memory (do NOT repeat anything already recorded here):\n" +
+        "---\n" + existingMemory + "\n---\n\n" +
+        "Extract ONLY NEW facts, decisions, or preferences NOT already in my existing memory. " +
+        "Format as bullet points. " +
+        "If everything is already recorded or nothing is worth remembering, respond with 'SKIP'.\n\n" +
+        `Also identify any NEW people, organizations, or decisions mentioned. ` +
+        `For each, output a line: ENTITY: name (type) - observation\n\n` +
+        daily;
 
-    const response = await provider.send(prompt);
-    const text = response.text.trim();
+      const response = await provider.send(prompt);
+      const text = response.text.trim();
 
-    if (text.toUpperCase() !== "SKIP") {
-      for (const line of text.split("\n")) {
-        if (line.startsWith("ENTITY:")) {
-          this._processEntityLine(remi, line);
+      if (text.toUpperCase() !== "SKIP") {
+        for (const line of text.split("\n")) {
+          if (line.startsWith("ENTITY:")) {
+            this._processEntityLine(remi, line);
+          }
         }
+
+        const summaryLines = text.split("\n").filter((line) => !line.startsWith("ENTITY:"));
+        const summaryText = summaryLines.join("\n").trim();
+
+        if (summaryText) {
+          remi.memory.appendMemory(`\n## From ${yesterday}\n\n${summaryText}`);
+          log.info(`Appended compacted memory from ${yesterday}`);
+        }
+
+        this._updateRollingSummary(remi, yesterday, summaryText);
       }
-
-      const summaryLines = text.split("\n").filter((line) => !line.startsWith("ENTITY:"));
-      const summaryText = summaryLines.join("\n").trim();
-
-      if (summaryText) {
-        remi.memory.appendMemory(`\n## From ${yesterday}\n\n${summaryText}`);
-        log.info(`Appended compacted memory from ${yesterday}`);
-      }
-
-      this._updateRollingSummary(remi, yesterday, summaryText);
     }
 
     this._compressWeeklyLogs(remi);

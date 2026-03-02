@@ -274,7 +274,29 @@ export class MemoryStore {
       }
     }
 
-    // 2. Search daily logs
+    // 2. Search extended memory sections (not injected into context)
+    const globalMemory = join(this.root, "MEMORY.md");
+    if (existsSync(globalMemory)) {
+      const content = readFileSync(globalMemory, "utf-8");
+      if (content.trim()) {
+        const { extended } = this._splitMemorySections(content);
+        const lq = query.toLowerCase();
+        for (const sec of extended) {
+          if (
+            sec.heading.toLowerCase().includes(lq) ||
+            sec.body.toLowerCase().includes(lq)
+          ) {
+            results.push({
+              source: "memory-section",
+              path: `## ${sec.heading}`,
+              meta: {} as Record<string, never>,
+            });
+          }
+        }
+      }
+    }
+
+    // 3a. Search daily logs
     const dailyDir = join(this.root, "daily");
     if (existsSync(dailyDir)) {
       const files = readdirSync(dailyDir)
@@ -289,7 +311,7 @@ export class MemoryStore {
       }
     }
 
-    // 3. Search project memory
+    // 3b. Search project memory
     const projectRoot = cwd ? this._projectRoot(cwd) : null;
     if (projectRoot) {
       this._findRemiMemoryFiles(projectRoot, (mdFile) => {
@@ -387,6 +409,23 @@ export class MemoryStore {
       }
     }
 
+    // Check for memory-section match → return section body if heading matches
+    for (const { source, path } of results) {
+      if (source === "memory-section") {
+        const heading = path.replace(/^##\s*/, "");
+        if (heading.toLowerCase().includes(q)) {
+          // Read and return the full section body
+          const globalMemory = join(this.root, "MEMORY.md");
+          const content = readFileSync(globalMemory, "utf-8");
+          const { extended } = this._splitMemorySections(content);
+          const sec = extended.find(
+            (s) => s.heading === heading,
+          );
+          if (sec) return `## ${sec.heading}\n${sec.body}`;
+        }
+      }
+    }
+
     // Otherwise return summary list
     const lines: string[] = [];
     for (const { source, path, meta } of results) {
@@ -397,6 +436,9 @@ export class MemoryStore {
         lines.push(`- [${source}] ${basename(path, ".md")}`);
       } else if (source === "project") {
         lines.push(`- [${source}] ${path}`);
+      } else if (source === "memory-section") {
+        const heading = path.replace(/^##\s*/, "");
+        lines.push(`- [记忆] ${heading}`);
       }
     }
     return lines.join("\n");
@@ -418,15 +460,65 @@ export class MemoryStore {
     return context;
   }
 
+  /** Sections always injected into context (identity + behavioral constraints) */
+  private static CORE_SECTIONS = new Set(["关于主人", "用户偏好"]);
+
+  /**
+   * Parse MEMORY.md into sections. Returns core (always injected) and
+   * extended (available via recall, listed in manifest) parts.
+   */
+  private _splitMemorySections(content: string): {
+    core: string;
+    extended: Array<{ heading: string; body: string }>;
+  } {
+    const lines = content.split("\n");
+    const sections: Array<{ heading: string; body: string[] }> = [];
+    let current: { heading: string; body: string[] } | null = null;
+    const preamble: string[] = [];
+
+    for (const line of lines) {
+      const m = line.match(/^##\s+(.+)/);
+      if (m) {
+        if (current) sections.push(current);
+        current = { heading: m[1].trim(), body: [] };
+      } else if (current) {
+        current.body.push(line);
+      } else {
+        // Lines before any ## heading (e.g. "# 个人记忆")
+        preamble.push(line);
+      }
+    }
+    if (current) sections.push(current);
+
+    const coreLines = [...preamble];
+    const extended: Array<{ heading: string; body: string }> = [];
+
+    for (const sec of sections) {
+      if (MemoryStore.CORE_SECTIONS.has(sec.heading)) {
+        coreLines.push(`## ${sec.heading}`, ...sec.body);
+      } else {
+        const body = sec.body.join("\n").trim();
+        if (body) {
+          extended.push({ heading: sec.heading, body });
+        }
+      }
+    }
+
+    return { core: coreLines.join("\n").trim(), extended };
+  }
+
   private _assemble(cwd: string | null): string {
     const parts: string[] = [];
 
-    // 1. Personal global memory (always injected)
+    // 1. Personal global memory — only core sections injected
     const globalMemory = join(this.root, "MEMORY.md");
     if (existsSync(globalMemory)) {
       const content = readFileSync(globalMemory, "utf-8");
       if (content.trim()) {
-        parts.push(`# 个人记忆\n${content}`);
+        const { core } = this._splitMemorySections(content);
+        if (core) {
+          parts.push(`# 个人记忆\n${core}`);
+        }
       }
     }
 
@@ -504,7 +596,28 @@ export class MemoryStore {
       });
     }
 
-    // 2. Entity directory (from in-memory index)
+    // 2. Extended memory sections (from MEMORY.md, not injected into context)
+    const globalMemory = join(this.root, "MEMORY.md");
+    if (existsSync(globalMemory)) {
+      const content = readFileSync(globalMemory, "utf-8");
+      if (content.trim()) {
+        const { extended } = this._splitMemorySections(content);
+        for (const sec of extended) {
+          // First bullet point as summary preview
+          const firstBullet = sec.body.split("\n").find((l) => l.trim().startsWith("-"));
+          const summary = firstBullet
+            ? firstBullet.trim().replace(/^-\s*/, "").slice(0, 50) + "…"
+            : "";
+          rows.push({
+            source: "记忆",
+            name: sec.heading,
+            summary,
+          });
+        }
+      }
+    }
+
+    // 3. Entity directory (from in-memory index)
     for (const [, meta] of this._index) {
       rows.push({
         source: "实体",
@@ -513,7 +626,7 @@ export class MemoryStore {
       });
     }
 
-    // 3. Daily log entry
+    // 4. Daily log entry
     const dailyDir = join(this.root, "daily");
     if (existsSync(dailyDir)) {
       const days = readdirSync(dailyDir)
