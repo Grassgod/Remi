@@ -25,50 +25,33 @@ export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal 
   }, []);
 
   return (
-    <header style={{
-      height: "var(--header-height)",
-      display: "flex", alignItems: "center",
-      padding: "0 24px",
-      borderBottom: "1px solid var(--border-glow)",
-      background: "var(--bg-surface)",
-      backdropFilter: "blur(20px)",
-      gap: 16, flexShrink: 0,
-    }}>
-      <span style={{
-        fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13,
-        color: "var(--text-bright)", letterSpacing: 2, textTransform: "uppercase",
-      }}>{title}</span>
+    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-4 border-b border-border bg-sidebar px-6">
+      <span className="text-sm font-semibold tracking-wide text-foreground">
+        {title}
+      </span>
       {subtitle && (
         <>
-          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>/</span>
-          <span style={{
-            fontFamily: "var(--font-mono)", fontSize: 10,
-            color: "var(--text-dim)", letterSpacing: 1,
-          }}>{subtitle}</span>
+          <span className="text-xs text-muted-foreground">/</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            {subtitle}
+          </span>
         </>
       )}
-      <div style={{ flex: 1 }} />
-      <span style={{
-        fontFamily: "var(--font-mono)", fontSize: 11,
-        color: "var(--glow-primary)", letterSpacing: 1.5,
-        textShadow: "0 0 10px rgba(var(--glow-primary-rgb), 0.3)",
-      }}>{clock}</span>
-      <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-        <div style={{
-          width: 6, height: 6, borderRadius: "50%",
-          background: daemonAlive ? "var(--glow-green)" : "var(--glow-red)",
-          boxShadow: daemonAlive
-            ? "0 0 6px rgba(var(--glow-green-rgb), 0.5)"
-            : "0 0 6px rgba(var(--glow-red-rgb), 0.5)",
-        }} title="Daemon" />
+      <div className="flex-1" />
+      <span className="font-mono text-xs tracking-wider text-muted-foreground">
+        {clock}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <div
+          className={`h-2 w-2 rounded-full ${daemonAlive ? "bg-success" : "bg-destructive"}`}
+          title="Daemon"
+        />
         {tokensTotal !== undefined && Array.from({ length: tokensTotal }).map((_, i) => (
-          <div key={i} style={{
-            width: 6, height: 6, borderRadius: "50%",
-            background: i < (tokensValid ?? 0) ? "var(--glow-green)" : "var(--glow-amber)",
-            boxShadow: i < (tokensValid ?? 0)
-              ? "0 0 6px rgba(var(--glow-green-rgb), 0.5)"
-              : "0 0 6px rgba(var(--glow-amber-rgb), 0.5)",
-          }} title={`Token ${i + 1}`} />
+          <div
+            key={i}
+            className={`h-2 w-2 rounded-full ${i < (tokensValid ?? 0) ? "bg-success" : "bg-warning"}`}
+            title={`Token ${i + 1}`}
+          />
         ))}
       </div>
     </header>

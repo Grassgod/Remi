@@ -20,104 +20,73 @@ export function Dashboard() {
     fetchDailyDates();
   }, []);
 
-  // Load today's daily when dates are available
   useEffect(() => {
     if (dailyDates.length > 0) {
-      fetchDaily(dailyDates[0].date); // most recent date first
+      fetchDaily(dailyDates[0].date);
     }
   }, [dailyDates]);
 
-  // Parse daily content into feed items
   const feedItems = parseDailyFeed(dailyContent);
-
   const nextExpiry = status?.tokens.nextExpiry ?? "—";
 
   return (
     <Layout title="Dashboard" subtitle="SYSTEM OVERVIEW">
       {/* Status Cards */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: 12, marginBottom: 20,
-      }} className="status-grid">
+      <div className="status-grid mb-5 grid grid-cols-4 gap-3">
         <ArcCard
           label="Daemon Status"
           value={status?.daemon.alive ? "ONLINE" : "OFFLINE"}
           sub={status?.daemon.pid ? `PID ${status.daemon.pid}` : "NOT RUNNING"}
-          color={status?.daemon.alive ? "cyan" : "red"}
-          delay={0}
+          color={status?.daemon.alive ? "default" : "destructive"}
         />
         <ArcCard
           label="Active Sessions"
           value={String(status?.sessions.total ?? 0)}
           sub={`${status?.sessions.main ?? 0} MAIN · ${status?.sessions.threads ?? 0} THREADS`}
-          color="cyan"
-          delay={0.06}
+          color="default"
         />
         <ArcCard
           label="Auth Tokens"
           value={`${status?.tokens.valid ?? 0}/${status?.tokens.total ?? 0}`}
           sub={`NEXT EXPIRY ${nextExpiry}`}
-          color={status?.tokens.valid === status?.tokens.total ? "green" : "amber"}
-          delay={0.12}
+          color={status?.tokens.valid === status?.tokens.total ? "success" : "warning"}
         />
         <ArcCard
           label="Memory Entities"
           value={String(status?.memory.entities ?? 0)}
           sub={entityTypeSummary(entities)}
-          color="cyan"
-          delay={0.18}
+          color="default"
         />
       </div>
 
       {/* Panels */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "1.2fr 0.8fr",
-        gap: 14,
-      }} className="panels-grid">
+      <div className="panels-grid grid grid-cols-[1.2fr_0.8fr] gap-3.5">
         {/* Activity Feed */}
         <HudPanel
           title="Activity Stream"
           icon={<IconActivity />}
           action={{ label: "View All", onClick: () => setLocation("/memory/daily") }}
-          delay={0.24}
         >
-          <div className="feed-scan">
+          <div>
             {feedItems.length === 0 ? (
-              <div style={{
-                padding: "20px 16px", textAlign: "center",
-                fontFamily: "var(--font-mono)", fontSize: 10,
-                color: "var(--text-dim)",
-              }}>NO ACTIVITY DATA</div>
+              <div className="p-5 text-center font-mono text-[10px] text-muted-foreground">
+                NO ACTIVITY DATA
+              </div>
             ) : (
               feedItems.map((item, i) => (
-                <div key={i} style={{
-                  display: "flex", padding: "9px 16px", gap: 12,
-                  alignItems: "baseline", transition: "background 0.15s",
-                  borderLeft: "2px solid transparent",
-                }} onMouseEnter={e => {
-                  e.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.03)";
-                  e.currentTarget.style.borderLeftColor = "rgba(var(--glow-primary-rgb), 0.2)";
-                }} onMouseLeave={e => {
-                  e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.borderLeftColor = "transparent";
-                }}>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 10,
-                    color: "var(--text-dim)", minWidth: 36, flexShrink: 0,
-                  }}>{item.time}</span>
-                  <span className="desktop-only" style={{
-                    fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: 1,
-                    textTransform: "uppercase", padding: "2px 6px", borderRadius: 2,
-                    border: "1px solid rgba(var(--glow-primary-rgb), 0.2)",
-                    color: "var(--glow-accent)", flexShrink: 0, display: "inline-block",
-                  }}>{item.tag}</span>
-                  <span style={{
-                    fontFamily: "var(--font-body)", fontSize: 12.5, fontWeight: 400,
-                    color: "var(--text-primary)", flex: 1, minWidth: 0,
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                  }}>{item.msg}</span>
+                <div
+                  key={i}
+                  className="flex items-baseline gap-3 border-l-2 border-transparent px-4 py-2 transition-colors hover:border-l-border hover:bg-accent/30"
+                >
+                  <span className="min-w-[36px] shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {item.time}
+                  </span>
+                  <span className="desktop-only inline-block shrink-0 rounded-sm border border-border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wide text-muted-foreground">
+                    {item.tag}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                    {item.msg}
+                  </span>
                 </div>
               ))
             )}
@@ -125,52 +94,37 @@ export function Dashboard() {
         </HudPanel>
 
         {/* Right Column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="flex flex-col gap-3.5">
           {/* Tokens */}
           <HudPanel
             title="Auth Tokens"
             icon={<IconAuth />}
             action={{ label: "Refresh", onClick: fetchTokens }}
-            delay={0.3}
           >
             {tokens.length === 0 ? (
-              <div style={{
-                padding: "16px", textAlign: "center",
-                fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)",
-              }}>NO TOKENS</div>
+              <div className="p-4 text-center font-mono text-[10px] text-muted-foreground">
+                NO TOKENS
+              </div>
             ) : (
               tokens.map((t, i) => (
-                <div key={i} style={{
-                  display: "grid", gridTemplateColumns: "1fr auto auto",
-                  alignItems: "center", padding: "10px 16px", gap: 10,
-                  transition: "background 0.15s",
-                }} onMouseEnter={e => {
-                  e.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.03)";
-                }} onMouseLeave={e => {
-                  e.currentTarget.style.background = "transparent";
-                }}>
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_auto_auto] items-center gap-2.5 px-4 py-2.5 transition-colors hover:bg-accent/30"
+                >
                   <div>
-                    <div style={{
-                      fontFamily: "var(--font-body)", fontSize: 12, fontWeight: 600,
-                      color: "var(--text-bright)", letterSpacing: 0.5,
-                    }}>{t.service}</div>
-                    <div style={{
-                      fontFamily: "var(--font-mono)", fontSize: 9,
-                      color: "var(--text-dim)", letterSpacing: 0.5,
-                    }}>{t.type}</div>
+                    <div className="text-xs font-semibold text-foreground">{t.service}</div>
+                    <div className="font-mono text-[9px] text-muted-foreground">{t.type}</div>
                   </div>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 10, textAlign: "right",
-                    color: t.valid ? "var(--glow-green)" : "var(--glow-red)",
-                    textShadow: t.valid ? "0 0 6px rgba(var(--glow-green-rgb), 0.3)" : "none",
-                  }}>{t.expiresIn}</span>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: 1,
-                    textTransform: "uppercase", padding: "2px 8px", borderRadius: 2,
-                    border: `1px solid ${t.valid ? "rgba(var(--glow-green-rgb), 0.3)" : "rgba(var(--glow-red-rgb), 0.3)"}`,
-                    color: t.valid ? "var(--glow-green)" : "var(--glow-red)",
-                    background: t.valid ? "rgba(var(--glow-green-rgb), 0.06)" : "rgba(var(--glow-red-rgb), 0.06)",
-                  }}>{t.valid ? "VALID" : "EXPIRED"}</span>
+                  <span className={`font-mono text-[10px] ${t.valid ? "text-success" : "text-destructive"}`}>
+                    {t.expiresIn}
+                  </span>
+                  <span className={`rounded-sm border px-2 py-0.5 font-mono text-[8px] uppercase tracking-wide
+                    ${t.valid
+                      ? "border-success/30 bg-success/[0.06] text-success"
+                      : "border-destructive/30 bg-destructive/[0.06] text-destructive"
+                    }`}>
+                    {t.valid ? "VALID" : "EXPIRED"}
+                  </span>
                 </div>
               ))
             )}
@@ -181,77 +135,52 @@ export function Dashboard() {
             title="Memory Entities"
             icon={<IconMemory />}
             action={{ label: "Manage", onClick: () => setLocation("/memory") }}
-            delay={0.36}
           >
             {entities.length === 0 ? (
-              <div style={{
-                padding: "16px", textAlign: "center",
-                fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)",
-              }}>NO ENTITIES</div>
+              <div className="p-4 text-center font-mono text-[10px] text-muted-foreground">
+                NO ENTITIES
+              </div>
             ) : (
               entities.map((e, i) => (
-                <div key={i} style={{
-                  display: "flex", alignItems: "center", padding: "8px 16px",
-                  gap: 10, cursor: "pointer", transition: "background 0.15s",
-                }} onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
-                onMouseEnter={ev => {
-                  ev.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.03)";
-                }} onMouseLeave={ev => {
-                  ev.currentTarget.style.background = "transparent";
-                }}>
-                  <span className={`entity-badge-${e.type}`} style={{
-                    fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: 0.8,
-                    textTransform: "uppercase", padding: "2px 7px", borderRadius: 2,
-                    minWidth: 56, textAlign: "center", flexShrink: 0,
-                  }}>{e.type}</span>
-                  <span style={{
-                    fontFamily: "var(--font-body)", fontSize: 13, fontWeight: 500,
-                    color: "var(--text-bright)", flex: 1, letterSpacing: 0.3,
-                  }}>{e.name}</span>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text-dim)",
-                  }}>{e.updatedAt ? e.updatedAt.slice(5, 10) : ""}</span>
+                <div
+                  key={i}
+                  className="flex cursor-pointer items-center gap-2.5 px-4 py-2 transition-colors hover:bg-accent/30"
+                  onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
+                >
+                  <span className={`entity-badge-${e.type} min-w-[56px] shrink-0 rounded-sm px-1.5 py-0.5 text-center font-mono text-[8px] uppercase tracking-wide`}>
+                    {e.type}
+                  </span>
+                  <span className="flex-1 text-sm font-medium text-foreground">
+                    {e.name}
+                  </span>
+                  <span className="font-mono text-[9px] text-muted-foreground">
+                    {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
+                  </span>
                 </div>
               ))
             )}
           </HudPanel>
 
           {/* Scheduler */}
-          <HudPanel title="Scheduler" icon={<IconScheduler />} delay={0.42}>
+          <HudPanel title="Scheduler" icon={<IconScheduler />}>
             {[
-              { name: "Heartbeat", freq: "5m", color: "var(--glow-green)" },
-              { name: "Compaction", freq: "03:00", color: "var(--glow-primary)" },
-              { name: "Cleanup", freq: "post", color: "var(--glow-amber)" },
+              { name: "Heartbeat", freq: "5m", cls: "bg-success" },
+              { name: "Compaction", freq: "03:00", cls: "bg-foreground" },
+              { name: "Cleanup", freq: "post", cls: "bg-warning" },
             ].map((job, i) => (
-              <div key={i} style={{
-                display: "grid", gridTemplateColumns: "1fr auto",
-                alignItems: "center", padding: "9px 16px", gap: 8,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{
-                    width: 5, height: 5, borderRadius: "50%", flexShrink: 0,
-                    background: job.color,
-                    boxShadow: `0 0 6px ${job.color}80`,
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--font-body)", fontSize: 12.5, fontWeight: 500,
-                    color: "var(--text-bright)", letterSpacing: 0.3,
-                  }}>{job.name}</span>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 9,
-                    color: "var(--text-dim)", marginLeft: 4,
-                  }}>{job.freq}</span>
+              <div key={i} className="grid grid-cols-[1fr_auto] items-center px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${job.cls}`} />
+                  <span className="text-xs font-medium text-foreground">{job.name}</span>
+                  <span className="ml-1 font-mono text-[9px] text-muted-foreground">{job.freq}</span>
                 </div>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text-muted)",
-                }}>—</span>
+                <span className="font-mono text-[9px] text-muted-foreground">—</span>
               </div>
             ))}
           </HudPanel>
         </div>
       </div>
 
-      {/* Responsive style override */}
       <style>{`
         @media (max-width: 768px) {
           .status-grid { grid-template-columns: repeat(2, 1fr) !important; }
@@ -271,7 +200,6 @@ function parseDailyFeed(content: string): { time: string; tag: string; msg: stri
   if (!content) return [];
   const items: { time: string; tag: string; msg: string }[] = [];
   for (const line of content.split("\n")) {
-    // Format: - [HH:MM] [connector] sender: message
     const m = line.match(/^- \[(\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.+)/);
     if (m) {
       items.push({ time: m[1], tag: m[2], msg: m[3] });

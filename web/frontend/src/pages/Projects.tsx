@@ -5,6 +5,9 @@ import { IconTrash } from "../components/icons";
 import * as api from "../api/client";
 import type { ProjectMap } from "../api/types";
 
+const inputCls = "w-full rounded-md border border-border bg-card px-3 py-1.5 font-mono text-xs text-foreground outline-none transition-colors focus:border-input";
+const btnCls = "rounded-md border border-border bg-transparent px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer";
+
 export function Projects() {
   const [projects, setProjects] = useState<ProjectMap>({});
   const [adding, setAdding] = useState(false);
@@ -44,40 +47,17 @@ export function Projects() {
     fetchProjects();
   };
 
-  const inputStyle: React.CSSProperties = {
-    fontFamily: "var(--font-mono)", fontSize: 11,
-    background: "rgba(var(--glow-primary-rgb), 0.04)",
-    border: "1px solid rgba(var(--glow-primary-rgb), 0.2)",
-    borderRadius: 3, padding: "6px 10px",
-    color: "var(--text-bright)", outline: "none",
-    width: "100%",
-  };
-
-  const btnStyle: React.CSSProperties = {
-    fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1,
-    textTransform: "uppercase", color: "var(--glow-primary)",
-    padding: "5px 12px", border: "1px solid rgba(var(--glow-primary-rgb), 0.2)",
-    borderRadius: 3, background: "rgba(var(--glow-primary-rgb), 0.04)",
-    cursor: "pointer", transition: "all 0.2s",
-  };
-
   return (
     <Layout title="Projects" subtitle="WORKSPACE MANAGEMENT">
       <HudPanel
         title="Registered Projects"
         action={{ label: "+ Add", onClick: () => setAdding(true) }}
         maxHeight={600}
-        delay={0}
       >
-        {/* Add form */}
         {adding && (
-          <div style={{
-            padding: "12px 16px",
-            borderBottom: "1px solid var(--border-glow)",
-            display: "flex", gap: 8, alignItems: "center",
-          }}>
+          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <input
-              style={{ ...inputStyle, flex: "0 0 120px", width: "auto" }}
+              className={`${inputCls} !w-auto flex-[0_0_120px]`}
               placeholder="别名 (如 remi)"
               value={newAlias}
               onChange={e => setNewAlias(e.target.value)}
@@ -85,53 +65,33 @@ export function Projects() {
               autoFocus
             />
             <input
-              style={{ ...inputStyle, flex: 1 }}
+              className={`${inputCls} flex-1`}
               placeholder="路径 (如 /data00/home/hehuajie/project/remi)"
               value={newPath}
               onChange={e => setNewPath(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleAdd()}
             />
-            <button style={btnStyle} onClick={handleAdd}>Save</button>
-            <button style={{ ...btnStyle, color: "var(--text-dim)", borderColor: "rgba(255,255,255,0.1)" }} onClick={() => { setAdding(false); setNewAlias(""); setNewPath(""); }}>Cancel</button>
+            <button className={btnCls} onClick={handleAdd}>Save</button>
+            <button className={btnCls} onClick={() => { setAdding(false); setNewAlias(""); setNewPath(""); }}>Cancel</button>
           </div>
         )}
 
         {entries.length === 0 && !adding ? (
-          <div style={{
-            padding: 40, textAlign: "center",
-            fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-dim)",
-          }}>NO PROJECTS REGISTERED</div>
+          <div className="p-10 text-center font-mono text-xs text-muted-foreground">NO PROJECTS REGISTERED</div>
         ) : (
           <div>
-            {/* Header */}
-            <div style={{
-              display: "grid", gridTemplateColumns: "120px 1fr auto",
-              padding: "8px 16px", gap: 10,
-              borderBottom: "1px solid var(--border-glow)",
-            }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--text-dim)" }}>ALIAS</span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1.5, textTransform: "uppercase", color: "var(--text-dim)" }}>PATH</span>
-              <span style={{ width: 60 }} />
+            <div className="grid grid-cols-[120px_1fr_auto] gap-2.5 border-b border-border px-4 py-2">
+              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">ALIAS</span>
+              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">PATH</span>
+              <span className="w-[60px]" />
             </div>
-            {/* Rows */}
             {entries.map(([alias, path]) => (
-              <div key={alias} style={{
-                display: "grid", gridTemplateColumns: "120px 1fr auto",
-                padding: "10px 16px", gap: 10, alignItems: "center",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = "rgba(var(--glow-primary-rgb), 0.03)"; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <span style={{
-                  fontFamily: "var(--font-display)", fontSize: 12, fontWeight: 600,
-                  color: "var(--glow-primary)", letterSpacing: 1,
-                }}>{alias}</span>
-
+              <div key={alias} className="grid grid-cols-[120px_1fr_auto] items-center gap-2.5 px-4 py-2.5 transition-colors hover:bg-accent/30">
+                <span className="font-mono text-xs font-semibold text-foreground">{alias}</span>
                 {editing === alias ? (
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div className="flex gap-1.5">
                     <input
-                      style={{ ...inputStyle, flex: 1 }}
+                      className={`${inputCls} flex-1`}
                       value={editPath}
                       onChange={e => setEditPath(e.target.value)}
                       onKeyDown={e => {
@@ -140,37 +100,19 @@ export function Projects() {
                       }}
                       autoFocus
                     />
-                    <button style={{ ...btnStyle, fontSize: 8, padding: "3px 8px" }} onClick={() => handleEdit(alias)}>OK</button>
+                    <button className={`${btnCls} !px-2 !py-1 !text-[8px]`} onClick={() => handleEdit(alias)}>OK</button>
                   </div>
                 ) : (
                   <span
-                    style={{
-                      fontFamily: "var(--font-mono)", fontSize: 11,
-                      color: "var(--text-muted)", wordBreak: "break-all",
-                      cursor: "pointer",
-                    }}
+                    className="cursor-pointer break-all font-mono text-xs text-muted-foreground"
                     onClick={() => { setEditing(alias); setEditPath(path); }}
                     title="点击编辑路径"
                   >{path}</span>
                 )}
-
-                <div style={{ display: "flex", gap: 4 }}>
+                <div className="flex gap-1">
                   <button
                     onClick={() => handleDelete(alias)}
-                    style={{
-                      background: "transparent", border: "1px solid rgba(var(--glow-red-rgb), 0.2)",
-                      borderRadius: 3, padding: "4px 6px", cursor: "pointer",
-                      color: "var(--text-dim)", transition: "all 0.2s",
-                      display: "flex", alignItems: "center",
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.borderColor = "rgba(var(--glow-red-rgb), 0.5)";
-                      e.currentTarget.style.color = "var(--glow-red)";
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.borderColor = "rgba(var(--glow-red-rgb), 0.2)";
-                      e.currentTarget.style.color = "var(--text-dim)";
-                    }}
+                    className="flex items-center rounded-md border border-destructive/20 bg-transparent p-1.5 text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive"
                   ><IconTrash /></button>
                 </div>
               </div>
@@ -179,20 +121,16 @@ export function Projects() {
         )}
       </HudPanel>
 
-      <div style={{ marginTop: 16 }}>
-        <HudPanel title="Usage" delay={0.1} maxHeight={200}>
-          <div style={{
-            padding: "14px 16px",
-            fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.8,
-            color: "var(--text-muted)",
-          }}>
+      <div className="mt-4">
+        <HudPanel title="Usage" maxHeight={200}>
+          <div className="p-4 font-mono text-xs leading-relaxed text-muted-foreground">
             <div>在飞书中使用：</div>
-            <div style={{ color: "var(--glow-primary)" }}>/p &lt;alias&gt;</div>
-            <div style={{ paddingLeft: 16 }}>切换到已注册的项目目录</div>
-            <div style={{ color: "var(--glow-primary)", marginTop: 4 }}>/p</div>
-            <div style={{ paddingLeft: 16 }}>查看当前项目和可用列表</div>
-            <div style={{ color: "var(--glow-primary)", marginTop: 4 }}>/p reset</div>
-            <div style={{ paddingLeft: 16 }}>清除项目绑定，回到默认目录</div>
+            <div className="text-foreground">/p &lt;alias&gt;</div>
+            <div className="pl-4">切换到已注册的项目目录</div>
+            <div className="mt-1 text-foreground">/p</div>
+            <div className="pl-4">查看当前项目和可用列表</div>
+            <div className="mt-1 text-foreground">/p reset</div>
+            <div className="pl-4">清除项目绑定，回到默认目录</div>
           </div>
         </HudPanel>
       </div>

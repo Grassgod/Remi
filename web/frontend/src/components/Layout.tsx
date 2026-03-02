@@ -14,15 +14,9 @@ export function Layout({ title, subtitle, children }: LayoutProps) {
   const status = useAppStore(s => s.status);
 
   return (
-    <div style={{
-      display: "flex", height: "100dvh",
-      position: "relative", zIndex: 1,
-    }}>
+    <div className="relative z-[1] flex h-dvh">
       <Sidebar daemonPid={status?.daemon.pid ?? null} />
-      <div style={{
-        flex: 1, display: "flex", flexDirection: "column",
-        minWidth: 0, overflow: "hidden",
-      }}>
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           title={title}
           subtitle={subtitle}
@@ -30,9 +24,7 @@ export function Layout({ title, subtitle, children }: LayoutProps) {
           tokensValid={status?.tokens.valid}
           tokensTotal={status?.tokens.total}
         />
-        <div style={{
-          flex: 1, overflowY: "auto", padding: 20,
-        }} className="main-content">
+        <div className="main-content flex-1 overflow-y-auto p-5">
           {children}
         </div>
       </div>
