@@ -265,6 +265,16 @@ const IMAGE_MIME_TYPES = new Set([
   "image/png", "image/jpeg", "image/gif", "image/webp",
 ]);
 
+/** Detect image MIME type from buffer magic bytes. */
+function detectImageMime(buf: Buffer): string {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
+  if (buf.length >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
+  if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
+    && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return "image/webp";
+  return "image/png"; // ultimate fallback
+}
+
 export function formatUserMessage(text: string, media?: MediaAttachment[]): string {
   // Filter to only images that Claude can understand via vision
   const images = media?.filter(
@@ -286,7 +296,7 @@ export function formatUserMessage(text: string, media?: MediaAttachment[]): stri
   for (const img of images) {
     const mimeType = IMAGE_MIME_TYPES.has(img.contentType)
       ? img.contentType
-      : "image/png"; // fallback for stickers etc.
+      : detectImageMime(img.buffer);
     content.push({
       type: "image",
       source: {
