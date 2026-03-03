@@ -109,3 +109,63 @@ export interface AnalyticsSummary {
   dailyHistory: DailySummary[];
   usage: UsageQuota[];
 }
+
+// Traces
+export interface SpanData {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  operationName: string;
+  serviceName: string;
+  startTime: string;
+  endTime?: string;
+  durationMs?: number;
+  status: "OK" | "ERROR" | "UNSET";
+  statusMessage?: string;
+  attributes: Record<string, string | number | boolean>;
+  events?: Array<{ name: string; timestamp: string; attributes?: Record<string, string | number | boolean> }>;
+}
+
+export interface TraceData {
+  traceId: string;
+  rootSpan: SpanData;
+  spans: SpanData[];
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  source?: string;
+  status: "OK" | "ERROR" | "UNSET";
+}
+
+// Logs
+export interface LogEntry {
+  ts: string;
+  level: "DEBUG" | "INFO" | "WARN" | "ERROR";
+  module: string;
+  msg: string;
+  traceId?: string;
+  spanId?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface LogQueryResult {
+  entries: LogEntry[];
+  total: number;
+  hasMore: boolean;
+}
+
+// Monitor
+export interface MonitorStats {
+  uptime: number;
+  activeSessions: number;
+  requestsToday: number;
+  requestsLastHour: number;
+  errorsToday: number;
+  errorRate: number;
+  latencyP50: number | null;
+  latencyP95: number | null;
+  latencyAvg: number | null;
+  tracesCount: number;
+  logsCount: number;
+  topOperations: Array<{ name: string; count: number; avgMs: number }>;
+}

@@ -12,6 +12,8 @@ import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
 import { CliUsageScanner } from "../src/metrics/cli-parser.js";
+import { TraceCollector, type TraceData, type SpanData } from "../src/tracing.js";
+import { readLogEntries, type LogEntry } from "../src/logger.js";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -88,6 +90,7 @@ export class RemiData {
   readonly root: string;       // ~/.remi
   readonly memoryDir: string;  // ~/.remi/memory
   private _metrics: MetricsCollector;
+  private _traceCollector: TraceCollector;
   private _analyticsCache: { data: AnalyticsSummary; ts: number } | null = null;
   private readonly _cacheTTL = 60_000; // 60s
 
@@ -95,6 +98,7 @@ export class RemiData {
     this.root = remiDir ?? join(homedir(), ".remi");
     this.memoryDir = join(this.root, "memory");
     this._metrics = new MetricsCollector(this.root);
+    this._traceCollector = new TraceCollector(join(this.root, "traces"));
 
     // Auto-scan CLI metrics on first startup
     try {
@@ -581,6 +585,140 @@ export class RemiData {
     }
     this._analyticsCache = null; // invalidate cache
     return { count: entries.length };
+  }
+
+  // ── Traces ─────────────────────────────────────────
+
+  getTraces(date: string, limit: number): TraceData[] {
+    return this._traceCollector.getRecentTraces(limit, date);
+  }
+
+  getTrace(traceId: string): TraceData | null {
+    return this._traceCollector.getTrace(traceId);
+  }
+
+  // ── Logs ──────────────────────────────────────────
+
+  getLogs(query: { date: string; level?: string | null; module?: string | null; traceId?: string | null; limit: number; offset: number }): { entries: LogEntry[]; total: number; hasMore: boolean } {
+    const logsDir = join(this.root, "logs");
+    let entries = readLogEntries(query.date, logsDir);
+
+    // Apply filters
+    if (query.level) {
+      const LEVELS: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+      const minLevel = LEVELS[query.level.toUpperCase()] ?? 0;
+      entries = entries.filter(e => (LEVELS[e.level] ?? 0) >= minLevel);
+    }
+    if (query.module) {
+      entries = entries.filter(e => e.module === query.module);
+    }
+    if (query.traceId) {
+      entries = entries.filter(e => e.traceId === query.traceId);
+    }
+
+    const total = entries.length;
+    // Reverse to show most recent first, then apply offset+limit
+    entries.reverse();
+    const sliced = entries.slice(query.offset, query.offset + query.limit);
+    return { entries: sliced, total, hasMore: query.offset + query.limit < total };
+  }
+
+  getLogModules(date?: string): string[] {
+    const logsDir = join(this.root, "logs");
+    const d = date ?? new Date().toISOString().slice(0, 10);
+    const entries = readLogEntries(d, logsDir);
+    return [...new Set(entries.map(e => e.module))].sort();
+  }
+
+  // ── Monitor ───────────────────────────────────────
+
+  getMonitorStats(): Record<string, unknown> {
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Uptime from PID file
+    let uptime = 0;
+    const pidFile = join(this.root, "remi.pid");
+    if (existsSync(pidFile)) {
+      try {
+        const stat = statSync(pidFile);
+        uptime = Math.floor((Date.now() - stat.mtimeMs) / 1000);
+      } catch { /* ignore */ }
+    }
+
+    // Active sessions
+    let activeSessions = 0;
+    const sessionsFile = join(this.root, "sessions.json");
+    if (existsSync(sessionsFile)) {
+      try {
+        const data = JSON.parse(readFileSync(sessionsFile, "utf-8"));
+        activeSessions = data.entries?.length ?? 0;
+      } catch { /* ignore */ }
+    }
+
+    // Metrics for today
+    const todayMetrics = this._metrics.readDay(today);
+    const requestsToday = todayMetrics.length;
+
+    // Requests in the last hour
+    const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+    const requestsLastHour = todayMetrics.filter(m => m.ts >= oneHourAgo).length;
+
+    // Trace stats
+    const todaySpans = this._traceCollector.readDay(today);
+    const rootSpans = todaySpans.filter(s => !s.parentSpanId);
+    const errorSpans = rootSpans.filter(s => s.status === "ERROR");
+    const errorRate = rootSpans.length > 0 ? (errorSpans.length / rootSpans.length) * 100 : 0;
+
+    // Latency percentiles from root spans
+    const durations = rootSpans
+      .map(s => s.durationMs ?? 0)
+      .filter(d => d > 0)
+      .sort((a, b) => a - b);
+
+    const p50 = durations.length > 0 ? durations[Math.floor(durations.length * 0.5)] : null;
+    const p95 = durations.length > 0 ? durations[Math.floor(durations.length * 0.95)] : null;
+    const avg = durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
+
+    // Top operations
+    const opMap = new Map<string, { count: number; totalMs: number }>();
+    for (const s of todaySpans) {
+      const existing = opMap.get(s.operationName);
+      if (existing) {
+        existing.count++;
+        existing.totalMs += s.durationMs ?? 0;
+      } else {
+        opMap.set(s.operationName, { count: 1, totalMs: s.durationMs ?? 0 });
+      }
+    }
+    const topOperations = [...opMap.entries()]
+      .map(([name, data]) => ({ name, count: data.count, avgMs: Math.round(data.totalMs / data.count) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    // Log count
+    const logsDir = join(this.root, "logs");
+    let logsCount = 0;
+    const logFile = join(logsDir, `${today}.jsonl`);
+    if (existsSync(logFile)) {
+      try {
+        logsCount = readFileSync(logFile, "utf-8").split("\n").filter(l => l.trim()).length;
+      } catch { /* ignore */ }
+    }
+
+    return {
+      uptime,
+      activeSessions,
+      requestsToday,
+      requestsLastHour,
+      errorsToday: errorSpans.length,
+      errorRate: Math.round(errorRate * 10) / 10,
+      latencyP50: p50,
+      latencyP95: p95,
+      latencyAvg: avg,
+      tracesCount: rootSpans.length,
+      logsCount,
+      topOperations,
+    };
   }
 
   // ── Backup ─────────────────────────────────────────

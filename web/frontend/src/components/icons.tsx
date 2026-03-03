@@ -41,6 +41,14 @@ export const IconAnalytics = () => (
   <svg {...s}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/><line x1="2" y1="20" x2="22" y2="20" strokeDasharray="2 2" opacity="0.4"/></svg>
 );
 
+export const IconTraces = () => (
+  <svg {...s}><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
+);
+
+export const IconLogs = () => (
+  <svg {...s}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+);
+
 export const IconActivity = () => (
   <svg {...s} width={13} height={13}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
 );

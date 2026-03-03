@@ -13,7 +13,7 @@ import { loadConfig } from "../config.js";
 import type { Remi } from "../core.js";
 import type { Connector } from "../connectors/base.js";
 import { CliUsageScanner } from "../metrics/cli-parser.js";
-import { createLogger } from "../logger.js";
+import { createLogger, cleanupOldLogs } from "../logger.js";
 import {
   existsSync,
   readFileSync,
@@ -358,6 +358,19 @@ export class Scheduler {
       log.info(
         `Cleanup: removed ${removedDaily} old dailies, ${removedVersions} old versions`,
       );
+    }
+
+    // Cleanup old logs and traces (60-day retention)
+    const retentionDays = this._config.tracing?.retentionDays ?? 60;
+    try {
+      const logsDir = this._config.tracing?.logsDir ?? join(homedir(), ".remi", "logs");
+      const removedLogs = cleanupOldLogs(logsDir, retentionDays);
+      const removedTraces = this._remi.traceCollector?.cleanupOldTraces(retentionDays) ?? 0;
+      if (removedLogs || removedTraces) {
+        log.info(`Tracing cleanup: removed ${removedLogs} old log files, ${removedTraces} old trace files`);
+      }
+    } catch (e) {
+      log.error("Tracing cleanup failed:", e);
     }
   }
 

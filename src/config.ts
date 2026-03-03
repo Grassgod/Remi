@@ -79,6 +79,13 @@ export interface ServiceConfig {
   enabled: boolean;
 }
 
+export interface TracingConfig {
+  enabled: boolean;
+  logsDir: string;
+  tracesDir: string;
+  retentionDays: number;
+}
+
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
@@ -88,6 +95,7 @@ export interface RemiConfig {
   services: ServiceConfig[];
   /** Registered project aliases: alias → absolute path. */
   projects: Record<string, string>;
+  tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
   logLevel: string;
@@ -137,6 +145,12 @@ export function defaultRemiConfig(): RemiConfig {
     scheduledSkills: [],
     services: [],
     projects: {},
+    tracing: {
+      enabled: true,
+      logsDir: join(homedir(), ".remi", "logs"),
+      tracesDir: join(homedir(), ".remi", "traces"),
+      retentionDays: 60,
+    },
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: "INFO",
@@ -228,6 +242,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       enabled: (s.enabled as boolean) ?? true,
     })),
     projects: projectsData,
+    tracing: (() => {
+      const t = (fileData.tracing ?? {}) as Record<string, unknown>;
+      return {
+        enabled: (t.enabled as boolean) ?? true,
+        logsDir: (t.logs_dir as string) ?? join(homedir(), ".remi", "logs"),
+        tracesDir: (t.traces_dir as string) ?? join(homedir(), ".remi", "traces"),
+        retentionDays: parseInt(String(t.retention_days ?? 60), 10),
+      };
+    })(),
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: env.REMI_LOG_LEVEL ?? (fileData.log_level as string) ?? "INFO",
