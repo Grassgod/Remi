@@ -32,4 +32,4 @@ export { MemoryStore } from "./memory/store.js";
 export { RemiDaemon } from "./daemon.js";
 
 // Scheduler
-export { Scheduler } from "./scheduler/jobs.js";
+export { CronTimer } from "./scheduler/cron-timer.js";
