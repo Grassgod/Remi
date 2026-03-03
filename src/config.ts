@@ -2,7 +2,7 @@
  * Configuration loading from environment variables and remi.toml.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -60,6 +60,31 @@ export interface SchedulerConfig {
   heartbeatInterval: number;
 }
 
+/**
+ * New unified cron job config — replaces fragmented [scheduler] + [[scheduled_skills]].
+ * Can be specified as [[cron.jobs]] in remi.toml.
+ */
+export interface CronJobConfig {
+  id: string;
+  name?: string;
+  handler: string;
+  enabled?: boolean;
+  /** Cron expression (5/6-field). Mutually exclusive with `every` and `at`. */
+  cron?: string;
+  /** Timezone for cron expression. */
+  tz?: string;
+  /** Fixed interval (e.g. "5m", "300s"). Mutually exclusive with `cron` and `at`. */
+  every?: string | number;
+  /** One-shot ISO timestamp. Mutually exclusive with `cron` and `every`. */
+  at?: string;
+  /** Timeout in ms (default: 300000). */
+  timeoutMs?: number;
+  /** Delete job after successful run (useful for one-shots). */
+  deleteAfterRun?: boolean;
+  /** Arbitrary config passed to the handler function. */
+  handlerConfig?: Record<string, any>;
+}
+
 export interface ServiceConfig {
   /** Display name (used as PM2 app name). */
   name: string;
@@ -89,8 +114,12 @@ export interface TracingConfig {
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
+  /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
   scheduler: SchedulerConfig;
+  /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
   scheduledSkills: ScheduledSkillConfig[];
+  /** Unified cron jobs — the new scheduler config. */
+  cronJobs: CronJobConfig[];
   /** Registered services managed by PM2. */
   services: ServiceConfig[];
   /** Registered project aliases: alias → absolute path. */
@@ -143,6 +172,7 @@ export function defaultRemiConfig(): RemiConfig {
     feishu: defaultFeishuConfig(),
     scheduler: defaultSchedulerConfig(),
     scheduledSkills: [],
+    cronJobs: [],
     services: [],
     projects: {},
     tracing: {
@@ -186,6 +216,8 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
+  const cronData = (fileData.cron ?? {}) as Record<string, unknown>;
+  const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
@@ -231,6 +263,19 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       outputDir: (s.output_dir as string) ?? join(homedir(), ".remi", "skill-reports", (s.name as string) ?? "unknown"),
       maxPushLength: parseInt(String(s.max_push_length ?? 4000), 10),
     })),
+    cronJobs: cronJobsData.map((j) => ({
+      id: (j.id as string) ?? "",
+      name: (j.name as string) ?? undefined,
+      handler: (j.handler as string) ?? "",
+      enabled: (j.enabled as boolean) ?? true,
+      cron: (j.cron as string) ?? undefined,
+      tz: (j.tz as string) ?? undefined,
+      every: (j.every as string | number) ?? undefined,
+      at: (j.at as string) ?? undefined,
+      timeoutMs: j.timeout_ms != null ? parseInt(String(j.timeout_ms), 10) : undefined,
+      deleteAfterRun: (j.delete_after_run as boolean) ?? undefined,
+      handlerConfig: (j.handler_config as Record<string, any>) ?? undefined,
+    })),
     services: servicesData.map((s) => ({
       name: (s.name as string) ?? "unnamed",
       script: (s.script as string) ?? "",
@@ -258,4 +303,180 @@ export function loadConfig(configPath?: string | null): RemiConfig {
     queueDir: join(homedir(), ".remi", "queue"),
     sessionsFile: join(homedir(), ".remi", "sessions.json"),
   };
+}
+
+/**
+ * Get the effective cron jobs list.
+ * If `config.cronJobs` is populated (new format), use it directly.
+ * Otherwise, fall back to legacy migration from [scheduler] + [[scheduled_skills]].
+ */
+export function migrateToCronJobs(config: RemiConfig): CronJobConfig[] {
+  if (config.cronJobs.length > 0) {
+    return config.cronJobs;
+  }
+
+  // Legacy fallback — auto-migrate from old format
+  return _legacyToCronJobs(config);
+}
+
+function _legacyToCronJobs(config: RemiConfig): CronJobConfig[] {
+  const jobs: CronJobConfig[] = [];
+  const compactHour = parseCronHourFromExpr(config.scheduler.memoryCompactCron);
+
+  jobs.push(
+    { id: "builtin:heartbeat", name: "Heartbeat", handler: "builtin:heartbeat", every: `${config.scheduler.heartbeatInterval}s` },
+    { id: "builtin:compaction", name: "Memory Compaction", handler: "builtin:compaction", cron: config.scheduler.memoryCompactCron },
+    { id: "builtin:cleanup", name: "Cleanup", handler: "builtin:cleanup", cron: `1 ${compactHour} * * *` },
+    { id: "builtin:cli-metrics", name: "CLI Metrics", handler: "builtin:cli-metrics", cron: `2 ${compactHour} * * *` },
+  );
+
+  for (const skill of config.scheduledSkills) {
+    if (!skill.name) continue;
+    jobs.push({
+      id: `skill:${skill.name}:gen`, name: `${skill.name} (generate)`,
+      handler: "skill:gen", enabled: skill.enabled,
+      cron: `0 ${skill.generateHour} * * *`,
+      handlerConfig: { skillName: skill.name, outputDir: skill.outputDir },
+    });
+    jobs.push({
+      id: `skill:${skill.name}:push`, name: `${skill.name} (push)`,
+      handler: "skill:push", enabled: skill.enabled,
+      cron: `${skill.pushMinute} ${skill.pushHour} * * *`,
+      handlerConfig: {
+        skillName: skill.name, outputDir: skill.outputDir,
+        connectorName: skill.connectorName, pushTargets: skill.pushTargets,
+        maxPushLength: skill.maxPushLength,
+      },
+    });
+  }
+
+  return jobs;
+}
+
+/**
+ * Write-through migration: rewrite remi.toml from old format to new [[cron.jobs]].
+ *
+ * - Detects if old [scheduler] or [[scheduled_skills]] sections exist
+ * - Converts them to [[cron.jobs]]
+ * - Removes old sections from the file
+ * - Backs up the original as remi.toml.bak
+ *
+ * Returns true if migration was performed, false if already migrated or no file found.
+ */
+export function migrateConfigFile(configPath?: string): boolean {
+  const filePath = configPath ?? findConfigPath();
+  if (!filePath) return false;
+
+  const raw = readFileSync(filePath, "utf-8");
+
+  // Check if already migrated: has [[cron.jobs]] and no [scheduler] or [[scheduled_skills]]
+  const hasCronJobs = /^\[\[cron\.jobs\]\]/m.test(raw);
+  const hasScheduler = /^\[scheduler\]/m.test(raw);
+  const hasScheduledSkills = /^\[\[scheduled_skills\]\]/m.test(raw);
+
+  if (hasCronJobs && !hasScheduler && !hasScheduledSkills) {
+    return false; // Already migrated
+  }
+
+  if (!hasScheduler && !hasScheduledSkills) {
+    return false; // Nothing to migrate
+  }
+
+  // Parse the old config to get migration data
+  const config = loadConfig(filePath);
+  const cronJobs = _legacyToCronJobs(config);
+
+  // Backup original
+  const bakPath = filePath + ".bak";
+  copyFileSync(filePath, bakPath);
+
+  // Remove old sections from raw text and append new [[cron.jobs]]
+  let newRaw = raw;
+
+  // Remove [scheduler] section (header + all subsequent lines until next section header)
+  newRaw = newRaw.replace(/^\[scheduler\]\r?\n(?:(?!\[)[^\r\n]*\r?\n?)*/gm, "");
+
+  // Remove all [[scheduled_skills]] blocks (header + all subsequent lines until next section header)
+  newRaw = newRaw.replace(/^\[\[scheduled_skills\]\]\r?\n(?:(?!\[)[^\r\n]*\r?\n?)*/gm, "");
+
+  // Clean up excessive blank lines
+  newRaw = newRaw.replace(/\n{3,}/g, "\n\n").trimEnd();
+
+  // Build [[cron.jobs]] TOML text
+  const cronText = buildCronJobsToml(cronJobs);
+
+  newRaw += "\n\n# ── Cron Jobs (migrated from [scheduler] + [[scheduled_skills]]) ──\n\n" + cronText;
+
+  writeFileSync(filePath, newRaw, "utf-8");
+  return true;
+}
+
+/**
+ * Locate the remi.toml config file.
+ */
+export function findConfigPath(): string | null {
+  const candidates = [
+    join(process.cwd(), CONFIG_FILENAME),
+    join(homedir(), ".remi", CONFIG_FILENAME),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return null;
+}
+
+/**
+ * Build TOML text for [[cron.jobs]] entries.
+ */
+function buildCronJobsToml(jobs: CronJobConfig[]): string {
+  const lines: string[] = [];
+
+  for (const job of jobs) {
+    lines.push("[[cron.jobs]]");
+    lines.push(`id = ${tomlStr(job.id)}`);
+    if (job.name) lines.push(`name = ${tomlStr(job.name)}`);
+    lines.push(`handler = ${tomlStr(job.handler)}`);
+    if (job.enabled === false) lines.push(`enabled = false`);
+    if (job.cron) lines.push(`cron = ${tomlStr(job.cron)}`);
+    if (job.tz) lines.push(`tz = ${tomlStr(job.tz)}`);
+    if (job.every) lines.push(`every = ${tomlStr(String(job.every))}`);
+    if (job.at) lines.push(`at = ${tomlStr(job.at)}`);
+    if (job.timeoutMs) lines.push(`timeout_ms = ${job.timeoutMs}`);
+    if (job.deleteAfterRun) lines.push(`delete_after_run = true`);
+
+    // handler_config as a sub-table
+    if (job.handlerConfig && Object.keys(job.handlerConfig).length > 0) {
+      lines.push("");
+      lines.push("[cron.jobs.handler_config]");
+      for (const [k, v] of Object.entries(job.handlerConfig)) {
+        const key = k; // Keep camelCase keys as-is to match handler expectations
+        if (typeof v === "string") {
+          lines.push(`${key} = ${tomlStr(v)}`);
+        } else if (typeof v === "number") {
+          lines.push(`${key} = ${v}`);
+        } else if (typeof v === "boolean") {
+          lines.push(`${key} = ${v}`);
+        } else if (Array.isArray(v)) {
+          lines.push(`${key} = [${v.map((s) => tomlStr(String(s))).join(", ")}]`);
+        }
+      }
+    }
+
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function tomlStr(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function parseCronHourFromExpr(cronExpr: string): number {
+  const parts = cronExpr.split(" ");
+  if (parts.length >= 2) {
+    const hour = parseInt(parts[1], 10);
+    if (!isNaN(hour)) return hour;
+  }
+  return 3;
 }

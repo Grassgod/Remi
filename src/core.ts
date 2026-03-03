@@ -229,9 +229,21 @@ export class Remi {
     log.debug("starting provider.sendStream iteration");
     let resultResponse: AgentResponse | null = null;
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
+    let promptTooLong = false;
 
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
       log.debug(`received event: ${event.kind}`);
+
+      // Detect prompt-too-long: suppress and mark for auto-retry
+      if (
+        (event.kind === "error" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.error)) ||
+        (event.kind === "result" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.response.text))
+      ) {
+        promptTooLong = true;
+        if (event.kind === "result") resultResponse = event.response;
+        continue;
+      }
+
       yield event;
       if (event.kind === "result") {
         resultResponse = event.response;
@@ -258,6 +270,36 @@ export class Remi {
     for (const [, s] of toolSpans) s.end();
     toolSpans.clear();
 
+    // ── Auto-recovery: prompt too long → reset session + retry ──
+    if (promptTooLong) {
+      log.warn(`Prompt too long for "${sessionKey}", auto-resetting session and retrying`);
+      providerSpan?.endWithError("prompt_too_long");
+
+      // Clear session mapping
+      this._sessions.delete(sessionKey);
+      this._scheduleSessFlush();
+
+      // Kill the old process so a fresh one is spawned on retry
+      if ("clearSession" in provider && typeof provider.clearSession === "function") {
+        await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
+      }
+
+      // Notify user via card content
+      yield { kind: "content_delta", text: "上下文过长，已自动重置会话。正在重新处理...\n\n" } as StreamEvent;
+
+      // Retry with fresh session (no resume)
+      const retryOptions = { ...streamOptions, sessionId: undefined };
+      resultResponse = null;
+      for await (const event of provider.sendStream(msg.text, retryOptions)) {
+        yield event;
+        if (event.kind === "result") resultResponse = event.response;
+        else if (event.kind === "rate_limit" && event.rateLimitType) {
+          this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
+        }
+      }
+    }
+
+    if (!promptTooLong) {
     // Attach result attributes to provider span
     if (resultResponse && providerSpan) {
       providerSpan.setAttributes({
@@ -298,6 +340,7 @@ export class Remi {
     } else {
       providerSpan?.end();
     }
+    } // end if (!promptTooLong)
 
     // Update session + daily notes
     if (resultResponse) {

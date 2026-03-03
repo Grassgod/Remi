@@ -25,6 +25,7 @@ import { registerAnalyticsHandlers } from "./handlers/analytics.js";
 import { registerTracesHandlers } from "./handlers/traces.js";
 import { registerLogsHandlers } from "./handlers/logs.js";
 import { registerMonitorHandlers } from "./handlers/monitor.js";
+import { registerSchedulerHandlers } from "./handlers/scheduler.js";
 
 // ── MIME types ─────────────────────────────────────────
 
@@ -69,6 +70,7 @@ export function startWebDashboard(opts: WebDashboardOptions = {}): { port: numbe
   registerTracesHandlers(router, data);
   registerLogsHandlers(router, data);
   registerMonitorHandlers(router, data);
+  registerSchedulerHandlers(router, data);
 
   _server = Bun.serve({
     port,

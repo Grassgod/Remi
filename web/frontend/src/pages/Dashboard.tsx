@@ -6,10 +6,12 @@ import { HudPanel } from "../components/HudPanel";
 import { IconActivity, IconAuth, IconMemory, IconScheduler } from "../components/icons";
 import { useAppStore } from "../stores/app";
 import { useMemoryStore } from "../stores/memory";
+import { useSchedulerStore } from "../stores/scheduler";
 
 export function Dashboard() {
   const { status, tokens, fetchStatus, fetchTokens, fetchSessions } = useAppStore();
   const { entities, dailyDates, dailyContent, fetchEntities, fetchDailyDates, fetchDaily } = useMemoryStore();
+  const { status: schedulerStatus, fetchStatus: fetchSchedulerStatus } = useSchedulerStore();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -18,6 +20,7 @@ export function Dashboard() {
     fetchSessions();
     fetchEntities();
     fetchDailyDates();
+    fetchSchedulerStatus();
   }, []);
 
   useEffect(() => {
@@ -162,21 +165,41 @@ export function Dashboard() {
           </HudPanel>
 
           {/* Scheduler */}
-          <HudPanel title="Scheduler" icon={<IconScheduler />}>
-            {[
-              { name: "Heartbeat", freq: "5m", cls: "bg-success" },
-              { name: "Compaction", freq: "03:00", cls: "bg-foreground" },
-              { name: "Cleanup", freq: "post", cls: "bg-warning" },
-            ].map((job, i) => (
-              <div key={i} className="grid grid-cols-[1fr_auto] items-center px-4 py-2.5">
-                <div className="flex items-center gap-2">
-                  <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${job.cls}`} />
-                  <span className="text-xs font-medium text-foreground">{job.name}</span>
-                  <span className="ml-1 font-mono text-[9px] text-muted-foreground">{job.freq}</span>
-                </div>
-                <span className="font-mono text-[9px] text-muted-foreground">—</span>
+          <HudPanel
+            title="Scheduler"
+            icon={<IconScheduler />}
+            action={{ label: "Details", onClick: () => setLocation("/scheduler") }}
+          >
+            {(!schedulerStatus || schedulerStatus.jobs.length === 0) ? (
+              <div className="p-4 text-center font-mono text-[10px] text-muted-foreground">
+                NO SCHEDULER DATA
               </div>
-            ))}
+            ) : (
+              schedulerStatus.jobs.filter(j => j.enabled).map((job, i) => {
+                const last = job.lastRun;
+                const statusColor = !last ? "bg-muted-foreground" : last.status === "ok" ? "bg-success" : "bg-destructive";
+                const statusLabel = !last ? "—" : last.status === "ok" ? "OK" : last.status === "error" ? "FAIL" : "SKIP";
+                const ago = last ? formatAgo(last.finishedAt) : "—";
+                return (
+                  <div key={i} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 px-3 py-2 transition-colors hover:bg-accent/30 sm:px-4 sm:py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusColor}`} />
+                      <span className="truncate text-xs font-medium text-foreground">{job.jobName}</span>
+                    </div>
+                    <span className="hidden font-mono text-[10px] text-muted-foreground sm:inline">{ago}</span>
+                    <span className={`shrink-0 rounded-sm border px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wide
+                      ${last?.status === "ok"
+                        ? "border-success/30 bg-success/[0.06] text-success"
+                        : last?.status === "error"
+                        ? "border-destructive/30 bg-destructive/[0.06] text-destructive"
+                        : "border-border text-muted-foreground"
+                      }`}>
+                      {statusLabel}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </HudPanel>
         </div>
       </div>
@@ -206,4 +229,16 @@ function parseDailyFeed(content: string): { time: string; tag: string; msg: stri
 function entityTypeSummary(entities: { type: string }[]): string {
   const types = [...new Set(entities.map(e => e.type.toUpperCase()))];
   return types.length > 0 ? types.join(" · ") : "NO ENTITIES";
+}
+
+function formatAgo(isoStr: string): string {
+  const ms = Date.now() - new Date(isoStr).getTime();
+  if (ms < 0) return "just now";
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }

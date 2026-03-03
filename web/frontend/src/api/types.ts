@@ -169,3 +169,50 @@ export interface MonitorStats {
   logsCount: number;
   topOperations: Array<{ name: string; count: number; avgMs: number }>;
 }
+
+// Scheduler
+export interface CronSchedule {
+  kind: "cron" | "every" | "at";
+  expr?: string;
+  tz?: string;
+  intervalMs?: number;
+  at?: string;
+}
+
+export interface CronJobLastRun {
+  status: "ok" | "error" | "skipped";
+  finishedAt: string;
+  durationMs: number;
+  error?: string;
+}
+
+export interface SchedulerJobStatus {
+  jobId: string;
+  jobName: string;
+  enabled: boolean;
+  handler: string;
+  schedule: CronSchedule;
+  lastRun: CronJobLastRun | null;
+  nextRunAt: string | null;
+  consecutiveErrors: number;
+}
+
+export interface SchedulerStatus {
+  jobs: SchedulerJobStatus[];
+}
+
+export interface CronRunEntry {
+  ts: string;
+  status: "ok" | "error" | "skipped";
+  durationMs: number;
+  error?: string;
+  jobId?: string;
+}
+
+export interface DailySchedulerSummary {
+  date: string;
+  total: number;
+  ok: number;
+  error: number;
+  skipped: number;
+}

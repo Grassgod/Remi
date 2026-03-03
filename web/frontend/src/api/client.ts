@@ -80,6 +80,17 @@ export const updateProject = (alias: string, path: string) =>
 export const deleteProject = (alias: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });
 
+// Scheduler
+export const getSchedulerStatus = () => request<import("./types").SchedulerStatus>("/api/v1/scheduler/status");
+export const getSchedulerHistory = (jobId?: string, limit = 50) => {
+  const params = new URLSearchParams();
+  if (jobId) params.set("jobId", jobId);
+  params.set("limit", String(limit));
+  return request<import("./types").CronRunEntry[]>(`/api/v1/scheduler/history?${params}`);
+};
+export const getSchedulerSummary = (days = 7) =>
+  request<import("./types").DailySchedulerSummary[]>(`/api/v1/scheduler/summary?days=${days}`);
+
 // Analytics
 export const getAnalyticsSummary = () => request<import("./types").AnalyticsSummary>("/api/v1/analytics/summary");
 export const getAnalyticsDaily = (start: string, end: string) =>
