@@ -13,6 +13,7 @@ import { loadConfig } from "../config.js";
 import type { Remi } from "../core.js";
 import type { Connector } from "../connectors/base.js";
 import { CliUsageScanner } from "../metrics/cli-parser.js";
+import { SchedulerHistory } from "./history.js";
 import { createLogger } from "../logger.js";
 import {
   existsSync,
@@ -48,12 +49,14 @@ export class Scheduler {
   private _config: RemiConfig;
   private _compactHour: number;
   private _heartbeatInterval: number;
+  readonly history: SchedulerHistory;
 
   constructor(remi: Remi, config: RemiConfig) {
     this._remi = remi;
     this._config = config;
     this._compactHour = parseCronHour(config.scheduler.memoryCompactCron);
     this._heartbeatInterval = config.scheduler.heartbeatInterval;
+    this.history = new SchedulerHistory(join(homedir(), ".remi"));
   }
 
   async start(shutdownSignal: AbortSignal): Promise<void> {
@@ -89,7 +92,7 @@ export class Scheduler {
       if (shutdownSignal.aborted) break;
 
       // Heartbeat
-      await this._heartbeat();
+      await this.history.run("heartbeat", () => this._heartbeat());
 
       // Hot-reload configs from remi.toml
       this._reloadScheduledSkillsConfig();
@@ -99,9 +102,9 @@ export class Scheduler {
 
       // Daily compaction (run once per day at configured hour)
       if (now.getHours() === this._compactHour && lastCompactDate !== today) {
-        await this._compactMemory();
-        await this._cleanup();
-        this._aggregateCliMetrics();
+        await this.history.run("compaction", () => this._compactMemory());
+        await this.history.run("cleanup", () => this._cleanup());
+        await this.history.run("cli-metrics", async () => this._aggregateCliMetrics());
         lastCompactDate = today;
       }
 
@@ -119,7 +122,9 @@ export class Scheduler {
           now.getHours() === skill.generateHour &&
           tracker.lastGenDate !== today
         ) {
-          await this._generateSkillReport(skill, today);
+          await this.history.run(`skill:${skill.name}:gen`, () =>
+            this._generateSkillReport(skill, today),
+          );
           tracker.lastGenDate = today;
           this._saveSkillTracker(skillTracker);
         }
@@ -130,7 +135,9 @@ export class Scheduler {
           now.getMinutes() >= skill.pushMinute &&
           tracker.lastPushDate !== today
         ) {
-          await this._pushSkillReport(skill, today);
+          await this.history.run(`skill:${skill.name}:push`, () =>
+            this._pushSkillReport(skill, today),
+          );
           tracker.lastPushDate = today;
           this._saveSkillTracker(skillTracker);
         }

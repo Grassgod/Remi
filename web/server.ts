@@ -22,6 +22,7 @@ import { registerAuthHandlers } from "./handlers/auth.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
 import { registerAnalyticsHandlers } from "./handlers/analytics.js";
+import { registerSchedulerHandlers } from "./handlers/scheduler.js";
 
 // ── MIME types ─────────────────────────────────────────
 
@@ -63,6 +64,7 @@ export function startWebDashboard(opts: WebDashboardOptions = {}): { port: numbe
   registerConfigHandlers(router, data);
   registerProjectHandlers(router, data);
   registerAnalyticsHandlers(router, data);
+  registerSchedulerHandlers(router, data);
 
   _server = Bun.serve({
     port,

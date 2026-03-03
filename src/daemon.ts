@@ -16,10 +16,10 @@ import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import type { Connector } from "./connectors/base.js";
 import type { RemiConfig } from "./config.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, migrateConfigFile } from "./config.js";
 import { Remi } from "./core.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
-import { Scheduler } from "./scheduler/jobs.js";
+import { CronTimer } from "./scheduler/cron-timer.js";
 import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
@@ -299,8 +299,14 @@ export class RemiDaemon {
     this._writePid();
     this._setupSignals();
 
+    // One-time migration: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]
+    if (migrateConfigFile()) {
+      log.info("Config migrated: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]");
+      this.config = loadConfig();
+    }
+
     const remi = this._buildRemi();
-    const scheduler = new Scheduler(remi, this.config);
+    const cronTimer = new CronTimer(remi, this.config);
 
     log.info("=".repeat(60));
     log.info(`Remi daemon starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${this.config.provider.name})`);
@@ -311,13 +317,16 @@ export class RemiDaemon {
     try {
       await Promise.all([
         remi.start(),
-        scheduler.start(this._abortController.signal),
+        cronTimer.start(this._abortController.signal),
       ]);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
+        // Abort CronTimer if remi.start() or any component fails
+        this._abortController.abort();
         throw e;
       }
     } finally {
+      this._abortController.abort(); // Ensure CronTimer stops in all exit paths
       await remi.stop();
       this._removePid();
       log.info("Remi daemon stopped.");

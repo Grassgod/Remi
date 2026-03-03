@@ -12,6 +12,7 @@ import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
 import { CliUsageScanner } from "../src/metrics/cli-parser.js";
+import { JobStore, type CronJob, type CronRunEntry } from "../src/scheduler/job-store.js";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export class RemiData {
   readonly root: string;       // ~/.remi
   readonly memoryDir: string;  // ~/.remi/memory
   private _metrics: MetricsCollector;
+  private _jobStore: JobStore;
   private _analyticsCache: { data: AnalyticsSummary; ts: number } | null = null;
   private readonly _cacheTTL = 60_000; // 60s
 
@@ -95,6 +97,7 @@ export class RemiData {
     this.root = remiDir ?? join(homedir(), ".remi");
     this.memoryDir = join(this.root, "memory");
     this._metrics = new MetricsCollector(this.root);
+    this._jobStore = new JobStore(this.root);
 
     // Auto-scan CLI metrics on first startup
     try {
@@ -581,6 +584,78 @@ export class RemiData {
     }
     this._analyticsCache = null; // invalidate cache
     return { count: entries.length };
+  }
+
+  // ── Scheduler (JobStore) ─────────────────────────────
+
+  getSchedulerStatus() {
+    this._jobStore.hotReload();
+    const jobs = this._jobStore.getAllJobs().map((job) => ({
+      jobId: job.id,
+      jobName: job.name,
+      enabled: job.enabled,
+      handler: job.handler,
+      schedule: job.schedule,
+      lastRun: job.state.lastRunAtMs
+        ? {
+            status: job.state.lastRunStatus ?? "ok",
+            finishedAt: new Date(job.state.lastRunAtMs + (job.state.lastDurationMs ?? 0)).toISOString(),
+            durationMs: job.state.lastDurationMs ?? 0,
+            error: job.state.lastError,
+          }
+        : null,
+      nextRunAt: job.state.nextRunAtMs ? new Date(job.state.nextRunAtMs).toISOString() : null,
+      consecutiveErrors: job.state.consecutiveErrors ?? 0,
+    }));
+    return { jobs };
+  }
+
+  getSchedulerHistory(jobId?: string, limit = 50): CronRunEntry[] {
+    if (jobId) {
+      return this._jobStore.getRunHistory(jobId, limit);
+    }
+    // Return combined history for all jobs
+    const allJobs = this._jobStore.getAllJobs();
+    const combined: (CronRunEntry & { jobId: string })[] = [];
+    for (const job of allJobs) {
+      const runs = this._jobStore.getRunHistory(job.id, limit);
+      for (const run of runs) {
+        combined.push({ ...run, jobId: job.id });
+      }
+    }
+    return combined
+      .sort((a, b) => b.ts.localeCompare(a.ts))
+      .slice(0, limit);
+  }
+
+  getSchedulerSummary(days: number) {
+    // Aggregate from JSONL run files
+    const allJobs = this._jobStore.getAllJobs();
+    const summaryMap = new Map<string, { total: number; ok: number; error: number; skipped: number }>();
+
+    for (let i = 0; i < days; i++) {
+      const d = new Date(Date.now() - i * 86400000);
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      summaryMap.set(dateStr, { total: 0, ok: 0, error: 0, skipped: 0 });
+    }
+
+    for (const job of allJobs) {
+      const runs = this._jobStore.getRunHistory(job.id, 500);
+      for (const run of runs) {
+        const dateStr = run.ts.slice(0, 10);
+        const entry = summaryMap.get(dateStr);
+        if (entry) {
+          entry.total++;
+          if (run.status === "ok") entry.ok++;
+          else if (run.status === "error") entry.error++;
+          else entry.skipped++;
+        }
+      }
+    }
+
+    return Array.from(summaryMap.entries())
+      .map(([date, counts]) => ({ date, ...counts }))
+      .sort((a, b) => b.date.localeCompare(a.date));
   }
 
   // ── Backup ─────────────────────────────────────────
