@@ -6,9 +6,13 @@
  */
 
 import { join } from "node:path";
+import { homedir } from "node:os";
 import type { AuthAdapter, TokenEntry, TokenStatus } from "./types.js";
 import { TokenPersistence } from "./persistence.js";
 import { createLogger } from "../logger.js";
+
+/** Secondary persistence for lark-mcp-server (~/.lark_auth/tokens.json). */
+const LARK_MCP_TOKEN_FILE = join(homedir(), ".lark_auth", "tokens.json");
 
 const log = createLogger("1passport");
 
@@ -109,6 +113,8 @@ export class AuthStore {
     }
     try {
       this._persistence.save(existing);
+      // Sync to lark-mcp-server token file (same format)
+      new TokenPersistence(LARK_MCP_TOKEN_FILE).save(existing);
       log.debug("Tokens persisted to disk");
     } catch (e) {
       log.warn("Failed to persist tokens:", e);
