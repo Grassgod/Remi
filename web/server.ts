@@ -150,19 +150,9 @@ export function stopWebDashboard(): void {
   }
 }
 
-// ── Standalone entry point ─────────────────────────────
+// ── Auto-start (standalone service) ───────────────────
 
-const isMain = process.argv[1]?.endsWith("server.ts") || process.argv[1]?.endsWith("server.js");
+const devMode = process.argv.includes("--dev");
+const { port } = startWebDashboard({ devMode });
 
-if (isMain) {
-  const devMode = process.argv.includes("--dev");
-  const { port } = startWebDashboard({ devMode });
-
-  console.log(`
-╔══════════════════════════════════════════╗
-║  REMI WEB DASHBOARD                     ║
-║  http://localhost:${port}                  ║
-║  Mode: ${devMode ? "development" : "production "}                     ║
-╚══════════════════════════════════════════╝
-`);
-}
+console.log(`[remi-web] Dashboard started on port ${port} (${devMode ? "dev" : "production"})`);
