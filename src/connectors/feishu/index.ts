@@ -327,6 +327,11 @@ export class FeishuConnector implements Connector {
     await this._streamHandler!(incoming, async (stream) => {
       try {
         for await (const event of stream) {
+          // If safety timeout fired, stop consuming events
+          if (session.abortSignal.aborted) {
+            log.warn("Safety timeout aborted stream consumption");
+            break;
+          }
           log.debug(`received event: ${event.kind}`);
           switch (event.kind) {
             case "thinking_delta":

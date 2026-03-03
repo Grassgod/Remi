@@ -139,6 +139,9 @@ export class ClaudeCLIProvider implements Provider {
     });
   }
 
+  /** Max wall-clock time for a single stream interaction (15 min). */
+  private static STREAM_DEADLINE_MS = 15 * 60 * 1000;
+
   async *sendStream(
     message: string,
     options?: SendOptions,
@@ -152,12 +155,21 @@ export class ClaudeCLIProvider implements Provider {
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     let sessionModel: string | null = null;
+    const deadline = Date.now() + ClaudeCLIProvider.STREAM_DEADLINE_MS;
+    let gotResult = false;
 
     for await (const msg of mgr.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
       options?.media,
     )) {
+      // Check wall-clock deadline
+      if (Date.now() > deadline) {
+        log.error(`Stream exceeded ${ClaudeCLIProvider.STREAM_DEADLINE_MS / 1000}s deadline, aborting`);
+        yield { kind: "error", error: "Task timed out (exceeded 15 minute limit)." } as StreamEvent;
+        break;
+      }
+
       if (msg.kind === "system") {
         const sys = msg as SystemMessage;
         if (sys.model) sessionModel = sys.model;
@@ -190,6 +202,7 @@ export class ClaudeCLIProvider implements Provider {
         log.debug(`yield error: ${err.error}`);
         yield { kind: "error", error: err.error, code: err.code } as StreamEvent;
       } else if (msg.kind === "result") {
+        gotResult = true;
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");
         const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
@@ -208,6 +221,17 @@ export class ClaudeCLIProvider implements Provider {
           }),
         };
       }
+    }
+
+    // If stream ended without a result event, synthesize one so downstream always gets a result
+    if (!gotResult) {
+      const fullText = textParts.join("") || "[Task ended without result — the CLI process may have crashed or timed out]";
+      const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
+      log.warn("Stream ended without result event, synthesizing fallback result");
+      yield {
+        kind: "result",
+        response: createAgentResponse({ text: fullText, thinking, toolCalls }),
+      };
     }
   }
 

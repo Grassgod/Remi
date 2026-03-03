@@ -201,6 +201,9 @@ export class FeishuStreamingSession {
   // Overflow protection: max bytes for process content (~10KB)
   private static PROCESS_BUDGET = 10000;
 
+  // AbortController for signalling upstream when safety timeout fires
+  private _abortController: AbortController | null = null;
+
   constructor(
     client: Client,
     creds: Credentials,
@@ -472,6 +475,17 @@ export class FeishuStreamingSession {
 
   // ── Safety timeout ─────────────────────────────────────────
 
+  /**
+   * Get an AbortSignal that fires when the safety timeout closes the card.
+   * Upstream consumers can use this to abort blocked iteration.
+   */
+  get abortSignal(): AbortSignal {
+    if (!this._abortController) {
+      this._abortController = new AbortController();
+    }
+    return this._abortController.signal;
+  }
+
   private _resetSafetyTimer(): void {
     if (this.safetyTimer) clearTimeout(this.safetyTimer);
     this.safetyTimer = setTimeout(() => {
@@ -479,6 +493,8 @@ export class FeishuStreamingSession {
         this.log(
           `Safety timeout: closing abandoned streaming card ${this.state.cardId}`,
         );
+        // Signal upstream to abort any blocked iteration
+        this._abortController?.abort();
         this.close().catch((e) =>
           this.log(`Safety close failed: ${String(e)}`),
         );
