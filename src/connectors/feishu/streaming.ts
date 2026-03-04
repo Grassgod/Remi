@@ -295,7 +295,7 @@ export class FeishuStreamingSession {
     if (options?.replyToMessageId) {
       sendRes = await this.client.im.message.reply({
         path: { message_id: options.replyToMessageId },
-        data: { msg_type: "interactive", content: cardContent },
+        data: { msg_type: "interactive", content: cardContent, reply_in_thread: true },
       });
     } else {
       sendRes = await this.client.im.message.create({
@@ -321,7 +321,8 @@ export class FeishuStreamingSession {
     };
     this._resetSafetyTimer();
     this.log(
-      `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`,
+      `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}` +
+      (options?.replyToMessageId ? ` (thread reply to ${options.replyToMessageId})` : ` (direct message)`),
     );
   }
 

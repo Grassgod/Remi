@@ -250,6 +250,7 @@ export class Remi {
     let resultResponse: AgentResponse | null = null;
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
     let promptTooLong = false;
+    let staleSession = false;
 
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
       log.debug(`received event: ${event.kind}`);
@@ -260,6 +261,17 @@ export class Remi {
         (event.kind === "result" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.response.text))
       ) {
         promptTooLong = true;
+        if (event.kind === "result") resultResponse = event.response;
+        continue;
+      }
+
+      // Detect stale session resume: "No conversation found with session ID"
+      if (
+        existingSessionId &&
+        ((event.kind === "error" && /no conversation found/i.test(event.error)) ||
+         (event.kind === "result" && event.response.inputTokens === 0 && event.response.durationMs === 0))
+      ) {
+        staleSession = true;
         if (event.kind === "result") resultResponse = event.response;
         continue;
       }
@@ -319,7 +331,32 @@ export class Remi {
       }
     }
 
-    if (!promptTooLong) {
+    // ── Auto-recovery: stale session → clear session + retry ──
+    if (staleSession) {
+      log.warn(`Stale session for "${sessionKey}" (sessionId=${existingSessionId}), auto-resetting and retrying`);
+      providerSpan?.endWithError("stale_session");
+
+      this._sessions.delete(sessionKey);
+      this._scheduleSessFlush();
+
+      if ("clearSession" in provider && typeof provider.clearSession === "function") {
+        await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
+      }
+
+      yield { kind: "content_delta", text: "会话已过期，自动重置。正在重新处理...\n\n" } as StreamEvent;
+
+      const retryOptions = { ...streamOptions, sessionId: undefined };
+      resultResponse = null;
+      for await (const event of provider.sendStream(msg.text, retryOptions)) {
+        yield event;
+        if (event.kind === "result") resultResponse = event.response;
+        else if (event.kind === "rate_limit" && event.rateLimitType) {
+          this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
+        }
+      }
+    }
+
+    if (!promptTooLong && !staleSession) {
     // Attach result attributes to provider span
     if (resultResponse && providerSpan) {
       providerSpan.setAttributes({

@@ -51,7 +51,7 @@ export async function sendMessageFeishu(
   if (options?.replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: options.replyToMessageId },
-      data: { content, msg_type: msgType },
+      data: { content, msg_type: msgType, reply_in_thread: true },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu reply failed: ${response.msg || `code ${response.code}`}`);
@@ -134,7 +134,7 @@ export async function sendCardFeishu(
   if (options?.replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: options.replyToMessageId },
-      data: { content, msg_type: "interactive" },
+      data: { content, msg_type: "interactive", reply_in_thread: true },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu card reply failed: ${response.msg || `code ${response.code}`}`);

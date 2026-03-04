@@ -113,7 +113,7 @@ export class CronTimer {
         this._store.getAllJobs().map(({ state, ...def }) => def).sort((a, b) => a.id.localeCompare(b.id)),
       );
       const newHash = JSON.stringify(
-        newJobs.sort((a, b) => a.id.localeCompare(b.id)),
+        newJobs.map(({ state, ...def }) => def).sort((a, b) => a.id.localeCompare(b.id)),
       );
 
       if (oldHash !== newHash) {

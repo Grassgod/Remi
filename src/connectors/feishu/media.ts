@@ -163,7 +163,7 @@ export async function sendImageFeishu(
   if (replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
-      data: { content, msg_type: "image" },
+      data: { content, msg_type: "image", reply_in_thread: true },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu image reply failed: ${response.msg || `code ${response.code}`}`);
@@ -197,7 +197,7 @@ export async function sendFileFeishu(
   if (replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
-      data: { content, msg_type: msgType },
+      data: { content, msg_type: msgType, reply_in_thread: true },
     });
     if (response.code !== 0) {
       throw new Error(`Feishu file reply failed: ${response.msg || `code ${response.code}`}`);
