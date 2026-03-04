@@ -272,7 +272,7 @@ function detectImageMime(buf: Buffer): string {
   if (buf.length >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
   if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46
     && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return "image/webp";
-  return "image/png"; // ultimate fallback
+  return ""; // no match — caller should handle
 }
 
 export function formatUserMessage(text: string, media?: MediaAttachment[]): string {
@@ -294,9 +294,9 @@ export function formatUserMessage(text: string, media?: MediaAttachment[]): stri
     { type: "text", text },
   ];
   for (const img of images) {
-    const mimeType = IMAGE_MIME_TYPES.has(img.contentType)
-      ? img.contentType
-      : detectImageMime(img.buffer);
+    // Always trust magic bytes over declared contentType — Feishu often omits
+    // or misreports MIME types, causing Claude API 400 errors.
+    const mimeType = detectImageMime(img.buffer) || img.contentType || "image/png";
     content.push({
       type: "image",
       source: {
