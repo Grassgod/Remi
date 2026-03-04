@@ -6,6 +6,8 @@
  */
 
 import type { Subprocess } from "bun";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   type AssistantBlocks,
   type ContentDelta,
@@ -97,6 +99,7 @@ export class ClaudeProcessManager {
       "--input-format", "stream-json",
       "--output-format", "stream-json",
       "--verbose",
+      "--add-dir", join(homedir(), ".remi"),
     ];
     if (this.model) {
       cmd.push("--model", this.model);
@@ -189,7 +192,10 @@ export class ClaudeProcessManager {
 
         // Skip unparseable lines (bad JSON, etc.)
         if (msg.kind === "parse_error") {
-          log.warn(`Parse error: ${msg.error} | line: ${msg.rawLine.slice(0, 100)}`);
+          // Log more context for API errors (previously truncated at 100 chars)
+          const isApiError = msg.rawLine.includes("API Error") || msg.rawLine.includes("invalid_request_error");
+          const maxLen = isApiError ? 500 : 100;
+          log.warn(`Parse error: ${msg.error} | line: ${msg.rawLine.slice(0, maxLen)}`);
           continue;
         }
 

@@ -296,7 +296,14 @@ export function formatUserMessage(text: string, media?: MediaAttachment[]): stri
   for (const img of images) {
     // Always trust magic bytes over declared contentType — Feishu often omits
     // or misreports MIME types, causing Claude API 400 errors.
-    const mimeType = detectImageMime(img.buffer) || img.contentType || "image/png";
+    const detected = detectImageMime(img.buffer);
+    const mimeType = detected || img.contentType || "image/png";
+    const magic = img.buffer.length >= 4
+      ? img.buffer.subarray(0, 4).toString("hex")
+      : `(${img.buffer.length}B)`;
+    console.log(
+      `[protocol] image: magic=${magic} detected=${detected || "none"} contentType=${img.contentType} final=${mimeType} size=${img.buffer.length}`,
+    );
     content.push({
       type: "image",
       source: {
