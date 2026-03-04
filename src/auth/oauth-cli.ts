@@ -1,10 +1,10 @@
 /**
  * CLI command: `bun run src/main.ts auth`
  *
- * Performs Feishu OAuth to obtain a user_access_token (+ refresh_token if available),
+ * Performs Feishu OAuth (v2) to obtain a user_access_token + refresh_token,
  * then persists it to ~/.remi/auth/tokens.json.
- * If refresh_token is returned, the daemon's FeishuAuthAdapter auto-refreshes.
- * Otherwise, re-run this command when the token expires (~2h).
+ * Uses offline_access scope to get refresh_token via v2 API,
+ * independent of the platform "允许刷新 user_access_token" toggle.
  */
 
 import { createInterface } from "node:readline";
@@ -25,63 +25,55 @@ function resolveApiBase(domain?: string): string {
   return "https://open.feishu.cn/open-apis";
 }
 
-async function getTenantToken(apiBase: string, appId: string, appSecret: string): Promise<string> {
-  const resp = await fetch(`${apiBase}/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-  });
-
-  const data = (await resp.json()) as {
-    code: number;
-    msg: string;
-    tenant_access_token?: string;
-  };
-
-  if (data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`获取 tenant_access_token 失败: ${data.msg}`);
-  }
-  return data.tenant_access_token;
-}
-
 async function exchangeCode(
   apiBase: string,
-  tenantToken: string,
+  appId: string,
+  appSecret: string,
   code: string,
 ): Promise<TokenEntry> {
-  // Use legacy v1 endpoint (returns u- prefix tokens compatible with existing code)
-  const resp = await fetch(`${apiBase}/authen/v1/access_token`, {
+  // v2 OAuth token endpoint — uses client credentials directly (no tenant_token needed)
+  const resp = await fetch(`${apiBase}/authen/v2/oauth/token`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${tenantToken}`,
-    },
-    body: JSON.stringify({ grant_type: "authorization_code", code }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: appId,
+      client_secret: appSecret,
+      redirect_uri: REDIRECT_URI,
+    }),
   });
 
   const result = (await resp.json()) as {
-    code: number;
-    msg?: string;
-    data?: {
-      access_token: string;
-      expires_in: number;
-      refresh_token?: string;
-      refresh_expires_in?: number;
-    };
+    code?: number;
+    error?: string;
+    error_description?: string;
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+    refresh_token_expires_in?: number;
   };
 
-  if (result.code !== 0 || !result.data) {
-    throw new Error(`换取 user_access_token 失败: ${result.msg ?? `code ${result.code}`}`);
+  // v2 can return Feishu-style {code} or standard OAuth {error}
+  if (result.error) {
+    throw new Error(`换取 user_access_token 失败: ${result.error_description ?? result.error}`);
+  }
+  if (result.code && result.code !== 0) {
+    throw new Error(`换取 user_access_token 失败: code ${result.code}`);
+  }
+  if (!result.access_token) {
+    throw new Error("换取 user_access_token 失败: 未返回 access_token");
   }
 
   const entry: TokenEntry = {
-    value: result.data.access_token,
-    expiresAt: Date.now() + result.data.expires_in * 1000 - 5 * 60 * 1000,
+    value: result.access_token,
+    expiresAt: Date.now() + (result.expires_in ?? 7200) * 1000 - 5 * 60 * 1000,
   };
 
-  if (result.data.refresh_token) {
-    entry.refreshToken = result.data.refresh_token;
-    entry.refreshExpiresAt = Date.now() + (result.data.refresh_expires_in ?? 2592000) * 1000;
+  if (result.refresh_token) {
+    entry.refreshToken = result.refresh_token;
+    entry.refreshExpiresAt =
+      Date.now() + (result.refresh_token_expires_in ?? 2592000) * 1000;
   }
 
   return entry;
@@ -108,14 +100,13 @@ export async function runAuth(): Promise<void> {
 
   const apiBase = resolveApiBase(domain);
 
-  // Step 1: Build auth URL
-  // Omit scope param — Feishu defaults to all app-configured user scopes.
-  // This avoids URL length issues and never needs updating when new scopes are added.
+  // Step 1: Build auth URL (v2 uses client_id + offline_access for refresh_token)
   const authUrl =
-    `${apiBase}/authen/v1/authorize?app_id=${appId}` +
+    `${apiBase}/authen/v1/authorize?client_id=${appId}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
     `&response_type=code` +
-    `&state=remi_auth`;
+    `&state=remi_auth` +
+    `&scope=offline_access`;
 
   console.log("\n📋 请在浏览器中打开以下链接完成授权：\n");
   console.log(`   ${authUrl}\n`);
@@ -140,14 +131,9 @@ export async function runAuth(): Promise<void> {
     // Not a URL, treat as raw code
   }
 
-  // Step 3: Get tenant token
-  console.log("\n⏳ 获取 tenant_access_token...");
-  const tenantToken = await getTenantToken(apiBase, appId, appSecret);
-  console.log("✅ tenant_access_token 获取成功");
-
-  // Step 4: Exchange code for user token
-  console.log("⏳ 换取 user_access_token...");
-  const userEntry = await exchangeCode(apiBase, tenantToken, code);
+  // Step 3: Exchange code for user token (v2 — no tenant_token needed)
+  console.log("\n⏳ 换取 user_access_token...");
+  const userEntry = await exchangeCode(apiBase, appId, appSecret, code);
   console.log("✅ user_access_token 获取成功");
 
   // Step 5: Persist to tokens.json

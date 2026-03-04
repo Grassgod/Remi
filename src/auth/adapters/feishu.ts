@@ -178,47 +178,49 @@ export class FeishuAuthAdapter implements AuthAdapter {
       throw new Error("refresh_token expired. Re-authorization required.");
     }
 
-    // Need tenant token to call the refresh endpoint
-    const appToken = await this.getToken("tenant");
-
+    // v2 OAuth refresh — uses client credentials directly (no tenant_token needed)
     const resp = await fetch(
-      `${this._apiBase}/authen/v1/refresh_access_token`,
+      `${this._apiBase}/authen/v2/oauth/token`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${appToken}`,
-        },
-        body: JSON.stringify({
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
           grant_type: "refresh_token",
           refresh_token: entry.refreshToken,
+          client_id: this._config.appId,
+          client_secret: this._config.appSecret,
         }),
       },
     );
 
     const result = (await resp.json()) as {
-      code: number;
-      msg?: string;
-      data?: {
-        access_token: string;
-        refresh_token: string;
-        expires_in: number;
-        refresh_expires_in: number;
-      };
+      code?: number;
+      error?: string;
+      error_description?: string;
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      refresh_token_expires_in?: number;
     };
 
-    if (result.code !== 0 || !result.data) {
+    if (result.error) {
       throw new Error(
-        `user token refresh failed: ${result.msg ?? `code ${result.code}`}`,
+        `user token refresh failed: ${result.error_description ?? result.error}`,
       );
+    }
+    if (result.code && result.code !== 0) {
+      throw new Error(`user token refresh failed: code ${result.code}`);
+    }
+    if (!result.access_token) {
+      throw new Error("user token refresh failed: no access_token returned");
     }
 
     const newEntry: TokenEntry = {
-      value: result.data.access_token,
-      expiresAt: Date.now() + result.data.expires_in * 1000 - 5 * 60 * 1000,
-      refreshToken: result.data.refresh_token,
+      value: result.access_token,
+      expiresAt: Date.now() + (result.expires_in ?? 7200) * 1000 - 5 * 60 * 1000,
+      refreshToken: result.refresh_token ?? entry.refreshToken,
       refreshExpiresAt:
-        Date.now() + result.data.refresh_expires_in * 1000,
+        Date.now() + (result.refresh_token_expires_in ?? 2592000) * 1000,
     };
 
     this._tokens.set("user", newEntry);
@@ -226,7 +228,7 @@ export class FeishuAuthAdapter implements AuthAdapter {
     this._onTokenChangeCb?.();
 
     log.info(
-      `user token refreshed, expires in ${Math.round((newEntry.expiresAt - Date.now()) / 1000)}s`,
+      `user token refreshed (v2), expires in ${Math.round((newEntry.expiresAt - Date.now()) / 1000)}s`,
     );
     return newEntry.value;
   }
