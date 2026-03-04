@@ -55,6 +55,7 @@ class AsyncLock {
 export class ClaudeProcessManager {
   model: string | null;
   allowedTools: string[];
+  addDirs: string[];
   systemPrompt: string | null;
   cwd: string | null;
   resumeSessionId: string | null;
@@ -69,12 +70,14 @@ export class ClaudeProcessManager {
   constructor(options: {
     model?: string | null;
     allowedTools?: string[];
+    addDirs?: string[];
     systemPrompt?: string | null;
     cwd?: string | null;
     resumeSessionId?: string | null;
   } = {}) {
     this.model = options.model ?? null;
     this.allowedTools = options.allowedTools ?? [];
+    this.addDirs = options.addDirs ?? [];
     this.systemPrompt = options.systemPrompt ?? null;
     this.cwd = options.cwd ?? null;
     this.resumeSessionId = options.resumeSessionId ?? null;
@@ -105,6 +108,9 @@ export class ClaudeProcessManager {
     }
     if (this.systemPrompt) {
       cmd.push("--append-system-prompt", this.systemPrompt);
+    }
+    for (const dir of this.addDirs) {
+      cmd.push("--add-dir", dir);
     }
     if (this.resumeSessionId) {
       cmd.push("--resume", this.resumeSessionId);

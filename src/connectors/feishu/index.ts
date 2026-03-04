@@ -6,7 +6,7 @@
  *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
  */
 
-import type { FeishuConfig } from "../../config.js";
+import type { BotProfile, FeishuConfig } from "../../config.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
@@ -114,6 +114,7 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
 export class FeishuConnector implements Connector {
   readonly name = "feishu";
   private _config: FeishuConfig & { domain?: string; connectionMode?: string };
+  private _bots: BotProfile[] = [];
   private _wsHandle: FeishuWSHandle | null = null;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
@@ -121,6 +122,16 @@ export class FeishuConnector implements Connector {
 
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
+  }
+
+  /** Set bot profiles for per-group reply mode configuration. */
+  setBotProfiles(bots: BotProfile[]): void {
+    this._bots = bots;
+  }
+
+  /** Find matching bot profile for a chat ID. */
+  private _findBotProfile(chatId: string): BotProfile | null {
+    return this._bots.find((b) => b.groups.includes(chatId)) ?? null;
   }
 
   /** Set the token provider (from 1Passport AuthStore). */
@@ -244,13 +255,18 @@ export class FeishuConnector implements Connector {
         // Non-critical: skip typing indicator if it fails
       }
 
+      // Determine reply mode from bot profile
+      const botProfile = this._findBotProfile(msg.chatId);
+      const replyInThread = botProfile ? botProfile.replyMode === "thread" : true;
+      const replyToId = replyInThread ? msg.messageId : undefined;
+
       // Use real streaming if streamHandler is available
       if (this._streamHandler) {
-        await this._handleStreaming(incoming, msg.chatId, msg.messageId);
+        await this._handleStreaming(incoming, msg.chatId, replyToId);
       } else {
         // Fallback: blocking handler → static card
         const response = await this._handler(incoming);
-        await this._sendStaticReply(msg.chatId, response, msg.messageId);
+        await this._sendStaticReply(msg.chatId, response, replyToId);
       }
 
       // Remove typing indicator
@@ -284,7 +300,7 @@ export class FeishuConnector implements Connector {
   private async _handleStreaming(
     incoming: IncomingMessage,
     chatId: string,
-    replyToMessageId: string,
+    replyToMessageId?: string,
   ): Promise<void> {
     const creds = {
       appId: this._config.appId,

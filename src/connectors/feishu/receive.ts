@@ -314,7 +314,7 @@ export async function processFeishuMessageEvent(
   client: Lark.Client,
   event: FeishuMessageEvent,
   botOpenId?: string,
-  opts?: { allowedGroups?: string[]; monitorGroups?: string[] },
+  opts?: { allowedGroups?: string[]; monitorGroups?: string[]; triggerUserIds?: string[] },
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
 
@@ -335,11 +335,14 @@ export async function processFeishuMessageEvent(
       return null;
     }
     const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) ?? false;
-    if (!ctx.mentionedBot && !isMonitor) {
+    const mentionedTriggerUser = opts?.triggerUserIds?.length
+      ? (event.message.mentions ?? []).some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
+      : false;
+    if (!ctx.mentionedBot && !isMonitor && !mentionedTriggerUser) {
       log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
       return null;
     }
-    monitored = isMonitor && !ctx.mentionedBot;
+    monitored = (isMonitor || mentionedTriggerUser) && !ctx.mentionedBot;
   }
 
   // Resolve sender name (best-effort)
@@ -421,6 +424,7 @@ export function startWebSocketListener(
 
   const allowedGroups = config.allowedGroups ?? [];
   const monitorGroups = config.monitorGroups ?? [];
+  const triggerUserIds = config.triggerUserIds ?? [];
 
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
@@ -443,7 +447,7 @@ export function startWebSocketListener(
       if (stopped) return;
       try {
         const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId, { allowedGroups, monitorGroups });
+        const msg = await processFeishuMessageEvent(client, event, botOpenId, { allowedGroups, monitorGroups, triggerUserIds });
         if (msg) {
           await onMessage(msg);
         }

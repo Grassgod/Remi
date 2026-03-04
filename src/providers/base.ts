@@ -48,6 +48,10 @@ export interface SendOptions {
   sessionId?: string | null;
   chatId?: string | null;
   media?: import("./claude-cli/protocol.js").MediaAttachment[];
+  /** Override allowed tools for this session (from bot profile). */
+  allowedTools?: string[];
+  /** Additional directories to add via --add-dir (from bot profile). */
+  addDirs?: string[];
 }
 
 /** Protocol that all provider backends must implement. */

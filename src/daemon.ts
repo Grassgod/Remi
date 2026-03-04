@@ -157,10 +157,22 @@ export class RemiDaemon {
 
     // 4. Register Feishu connector with token provider
     if (hasFeishuCreds) {
-      const feishu = new FeishuConnector(this.config.feishu);
+      // Merge bot profile groups into allowedGroups only (not monitorGroups —
+      // bot profile groups require @bot or @triggerUser to respond)
+      const feishuConfig = { ...this.config.feishu };
+      for (const bot of this.config.bots) {
+        for (const g of bot.groups) {
+          if (!feishuConfig.allowedGroups.includes(g)) {
+            feishuConfig.allowedGroups = [...feishuConfig.allowedGroups, g];
+          }
+        }
+      }
+
+      const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
+      feishu.setBotProfiles(this.config.bots);
       remi.addConnector(feishu);
-      log.info("Registered Feishu connector (with 1Passport)");
+      log.info(`Registered Feishu connector (with 1Passport, ${this.config.bots.length} bot profiles)`);
     }
 
     // Register restart handler (only triggered by /restart slash command)

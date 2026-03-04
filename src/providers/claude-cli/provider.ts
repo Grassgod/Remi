@@ -149,7 +149,10 @@ export class ClaudeCLIProvider implements Provider {
     const context = options?.context;
     const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
 
-    const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt, options?.sessionId, options?.cwd);
+    const mgr = await this._ensureProcess(
+      options?.chatId, options?.systemPrompt, options?.sessionId, options?.cwd,
+      { allowedTools: options?.allowedTools, addDirs: options?.addDirs },
+    );
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -284,6 +287,7 @@ export class ClaudeCLIProvider implements Provider {
     systemPrompt?: string | null,
     sessionId?: string | null,
     cwd?: string | null,
+    overrides?: { allowedTools?: string[]; addDirs?: string[] },
   ): Promise<ClaudeProcessManager> {
     const key = chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
@@ -295,7 +299,8 @@ export class ClaudeCLIProvider implements Provider {
 
     mgr = new ClaudeProcessManager({
       model: this.model,
-      allowedTools: this.allowedTools,
+      allowedTools: overrides?.allowedTools ?? this.allowedTools,
+      addDirs: overrides?.addDirs,
       systemPrompt: systemPrompt ?? this.systemPrompt,
       cwd: cwd ?? this.cwd,
       resumeSessionId: sessionId,

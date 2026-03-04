@@ -33,6 +33,8 @@ export interface FeishuConfig {
   allowedGroups: string[];
   /** Group chat IDs where Remi reads all messages without requiring @mention. */
   monitorGroups: string[];
+  /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
+  triggerUserIds: string[];
 }
 
 export interface ScheduledSkillConfig {
@@ -104,6 +106,30 @@ export interface ServiceConfig {
   enabled: boolean;
 }
 
+/**
+ * Bot profile — configurable bot persona for specific groups.
+ * Each profile overrides provider defaults (cwd, tools, system prompt)
+ * and can control reply behavior (thread vs direct).
+ */
+export interface BotProfile {
+  /** Unique identifier for this bot profile. */
+  id: string;
+  /** Display name. */
+  name: string;
+  /** Group chat IDs where this bot profile is active. */
+  groups: string[];
+  /** Working directory for Claude Code (loads CLAUDE.md from here). */
+  cwd: string;
+  /** Allowed tools whitelist. Empty = use global default. */
+  allowedTools: string[];
+  /** Additional directories to add (--add-dir). */
+  addDirs: string[];
+  /** Reply mode: "thread" = reply under user's message, "direct" = reply in chat. */
+  replyMode: "thread" | "direct";
+  /** Override system prompt. Empty = use default. */
+  systemPrompt: string;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -124,6 +150,8 @@ export interface RemiConfig {
   services: ServiceConfig[];
   /** Registered project aliases: alias → absolute path. */
   projects: Record<string, string>;
+  /** Configurable bot profiles for specific groups. */
+  bots: BotProfile[];
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -156,6 +184,7 @@ function defaultFeishuConfig(): FeishuConfig {
     autoReplyGroups: [],
     allowedGroups: [],
     monitorGroups: [],
+    triggerUserIds: [],
   };
 }
 
@@ -175,6 +204,7 @@ export function defaultRemiConfig(): RemiConfig {
     cronJobs: [],
     services: [],
     projects: {},
+    bots: [],
     tracing: {
       enabled: true,
       logsDir: join(homedir(), ".remi", "logs"),
@@ -219,6 +249,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const cronData = (fileData.cron ?? {}) as Record<string, unknown>;
   const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
+  const botsData = (fileData.bots ?? []) as Array<Record<string, unknown>>;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
@@ -244,6 +275,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       allowedGroups: (feishuData.allowed_groups as string[]) ?? [],
       monitorGroups: (feishuData.monitor_groups as string[]) ??
                      (feishuData.auto_reply_groups as string[]) ?? [],
+      triggerUserIds: (feishuData.trigger_user_ids as string[]) ?? [],
     },
     scheduler: {
       memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",
@@ -287,6 +319,16 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       enabled: (s.enabled as boolean) ?? true,
     })),
     projects: projectsData,
+    bots: botsData.map((b) => ({
+      id: (b.id as string) ?? "",
+      name: (b.name as string) ?? "",
+      groups: (b.groups as string[]) ?? [],
+      cwd: (b.cwd as string) ?? "",
+      allowedTools: (b.allowed_tools as string[]) ?? [],
+      addDirs: (b.add_dirs as string[]) ?? [],
+      replyMode: ((b.reply_mode as string) ?? "direct") as BotProfile["replyMode"],
+      systemPrompt: (b.system_prompt as string) ?? "",
+    })),
     tracing: (() => {
       const t = (fileData.tracing ?? {}) as Record<string, unknown>;
       return {

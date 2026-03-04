@@ -13,7 +13,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import type { RemiConfig } from "./config.js";
+import type { BotProfile, RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { MemoryStore } from "./memory/store.js";
@@ -143,6 +143,21 @@ export class Remi {
     return msg.chatId;
   }
 
+  // ── Bot profile resolution ──────────────────────────────
+
+  /**
+   * Find a bot profile that matches the message's chatId.
+   * Returns null if no profile matches (uses default Remi behavior).
+   */
+  _resolveBotProfile(msg: IncomingMessage): BotProfile | null {
+    for (const bot of this.config.bots) {
+      if (bot.groups.includes(msg.chatId)) {
+        return bot;
+      }
+    }
+    return null;
+  }
+
   // ── Message handling (the core loop) ─────────────────────
 
   async handleMessage(msg: IncomingMessage): Promise<AgentResponse> {
@@ -199,22 +214,25 @@ export class Remi {
     }
 
     const sessionKey = this._resolveSessionKey(msg);
-    const cwd = this._sessionCwd.get(sessionKey) ?? (msg.metadata?.cwd as string) ?? undefined;
+    const botProfile = this._resolveBotProfile(msg);
+    const cwd = botProfile?.cwd || this._sessionCwd.get(sessionKey) || (msg.metadata?.cwd as string) || undefined;
 
     // Span: memory context assembly
-    const memSpan = traceCtx?.startSpan("memory.assemble", { "session.key": sessionKey });
-    const context = this.memory.gatherContext(cwd);
+    const memSpan = traceCtx?.startSpan("memory.assemble", { "session.key": sessionKey, "bot.id": botProfile?.id ?? "" });
+    const context = botProfile ? undefined : (this.memory.gatherContext(cwd) || undefined);
     memSpan?.end();
 
     const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
-    log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}`);
+    log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
     const streamOptions = {
-      systemPrompt: SYSTEM_PROMPT,
-      context: context || undefined,
+      systemPrompt: botProfile?.systemPrompt || SYSTEM_PROMPT,
+      context: context,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,
       media: msg.media,
+      allowedTools: botProfile?.allowedTools?.length ? botProfile.allowedTools : undefined,
+      addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
     };
 
     const provider = this._getProvider();
