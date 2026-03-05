@@ -255,9 +255,9 @@ export class FeishuConnector implements Connector {
         // Non-critical: skip typing indicator if it fails
       }
 
-      // Determine reply mode from bot profile
+      // Determine reply mode: p2p chats never use thread; groups check bot profile
       const botProfile = this._findBotProfile(msg.chatId);
-      const replyInThread = botProfile ? botProfile.replyMode === "thread" : true;
+      const replyInThread = msg.chatType === "p2p" ? false : (botProfile ? botProfile.replyMode === "thread" : true);
       const replyToId = replyInThread ? msg.messageId : undefined;
 
       // Use real streaming if streamHandler is available
