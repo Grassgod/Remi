@@ -63,7 +63,6 @@ export const SYSTEM_PROMPT = `\
 - **lark_fetch** — 获取飞书/Lark文档内容并转为Markdown。当用户发送飞书链接时，优先使用此工具读取文档内容。
 - **lark_search** — 搜索飞书文档，支持按关键词、文档类型、所有者过滤。
 - **lark_render** — 将Markdown内容写入飞书文档，可创建新文档或更新已有文档。
-- **lark_auth** — 飞书OAuth授权管理，用于发起个人授权或查看token状态。
 
 <context> 末尾的"可用记忆"表格是摘要目录，使用 recall 可查看完整详情。
 `;
