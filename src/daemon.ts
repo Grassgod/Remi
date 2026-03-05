@@ -20,7 +20,6 @@ import { loadConfig, migrateConfigFile } from "./config.js";
 import { Remi } from "./core.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { CronTimer } from "./scheduler/cron-timer.js";
-import { getFeishuTools } from "./tools/feishu-tools.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
@@ -141,9 +140,9 @@ export class RemiDaemon {
     const provider = this._buildProvider();
     remi.addProvider(provider);
 
-    // 3. Register tools with token provider from AuthStore
-    // Note: memory tools (recall/remember) are now provided via MCP server (src/mcp/memory-server.ts)
-    this._registerFeishuTools(provider, hasFeishuCreds ? authStore : undefined);
+    // 3. Feishu document tools (lark_fetch/lark_render/lark_search/lark_auth) are now
+    // provided via MCP server (bytedance.lark_parser built-in lark-mcp-server).
+    // Memory tools (recall/remember) via MCP server (src/mcp/memory-server.ts).
 
     // Register fallback if configured
     if (this.config.provider.fallback) {
@@ -179,34 +178,6 @@ export class RemiDaemon {
     remi.onRestart((info) => this._restart(info));
 
     return remi;
-  }
-
-  private _registerFeishuTools(provider: unknown, authStore?: AuthStore): void {
-    if (!this.config.feishu.appId || !this.config.feishu.appSecret) return;
-
-    const registerable = provider as { registerToolsFromDict?: (tools: Record<string, unknown>) => void };
-    if (typeof registerable.registerToolsFromDict !== "function") return;
-
-    // Token provider for document tools: prefer user token, fall back to tenant
-    const tokenProvider = authStore
-      ? async () => {
-          try {
-            return await authStore.getToken("feishu", "user");
-          } catch {
-            return authStore.getToken("feishu", "tenant");
-          }
-        }
-      : undefined;
-
-    try {
-      const tools = getFeishuTools(this.config.feishu, tokenProvider);
-      registerable.registerToolsFromDict(tools);
-      log.info(
-        `Registered ${Object.keys(tools).length} feishu tools on ${(provider as { name: string }).name}`,
-      );
-    } catch (e) {
-      log.warn("Failed to register feishu tools:", e);
-    }
   }
 
   private _buildProvider(name?: string | null) {

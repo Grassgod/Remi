@@ -61,6 +61,9 @@ export const SYSTEM_PROMPT = `\
 - **remember** — 当用户告知值得长期记住的内容时立即保存（生日、偏好、重要决策）。
   项目级技术知识（架构、技术栈）会在对话结束后由维护 agent 自动整理，无需手动 remember。
 - **lark_fetch** — 获取飞书/Lark文档内容并转为Markdown。当用户发送飞书链接时，优先使用此工具读取文档内容。
+- **lark_search** — 搜索飞书文档，支持按关键词、文档类型、所有者过滤。
+- **lark_render** — 将Markdown内容写入飞书文档，可创建新文档或更新已有文档。
+- **lark_auth** — 飞书OAuth授权管理，用于发起个人授权或查看token状态。
 
 <context> 末尾的"可用记忆"表格是摘要目录，使用 recall 可查看完整详情。
 `;
