@@ -477,9 +477,7 @@ export class FeishuConnector implements Connector {
         // Close streaming card with final content + stats + tool entries
         // @mention is embedded in the final card for group chats (single message)
         const stats = finalResponse ? this._formatStats(finalResponse) : null;
-        const mentionOpenId = incoming.metadata?.chatType === "group"
-          ? (incoming.metadata?.senderOpenId as string | undefined)
-          : undefined;
+        const mentionOpenId: string | undefined = undefined;
         await session.close({
           finalText: finalResponse?.text ?? contentText,
           thinking: thinkingText || finalResponse?.thinking || null,
@@ -490,19 +488,6 @@ export class FeishuConnector implements Connector {
           mentionOpenId,
         });
 
-        // Send in-app urgent notification so the user gets a push notification
-        // (card @mentions don't trigger Feishu notifications)
-        if (mentionOpenId && session.getMessageId()) {
-          try {
-            await client.im.message.urgentApp({
-              path: { message_id: session.getMessageId()! },
-              params: { user_id_type: "open_id" },
-              data: { user_id_list: [mentionOpenId] },
-            });
-          } catch (err) {
-            log.warn(`urgent_app notification failed: ${String(err)}`);
-          }
-        }
       } catch (err) {
         log.error(`streaming error: ${String(err)}`);
         // Always close the streaming card to prevent it from being stuck
