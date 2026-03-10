@@ -158,7 +158,8 @@ export class ClaudeCLIProvider implements Provider {
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
     let sessionModel: string | null = null;
-    const deadline = Date.now() + ClaudeCLIProvider.STREAM_DEADLINE_MS;
+    const deadlineMs = options?.deadlineMs ?? ClaudeCLIProvider.STREAM_DEADLINE_MS;
+    const deadline = Date.now() + deadlineMs;
     let gotResult = false;
 
     for await (const msg of mgr.sendAndStream(
@@ -168,8 +169,8 @@ export class ClaudeCLIProvider implements Provider {
     )) {
       // Check wall-clock deadline
       if (Date.now() > deadline) {
-        log.error(`Stream exceeded ${ClaudeCLIProvider.STREAM_DEADLINE_MS / 1000}s deadline, aborting`);
-        yield { kind: "error", error: "Task timed out (exceeded 15 minute limit)." } as StreamEvent;
+        log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
+        yield { kind: "error", error: `Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).` } as StreamEvent;
         break;
       }
 

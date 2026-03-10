@@ -68,6 +68,11 @@ export class ClaudeProcessManager {
   private _started = false;
   private _reader: ReadableStreamDefaultReader<string> | null = null;
   private _lineBuffer = "";
+  /** Dynamic timeout for _readline(), adjusted based on rate limits and tool execution. */
+  private _dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
+  /** Count of reader rebuilds in the current sendAndStream() call. */
+  private _readerRebuildCount = 0;
+  private static MAX_READER_REBUILDS = 3;
 
   constructor(options: {
     model?: string | null;
@@ -172,9 +177,12 @@ export class ClaudeProcessManager {
       let inputChunks: string[] = [];
       // Track built-in tool timing (tools not handled by Remi)
       let builtInToolPending: { toolUseId: string; name: string; t0: number } | null = null;
+      // Reset dynamic state for this interaction
+      this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
+      this._readerRebuildCount = 0;
 
       while (true) {
-        const line = await this._readline();
+        const line = await this._readline(this._dynamicTimeoutMs);
         if (line === null) {
           // Distinguish timeout/hang from graceful EOF
           if (this._process && !this._process.killed) {
@@ -230,7 +238,21 @@ export class ClaudeProcessManager {
               durationMs: elapsed,
             } as ToolResultMessage;
             builtInToolPending = null;
+            // Built-in tool done — reset timeout to default
+            this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
           }
+        }
+
+        // Extend timeout when entering built-in tool execution (Bash, etc. can run long)
+        if (msg.kind === "tool_use" && !builtInToolPending) {
+          // Will be set to builtInToolPending after toolHandler returns null below;
+          // preemptively extend timeout for the upcoming tool execution
+          this._dynamicTimeoutMs = 15 * 60 * 1000; // 15 min for built-in tools
+        }
+
+        // Reset timeout on normal content (model is actively producing output)
+        if (msg.kind === "content_delta" || msg.kind === "thinking_delta") {
+          this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
         }
 
         // Tool use start (streaming — input comes via deltas)
@@ -383,9 +405,13 @@ export class ClaudeProcessManager {
           continue;
         }
 
-        // Rate limit — yield so downstream can show warning
+        // Rate limit — yield so downstream can show warning + extend timeout
         if (msg.kind === "rate_limit") {
-          log.warn(`Rate limited: retry after ${msg.retryAfterMs}ms`);
+          const retryMs = (msg as import("./protocol.js").RateLimitEvent).retryAfterMs ?? 0;
+          log.warn(`Rate limited: retry after ${retryMs}ms`);
+          // Extend readline timeout to accommodate CLI's internal retry wait
+          this._dynamicTimeoutMs = Math.max(retryMs + 120_000, this._dynamicTimeoutMs);
+          log.info(`Dynamic timeout extended to ${Math.round(this._dynamicTimeoutMs / 1000)}s (rate limit)`);
           yield msg;
           continue;
         }
@@ -479,11 +505,40 @@ export class ClaudeProcessManager {
         }
 
         const { value, done } = readResult;
-        if (done) return null;
+        if (done) {
+          // Stream ended — check if process is actually dead or just a transient pipe issue
+          if (!this._process || this._process.killed || this._process.exitCode !== null) {
+            // Process truly exited — genuine EOF
+            return null;
+          }
+          // Process still alive but stdout stream ended — try rebuilding reader
+          if (this._readerRebuildCount < ClaudeProcessManager.MAX_READER_REBUILDS) {
+            this._readerRebuildCount++;
+            log.warn(`stdout stream ended but process alive — rebuilding reader (attempt ${this._readerRebuildCount}/${ClaudeProcessManager.MAX_READER_REBUILDS})`);
+            this._rebuildReader();
+            await Bun.sleep(1000); // Give CLI time to resume output
+            continue; // Retry reading with new reader
+          }
+          log.error(`stdout stream ended ${ClaudeProcessManager.MAX_READER_REBUILDS} times — giving up`);
+          return null;
+        }
         this._lineBuffer += value;
       }
     } catch {
       return null;
+    }
+  }
+
+  /** Rebuild the stdout reader after a transient stream break. */
+  private _rebuildReader(): void {
+    if (!this._process) return;
+    try {
+      const decoder = new TextDecoderStream();
+      this._process.stdout.pipeTo(decoder.writable).catch(() => {});
+      this._reader = decoder.readable.getReader();
+      this._lineBuffer = "";
+    } catch (e) {
+      log.error("Failed to rebuild reader:", e);
     }
   }
 

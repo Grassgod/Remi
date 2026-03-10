@@ -52,6 +52,8 @@ export interface SendOptions {
   allowedTools?: string[];
   /** Additional directories to add via --add-dir (from bot profile). */
   addDirs?: string[];
+  /** Override stream deadline in ms (default: 15 minutes). Useful for long-running skills/jobs. */
+  deadlineMs?: number;
 }
 
 /** Protocol that all provider backends must implement. */
