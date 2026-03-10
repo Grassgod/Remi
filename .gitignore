@@ -30,3 +30,6 @@ coverage/
 # Dashboard screenshots (dev artifacts)
 remi-dashboard-*.png
 remi-jarvis-*.png
+
+# MCP config (contains credentials)
+.mcp.json
