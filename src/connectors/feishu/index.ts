@@ -21,8 +21,6 @@ import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js
 import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
 import {
   type ToolEntry,
-  formatToolEntryMarkdown,
-  replaceLastPending,
 } from "./tool-formatters.js";
 import {
   startWebSocketListener,
@@ -332,6 +330,8 @@ export class FeishuConnector implements Connector {
     // Collect tool entries for final card nested collapsible panels
     const toolEntries: ToolEntry[] = [];
     let currentThinkingSegment = "";
+    // Track whether we've added an initial thinking step
+    let hasThinkingStep = false;
 
     // Plan task tracking for status bar
     const planTasks: PlanTask[] = [];
@@ -356,7 +356,11 @@ export class FeishuConnector implements Connector {
               if (planTasks.length === 0 && activeAgents.length === 0) {
                 await session.updateStatus("🤔 Thinking...");
               }
-              await session.updateThinking(thinkingText);
+              // Add a single thinking step (first time only)
+              if (!hasThinkingStep) {
+                hasThinkingStep = true;
+                session.addStep("_thinking", "Thinking...");
+              }
               break;
             case "content_delta":
               contentText += event.text;
@@ -421,11 +425,9 @@ export class FeishuConnector implements Connector {
                 thinkingBefore: currentThinkingSegment,
               });
               currentThinkingSegment = "";
-              // Streaming: append rich tool entry to thinking
-              thinkingText += formatToolEntryMarkdown(
-                event.name, event.input, undefined, undefined, "pending",
-              );
-              await session.updateThinking(thinkingText);
+              // Add icon step to process panel
+              const stepDesc = formatToolStatus(event.name, event.input).replace(/\.\.\.$/, "");
+              session.addStep(event.name, stepDesc);
               break;
             }
             case "tool_result": {
@@ -452,17 +454,12 @@ export class FeishuConnector implements Connector {
                 entry.durationMs = event.durationMs;
                 entry.resultPreview = event.resultPreview;
               }
-              // Replace ⏳ with ✅ + result preview in thinking text
-              thinkingText = replaceLastPending(
-                thinkingText, event.name, event.resultPreview, event.durationMs,
-              );
-              await session.updateThinking(thinkingText);
+              // Steps panel is already updated by addStep() — no need to update process_content here
               break;
             }
             case "rate_limit":
               await session.updateStatus(`⚠️ Rate limited, retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...`);
-              thinkingText += `\n⚠️ **Rate limited** — retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...\n`;
-              await session.updateThinking(thinkingText);
+              session.addStep("_default", `⚠️ Rate limited, retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s`);
               break;
             case "error":
               contentText += `\n\n**Error:** ${event.error}\n`;

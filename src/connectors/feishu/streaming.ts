@@ -14,7 +14,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
-import { type ToolEntry, buildToolCollapsible } from "./tool-formatters.js";
+import { type ToolEntry, buildToolCollapsible, buildStepDiv, TOOL_EMOJI } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -38,6 +38,12 @@ export interface StreamingCloseOptions {
   stats?: string | null;
   /** Sender open ID — if provided, an @mention is embedded in the final card. */
   mentionOpenId?: string;
+}
+
+/** Step data for process panel rendering. */
+export interface StepInfo {
+  tool: string;
+  desc: string;
 }
 
 // ── Token cache (shared across sessions) ────────────────────
@@ -82,16 +88,18 @@ function truncateSummary(text: string, max = 50): string {
 }
 
 /**
- * Build the final static card JSON (thinking panel collapsed).
+ * Build the final static card JSON.
  *
- * When toolEntries are provided, the thinking panel contains interleaved:
- *   markdown (thinking text) → nested collapsible_panel (tool) → markdown → ...
- * Each tool becomes a nested collapsible_panel with full input/output details.
+ * Process panel uses two layers:
+ * 1. Outer: icon step divs (grey, notation size) — quick overview
+ * 2. Inner: each step is a collapsible_panel with input/output details on click
  */
 function buildFinalCard(opts: {
   text: string;
   thinking?: string | null;
   toolEntries?: ToolEntry[];
+  /** Step descriptions collected during streaming (tool + desc pairs). */
+  steps?: Array<{ tool: string; desc: string }>;
   trailingThinking?: string | null;
   toolCount?: number;
   stats?: string | null;
@@ -100,54 +108,47 @@ function buildFinalCard(opts: {
   const elements: Record<string, unknown>[] = [];
 
   const hasTools = opts.toolEntries && opts.toolEntries.length > 0;
-  const hasThinking = opts.thinking || hasTools;
+  const hasSteps = opts.steps && opts.steps.length > 0;
+  const hasThinking = opts.thinking || hasTools || hasSteps;
 
   if (hasThinking) {
+    // Build step elements for the collapsed panel
+    const panelElements: Record<string, unknown>[] = [];
+
     if (hasTools) {
-      // Build structured thinking panel with nested tool collapsible blocks
-      const thinkingElements: Record<string, unknown>[] = [];
-
+      // Rich mode: each tool entry becomes an icon div, clickable for details via nested collapsible
       for (const entry of opts.toolEntries!) {
-        // Thinking text before this tool
-        if (entry.thinkingBefore?.trim()) {
-          thinkingElements.push({
-            tag: "markdown",
-            content: entry.thinkingBefore,
-          });
-        }
-        // Nested collapsible panel for the tool
-        thinkingElements.push(buildToolCollapsible(entry));
+        panelElements.push(buildToolCollapsible(entry));
       }
-
-      // Trailing thinking text after the last tool
-      if (opts.trailingThinking?.trim()) {
-        thinkingElements.push({
-          tag: "markdown",
-          content: opts.trailingThinking,
-        });
+    } else if (hasSteps) {
+      // Lightweight mode: icon divs from step descriptions
+      for (const step of opts.steps!) {
+        panelElements.push(buildStepDiv(step.tool, step.desc));
       }
+    } else if (opts.thinking) {
+      // No tools/steps — fallback to raw thinking markdown
+      panelElements.push({ tag: "markdown", content: opts.thinking });
+    }
 
-      // Fallback: if no elements were created, use raw thinking text
-      if (thinkingElements.length === 0 && opts.thinking) {
-        thinkingElements.push({ tag: "markdown", content: opts.thinking });
-      }
-
-      const toolLabel = opts.toolCount ? ` (${opts.toolCount} tools)` : "";
+    if (panelElements.length > 0) {
+      const stepCount = opts.toolCount ?? opts.steps?.length ?? panelElements.length;
       elements.push({
         tag: "collapsible_panel",
         expanded: false,
-        header: { title: { tag: "plain_text", content: `⚙️ Process${toolLabel}` } },
+        border: { color: "grey-300", corner_radius: "6px" },
+        header: {
+          title: {
+            tag: "plain_text",
+            content: `${stepCount} steps`,
+            text_color: "grey",
+            text_size: "notation",
+          },
+          icon: { tag: "standard_icon", token: "right_outlined", color: "grey" },
+          icon_position: "right",
+          icon_expanded_angle: 90,
+        },
         vertical_spacing: "2px",
-        elements: thinkingElements,
-      });
-    } else {
-      // No tools — simple thinking panel with plain markdown
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: false,
-        header: { title: { tag: "plain_text", content: "⚙️ Process" } },
-        vertical_spacing: "2px",
-        elements: [{ tag: "markdown", content: opts.thinking! }],
+        elements: panelElements,
       });
     }
   }
@@ -166,7 +167,7 @@ function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    config: { summary: { content: truncateSummary(opts.text) } },
+    config: { width_mode: "fill", summary: { content: truncateSummary(opts.text) } },
     body: { elements },
   };
 }
@@ -204,6 +205,9 @@ export class FeishuStreamingSession {
   // AbortController for signalling upstream when safety timeout fires
   private _abortController: AbortController | null = null;
 
+  // Step tracking for icon-based process panel
+  private _steps: StepInfo[] = [];
+
   constructor(
     client: Client,
     creds: Credentials,
@@ -235,6 +239,7 @@ export class FeishuStreamingSession {
     const cardJson = {
       schema: "2.0",
       config: {
+        width_mode: "fill",
         streaming_mode: true,
         summary: { content: "[Generating...]" },
         streaming_config: {
@@ -247,10 +252,18 @@ export class FeishuStreamingSession {
           { tag: "markdown", content: "", element_id: "status_bar" },
           {
             tag: "collapsible_panel",
-            expanded: false,
-            background_style: "default",
+            expanded: true,
+            border: { color: "grey-300", corner_radius: "6px" },
             header: {
-              title: { tag: "plain_text", content: "⚙️ Process" },
+              title: {
+                tag: "plain_text",
+                content: "0 steps",
+                text_color: "grey",
+                text_size: "notation",
+              },
+              icon: { tag: "standard_icon", token: "right_outlined", color: "grey" },
+              icon_position: "right",
+              icon_expanded_angle: 90,
             },
             vertical_spacing: "2px",
             element_id: "process_panel",
@@ -447,6 +460,38 @@ export class FeishuStreamingSession {
     this._throttledUpdate("status_bar", text, "currentStatus");
   }
 
+  /**
+   * Add a step to the process panel (icon + one-liner).
+   * Uses emoji in streaming markdown; final card uses standard_icon divs.
+   */
+  addStep(toolName: string, desc: string): void {
+    this._steps.push({ tool: toolName, desc });
+    const stepsMarkdown = this._steps
+      .map((s) => {
+        const e = TOOL_EMOJI[s.tool] ?? TOOL_EMOJI._default ?? "⚙️";
+        return `${e}  ${s.desc}`;
+      })
+      .join("\n");
+    this._throttledUpdate("process_content", this._truncateIfNeeded(stepsMarkdown), "currentThinking");
+    // Update summary during streaming
+    this._updateSummaryThrottled();
+  }
+
+  /** Get collected steps for final card rendering. */
+  getSteps(): StepInfo[] {
+    return this._steps;
+  }
+
+  /** Update card summary (notification preview) during streaming. */
+  private _updateSummaryThrottled(): void {
+    if (!this.state || this.closed) return;
+    const count = this._steps.length;
+    const summaryText = count > 0 ? `Working on it (${count} steps)` : "[Generating...]";
+    // Summary is updated via settings PATCH — do it infrequently
+    // Just update local state; actual summary is set on close
+    // (Feishu CardKit doesn't support streaming summary updates via element API)
+  }
+
   // ── Flush all pending throttled updates ────────────────────
 
   private async _flushAll(): Promise<void> {
@@ -617,9 +662,18 @@ export class FeishuStreamingSession {
       this.log(`Close failed: ${String(e)}`);
     }
 
-    // Replace with static card — thinking panel collapsed
+    // Replace with static card — process panel collapsed with icon divs
     try {
-      const finalCard = buildFinalCard({ text, thinking: thinkingText, toolEntries, trailingThinking, toolCount, stats, mentionOpenId });
+      const finalCard = buildFinalCard({
+        text,
+        thinking: thinkingText,
+        toolEntries,
+        steps: this._steps.length > 0 ? this._steps : undefined,
+        trailingThinking,
+        toolCount,
+        stats,
+        mentionOpenId,
+      });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: JSON.stringify(finalCard) },

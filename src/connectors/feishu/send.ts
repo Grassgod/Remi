@@ -73,7 +73,7 @@ export async function sendMessageFeishu(
 export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
-    config: { wide_screen_mode: true },
+    config: { width_mode: "fill" },
     body: {
       elements: [{ tag: "markdown", content: text }],
     },
@@ -113,7 +113,7 @@ export function buildRichCard(options: {
 
   return {
     schema: "2.0",
-    config: { wide_screen_mode: true },
+    config: { width_mode: "fill" },
     body: { elements },
   };
 }

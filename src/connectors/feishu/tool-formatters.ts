@@ -1,9 +1,10 @@
 /**
  * Tool-specific formatters for Feishu card display.
  *
- * Provides two display modes:
- * 1. Streaming: rich markdown text appended to thinking content
- * 2. Final card: nested collapsible_panel JSON for each tool call
+ * Provides three display modes:
+ * 1. Streaming steps: emoji + one-liner per tool (for process_content markdown)
+ * 2. Final card steps: div + standard_icon per tool (for process_panel elements)
+ * 3. Final card detail: nested collapsible_panel with input/output per tool
  */
 
 // ── Constants ────────────────────────────────────────────
@@ -12,6 +13,67 @@
 const MAX_RESULT_PREVIEW = 800;
 /** Maximum length for a tool input display line. */
 const MAX_INPUT_LINE = 200;
+
+// ── Tool icon mappings ──────────────────────────────────
+
+/** Feishu standard_icon tokens for final card div elements. */
+export const TOOL_ICONS: Record<string, string> = {
+  Bash:      "computer_outlined",
+  Read:      "file-link-bitable_outlined",
+  Write:     "edit_outlined",
+  Edit:      "edit_outlined",
+  Glob:      "card-search_outlined",
+  Grep:      "doc-search_outlined",
+  WebFetch:  "language_outlined",
+  WebSearch: "search_outlined",
+  Agent:     "robot_outlined",
+  Skill:     "file-link-mindnote_outlined",
+  TodoWrite: "task_outlined",
+  NotebookEdit: "edit_outlined",
+  EnterPlanMode: "task_outlined",
+  _thinking: "emoji_outlined",
+  _default:  "setting-inter_outlined",
+};
+
+/** Emoji fallback for streaming markdown (element_id updates only support text). */
+export const TOOL_EMOJI: Record<string, string> = {
+  Bash:      "🖥",
+  Read:      "📄",
+  Write:     "✏️",
+  Edit:      "✏️",
+  Glob:      "🔍",
+  Grep:      "🔍",
+  WebFetch:  "🌐",
+  WebSearch: "🔎",
+  Agent:     "🤖",
+  Skill:     "📋",
+  TodoWrite: "📋",
+  NotebookEdit: "✏️",
+  EnterPlanMode: "📋",
+  _thinking: "🧠",
+  _default:  "⚙️",
+};
+
+/** Build a Feishu Card 2.0 div element with standard_icon for final card. */
+export function buildStepDiv(toolName: string, desc: string): Record<string, unknown> {
+  const iconToken = TOOL_ICONS[toolName] ?? TOOL_ICONS._default;
+  return {
+    tag: "div",
+    icon: { tag: "standard_icon", token: iconToken, color: "grey" },
+    text: {
+      tag: "plain_text",
+      text_color: "grey",
+      text_size: "notation",
+      content: desc,
+    },
+  };
+}
+
+/** Format a step as emoji + text for streaming markdown updates. */
+export function formatStepLine(toolName: string, desc: string): string {
+  const emoji = TOOL_EMOJI[toolName] ?? TOOL_EMOJI._default;
+  return `${emoji}  ${desc}`;
+}
 
 // ── Tool entry data structure ────────────────────────────
 
