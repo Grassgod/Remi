@@ -425,8 +425,10 @@ export class FeishuConnector implements Connector {
                 thinkingBefore: currentThinkingSegment,
               });
               currentThinkingSegment = "";
-              // Add icon step to process panel
-              const stepDesc = formatToolStatus(event.name, event.input).replace(/\.\.\.$/, "");
+              // Add icon step to process panel (strip emoji prefix from formatToolStatus to avoid double emoji in addStep)
+              const stepDesc = formatToolStatus(event.name, event.input)
+                .replace(/\.\.\.$/, "")
+                .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F]+\s*/u, "");
               session.addStep(event.name, stepDesc);
               break;
             }

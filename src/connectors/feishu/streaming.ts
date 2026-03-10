@@ -466,15 +466,15 @@ export class FeishuStreamingSession {
    */
   addStep(toolName: string, desc: string): void {
     this._steps.push({ tool: toolName, desc });
-    const stepsMarkdown = this._steps
+    const stepLines = this._steps
       .map((s) => {
         const e = TOOL_EMOJI[s.tool] ?? TOOL_EMOJI._default ?? "⚙️";
         return `${e}  ${s.desc}`;
       })
       .join("\n");
+    // Prepend step count since collapsible_panel header can't be updated via element API
+    const stepsMarkdown = `**${this._steps.length} steps**\n${stepLines}`;
     this._throttledUpdate("process_content", this._truncateIfNeeded(stepsMarkdown), "currentThinking");
-    // Update summary during streaming
-    this._updateSummaryThrottled();
   }
 
   /** Get collected steps for final card rendering. */
@@ -482,15 +482,6 @@ export class FeishuStreamingSession {
     return this._steps;
   }
 
-  /** Update card summary (notification preview) during streaming. */
-  private _updateSummaryThrottled(): void {
-    if (!this.state || this.closed) return;
-    const count = this._steps.length;
-    const summaryText = count > 0 ? `Working on it (${count} steps)` : "[Generating...]";
-    // Summary is updated via settings PATCH — do it infrequently
-    // Just update local state; actual summary is set on close
-    // (Feishu CardKit doesn't support streaming summary updates via element API)
-  }
 
   // ── Flush all pending throttled updates ────────────────────
 
