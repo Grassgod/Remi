@@ -257,7 +257,7 @@ export class FeishuStreamingSession {
             header: {
               title: {
                 tag: "plain_text",
-                content: "0 steps",
+                content: "steps",
                 text_color: "grey",
                 text_size: "notation",
               },
@@ -469,7 +469,7 @@ export class FeishuStreamingSession {
     const stepLines = this._steps
       .map((s) => {
         const e = TOOL_EMOJI[s.tool] ?? TOOL_EMOJI._default ?? "⚙️";
-        return `${e}  ${s.desc}`;
+        return `${e}  <font color='grey'>${s.desc}</font>`;
       })
       .join("\n");
     // Prepend step count since collapsible_panel header can't be updated via element API
