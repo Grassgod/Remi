@@ -1,10 +1,11 @@
 /**
- * CLI command: `bun run src/main.ts auth`
+ * CLI command: `bun run src/main.ts auth [provider]`
  *
- * Performs Feishu OAuth (v2) to obtain a user_access_token + refresh_token,
- * then persists it to ~/.remi/auth/tokens.json.
- * Uses offline_access scope to get refresh_token via v2 API,
- * independent of the platform "允许刷新 user_access_token" toggle.
+ * Supported providers:
+ *   - feishu (default): Feishu OAuth v2
+ *   - bytedance-sso: ByteDance SSO Device Code flow
+ *
+ * Tokens are persisted to ~/.remi/auth/tokens.json.
  */
 
 import { createInterface } from "node:readline";
@@ -13,6 +14,7 @@ import { homedir } from "node:os";
 import { loadConfig } from "../config.js";
 import { TokenPersistence, type PersistedTokens } from "./persistence.js";
 import type { TokenEntry } from "./types.js";
+import { ByteDanceSSOAdapter } from "./adapters/bytedance-sso.js";
 
 const REDIRECT_URI = "http://localhost:9000/auth/callback";
 const AUTH_DIR = join(homedir(), ".remi", "auth");
@@ -89,7 +91,12 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-export async function runAuth(): Promise<void> {
+export async function runAuth(provider?: string): Promise<void> {
+  if (provider === "bytedance-sso") {
+    return runByteDanceSSOAuth();
+  }
+
+  // Default: Feishu OAuth
   const config = loadConfig();
   const { appId, appSecret, domain } = config.feishu;
 
@@ -157,5 +164,47 @@ export async function runAuth(): Promise<void> {
   } else {
     console.log("   refresh_token: 未返回（内部飞书可能不支持）");
     console.log("\n   Token 过期后需重新运行: bun run src/main.ts auth\n");
+  }
+}
+
+// ── ByteDance SSO Device Code Flow ─────────────────────────
+
+async function runByteDanceSSOAuth(): Promise<void> {
+  const config = loadConfig();
+  const ssoConfig = config.bytedanceSso ?? {};
+
+  const adapter = new ByteDanceSSOAdapter(ssoConfig);
+
+  // Step 1: Request device code
+  console.log("\n⏳ 请求 ByteDance SSO Device Code...");
+  const deviceCode = await adapter.requestDeviceCode();
+
+  console.log("\n📋 请在浏览器中打开以下链接完成授权：\n");
+  console.log(`   ${deviceCode.verification_uri}\n`);
+  console.log(`   输入代码: ${deviceCode.user_code}\n`);
+  if (deviceCode.verification_uri_complete) {
+    console.log(`   或直接打开: ${deviceCode.verification_uri_complete}\n`);
+  }
+
+  // Step 2: Poll for authorization
+  console.log("⏳ 等待浏览器授权...");
+  await adapter.pollForToken(deviceCode.device_code, deviceCode.interval);
+
+  // Step 3: Export and persist
+  const tokens = adapter.exportTokens?.() ?? {};
+  const persistence = new TokenPersistence(join(AUTH_DIR, "tokens.json"));
+  const existing: PersistedTokens = persistence.load();
+  existing["bytedance-sso"] = { ...existing["bytedance-sso"], ...tokens };
+  persistence.save(existing);
+
+  const accessEntry = tokens.access;
+  if (accessEntry) {
+    const expiresIn = Math.round((accessEntry.expiresAt - Date.now()) / 1000);
+    console.log("\n🎉 ByteDance SSO 授权完成！Token 已保存到 ~/.remi/auth/tokens.json\n");
+    console.log(`   access_token  有效期: ${expiresIn}s (~${(expiresIn / 3600).toFixed(1)}h)`);
+    if (accessEntry.refreshToken) {
+      console.log("   refresh_token: 已获取，后续自动续期");
+    }
+    console.log("\n   重启 Remi daemon 后自动生效。\n");
   }
 }

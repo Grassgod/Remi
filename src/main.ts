@@ -78,7 +78,7 @@ function main(): void {
       runServe();
       break;
     case "auth":
-      runAuth().catch((e: Error) => {
+      runAuth(process.argv[3]).catch((e: Error) => {
         log.error("Auth error:", e);
         process.exit(1);
       });

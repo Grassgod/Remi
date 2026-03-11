@@ -130,6 +130,22 @@ export interface BotProfile {
   systemPrompt: string;
 }
 
+export interface ByteDanceSSOConfig {
+  clientId: string;
+  ssoHost: string;
+  bytecloudHost: string;
+  scopes: string[];
+}
+
+export interface TokenSyncRuleConfig {
+  name: string;
+  source: string;
+  target: string;
+  format: string;
+  key?: string;
+  extraKeys?: Record<string, string>;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -140,6 +156,10 @@ export interface TracingConfig {
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
+  /** ByteDance SSO config (optional). */
+  bytedanceSso?: ByteDanceSSOConfig;
+  /** Token sync rules for distributing tokens to external tools. */
+  tokenSync: TokenSyncRuleConfig[];
   /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
   scheduler: SchedulerConfig;
   /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
@@ -199,6 +219,7 @@ export function defaultRemiConfig(): RemiConfig {
   return {
     provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
+    tokenSync: [],
     scheduler: defaultSchedulerConfig(),
     scheduledSkills: [],
     cronJobs: [],
@@ -244,6 +265,8 @@ export function loadConfig(configPath?: string | null): RemiConfig {
 
   const providerData = (fileData.provider ?? {}) as Record<string, unknown>;
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
+  const bytedanceSsoData = fileData.bytedance_sso as Record<string, unknown> | undefined;
+  const tokenSyncData = (fileData.token_sync ?? []) as Array<Record<string, unknown>>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
   const cronData = (fileData.cron ?? {}) as Record<string, unknown>;
@@ -277,6 +300,22 @@ export function loadConfig(configPath?: string | null): RemiConfig {
                      (feishuData.auto_reply_groups as string[]) ?? [],
       triggerUserIds: (feishuData.trigger_user_ids as string[]) ?? [],
     },
+    bytedanceSso: bytedanceSsoData
+      ? {
+          clientId: env.BYTEDANCE_SSO_CLIENT_ID ?? (bytedanceSsoData.client_id as string) ?? "",
+          ssoHost: env.BYTEDANCE_SSO_HOST ?? (bytedanceSsoData.sso_host as string) ?? "https://sso.bytedance.com",
+          bytecloudHost: env.BYTEDANCE_BYTECLOUD_HOST ?? (bytedanceSsoData.bytecloud_host as string) ?? "https://cloud.bytedance.net",
+          scopes: (bytedanceSsoData.scopes as string[]) ?? ["read", "ciam.device.read"],
+        }
+      : undefined,
+    tokenSync: tokenSyncData.map((r) => ({
+      name: (r.name as string) ?? "",
+      source: (r.source as string) ?? "",
+      target: (r.target as string) ?? "",
+      format: (r.format as string) ?? "raw",
+      key: (r.key as string) ?? undefined,
+      extraKeys: (r.extra_keys as Record<string, string>) ?? undefined,
+    })),
     scheduler: {
       memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",
       heartbeatInterval: parseInt(

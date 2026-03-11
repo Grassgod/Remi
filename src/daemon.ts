@@ -22,7 +22,8 @@ import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { CronTimer } from "./scheduler/cron-timer.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
-import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
+import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
+import type { TokenSyncRule } from "./auth/token-sync.js";
 import { createLogger } from "./logger.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
 
@@ -121,8 +122,12 @@ export class RemiDaemon {
   _buildRemi(): Remi {
     const remi = new Remi(this.config);
 
-    // 1. Initialize AuthStore (1Passport)
-    const authStore = new AuthStore(join(homedir(), ".remi", "auth"));
+    // 1. Initialize AuthStore (1Passport) with token sync rules
+    const syncRules: TokenSyncRule[] | undefined =
+      this.config.tokenSync.length > 0
+        ? (this.config.tokenSync as TokenSyncRule[])
+        : undefined; // undefined → use defaults
+    const authStore = new AuthStore(join(homedir(), ".remi", "auth"), syncRules);
     const hasFeishuCreds = !!(this.config.feishu.appId && this.config.feishu.appSecret);
     if (hasFeishuCreds) {
       authStore.registerAdapter(
@@ -133,6 +138,12 @@ export class RemiDaemon {
           userAccessToken: this.config.feishu.userAccessToken || undefined,
         }),
       );
+    }
+    if (this.config.bytedanceSso?.clientId) {
+      authStore.registerAdapter(
+        new ByteDanceSSOAdapter(this.config.bytedanceSso),
+      );
+      log.info("Registered ByteDance SSO adapter (1Passport)");
     }
     remi.authStore = authStore;
 

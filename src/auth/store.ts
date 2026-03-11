@@ -9,10 +9,18 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AuthAdapter, TokenEntry, TokenStatus } from "./types.js";
 import { TokenPersistence } from "./persistence.js";
+import { TokenSyncEngine, type TokenSyncRule } from "./token-sync.js";
 import { createLogger } from "../logger.js";
 
-/** Secondary persistence for lark-mcp-server (~/.lark_auth/tokens.json). */
-const LARK_MCP_TOKEN_FILE = join(homedir(), ".lark_auth", "tokens.json");
+/** Default sync rules when none are configured (backward-compatible). */
+const DEFAULT_SYNC_RULES: TokenSyncRule[] = [
+  {
+    name: "lark-mcp-server",
+    source: "feishu/*",
+    target: "~/.lark_auth/tokens.json",
+    format: "mirror",
+  },
+];
 
 const log = createLogger("1passport");
 
@@ -20,9 +28,11 @@ export class AuthStore {
   private _adapters = new Map<string, AuthAdapter>();
   private _persistence: TokenPersistence;
   private _persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private _syncEngine: TokenSyncEngine;
 
-  constructor(authDir: string) {
+  constructor(authDir: string, syncRules?: TokenSyncRule[]) {
     this._persistence = new TokenPersistence(join(authDir, "tokens.json"));
+    this._syncEngine = new TokenSyncEngine(syncRules ?? DEFAULT_SYNC_RULES);
   }
 
   /** Register an adapter and restore its persisted tokens. */
@@ -113,8 +123,8 @@ export class AuthStore {
     }
     try {
       this._persistence.save(existing);
-      // Sync to lark-mcp-server token file (same format)
-      new TokenPersistence(LARK_MCP_TOKEN_FILE).save(existing);
+      // Sync tokens to external tools via configured rules
+      this._syncEngine.syncAll(this._adapters, existing);
       log.debug("Tokens persisted to disk");
     } catch (e) {
       log.warn("Failed to persist tokens:", e);
