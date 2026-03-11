@@ -252,7 +252,7 @@ export class FeishuStreamingSession {
           { tag: "markdown", content: "", element_id: "status_bar" },
           {
             tag: "collapsible_panel",
-            expanded: true,
+            expanded: false,
             border: { color: "grey-300", corner_radius: "6px" },
             header: {
               title: {

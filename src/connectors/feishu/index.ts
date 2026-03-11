@@ -81,29 +81,37 @@ function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]
   return parts.join("\n\n");
 }
 
+/** Shorten home directory prefixes to ~/ for display. */
+function shortenPath(s: string): string {
+  return s
+    .replace(/^\/data00\/home\/hehuajie\//, "~/")
+    .replace(/^\/home\/hehuajie\//, "~/");
+}
+
 /** Generate a human-readable status line from a tool call for the status bar. */
 function formatToolStatus(name: string, input?: Record<string, unknown>): string {
   const str = (v: unknown) => (v == null ? "" : String(v));
   const trunc = (s: string, max: number) => s.length <= max ? s : s.slice(0, max - 3) + "...";
+  const MAX = 200;
 
   switch (name) {
     case "Read":
-      return `📖 Reading ${trunc(str(input?.file_path), 60)}...`;
+      return `📖 Reading ${trunc(shortenPath(str(input?.file_path)), MAX)}...`;
     case "Bash":
-      return `⚙️ Running: ${trunc(str(input?.command), 60)}...`;
+      return `⚙️ Running: ${trunc(shortenPath(str(input?.command)), MAX)}...`;
     case "Grep":
-      return `🔍 Searching: ${trunc(str(input?.pattern), 60)}...`;
+      return `🔍 Searching: ${trunc(str(input?.pattern), MAX)}...`;
     case "Edit":
     case "Write":
-      return `✏️ Editing ${trunc(str(input?.file_path), 60)}...`;
+      return `✏️ Editing ${trunc(shortenPath(str(input?.file_path)), MAX)}...`;
     case "Glob":
-      return `📂 Finding: ${trunc(str(input?.pattern), 60)}...`;
+      return `📂 Finding: ${trunc(str(input?.pattern), MAX)}...`;
     case "WebFetch":
-      return `🌐 Fetching: ${trunc(str(input?.url), 60)}...`;
+      return `🌐 Fetching: ${trunc(str(input?.url), MAX)}...`;
     case "WebSearch":
-      return `🌐 Searching: ${trunc(str(input?.query), 60)}...`;
+      return `🌐 Searching: ${trunc(str(input?.query), MAX)}...`;
     case "Agent":
-      return `🤖 Agent: ${trunc(str(input?.description ?? input?.prompt), 60)}...`;
+      return `🤖 Agent: ${trunc(str(input?.description ?? input?.prompt), MAX)}...`;
     default:
       return `🔧 Tool: ${name}...`;
   }
@@ -330,8 +338,6 @@ export class FeishuConnector implements Connector {
     // Collect tool entries for final card nested collapsible panels
     const toolEntries: ToolEntry[] = [];
     let currentThinkingSegment = "";
-    // Track whether we've added an initial thinking step
-    let hasThinkingStep = false;
 
     // Plan task tracking for status bar
     const planTasks: PlanTask[] = [];
@@ -356,11 +362,7 @@ export class FeishuConnector implements Connector {
               if (planTasks.length === 0 && activeAgents.length === 0) {
                 await session.updateStatus("🤔 Thinking...");
               }
-              // Add a single thinking step (first time only)
-              if (!hasThinkingStep) {
-                hasThinkingStep = true;
-                session.addStep("_thinking", "Thinking...");
-              }
+              // Show thinking status (no step added — thinking is not a tool step)
               break;
             case "content_delta":
               contentText += event.text;
