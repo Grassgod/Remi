@@ -140,12 +140,21 @@ export class Remi {
   /**
    * Resolve session key for a message.
    * Thread messages (with rootId) get isolated sessions: `${chatId}:thread:${rootId}`.
-   * Main chat messages use plain `chatId`.
+   * Group messages without rootId use messageId as thread key (they will become thread roots).
+   * P2P messages use plain `chatId` for continuous conversation.
    */
   _resolveSessionKey(msg: IncomingMessage): string {
     const rootId = msg.metadata?.rootId as string | undefined;
     if (rootId) {
       return `${msg.chatId}:thread:${rootId}`;
+    }
+    // Group messages without rootId: each @mention starts a new session
+    // using messageId as thread key (Remi replies in thread, so subsequent
+    // messages will have rootId = this messageId, matching this key)
+    const chatType = msg.metadata?.chatType as string | undefined;
+    const messageId = msg.metadata?.messageId as string | undefined;
+    if (chatType === "group" && messageId) {
+      return `${msg.chatId}:thread:${messageId}`;
     }
     return msg.chatId;
   }
