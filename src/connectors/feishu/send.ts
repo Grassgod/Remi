@@ -9,6 +9,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { resolveReceiveIdType } from "./client.js";
 import { parsePostContent } from "./receive.js";
+import { getSessionName } from "./session-name.js";
 
 /** Build Feishu post message payload (rich text with markdown support). */
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
@@ -69,18 +70,20 @@ export async function sendMessageFeishu(
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
 }
 
-/** Shared card header for Remi branding. */
-export const CARD_HEADER = {
-  title: { tag: "plain_text" as const, content: "Remi" },
-  template: "indigo" as const,
-  ud_icon: { tag: "standard_icon" as const, token: "chat-ai_outlined" },
-};
+/** Build a Remi branded card header. With sessionId, shows "X的 Remi". */
+export function buildCardHeader(sessionId?: string | null) {
+  const title = sessionId ? getSessionName(sessionId) : "Remi";
+  return {
+    title: { tag: "plain_text" as const, content: title },
+    template: "indigo" as const,
+  };
+}
 
 /** Build a Feishu interactive card with markdown content (schema 2.0). */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
-    header: CARD_HEADER,
+    header: buildCardHeader(),
     config: { width_mode: "fill" },
     body: {
       elements: [{ tag: "markdown", content: text }],
@@ -121,7 +124,7 @@ export function buildRichCard(options: {
 
   return {
     schema: "2.0",
-    header: CARD_HEADER,
+    header: buildCardHeader(),
     config: { width_mode: "fill" },
     body: { elements },
   };

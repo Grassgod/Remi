@@ -483,6 +483,7 @@ export class FeishuConnector implements Connector {
           toolCount: toolCount > 0 ? toolCount : undefined,
           stats,
           mentionOpenId,
+          sessionId: finalResponse?.sessionId,
         });
 
       } catch (err) {

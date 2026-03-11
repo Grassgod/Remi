@@ -38,6 +38,8 @@ export interface StreamingCloseOptions {
   stats?: string | null;
   /** Sender open ID — if provided, an @mention is embedded in the final card. */
   mentionOpenId?: string;
+  /** Session ID for dynamic card header name (e.g. "好奇的 Remi"). */
+  sessionId?: string | null;
 }
 
 /** Step data for process panel rendering. */
@@ -87,7 +89,7 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-import { CARD_HEADER } from "./send.js";
+import { buildCardHeader } from "./send.js";
 
 /**
  * Build the final static card JSON.
@@ -106,6 +108,7 @@ function buildFinalCard(opts: {
   toolCount?: number;
   stats?: string | null;
   mentionOpenId?: string;
+  sessionId?: string | null;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -169,7 +172,7 @@ function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    header: CARD_HEADER,
+    header: buildCardHeader(opts.sessionId),
     config: { width_mode: "fill", summary: { content: truncateSummary(opts.text) } },
     body: { elements },
   };
@@ -241,7 +244,7 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
-      header: CARD_HEADER,
+      header: buildCardHeader(),
       config: {
         width_mode: "fill",
         streaming_mode: true,
@@ -594,6 +597,7 @@ export class FeishuStreamingSession {
     let toolCount: number | undefined;
     let stats: string | null | undefined;
     let mentionOpenId: string | undefined;
+    let sessionId: string | null | undefined;
 
     if (typeof finalTextOrOptions === "string") {
       finalText = finalTextOrOptions;
@@ -605,6 +609,7 @@ export class FeishuStreamingSession {
       toolCount = finalTextOrOptions.toolCount;
       stats = finalTextOrOptions.stats;
       mentionOpenId = finalTextOrOptions.mentionOpenId;
+      sessionId = finalTextOrOptions.sessionId;
     }
 
     const text = finalText ?? this.state.currentText;
@@ -668,6 +673,7 @@ export class FeishuStreamingSession {
         toolCount,
         stats,
         mentionOpenId,
+        sessionId,
       });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
