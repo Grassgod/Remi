@@ -87,6 +87,8 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+import { CARD_HEADER } from "./send.js";
+
 /**
  * Build the final static card JSON.
  *
@@ -167,6 +169,7 @@ function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
+    header: CARD_HEADER,
     config: { width_mode: "fill", summary: { content: truncateSummary(opts.text) } },
     body: { elements },
   };
@@ -238,6 +241,7 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
+      header: CARD_HEADER,
       config: {
         width_mode: "fill",
         streaming_mode: true,

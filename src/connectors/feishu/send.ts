@@ -69,10 +69,18 @@ export async function sendMessageFeishu(
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
 }
 
+/** Shared card header for Remi branding. */
+export const CARD_HEADER = {
+  title: { tag: "plain_text" as const, content: "Remi" },
+  template: "indigo" as const,
+  ud_icon: { tag: "standard_icon" as const, token: "chat-ai_outlined" },
+};
+
 /** Build a Feishu interactive card with markdown content (schema 2.0). */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
+    header: CARD_HEADER,
     config: { width_mode: "fill" },
     body: {
       elements: [{ tag: "markdown", content: text }],
@@ -113,6 +121,7 @@ export function buildRichCard(options: {
 
   return {
     schema: "2.0",
+    header: CARD_HEADER,
     config: { width_mode: "fill" },
     body: { elements },
   };
