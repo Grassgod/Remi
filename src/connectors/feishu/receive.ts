@@ -232,6 +232,8 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
         text = "[图片]";
       } else if (item.msg_type === "file") {
         text = "[文件]";
+      } else if (item.msg_type === "sticker") {
+        text = "[表情包]";
       } else if (item.msg_type === "merge_forward") {
         text = "[嵌套合并转发]";
       } else {
@@ -240,6 +242,14 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
     } catch {
       text = content || `[${item.msg_type}]`;
     }
+
+    // Resolve sender name for each sub-message
+    const senderOpenId = item.sender?.id;
+    if (senderOpenId && text) {
+      const name = await resolveSenderName(client, senderOpenId);
+      if (name) text = `${name}: ${text}`;
+    }
+
     if (text) parts.push(text);
   }
 
