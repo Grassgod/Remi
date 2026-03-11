@@ -195,6 +195,58 @@ function parseMediaKeys(
   }
 }
 
+/** Resolve merge_forward message: fetch sub-messages and concatenate their text. */
+async function resolveMergeForward(client: Lark.Client, messageId: string): Promise<string | null> {
+  const response = (await client.im.message.get({
+    path: { message_id: messageId },
+  })) as {
+    code?: number;
+    data?: {
+      items?: Array<{
+        message_id?: string;
+        msg_type?: string;
+        body?: { content?: string };
+        upper_message_id?: string;
+        sender?: { id?: string; sender_type?: string };
+      }>;
+    };
+  };
+
+  if (response.code !== 0) return null;
+  const items = response.data?.items;
+  if (!items || items.length <= 1) return null;
+
+  // Skip the first item (the merge_forward wrapper itself), process sub-messages
+  const parts: string[] = [];
+  for (const item of items) {
+    if (item.message_id === messageId) continue; // skip parent
+    const content = item.body?.content ?? "";
+    let text = "";
+    try {
+      if (item.msg_type === "text") {
+        const parsed = JSON.parse(content);
+        text = parsed.text || content;
+      } else if (item.msg_type === "post") {
+        text = parsePostContent(content).textContent;
+      } else if (item.msg_type === "image") {
+        text = "[图片]";
+      } else if (item.msg_type === "file") {
+        text = "[文件]";
+      } else if (item.msg_type === "merge_forward") {
+        text = "[嵌套合并转发]";
+      } else {
+        text = content || `[${item.msg_type}]`;
+      }
+    } catch {
+      text = content || `[${item.msg_type}]`;
+    }
+    if (text) parts.push(text);
+  }
+
+  if (parts.length === 0) return null;
+  return `[合并转发消息，共${parts.length}条]\n\n${parts.join("\n\n---\n\n")}`;
+}
+
 function inferPlaceholder(messageType: string): string {
   switch (messageType) {
     case "image": return "<media:image>";
@@ -370,6 +422,16 @@ export async function processFeishuMessageEvent(
       if (quoted) quotedContent = quoted.content;
     } catch {
       // Skip
+    }
+  }
+
+  // Resolve merge_forward sub-messages
+  if (event.message.message_type === "merge_forward") {
+    try {
+      const mergedText = await resolveMergeForward(client, ctx.messageId);
+      if (mergedText) ctx.content = mergedText;
+    } catch {
+      // Keep original content on failure
     }
   }
 
