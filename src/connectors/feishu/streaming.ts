@@ -90,7 +90,7 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-import { buildCardHeader } from "./send.js";
+import { buildCardHeader, sanitizeHeadings } from "./send.js";
 
 /**
  * Build the final static card JSON.
@@ -159,7 +159,7 @@ function buildFinalCard(opts: {
     }
   }
 
-  elements.push({ tag: "markdown", content: opts.text || "" });
+  elements.push({ tag: "markdown", content: sanitizeHeadings(opts.text || "") });
 
   // Stats bar with optional @mention
   const statsContent = opts.mentionOpenId
@@ -469,7 +469,7 @@ export class FeishuStreamingSession {
   // ── Public update methods (fire-and-forget, don't block caller) ──
 
   async update(text: string): Promise<void> {
-    this._throttledUpdate("content", text, "currentText");
+    this._throttledUpdate("content", sanitizeHeadings(text), "currentText");
   }
 
   async updateThinking(text: string): Promise<void> {

@@ -87,6 +87,13 @@ export function buildCardHeader(sessionId?: string | null) {
   };
 }
 
+/** Sanitize markdown for Feishu card rendering: headings → bold, remove horizontal rules. */
+export function sanitizeHeadings(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+(.+)$/gm, "**$1**")
+    .replace(/^[-_]{3,}$/gm, "***");
+}
+
 /** Build a Feishu interactive card with markdown content (schema 2.0). */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
@@ -94,7 +101,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
     header: buildCardHeader(),
     config: { width_mode: "fill" },
     body: {
-      elements: [{ tag: "markdown", content: text }],
+      elements: [{ tag: "markdown", content: sanitizeHeadings(text) }],
     },
   };
 }
@@ -122,7 +129,7 @@ export function buildRichCard(options: {
   }
 
   // Main content
-  elements.push({ tag: "markdown", content: options.text });
+  elements.push({ tag: "markdown", content: sanitizeHeadings(options.text) });
 
   // Stats footer
   if (options.stats) {
