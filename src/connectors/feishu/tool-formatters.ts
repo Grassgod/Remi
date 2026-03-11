@@ -31,17 +31,16 @@ export const TOOL_ICONS: Record<string, string> = {
   TodoWrite: "task_outlined",
   NotebookEdit: "edit_outlined",
   EnterPlanMode: "task_outlined",
-  _thinking: "emoji_outlined",
   _default:  "setting-inter_outlined",
 };
 
 /** Emoji fallback for streaming markdown (element_id updates only support text). */
 export const TOOL_EMOJI: Record<string, string> = {
-  Bash:      "🖥",
-  Read:      "📄",
+  Bash:      "⚙️",
+  Read:      "📖",
   Write:     "✏️",
   Edit:      "✏️",
-  Glob:      "🔍",
+  Glob:      "📂",
   Grep:      "🔍",
   WebFetch:  "🌐",
   WebSearch: "🔎",
@@ -50,8 +49,7 @@ export const TOOL_EMOJI: Record<string, string> = {
   TodoWrite: "📋",
   NotebookEdit: "✏️",
   EnterPlanMode: "📋",
-  _thinking: "🧠",
-  _default:  "⚙️",
+  _default:  "🔧",
 };
 
 /** Build a Feishu Card 2.0 div element with standard_icon for final card. */
@@ -69,11 +67,6 @@ export function buildStepDiv(toolName: string, desc: string): Record<string, unk
   };
 }
 
-/** Format a step as emoji + text for streaming markdown updates. */
-export function formatStepLine(toolName: string, desc: string): string {
-  const emoji = TOOL_EMOJI[toolName] ?? TOOL_EMOJI._default;
-  return `${emoji}  ${desc}`;
-}
 
 // ── Tool entry data structure ────────────────────────────
 
@@ -152,7 +145,7 @@ export function replaceLastPending(
 /** Build a nested collapsible_panel element for one tool call. */
 export function buildToolCollapsible(entry: ToolEntry): Record<string, unknown> {
   const dur = entry.durationMs != null ? ` (${(entry.durationMs / 1000).toFixed(1)}s)` : "";
-  const icon = entry.status === "done" ? "✅" : "⏳";
+  const emoji = TOOL_EMOJI[entry.name] ?? TOOL_EMOJI._default ?? "⚙️";
   const summary = formatToolInputSummary(entry.name, entry.input);
 
   // Build detailed markdown content for inside the collapsible
@@ -181,7 +174,9 @@ export function buildToolCollapsible(entry: ToolEntry): Record<string, unknown> 
     header: {
       title: {
         tag: "plain_text",
-        content: `${icon} ${entry.name} ${summary}${dur}`,
+        content: `${emoji} ${entry.name} ${summary}${dur}`,
+        text_color: "grey",
+        text_size: "notation",
       },
     },
     vertical_spacing: "2px",
@@ -326,12 +321,12 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 3) + "...";
 }
 
-/** Shorten a file path for display — show last 3 segments. */
-function shortPath(path: string): string {
+/** Shorten a file path for display — replace home dir with ~/, keep relative. */
+export function shortPath(path: string): string {
   if (!path) return "";
-  const parts = path.split("/");
-  if (parts.length <= 3) return path;
-  return ".../" + parts.slice(-3).join("/");
+  return path
+    .replace(/^\/data00\/home\/hehuajie\//, "~/")
+    .replace(/^\/home\/hehuajie\//, "~/");
 }
 
 function formatResultPreview(resultPreview: string): string {

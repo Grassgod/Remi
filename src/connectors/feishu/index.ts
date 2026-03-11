@@ -21,6 +21,8 @@ import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js
 import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
 import {
   type ToolEntry,
+  TOOL_EMOJI,
+  shortPath,
 } from "./tool-formatters.js";
 import {
   startWebSocketListener,
@@ -81,39 +83,33 @@ function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]
   return parts.join("\n\n");
 }
 
-/** Shorten home directory prefixes to ~/ for display. */
-function shortenPath(s: string): string {
-  return s
-    .replace(/^\/data00\/home\/hehuajie\//, "~/")
-    .replace(/^\/home\/hehuajie\//, "~/");
-}
-
 /** Generate a human-readable status line from a tool call for the status bar. */
 function formatToolStatus(name: string, input?: Record<string, unknown>): string {
-  const str = (v: unknown) => (v == null ? "" : String(v));
-  const trunc = (s: string, max: number) => s.length <= max ? s : s.slice(0, max - 3) + "...";
+  const s = (v: unknown) => (v == null ? "" : String(v));
+  const trunc = (t: string, max: number) => t.length <= max ? t : t.slice(0, max - 3) + "...";
+  const emoji = TOOL_EMOJI[name] ?? TOOL_EMOJI._default ?? "⚙️";
   const MAX = 200;
 
   switch (name) {
     case "Read":
-      return `📖 Reading ${trunc(shortenPath(str(input?.file_path)), MAX)}...`;
+      return `${emoji} Reading ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
     case "Bash":
-      return `⚙️ Running: ${trunc(shortenPath(str(input?.command)), MAX)}...`;
+      return `${emoji} Running: ${trunc(shortPath(s(input?.command)), MAX)}...`;
     case "Grep":
-      return `🔍 Searching: ${trunc(str(input?.pattern), MAX)}...`;
+      return `${emoji} Searching: ${trunc(s(input?.pattern), MAX)}...`;
     case "Edit":
     case "Write":
-      return `✏️ Editing ${trunc(shortenPath(str(input?.file_path)), MAX)}...`;
+      return `${emoji} Editing ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
     case "Glob":
-      return `📂 Finding: ${trunc(str(input?.pattern), MAX)}...`;
+      return `${emoji} Finding: ${trunc(s(input?.pattern), MAX)}...`;
     case "WebFetch":
-      return `🌐 Fetching: ${trunc(str(input?.url), MAX)}...`;
+      return `${emoji} Fetching: ${trunc(s(input?.url), MAX)}...`;
     case "WebSearch":
-      return `🌐 Searching: ${trunc(str(input?.query), MAX)}...`;
+      return `${emoji} Searching: ${trunc(s(input?.query), MAX)}...`;
     case "Agent":
-      return `🤖 Agent: ${trunc(str(input?.description ?? input?.prompt), MAX)}...`;
+      return `${emoji} Agent: ${trunc(s(input?.description ?? input?.prompt), MAX)}...`;
     default:
-      return `🔧 Tool: ${name}...`;
+      return `${emoji} Tool: ${name}...`;
   }
 }
 
