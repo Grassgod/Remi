@@ -141,8 +141,11 @@ function parseTextContent(content: string, messageType: string): string {
 export function parsePostContent(content: string): { textContent: string; imageKeys: string[] } {
   try {
     const parsed = JSON.parse(content);
-    const title = parsed.title || "";
-    const contentBlocks = parsed.content || [];
+    // Post messages are wrapped in a locale key (zh_cn, en_us, ja_jp, etc.)
+    const localeKey = Object.keys(parsed).find((k) => typeof parsed[k] === "object" && parsed[k]?.content);
+    const body = localeKey ? parsed[localeKey] : parsed;
+    const title = body.title || "";
+    const contentBlocks = body.content || [];
     let textContent = title ? `${title}\n\n` : "";
     const imageKeys: string[] = [];
 
