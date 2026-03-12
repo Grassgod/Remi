@@ -103,7 +103,7 @@ async function resolveSenderName(
 
   const cached = senderNameCache.get(senderOpenId);
   const now = Date.now();
-  if (cached && cached.expireAt > now) return cached.name;
+  if (cached && cached.expireAt > now) return cached.name || undefined;
 
   try {
     const res: any = await client.contact.user.get({
@@ -119,8 +119,10 @@ async function resolveSenderName(
       senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return name;
     }
-  } catch {
-    // Best-effort: don't fail message handling if name lookup fails
+  } catch (err) {
+    log.info(`resolveSenderName failed for ${senderOpenId}: ${String(err)}`);
+    // Negative cache: avoid repeated failed API calls for the same open_id
+    senderNameCache.set(senderOpenId, { name: "", expireAt: now + SENDER_NAME_TTL_MS });
   }
   return undefined;
 }
@@ -243,11 +245,12 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
       text = content || `[${item.msg_type}]`;
     }
 
-    // Resolve sender name for each sub-message
+    // Prefix sender identity (name or truncated open_id as fallback)
     const senderOpenId = item.sender?.id;
     if (senderOpenId && text) {
       const name = await resolveSenderName(client, senderOpenId);
-      if (name) text = `${name}: ${text}`;
+      const label = name || senderOpenId.slice(-8);
+      text = `${label}: ${text}`;
     }
 
     if (text) parts.push(text);
