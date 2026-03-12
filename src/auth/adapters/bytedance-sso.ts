@@ -152,8 +152,8 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
     const url = `${this._config.ssoHost}${DEVICE_CODE_ENDPOINT}`;
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
         client_id: this._config.clientId,
         scope: this._config.scopes.join(" "),
       }),
@@ -173,8 +173,8 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
 
       const resp = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
           client_id: this._config.clientId,
           device_code: deviceCode,
           grant_type: "urn:ietf:params:oauth:grant-type:device_code",
@@ -247,8 +247,8 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
     const url = `${this._config.ssoHost}${TOKEN_ENDPOINT}`;
     const resp = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
         client_id: this._config.clientId,
         grant_type: "refresh_token",
         refresh_token: entry.refreshToken,
