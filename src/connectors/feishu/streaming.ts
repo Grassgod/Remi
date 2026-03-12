@@ -7,7 +7,8 @@
  * - Independent throttle per element (thinking vs content don't block each other)
  * - Fire-and-forget updates (don't block the event consumption loop)
  * - Guaranteed flush before close (no lost pending updates)
- * - Safety timeout to auto-close abandoned cards (5 min)
+ * - Safety timeout to auto-close abandoned cards (2 hours)
+ * - Heartbeat: periodic status update every 10s when idle to show liveness
  * - Retry on transient 5xx API failures
  */
 
@@ -201,9 +202,15 @@ export class FeishuStreamingSession {
   private throttles = new Map<string, ElementThrottle>();
   private throttleMs = 300;
 
-  // Safety timeout: auto-close if no updates for 5 minutes
+  // Safety timeout: auto-close if no updates for 10 minutes
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
-  private static SAFETY_TIMEOUT_MS = 5 * 60 * 1000;
+  private static SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
+  // Heartbeat: periodic status update when no events arrive
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private static HEARTBEAT_INTERVAL_MS = 10_000;
+  private _startTime = 0;
+  private _lastStatusText = "";
 
   // Overflow protection: max bytes for process content (~10KB)
   private static PROCESS_BUDGET = 10000;
@@ -340,6 +347,7 @@ export class FeishuStreamingSession {
       currentStatus: "",
     };
     this._resetSafetyTimer();
+    this._startHeartbeat();
     this.log(
       `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}` +
       (options?.replyToMessageId ? ` (thread reply to ${options.replyToMessageId})` : ` (direct message)`),
@@ -419,6 +427,11 @@ export class FeishuStreamingSession {
   ): void {
     if (!this.state || this.closed) return;
     this._resetSafetyTimer();
+    this._resetHeartbeat();
+    // Track last status for heartbeat display context
+    if (stateField === "currentStatus") {
+      this._lastStatusText = content.replace(/[⏳✍️🤔⚙️📋🤖]/g, "").trim();
+    }
 
     const throttle = this._getThrottle(elementId);
     const now = Date.now();
@@ -553,6 +566,42 @@ export class FeishuStreamingSession {
     }
   }
 
+  // ── Heartbeat ───────────────────────────────────────────────
+
+  private _startHeartbeat(): void {
+    this._startTime = Date.now();
+    this._resetHeartbeat();
+  }
+
+  private _resetHeartbeat(): void {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = setTimeout(() => {
+      this._sendHeartbeat();
+    }, FeishuStreamingSession.HEARTBEAT_INTERVAL_MS);
+  }
+
+  private _sendHeartbeat(): void {
+    if (!this.state || this.closed) return;
+    const elapsed = Math.round((Date.now() - this._startTime) / 1000);
+    const label = this._lastStatusText || "Running";
+    const heartbeatText = `⏳ ${label} (${elapsed}s)`;
+    // Bypass throttle — heartbeat is already rate-limited by its own timer
+    this.queue = this.queue.then(() =>
+      this._updateElementRaw("status_bar", heartbeatText),
+    );
+    // Schedule next heartbeat
+    this.heartbeatTimer = setTimeout(() => {
+      this._sendHeartbeat();
+    }, FeishuStreamingSession.HEARTBEAT_INTERVAL_MS);
+  }
+
+  private _clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
   // ── Overflow protection ────────────────────────────────────
 
   /**
@@ -585,6 +634,7 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) return;
 
     this._clearSafetyTimer();
+    this._clearHeartbeat();
 
     // Flush all pending throttled updates first
     await this._flushAll();
