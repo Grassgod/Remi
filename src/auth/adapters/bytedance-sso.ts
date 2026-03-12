@@ -347,7 +347,9 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
     const entry = this._tokens.get(type);
     if (!entry || !entry.refreshToken) return;
 
-    const delay = Math.max(entry.expiresAt - Date.now() - 5 * 60 * 1000, 0);
+    // Cap at 24 days to avoid 32-bit signed int overflow in setTimeout
+    const MAX_TIMEOUT = 24 * 24 * 60 * 60 * 1000; // ~24 days
+    const delay = Math.min(Math.max(entry.expiresAt - Date.now() - 5 * 60 * 1000, 0), MAX_TIMEOUT);
 
     const timer = setTimeout(async () => {
       try {
