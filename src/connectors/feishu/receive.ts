@@ -140,6 +140,11 @@ function parseTextContent(content: string, messageType: string): string {
   }
 }
 
+/** Strip simple HTML tags (e.g. <p>, <br>, <b>) from text, preserving inner content. */
+function stripHtmlTags(text: string): string {
+  return text.replace(/<[^>]+>/g, "").trim();
+}
+
 export function parsePostContent(content: string): { textContent: string; imageKeys: string[] } {
   try {
     const parsed = JSON.parse(content);
@@ -166,7 +171,7 @@ export function parsePostContent(content: string): { textContent: string; imageK
       }
     }
 
-    return { textContent: textContent.trim() || "[富文本消息]", imageKeys };
+    return { textContent: stripHtmlTags(textContent.trim()) || "[富文本消息]", imageKeys };
   } catch {
     return { textContent: "[富文本消息]", imageKeys: [] };
   }
@@ -220,6 +225,7 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
 
   // Skip the first item (the merge_forward wrapper itself), process sub-messages
   const parts: string[] = [];
+  const anonymousMap = new Map<string, number>(); // open_id → user number
   for (const item of items) {
     if (item.message_id === messageId) continue; // skip parent
     const content = item.body?.content ?? "";
@@ -227,7 +233,7 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
     try {
       if (item.msg_type === "text") {
         const parsed = JSON.parse(content);
-        text = parsed.text || content;
+        text = stripHtmlTags(parsed.text || content);
       } else if (item.msg_type === "post") {
         text = parsePostContent(content).textContent;
       } else if (item.msg_type === "image") {
@@ -245,15 +251,27 @@ async function resolveMergeForward(client: Lark.Client, messageId: string): Prom
       text = content || `[${item.msg_type}]`;
     }
 
-    // Prefix sender identity (name or truncated open_id as fallback)
+    // Prefix sender identity (name or numbered fallback)
     const senderOpenId = item.sender?.id;
     if (senderOpenId && text) {
       const name = await resolveSenderName(client, senderOpenId);
-      const label = name || senderOpenId.slice(-8);
-      text = `${label}: ${text}`;
+      if (name) {
+        text = `${name}: ${text}`;
+      } else {
+        if (!anonymousMap.has(senderOpenId)) {
+          anonymousMap.set(senderOpenId, anonymousMap.size + 1);
+        }
+        text = `用户${anonymousMap.get(senderOpenId)}: ${text}`;
+      }
     }
 
     if (text) parts.push(text);
+  }
+
+  // Log anonymous open_id mapping for traceability
+  if (anonymousMap.size > 0) {
+    const mapping = [...anonymousMap.entries()].map(([id, n]) => `用户${n}=${id}`).join(", ");
+    log.info(`merge_forward sender mapping: ${mapping}`);
   }
 
   if (parts.length === 0) return null;
