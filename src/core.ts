@@ -29,6 +29,11 @@ class AsyncLock {
   private _queue: Array<() => void> = [];
   private _locked = false;
 
+  /** True when no one holds or waits for the lock. */
+  get isIdle(): boolean {
+    return !this._locked && this._queue.length === 0;
+  }
+
   async acquire(): Promise<void> {
     if (!this._locked) {
       this._locked = true;
@@ -170,6 +175,7 @@ export class Remi {
       return await this._process(msg);
     } finally {
       lock.release();
+      if (lock.isIdle) this._laneLocks.delete(sessionKey);
     }
   }
 
@@ -198,6 +204,7 @@ export class Remi {
       // Guarantee span is always recorded — SpanImpl._ended prevents double-write
       rootSpan.end();
       lock.release();
+      if (lock.isIdle) this._laneLocks.delete(sessionKey);
     }
   }
 
@@ -360,47 +367,47 @@ export class Remi {
     }
 
     if (!promptTooLong && !staleSession) {
-    // Attach result attributes to provider span
-    if (resultResponse && providerSpan) {
-      providerSpan.setAttributes({
-        "llm.model": resultResponse.model ?? "unknown",
-        "llm.input_tokens": resultResponse.inputTokens ?? 0,
-        "llm.output_tokens": resultResponse.outputTokens ?? 0,
-        "llm.cost_usd": resultResponse.costUsd ?? 0,
-        "llm.duration_ms": resultResponse.durationMs ?? 0,
-      });
-    }
-
-    // Fallback: if primary result was an error, try fallback provider
-    if (
-      resultResponse &&
-      (resultResponse.text.startsWith("[Provider error") ||
-        resultResponse.text.startsWith("[Provider timeout"))
-    ) {
-      providerSpan?.endWithError("primary provider failed");
-
-      const fallbackName = this.config.provider.fallback;
-      if (fallbackName && this._providers.has(fallbackName)) {
-        log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
-        const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
-          "provider.name": fallbackName,
+      // Attach result attributes to provider span
+      if (resultResponse && providerSpan) {
+        providerSpan.setAttributes({
+          "llm.model": resultResponse.model ?? "unknown",
+          "llm.input_tokens": resultResponse.inputTokens ?? 0,
+          "llm.output_tokens": resultResponse.outputTokens ?? 0,
+          "llm.cost_usd": resultResponse.costUsd ?? 0,
+          "llm.duration_ms": resultResponse.durationMs ?? 0,
         });
-        const fallback = this._providers.get(fallbackName)!;
-        if (typeof fallback.sendStream === "function") {
-          for await (const event of fallback.sendStream(msg.text, streamOptions)) {
-            yield event;
-            if (event.kind === "result") resultResponse = event.response;
-          }
-        } else {
-          resultResponse = await fallback.send(msg.text, streamOptions);
-          yield { kind: "result", response: resultResponse };
-        }
-        fallbackSpan?.end();
       }
-    } else {
-      providerSpan?.end();
+
+      // Fallback: if primary result was an error, try fallback provider
+      if (
+        resultResponse &&
+        (resultResponse.text.startsWith("[Provider error") ||
+          resultResponse.text.startsWith("[Provider timeout"))
+      ) {
+        providerSpan?.endWithError("primary provider failed");
+
+        const fallbackName = this.config.provider.fallback;
+        if (fallbackName && this._providers.has(fallbackName)) {
+          log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
+          const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
+            "provider.name": fallbackName,
+          });
+          const fallback = this._providers.get(fallbackName)!;
+          if (typeof fallback.sendStream === "function") {
+            for await (const event of fallback.sendStream(msg.text, streamOptions)) {
+              yield event;
+              if (event.kind === "result") resultResponse = event.response;
+            }
+          } else {
+            resultResponse = await fallback.send(msg.text, streamOptions);
+            yield { kind: "result", response: resultResponse };
+          }
+          fallbackSpan?.end();
+        }
+      } else {
+        providerSpan?.end();
+      }
     }
-    } // end if (!promptTooLong)
 
     // Update session + daily notes
     if (resultResponse) {

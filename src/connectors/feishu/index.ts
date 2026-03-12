@@ -241,14 +241,14 @@ export class FeishuConnector implements Connector {
 
     log.info(`received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${text.slice(0, 80)}${media.length > 0 ? ` [+${media.length} media]` : ""}`);
 
+    const client = createFeishuClient({
+      appId: this._config.appId,
+      appSecret: this._config.appSecret,
+      domain: this._config.domain,
+    });
+    let thinkingReactionId: string | undefined;
     try {
       // Add typing indicator (thinking emoji)
-      const client = createFeishuClient({
-        appId: this._config.appId,
-        appSecret: this._config.appSecret,
-        domain: this._config.domain,
-      });
-      let thinkingReactionId: string | undefined;
       try {
         const { addReactionFeishu } = await import("./reactions.js");
         const result = await addReactionFeishu(client, msg.messageId, "THINKING");
@@ -270,8 +270,15 @@ export class FeishuConnector implements Connector {
         const response = await this._handler(incoming);
         await this._sendStaticReply(msg.chatId, response, replyToId);
       }
-
-      // Remove typing indicator
+    } catch (err) {
+      log.error(`failed to process message ${msg.messageId}: ${String(err)}`);
+      try {
+        await sendMarkdownCardFeishu(client, msg.chatId, `**Error:** ${String(err)}`);
+      } catch {
+        // Give up
+      }
+    } finally {
+      // Always clean up thinking reaction, even if streaming threw
       if (thinkingReactionId) {
         try {
           const { removeReactionFeishu } = await import("./reactions.js");
@@ -279,18 +286,6 @@ export class FeishuConnector implements Connector {
         } catch {
           // Non-critical
         }
-      }
-    } catch (err) {
-      log.error(`failed to process message ${msg.messageId}: ${String(err)}`);
-      try {
-        const client = createFeishuClient({
-          appId: this._config.appId,
-          appSecret: this._config.appSecret,
-          domain: this._config.domain,
-        });
-        await sendMarkdownCardFeishu(client, msg.chatId, `**Error:** ${String(err)}`);
-      } catch {
-        // Give up
       }
     }
   }
