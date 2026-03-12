@@ -141,7 +141,7 @@ function parseTextContent(content: string, messageType: string): string {
 export function parsePostContent(content: string): { textContent: string; imageKeys: string[] } {
   try {
     const parsed = JSON.parse(content);
-    // Post messages are wrapped in a locale key (zh_cn, en_us, ja_jp, etc.)
+    // Post messages may be wrapped in a locale key (zh_cn, en_us, ja_jp, etc.)
     const localeKey = Object.keys(parsed).find((k) => typeof parsed[k] === "object" && parsed[k]?.content);
     const body = localeKey ? parsed[localeKey] : parsed;
     const title = body.title || "";
@@ -153,9 +153,12 @@ export function parsePostContent(content: string): { textContent: string; imageK
       if (Array.isArray(paragraph)) {
         for (const element of paragraph) {
           if (element.tag === "text") textContent += element.text || "";
-          else if (element.tag === "a") textContent += element.text || element.href || "";
+          else if (element.tag === "a") textContent += `[${element.text || ""}](${element.href || ""})`;
           else if (element.tag === "at") textContent += `@${element.user_name || element.user_id || ""}`;
           else if (element.tag === "img" && element.image_key) imageKeys.push(element.image_key);
+          else if (element.tag === "code_block") textContent += `\`\`\`${element.language || ""}\n${element.text || ""}\`\`\`\n`;
+          else if (element.tag === "emotion") textContent += element.emoji_type ? `[${element.emoji_type}]` : "";
+          else if (element.text) textContent += element.text; // fallback for unknown tags with text
         }
         textContent += "\n";
       }
