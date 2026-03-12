@@ -146,6 +146,13 @@ export interface TokenSyncRuleConfig {
   extraKeys?: Record<string, string>;
 }
 
+export interface ProxyConfig {
+  /** HTTP/HTTPS proxy URL. Empty = no proxy. */
+  http: string;
+  /** Comma-separated list of hosts/CIDRs that bypass the proxy. */
+  noProxy: string;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -172,6 +179,8 @@ export interface RemiConfig {
   projects: Record<string, string>;
   /** Configurable bot profiles for specific groups. */
   bots: BotProfile[];
+  /** Proxy settings for outbound HTTP requests. */
+  proxy: ProxyConfig;
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -226,6 +235,7 @@ export function defaultRemiConfig(): RemiConfig {
     services: [],
     projects: {},
     bots: [],
+    proxy: { http: "", noProxy: "" },
     tracing: {
       enabled: true,
       logsDir: join(homedir(), ".remi", "logs"),
@@ -273,6 +283,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
   const botsData = (fileData.bots ?? []) as Array<Record<string, unknown>>;
+  const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
@@ -357,6 +368,10 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       port: (s.port as number) ?? null,
       enabled: (s.enabled as boolean) ?? true,
     })),
+    proxy: {
+      http: (proxyData.http as string) ?? "",
+      noProxy: (proxyData.no_proxy as string) ?? "",
+    },
     projects: projectsData,
     bots: botsData.map((b) => ({
       id: (b.id as string) ?? "",

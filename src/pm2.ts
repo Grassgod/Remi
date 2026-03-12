@@ -17,6 +17,21 @@ const log = createLogger("pm2");
 const REMI_ROOT = resolve(import.meta.dir, "..");
 const ECOSYSTEM_PATH = join(homedir(), ".remi", "ecosystem.config.cjs");
 
+/** Build proxy environment variables from config. */
+function buildProxyEnv(config: RemiConfig): Record<string, string> {
+  const env: Record<string, string> = {
+    http_proxy: config.proxy.http,
+    https_proxy: config.proxy.http,
+    HTTP_PROXY: config.proxy.http,
+    HTTPS_PROXY: config.proxy.http,
+  };
+  if (config.proxy.noProxy) {
+    env.NO_PROXY = config.proxy.noProxy;
+    env.no_proxy = config.proxy.noProxy;
+  }
+  return env;
+}
+
 export function getEcosystemPath(): string {
   return ECOSYSTEM_PATH;
 }
@@ -33,6 +48,7 @@ export function generateEcosystem(config: RemiConfig): string {
       autorestart: true,
       max_restarts: 10,
       restart_delay: 3000,
+      ...(config.proxy.http ? { env: buildProxyEnv(config) } : {}),
     },
   ];
 
@@ -48,7 +64,10 @@ export function generateEcosystem(config: RemiConfig): string {
       restart_delay: 2000,
     };
     if (svc.args.length) app.args = svc.args.join(" ");
-    if (svc.port) app.env = { PORT: svc.port };
+    const svcEnv: Record<string, unknown> = {};
+    if (svc.port) svcEnv.PORT = svc.port;
+    if (config.proxy.http) Object.assign(svcEnv, buildProxyEnv(config));
+    if (Object.keys(svcEnv).length) app.env = svcEnv;
     apps.push(app);
   }
 
