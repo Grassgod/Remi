@@ -14,8 +14,6 @@ const log = createLogger("1passport:bytedance-sso");
 const DEFAULT_SSO_HOST = "https://sso.bytedance.com";
 const DEFAULT_BYTECLOUD_HOST = "https://cloud.bytedance.net";
 const DEFAULT_SCOPES = ["read", "ciam.device.read"];
-const DEFAULT_CLIENT_ID = "cd1k8uzbde1i1aa1gy0f";
-
 const DEVICE_CODE_ENDPOINT = "/oauth2/device/code";
 const TOKEN_ENDPOINT = "/oauth2/access_token";
 const JWT_ENDPOINT = "/auth/api/v1/jwt";
@@ -26,7 +24,7 @@ const JWT_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_POLL_ATTEMPTS = 120;
 
 export interface ByteDanceSSOConfig {
-  clientId?: string;
+  clientId: string;
   ssoHost?: string;
   bytecloudHost?: string;
   scopes?: string[];
@@ -49,8 +47,13 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
   private _onTokenChangeCb: (() => void) | null = null;
 
   constructor(config: ByteDanceSSOConfig) {
+    if (!config.clientId) {
+      throw new Error(
+        "ByteDance SSO: clientId is required. Set it in remi.toml [bytedance_sso] or env BYTEDANCE_SSO_CLIENT_ID.",
+      );
+    }
     this._config = {
-      clientId: config.clientId ?? DEFAULT_CLIENT_ID,
+      clientId: config.clientId,
       ssoHost: (config.ssoHost ?? DEFAULT_SSO_HOST).replace(/\/+$/, ""),
       bytecloudHost: (config.bytecloudHost ?? DEFAULT_BYTECLOUD_HOST).replace(/\/+$/, ""),
       scopes: config.scopes ?? DEFAULT_SCOPES,
