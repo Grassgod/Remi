@@ -202,11 +202,8 @@ function parseMediaKeys(
   }
 }
 
-/** Resolve merge_forward message: fetch sub-messages, concatenate text, and collect images. */
-async function resolveMergeForward(
-  client: Lark.Client,
-  messageId: string,
-): Promise<{ text: string; media: FeishuMediaInfo[] } | null> {
+/** Resolve merge_forward message: fetch sub-messages and concatenate their text. */
+async function resolveMergeForward(client: Lark.Client, messageId: string): Promise<string | null> {
   const response = (await client.im.message.get({
     path: { message_id: messageId },
   })) as {
@@ -228,7 +225,6 @@ async function resolveMergeForward(
 
   // Skip the first item (the merge_forward wrapper itself), process sub-messages
   const parts: string[] = [];
-  const collectedMedia: FeishuMediaInfo[] = [];
   const anonymousMap = new Map<string, number>(); // open_id → user number
   for (const item of items) {
     if (item.message_id === messageId) continue; // skip parent
@@ -239,25 +235,10 @@ async function resolveMergeForward(
         const parsed = JSON.parse(content);
         text = stripHtmlTags(parsed.text || content);
       } else if (item.msg_type === "post") {
-        const postResult = parsePostContent(content);
-        text = postResult.textContent;
-        // Download embedded images from post
-        for (const imageKey of postResult.imageKeys) {
-          try {
-            const result = await downloadMessageResourceFeishu(client, item.message_id!, imageKey, "image");
-            collectedMedia.push({ buffer: result.buffer, contentType: result.contentType, placeholder: "<media:image>" });
-          } catch { /* skip failed downloads */ }
-        }
+        text = parsePostContent(content).textContent;
       } else if (item.msg_type === "image") {
+        // Note: cannot download images from merge_forward sub-messages (bot lacks access to cross-context message_ids)
         text = "[图片]";
-        // Download the image
-        try {
-          const imgParsed = JSON.parse(content);
-          if (imgParsed.image_key && item.message_id) {
-            const result = await downloadMessageResourceFeishu(client, item.message_id, imgParsed.image_key, "image");
-            collectedMedia.push({ buffer: result.buffer, contentType: result.contentType, placeholder: "<media:image>" });
-          }
-        } catch { /* skip failed downloads */ }
       } else if (item.msg_type === "file") {
         text = "[文件]";
       } else if (item.msg_type === "sticker") {
@@ -295,10 +276,7 @@ async function resolveMergeForward(
   }
 
   if (parts.length === 0) return null;
-  return {
-    text: `[合并转发消息，共${parts.length}条]\n\n${parts.join("\n\n---\n\n")}`,
-    media: collectedMedia,
-  };
+  return `[合并转发消息，共${parts.length}条]\n\n${parts.join("\n\n---\n\n")}`;
 }
 
 function inferPlaceholder(messageType: string): string {
@@ -482,11 +460,8 @@ export async function processFeishuMessageEvent(
   // Resolve merge_forward sub-messages
   if (event.message.message_type === "merge_forward") {
     try {
-      const merged = await resolveMergeForward(client, ctx.messageId);
-      if (merged) {
-        ctx.content = merged.text;
-        media.push(...merged.media);
-      }
+      const mergedText = await resolveMergeForward(client, ctx.messageId);
+      if (mergedText) ctx.content = mergedText;
     } catch {
       // Keep original content on failure
     }
