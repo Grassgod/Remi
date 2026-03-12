@@ -175,7 +175,7 @@ export class Remi {
 
   async handleMessageStream(
     msg: IncomingMessage,
-    consumer: (stream: AsyncIterable<StreamEvent>) => Promise<void>,
+    consumer: (stream: AsyncIterable<StreamEvent>, meta: import("./connectors/base.js").StreamMeta) => Promise<void>,
   ): Promise<void> {
     const sessionKey = this._resolveSessionKey(msg);
     const lock = this._getLaneLock(sessionKey);
@@ -187,8 +187,9 @@ export class Remi {
       "connector.name": msg.connectorName ?? "",
       "message.text": msg.text.slice(0, 200),
     });
+    const existingSessionId = this._sessions.get(sessionKey) ?? null;
     try {
-      await consumer(this._processStream(msg, rootSpan.context()));
+      await consumer(this._processStream(msg, rootSpan.context()), { sessionId: existingSessionId });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));

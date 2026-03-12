@@ -9,7 +9,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { resolveReceiveIdType } from "./client.js";
 import { parsePostContent } from "./receive.js";
-import { getSessionName } from "./session-name.js";
+import { getSessionName, getNewbornName } from "./session-name.js";
 
 /** Build Feishu post message payload (rich text with markdown support). */
 function buildFeishuPostMessagePayload(params: { messageText: string }): {
@@ -70,9 +70,17 @@ export async function sendMessageFeishu(
   return { messageId: response.data?.message_id ?? "unknown", chatId: receiveId };
 }
 
-/** Build a Remi branded card header. With sessionId, shows "X的 Remi". */
+/**
+ * Build a Remi branded card header.
+ * - sessionId string → deterministic name ("好奇的 Remi")
+ * - sessionId null → newborn name ("刚醒来的 Remi")
+ * - sessionId undefined → plain "Remi" (non-streaming cards)
+ */
 export function buildCardHeader(sessionId?: string | null) {
-  const title = sessionId ? getSessionName(sessionId) : "Remi";
+  const title =
+    sessionId ? getSessionName(sessionId) :
+    sessionId === null ? getNewbornName() :
+    "Remi";
   return {
     title: { tag: "plain_text" as const, content: title },
     template: "indigo" as const,

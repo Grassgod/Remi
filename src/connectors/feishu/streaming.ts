@@ -237,14 +237,14 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string },
+    options?: { replyToMessageId?: string; sessionId?: string | null },
   ): Promise<void> {
     if (this.state) return;
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
-      header: buildCardHeader(),
+      header: buildCardHeader(options?.sessionId),
       config: {
         width_mode: "fill",
         streaming_mode: true,

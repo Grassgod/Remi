@@ -112,12 +112,26 @@ function hashString(s: string): number {
   return h >>> 0; // ensure unsigned
 }
 
+// ── Newborn pool (for brand-new sessions without sessionId) ─
+
+const NEWBORN = [
+  "刚醒来", "初始化", "刚上线", "新生", "刚启动",
+  "刚睁眼", "热身中", "准备就绪", "蓄势待发", "整装待发",
+  "刚出炉", "新鲜出炉", "满血复活", "元气满满", "蠢蠢欲动",
+];
+
 // ── Public API ──────────────────────────────────────────────
 
 /** Get a deterministic session name like "好奇的 Remi" from a sessionId. */
 export function getSessionName(sessionId: string): string {
   const idx = hashString(sessionId) % POOL.length;
   return `${POOL[idx]}的 Remi`;
+}
+
+/** Get a random newborn name for brand-new sessions (no sessionId yet). */
+export function getNewbornName(): string {
+  const idx = Math.floor(Math.random() * NEWBORN.length);
+  return `${NEWBORN[idx]}的 Remi`;
 }
 
 /** Get the adjective pool size (for debugging/logging). */

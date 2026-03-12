@@ -194,16 +194,25 @@ export function parseLine(line: string): ParsedMessage {
   // Claude CLI nests fields in rate_limit_info; also handle flat layouts
   if (msgType === "rate_limit_event" || msgType === "rate_limit") {
     const info = (data.rate_limit_info as Record<string, unknown>) ?? {};
-    const retryMs = (data.retry_after_ms as number)
-      ?? ((data.retry_after as number) ?? 0) * 1000;
 
-    // rateLimitType: try info first, then top-level
+    // retry_after_ms: check top-level, then info, then retry_after (seconds) at both levels
+    const retryMs =
+      (typeof data.retry_after_ms === "number" ? data.retry_after_ms : null)
+      ?? (typeof info.retry_after_ms === "number" ? info.retry_after_ms : null)
+      ?? (typeof info.retryAfterMs === "number" ? info.retryAfterMs : null)
+      ?? ((typeof data.retry_after === "number" ? data.retry_after
+          : typeof info.retry_after === "number" ? info.retry_after
+          : 0) * 1000);
+
+    // rateLimitType: try info first (camel), then top-level (camel + snake)
     const rateLimitType =
-      (info.rateLimitType as string) ?? (data.rateLimitType as string) ?? (data.rate_limit_type as string) ?? undefined;
+      (info.rateLimitType as string) ?? (info.rate_limit_type as string)
+      ?? (data.rateLimitType as string) ?? (data.rate_limit_type as string)
+      ?? undefined;
 
     // resetsAt: may be Unix seconds (number) or ISO string
     let resetsAt: string | undefined;
-    const rawResets = info.resetsAt ?? data.resetsAt ?? data.resets_at;
+    const rawResets = info.resetsAt ?? info.resets_at ?? data.resetsAt ?? data.resets_at;
     if (typeof rawResets === "number" && rawResets > 0) {
       resetsAt = new Date(rawResets * 1000).toISOString();
     } else if (typeof rawResets === "string") {
@@ -211,7 +220,7 @@ export function parseLine(line: string): ParsedMessage {
     }
 
     // status: "allowed" | "rate_limited"
-    const status = (info.status as string) ?? undefined;
+    const status = (info.status as string) ?? (data.status as string) ?? undefined;
 
     return {
       kind: "rate_limit",

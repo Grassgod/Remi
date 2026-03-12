@@ -314,18 +314,6 @@ export class FeishuConnector implements Connector {
       tokenProvider: this._tokenProvider ?? undefined,
     });
 
-    // Try to start the streaming card — fall back to blocking handler if it fails
-    try {
-      await session.start(chatId, "chat_id", { replyToMessageId });
-    } catch (err) {
-      log.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
-      if (this._handler) {
-        const response = await this._handler(incoming);
-        await this._sendStaticReply(chatId, response, replyToMessageId);
-      }
-      return;
-    }
-
     let thinkingText = "";
     let contentText = "";
     let finalResponse: AgentResponse | null = null;
@@ -342,7 +330,19 @@ export class FeishuConnector implements Connector {
 
     // Use callback pattern: the lane lock in core.ts covers this entire consumer,
     // so card close + @mention complete before the next message starts processing.
-    await this._streamHandler!(incoming, async (stream) => {
+    await this._streamHandler!(incoming, async (stream, meta) => {
+      // Start streaming card with session name (existing session → deterministic name, new → newborn)
+      try {
+        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId });
+      } catch (err) {
+        log.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
+        if (this._handler) {
+          const response = await this._handler(incoming);
+          await this._sendStaticReply(chatId, response, replyToMessageId);
+        }
+        return;
+      }
+
       try {
         for await (const event of stream) {
           // If safety timeout fired, stop consuming events
@@ -458,8 +458,12 @@ export class FeishuConnector implements Connector {
               break;
             }
             case "rate_limit":
-              await session.updateStatus(`⚠️ Rate limited, retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s...`);
-              session.addStep("_default", `⚠️ Rate limited, retrying in ${((event.retryAfterMs) / 1000).toFixed(0)}s`);
+              // status "allowed" = informational quota update, not a real block — skip UI noise
+              if (event.status !== "allowed") {
+                const secs = ((event.retryAfterMs) / 1000).toFixed(0);
+                await session.updateStatus(`⚠️ Rate limited, retrying in ${secs}s...`);
+                session.addStep("_default", `⚠️ Rate limited, retrying in ${secs}s`);
+              }
               break;
             case "error":
               contentText += `\n\n**Error:** ${event.error}\n`;

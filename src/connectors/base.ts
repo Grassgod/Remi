@@ -23,9 +23,15 @@ export type MessageHandler = (msg: IncomingMessage) => Promise<AgentResponse>;
  * Uses callback pattern so the lane lock covers the entire consumer lifecycle
  * (including card close + notifications), preventing concurrent message overlap.
  */
+/** Metadata passed alongside the stream to the consumer. */
+export interface StreamMeta {
+  /** Existing sessionId if resuming, null for brand-new sessions. */
+  sessionId?: string | null;
+}
+
 export type StreamingHandler = (
   msg: IncomingMessage,
-  consumer: (stream: AsyncIterable<StreamEvent>) => Promise<void>,
+  consumer: (stream: AsyncIterable<StreamEvent>, meta: StreamMeta) => Promise<void>,
 ) => Promise<void>;
 
 /** Protocol that all input connectors must implement. */
