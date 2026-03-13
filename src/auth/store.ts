@@ -12,16 +12,6 @@ import { TokenPersistence } from "./persistence.js";
 import { TokenSyncEngine, type TokenSyncRule } from "./token-sync.js";
 import { createLogger } from "../logger.js";
 
-/** Default sync rules when none are configured (backward-compatible). */
-const DEFAULT_SYNC_RULES: TokenSyncRule[] = [
-  {
-    name: "lark-mcp-server",
-    source: "feishu/*",
-    target: "~/.lark_auth/tokens.json",
-    format: "mirror",
-  },
-];
-
 const log = createLogger("1passport");
 
 export class AuthStore {
@@ -32,7 +22,7 @@ export class AuthStore {
 
   constructor(authDir: string, syncRules?: TokenSyncRule[]) {
     this._persistence = new TokenPersistence(join(authDir, "tokens.json"));
-    this._syncEngine = new TokenSyncEngine(syncRules ?? DEFAULT_SYNC_RULES);
+    this._syncEngine = new TokenSyncEngine(syncRules ?? []);
   }
 
   /** Register an adapter and restore its persisted tokens. */
