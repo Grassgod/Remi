@@ -13,6 +13,7 @@ import { CronTimer } from "./scheduler/cron-timer.js";
 import { setLogLevel, createLogger, initLogPersistence } from "./logger.js";
 import { runAuth } from "./auth/oauth-cli.js";
 import { pm2Start, pm2Stop } from "./pm2.js";
+import { initLangSmith } from "./langsmith-exporter.js";
 
 const log = createLogger("main");
 
@@ -20,6 +21,7 @@ function runCli(): void {
   const config = loadConfig();
   setLogLevel(config.logLevel);
   if (config.tracing.enabled) initLogPersistence(config.tracing.logsDir);
+  initLangSmith(config.tracing);
 
   const remi = Remi.boot(config);
 
@@ -38,6 +40,7 @@ async function runServe(): Promise<void> {
   let config = loadConfig();
   setLogLevel(config.logLevel);
   if (config.tracing.enabled) initLogPersistence(config.tracing.logsDir);
+  initLangSmith(config.tracing);
 
   // One-time migration: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]
   if (migrateConfigFile()) {
