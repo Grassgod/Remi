@@ -17,8 +17,9 @@ let projectName = "remi";
 let enabled = false;
 
 // Cache dotted_order per spanId so child spans can reference their parent's dotted_order.
-// Populated at span creation time (registerSpanStart), consumed at export time (exportSpan).
 const dottedOrderCache = new Map<string, string>();
+// Map traceId → root spanId so all spans in a trace share the same LangSmith trace_id.
+const rootSpanMap = new Map<string, string>();
 
 export function initLangSmith(config: TracingConfig): boolean {
   const apiKey = config.langsmithApiKey;
@@ -45,8 +46,7 @@ export function isLangSmithEnabled(): boolean {
  * Register a span at creation time to build its dotted_order early,
  * so child spans can look up their parent's dotted_order when they end.
  */
-export function registerSpanStart(spanId: string, parentSpanId: string | undefined, startTime: string): void {
-  // Always cache dotted_order even before LangSmith is initialized — spans may start before init completes
+export function registerSpanStart(spanId: string, traceId: string, parentSpanId: string | undefined, startTime: string): void {
   const runId = toUuid(spanId).replace(/-/g, "");
   const ts = toDottedTs(startTime);
   const selfSegment = `${ts}${runId}`;
@@ -55,7 +55,9 @@ export function registerSpanStart(spanId: string, parentSpanId: string | undefin
     const parentDotted = dottedOrderCache.get(parentSpanId);
     dottedOrderCache.set(spanId, parentDotted ? `${parentDotted}.${selfSegment}` : selfSegment);
   } else {
+    // Root span: register as LangSmith trace root
     dottedOrderCache.set(spanId, selfSegment);
+    rootSpanMap.set(traceId, spanId);
   }
   // Auto-cleanup after 10 minutes
   setTimeout(() => dottedOrderCache.delete(spanId), 10 * 60 * 1000);
@@ -121,8 +123,12 @@ export function exportSpan(span: SpanData): void {
 
   // Convert IDs to UUID format (LangSmith requires 32-hex or UUID pattern)
   const runId = toUuid(span.spanId);
-  const traceId = toUuid(span.traceId);
   const parentRunId = span.parentSpanId ? toUuid(span.parentSpanId) : undefined;
+
+  // LangSmith trace_id must match the first segment's runId in dotted_order (= root span's runId).
+  // rootSpanMap is populated at span creation time (registerSpanStart) so it's always available.
+  const rootSpanId = rootSpanMap.get(span.traceId) ?? span.spanId;
+  const traceId = toUuid(rootSpanId);
 
   // Look up dotted_order from cache (populated by registerSpanStart at span creation time)
   let dottedOrder = dottedOrderCache.get(span.spanId);

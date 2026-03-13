@@ -113,7 +113,7 @@ class SpanImpl implements Span {
     this._startTime = new Date().toISOString();
     this._startMs = performance.now();
     this._attributes = { ...attributes };
-    registerSpanStart(this.spanId, parentSpanId, this._startTime);
+    registerSpanStart(this.spanId, traceId, parentSpanId, this._startTime);
   }
 
   context(): TraceContext {
