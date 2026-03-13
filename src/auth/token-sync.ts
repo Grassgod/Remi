@@ -153,8 +153,13 @@ export class TokenSyncEngine {
     allTokens: PersistedTokens,
   ): string {
     switch (rule.format) {
-      case "mirror":
-        return JSON.stringify(allTokens, null, 2);
+      case "mirror": {
+        const [adapterName] = this._parseSource(rule.source);
+        const filtered = adapterName === "*"
+          ? allTokens
+          : { [adapterName]: allTokens[adapterName] };
+        return JSON.stringify(filtered, null, 2);
+      }
 
       case "json_kv": {
         if (!entry) return "{}";
