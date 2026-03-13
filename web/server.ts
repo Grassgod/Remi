@@ -71,6 +71,11 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerMonitorHandlers(app, data);
   registerSchedulerHandlers(app, data);
 
+  // External static sites
+  const tasksDir = "/data00/home/hehuajie/tasks";
+  app.use("/lark-dash/*", serveStatic({ root: join(tasksDir, "lark_parser_openAPI_test"), rewriteRequestPath: (p) => p.replace(/^\/lark-dash/, "") }));
+  app.use("/luxury-bags/*", serveStatic({ root: join(tasksDir, "luxury-bags-comparison"), rewriteRequestPath: (p) => p.replace(/^\/luxury-bags/, "") }));
+
   // Static files (production only)
   if (!devMode) {
     app.use("/*", serveStatic({ root: staticDir }));
