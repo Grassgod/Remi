@@ -95,16 +95,16 @@ export function exportSpan(span: SpanData): void {
   if (isLLM) runType = "llm";
   else if (span.operationName.startsWith("tool.")) runType = "tool";
 
-  // Build inputs/outputs
+  // Build inputs/outputs — pass all attributes so LangSmith Dashboard shows full context
   const inputs: Record<string, unknown> = {};
   const outputs: Record<string, unknown> = {};
 
-  if (isRoot) {
-    inputs.message = span.attributes["message.text"] ?? "";
-    inputs.chat_id = span.attributes["chat.id"] ?? "";
-    inputs.connector = span.attributes["connector.name"] ?? "";
+  // Always include all span attributes as inputs for full visibility
+  for (const [k, v] of Object.entries(span.attributes)) {
+    inputs[k] = v;
   }
 
+  // Span-specific structured outputs
   if (isLLM) {
     outputs.model = span.attributes["llm.model"] ?? "unknown";
     outputs.input_tokens = span.attributes["llm.input_tokens"] ?? 0;
@@ -113,13 +113,9 @@ export function exportSpan(span: SpanData): void {
     outputs.duration_ms = span.attributes["llm.duration_ms"] ?? 0;
   }
 
-  if (span.operationName.startsWith("tool.")) {
-    inputs.tool_name = span.attributes["tool.name"] ?? "";
-    inputs.tool_use_id = span.attributes["tool.use_id"] ?? "";
-    if (span.attributes["tool.duration_ms"] != null) {
-      outputs.duration_ms = span.attributes["tool.duration_ms"];
-    }
-  }
+  outputs.duration_ms = span.durationMs;
+  outputs.status = span.status;
+  if (span.statusMessage) outputs.error = span.statusMessage;
 
   // Convert IDs to UUID format (LangSmith requires 32-hex or UUID pattern)
   const runId = toUuid(span.spanId);
