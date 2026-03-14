@@ -20,6 +20,8 @@ let enabled = false;
 const dottedOrderCache = new Map<string, string>();
 // Map traceId → root spanId so all spans in a trace share the same LangSmith trace_id.
 const rootSpanMap = new Map<string, string>();
+// Map traceId → session_key so all spans (including children) can carry the thread identifier.
+const traceSessionMap = new Map<string, string>();
 
 export function initLangSmith(config: TracingConfig): boolean {
   const apiKey = config.langsmithApiKey;
@@ -138,9 +140,14 @@ export function exportSpan(span: SpanData): void {
 
   log.debug(`exportSpan ${span.operationName}: dottedOrder=${dottedOrder ? dottedOrder.slice(0, 40) + "..." : "EMPTY"}, runId=${runId}`);
 
-  // Session info for multi-turn grouping (via metadata + tags, NOT session_name which creates new projects)
-  const sessionKey = (span.attributes["session.key"] as string) ?? undefined;
+  // Session/thread grouping: cache on root, propagate to all children
   const chatId = (span.attributes["chat.id"] as string) ?? undefined;
+  let sessionKey = (span.attributes["session.key"] as string) ?? undefined;
+  if (isRoot && sessionKey) {
+    traceSessionMap.set(span.traceId, sessionKey);
+  } else if (!sessionKey) {
+    sessionKey = traceSessionMap.get(span.traceId);
+  }
 
   // Async create — fire-and-forget
   client.createRun({
@@ -160,7 +167,8 @@ export function exportSpan(span: SpanData): void {
     error: span.statusMessage ?? undefined,
     extra: {
       metadata: {
-        session_key: sessionKey,
+        // LangSmith recognizes session_id/thread_id/conversation_id for Thread grouping
+        session_id: sessionKey,
         chat_id: chatId,
         connector: span.attributes["connector.name"] ?? undefined,
       },
