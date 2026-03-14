@@ -10,17 +10,23 @@
  * 6. Response dispatch — return AgentResponse via originating connector
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { spawn } from "node:child_process";
 import type { BotProfile, RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
+import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
+import { FeishuConnector } from "./connectors/feishu/index.js";
+import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
+import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
+import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
-import type { AuthStore } from "./auth/store.js";
 import { MetricsCollector } from "./metrics/collector.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
+import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
 
 const log = createLogger("core");
 
@@ -602,6 +608,158 @@ export class Remi {
     }
 
     return { text: `今天（${today}）还没有生成报告，请稍后再试。` };
+  }
+
+  // ── Static factory ─────────────────────────────────────────
+
+  /**
+   * Build a fully-wired Remi instance from config.
+   * Replaces the old RemiDaemon._buildRemi() — all component assembly in one place.
+   */
+  static boot(config: RemiConfig): Remi {
+    const remi = new Remi(config);
+
+    // 1. AuthStore (1Passport) with token sync rules
+    const syncRules: TokenSyncRule[] | undefined =
+      config.tokenSync.length > 0
+        ? (config.tokenSync as TokenSyncRule[])
+        : undefined;
+    const authStore = new AuthStore(join(homedir(), ".remi", "auth"), syncRules);
+    const hasFeishuCreds = !!(config.feishu.appId && config.feishu.appSecret);
+    if (hasFeishuCreds) {
+      authStore.registerAdapter(
+        new FeishuAuthAdapter({
+          appId: config.feishu.appId,
+          appSecret: config.feishu.appSecret,
+          domain: config.feishu.domain,
+          userAccessToken: config.feishu.userAccessToken || undefined,
+        }),
+      );
+    }
+    if (config.bytedanceSso?.clientId) {
+      authStore.registerAdapter(
+        new ByteDanceSSOAdapter(config.bytedanceSso),
+      );
+      log.info("Registered ByteDance SSO adapter (1Passport)");
+    }
+    remi.authStore = authStore;
+
+    // 2. Providers
+    const provider = Remi._buildProvider(config);
+    remi.addProvider(provider);
+
+    if (config.provider.fallback) {
+      try {
+        const fallback = Remi._buildProvider(config, config.provider.fallback);
+        remi.addProvider(fallback);
+      } catch (e) {
+        log.warn("Failed to build fallback provider:", e);
+      }
+    }
+
+    // 3. Feishu connector
+    if (hasFeishuCreds) {
+      const feishuConfig = { ...config.feishu };
+      for (const bot of config.bots) {
+        for (const g of bot.groups) {
+          if (!feishuConfig.allowedGroups.includes(g)) {
+            feishuConfig.allowedGroups = [...feishuConfig.allowedGroups, g];
+          }
+        }
+      }
+
+      const feishu = new FeishuConnector(feishuConfig);
+      feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
+      feishu.setBotProfiles(config.bots);
+      remi.addConnector(feishu);
+      log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
+    }
+
+    // 4. Restart handler
+    remi.onRestart((info) => remi._handleRestart(info));
+
+    return remi;
+  }
+
+  private static _buildProvider(config: RemiConfig, name?: string | null) {
+    const n = name ?? config.provider.name;
+    if (n === "claude_cli") {
+      return new ClaudeCLIProvider({
+        model: config.provider.model,
+        timeout: config.provider.timeout,
+        allowedTools: config.provider.allowedTools,
+        cwd: homedir(),
+      });
+    }
+    throw new Error(`Unknown provider: ${n}`);
+  }
+
+  // ── Restart / notify ──────────────────────────────────────
+
+  private static get _restartNotifyPath(): string {
+    return join(homedir(), ".remi", "restart-notify.json");
+  }
+
+  private _handleRestart(info: { chatId: string; connectorName?: string }): void {
+    log.info("Restart requested — rebuilding services and triggering PM2 restart...");
+
+    // Save notify info so post-restart we can notify the user
+    const dir = join(homedir(), ".remi");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(Remi._restartNotifyPath, JSON.stringify(info));
+
+    flushDedupCacheSync();
+    runBuildsSync(this.config);
+    writeEcosystem(this.config);
+
+    const child = spawn("pm2", ["restart", getEcosystemPath(), "--update-env"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
+
+  /** After startup, check if we need to notify someone that restart succeeded. */
+  async sendRestartNotify(): Promise<void> {
+    const filePath = Remi._restartNotifyPath;
+    if (!existsSync(filePath)) return;
+
+    let info: { chatId: string; connectorName?: string };
+    try {
+      const raw = readFileSync(filePath, "utf-8");
+      info = JSON.parse(raw);
+      unlinkSync(filePath);
+      log.info(`Restart notify: connector=${info.connectorName}, chatId=${info.chatId}`);
+    } catch (e) {
+      log.warn("Restart notify: failed to read file:", e);
+      if (existsSync(filePath)) unlinkSync(filePath);
+      return;
+    }
+
+    const connector = this._connectors.find(
+      (c) => c.name === (info.connectorName ?? ""),
+    );
+    if (!connector) {
+      log.warn(
+        `Restart notify: connector "${info.connectorName}" not found (available: ${this._connectors.map((c) => c.name).join(", ")})`,
+      );
+      return;
+    }
+
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await connector.reply(info.chatId, { text: "Remi 重启成功，已上线。" });
+        log.info(`Restart notification sent to ${info.connectorName}:${info.chatId}`);
+        return;
+      } catch (e) {
+        log.warn(`Restart notify attempt ${attempt}/${maxRetries} failed: ${String(e)}`);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    }
+    log.error("Restart notification failed after all retries.");
   }
 
   // ── Lifecycle ─────────────────────────────────────────────

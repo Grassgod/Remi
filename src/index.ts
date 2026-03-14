@@ -28,8 +28,5 @@ export { CLIConnector } from "./connectors/cli.js";
 // Memory
 export { MemoryStore } from "./memory/store.js";
 
-// Daemon
-export { RemiDaemon } from "./daemon.js";
-
 // Scheduler
 export { CronTimer } from "./scheduler/cron-timer.js";
