@@ -353,6 +353,7 @@ export async function resolveFeishuMedia(
           buffer: result.buffer,
           contentType: result.contentType,
           placeholder: "<media:image>",
+          imageKey,
         });
       } catch {
         // Skip failed downloads
@@ -374,6 +375,7 @@ export async function resolveFeishuMedia(
       contentType: result.contentType,
       fileName: result.fileName || mediaKeys.fileName,
       placeholder: inferPlaceholder(messageType),
+      imageKey: mediaKeys.imageKey,
     });
   } catch {
     // Skip failed downloads

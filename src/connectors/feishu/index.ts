@@ -208,9 +208,16 @@ export class FeishuConnector implements Connector {
     }));
 
     // Save non-image files to temp directory so Claude can read them
+    // Images: inject metadata into text so skills can download via message resource API (no local caching)
     let text = msg.text;
     for (const m of media) {
-      if (m.mediaType !== "image" && m.mediaType !== "sticker") {
+      if (m.mediaType === "image") {
+        const feishuMedia = msg.media.find((fm) => fm.buffer === m.buffer);
+        const imageKey = feishuMedia?.imageKey;
+        if (imageKey) {
+          text += `\n{"image_key":"${imageKey}","message_id":"${msg.messageId}"}`;
+        }
+      } else if (m.mediaType !== "sticker") {
         const dir = join(tmpdir(), "remi-media", msg.chatId.slice(0, 16));
         mkdirSync(dir, { recursive: true });
         const name = m.fileName ?? `${Date.now()}.bin`;

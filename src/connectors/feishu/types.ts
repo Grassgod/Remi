@@ -25,6 +25,8 @@ export type FeishuMediaInfo = {
   contentType?: string;
   fileName?: string;
   placeholder: string;
+  /** Original Feishu image_key (for images). */
+  imageKey?: string;
 };
 
 /** Raw Feishu message event from WebSocket / EventDispatcher. */
