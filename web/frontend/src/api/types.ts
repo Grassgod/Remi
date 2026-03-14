@@ -216,3 +216,27 @@ export interface DailySchedulerSummary {
   error: number;
   skipped: number;
 }
+
+// Database
+export interface DbStats {
+  dbPath: string;
+  dbSizeBytes: number;
+  journalMode: string;
+  tables: {
+    kv: { count: number };
+    embeddings: { count: number };
+  };
+}
+
+export interface KvEntry {
+  key: string;
+  value: string;
+  updated_at: string;
+}
+
+export interface EmbeddingEntry {
+  id: string;
+  content_hash: string;
+  metadata: Record<string, string> | null;
+  embedded_at: string;
+}

@@ -122,3 +122,8 @@ export const getLogModules = (date?: string) =>
 
 // Monitor
 export const getMonitorStats = () => request<import("./types").MonitorStats>("/api/v1/monitor/stats");
+
+// Database
+export const getDbStats = () => request<import("./types").DbStats>("/api/v1/db/stats");
+export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv");
+export const getDbEmbeddings = () => request<import("./types").EmbeddingEntry[]>("/api/v1/db/embeddings");

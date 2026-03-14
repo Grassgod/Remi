@@ -28,6 +28,7 @@ import { registerTracesHandlers } from "./handlers/traces.js";
 import { registerLogsHandlers } from "./handlers/logs.js";
 import { registerMonitorHandlers } from "./handlers/monitor.js";
 import { registerSchedulerHandlers } from "./handlers/scheduler.js";
+import { registerDbHandlers } from "./handlers/db.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -71,6 +72,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerLogsHandlers(app, data);
   registerMonitorHandlers(app, data);
   registerSchedulerHandlers(app, data);
+  registerDbHandlers(app, data);
 
   // Auto-mount all task directories as /tasks/<dir-name>/*
   const tasksDir = "/data00/home/hehuajie/tasks";
