@@ -71,6 +71,13 @@ export const getConfig = () => request<import("./types").RemiConfig>("/api/v1/co
 export const updateConfig = (patch: Record<string, unknown>) =>
   request("/api/v1/config", { method: "PUT", body: JSON.stringify(patch) });
 
+// Bot Menu
+export const getBotMenu = () => request<any>("/api/v1/bot-menu");
+export const updateBotMenu = (menu: any) =>
+  request("/api/v1/bot-menu", { method: "PUT", body: JSON.stringify(menu) });
+export const syncBotMenu = () =>
+  request<{ ok: boolean }>("/api/v1/bot-menu/sync", { method: "POST" });
+
 // Projects
 export const getProjects = () => request<import("./types").ProjectMap>("/api/v1/projects");
 export const createProject = (alias: string, path: string) =>
