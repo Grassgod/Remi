@@ -418,7 +418,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
     google: googleData
       ? {
           apiKey: env.GOOGLE_API_KEY ?? (googleData.api_key as string) ?? "",
-          model: (googleData.model as string) ?? "gemini-2.5-flash-image",
+          model: (googleData.model as string) ?? "gemini-3.1-flash-image-preview",
         }
       : undefined,
     tracing: (() => {
