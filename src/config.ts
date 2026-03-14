@@ -165,6 +165,9 @@ export interface TracingConfig {
   logsDir: string;
   tracesDir: string;
   retentionDays: number;
+  langsmithApiKey: string;
+  langsmithEndpoint: string;
+  langsmithProject: string;
 }
 
 export interface RemiConfig {
@@ -250,6 +253,9 @@ export function defaultRemiConfig(): RemiConfig {
       logsDir: join(homedir(), ".remi", "logs"),
       tracesDir: join(homedir(), ".remi", "traces"),
       retentionDays: 60,
+      langsmithApiKey: "",
+      langsmithEndpoint: "https://api.smith.langchain.com",
+      langsmithProject: "Remi",
     },
     memoryDir: DEFAULT_MEMORY_DIR,
     pidFile: join(homedir(), ".remi", "remi.pid"),
@@ -408,6 +414,9 @@ export function loadConfig(configPath?: string | null): RemiConfig {
         logsDir: (t.logs_dir as string) ?? join(homedir(), ".remi", "logs"),
         tracesDir: (t.traces_dir as string) ?? join(homedir(), ".remi", "traces"),
         retentionDays: parseInt(String(t.retention_days ?? 60), 10),
+        langsmithApiKey: (t.langsmith_api_key as string) ?? "",
+        langsmithEndpoint: (t.langsmith_endpoint as string) ?? "https://api.smith.langchain.com",
+        langsmithProject: (t.langsmith_project as string) ?? "Remi",
       };
     })(),
     memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
