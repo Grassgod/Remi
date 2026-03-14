@@ -94,6 +94,43 @@ export function sanitizeHeadings(md: string): string {
     .replace(/^[-_]{3,}$/gm, "***");
 }
 
+/** Feishu image marker pattern: ![alt](feishu-image:img_key) */
+const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
+
+/**
+ * Split markdown text into card elements, extracting feishu-image markers into img elements.
+ * Returns an array of markdown and img elements ready for card body.
+ */
+export function buildContentElements(text: string): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(FEISHU_IMAGE_RE)) {
+    const before = text.slice(lastIndex, match.index);
+    if (before.trim()) {
+      elements.push({ tag: "markdown", content: sanitizeHeadings(before.trim()) });
+    }
+    elements.push({
+      tag: "img",
+      img_key: match[2],
+      alt: { tag: "plain_text", content: match[1] || "image" },
+    });
+    lastIndex = match.index! + match[0].length;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after.trim()) {
+    elements.push({ tag: "markdown", content: sanitizeHeadings(after.trim()) });
+  }
+
+  // Fallback: if no elements (empty text), add empty markdown
+  if (elements.length === 0) {
+    elements.push({ tag: "markdown", content: "" });
+  }
+
+  return elements;
+}
+
 /** Build a Feishu interactive card with markdown content (schema 2.0). */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
@@ -101,7 +138,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
     header: buildCardHeader(),
     config: { width_mode: "fill" },
     body: {
-      elements: [{ tag: "markdown", content: sanitizeHeadings(text) }],
+      elements: buildContentElements(text),
     },
   };
 }
@@ -128,8 +165,8 @@ export function buildRichCard(options: {
     });
   }
 
-  // Main content
-  elements.push({ tag: "markdown", content: sanitizeHeadings(options.text) });
+  // Main content (may include embedded images)
+  elements.push(...buildContentElements(options.text));
 
   // Stats footer
   if (options.stats) {

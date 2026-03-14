@@ -90,7 +90,7 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-import { buildCardHeader, sanitizeHeadings } from "./send.js";
+import { buildCardHeader, sanitizeHeadings, buildContentElements } from "./send.js";
 
 /**
  * Build the final static card JSON.
@@ -159,7 +159,7 @@ function buildFinalCard(opts: {
     }
   }
 
-  elements.push({ tag: "markdown", content: sanitizeHeadings(opts.text || "") });
+  elements.push(...buildContentElements(opts.text || ""));
 
   // Stats bar with optional @mention
   const statsContent = opts.mentionOpenId
