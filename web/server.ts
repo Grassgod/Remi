@@ -11,6 +11,7 @@
  */
 
 import { join } from "node:path";
+import { readdirSync, statSync } from "node:fs";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
@@ -71,10 +72,16 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerMonitorHandlers(app, data);
   registerSchedulerHandlers(app, data);
 
-  // External static sites
+  // Auto-mount all task directories as /tasks/<dir-name>/*
   const tasksDir = "/data00/home/hehuajie/tasks";
-  app.use("/lark-dash/*", serveStatic({ root: join(tasksDir, "lark_parser_openAPI_test"), rewriteRequestPath: (p) => p.replace(/^\/lark-dash/, "") }));
-  app.use("/luxury-bags/*", serveStatic({ root: join(tasksDir, "luxury-bags-comparison"), rewriteRequestPath: (p) => p.replace(/^\/luxury-bags/, "") }));
+  try {
+    for (const entry of readdirSync(tasksDir)) {
+      const fullPath = join(tasksDir, entry);
+      if (statSync(fullPath).isDirectory()) {
+        app.use(`/tasks/${entry}/*`, serveStatic({ root: fullPath, rewriteRequestPath: (p) => p.replace(`/tasks/${entry}`, "") }));
+      }
+    }
+  } catch { /* tasks dir missing — skip */ }
 
   // Static files (production only)
   if (!devMode) {
