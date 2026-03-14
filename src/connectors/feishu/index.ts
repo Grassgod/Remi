@@ -49,10 +49,13 @@ interface ActiveAgent {
 const PLAN_TOOLS = new Set(["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList"]);
 
 /** Render the full plan task list as status bar markdown. */
-function renderPlanStatus(tasks: PlanTask[]): string {
+function renderPlanStatus(tasks: PlanTask[], elapsed?: number): string {
   if (tasks.length === 0) return "";
   const completed = tasks.filter((t) => t.status === "completed").length;
-  const lines = [`📋 **Plan** (${completed}/${tasks.length})`];
+  const header = elapsed != null
+    ? `📋 **Plan** (${completed}/${tasks.length}) · ⏳ ${elapsed}s`
+    : `📋 **Plan** (${completed}/${tasks.length})`;
+  const lines = [header];
   for (const t of tasks) {
     const icon =
       t.status === "completed" ? "✅"
@@ -64,18 +67,19 @@ function renderPlanStatus(tasks: PlanTask[]): string {
 }
 
 /** Render combined plan + active agents status for the status bar. */
-function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]): string {
+function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[], elapsed?: number): string {
   const parts: string[] = [];
 
   if (planTasks.length > 0) {
-    parts.push(renderPlanStatus(planTasks));
+    parts.push(renderPlanStatus(planTasks, elapsed));
   }
 
   if (activeAgents.length > 0) {
-    const agentLines = [`🤖 **Agents** (${activeAgents.length} active)`];
+    const elapsedSuffix = elapsed != null && planTasks.length === 0 ? ` · ⏳ ${elapsed}s` : "";
+    const agentLines = [`🤖 **Agents** (${activeAgents.length} active)${elapsedSuffix}`];
     for (const a of activeAgents) {
-      const elapsed = ((Date.now() - a.startTime) / 1000).toFixed(0);
-      agentLines.push(`⏳ ${a.description} (${elapsed}s)`);
+      const agentElapsed = ((Date.now() - a.startTime) / 1000).toFixed(0);
+      agentLines.push(`⏳ ${a.description} (${agentElapsed}s)`);
     }
     parts.push(agentLines.join("\n"));
   }
@@ -323,6 +327,17 @@ export class FeishuConnector implements Connector {
     // Active sub-agent tracking
     const activeAgents: ActiveAgent[] = [];
 
+    /** Sync heartbeat renderer: register when plan/agents active, clear when idle. */
+    const syncHeartbeatRenderer = () => {
+      if (planTasks.length > 0 || activeAgents.length > 0) {
+        session.setHeartbeatRenderer((elapsed) =>
+          renderCombinedStatus(planTasks, activeAgents, elapsed) || `⏳ Running (${elapsed}s)`,
+        );
+      } else {
+        session.setHeartbeatRenderer(null);
+      }
+    };
+
     // Use callback pattern: the lane lock in core.ts covers this entire consumer,
     // so card close + @mention complete before the next message starts processing.
     await this._streamHandler!(incoming, async (stream, meta) => {
@@ -376,14 +391,16 @@ export class FeishuConnector implements Connector {
                     status: String(t.status ?? "pending"),
                   });
                 }
-                await session.updateStatus(renderPlanStatus(planTasks));
+                syncHeartbeatRenderer();
+                await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
               } else if (event.name === "TaskCreate" && event.input) {
                 planTasks.push({
                   id: `_pending_${event.toolUseId}`,
                   subject: String(event.input.subject ?? ""),
                   status: "pending",
                 });
-                await session.updateStatus(renderPlanStatus(planTasks));
+                syncHeartbeatRenderer();
+                await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
               } else if (event.name === "TaskUpdate" && event.input) {
                 const task = planTasks.find((t) => t.id === String(event.input!.taskId));
                 if (task) {
@@ -394,7 +411,8 @@ export class FeishuConnector implements Connector {
                     if (event.input.status) task.status = String(event.input.status);
                     if (event.input.subject) task.subject = String(event.input.subject);
                   }
-                  await session.updateStatus(renderPlanStatus(planTasks));
+                  syncHeartbeatRenderer();
+                  await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
                 }
               } else if (event.name === "Agent") {
                 activeAgents.push({
@@ -402,7 +420,8 @@ export class FeishuConnector implements Connector {
                   description: String(event.input?.description ?? event.input?.prompt ?? "").slice(0, 60),
                   startTime: Date.now(),
                 });
-                await session.updateStatus(renderCombinedStatus(planTasks, activeAgents));
+                syncHeartbeatRenderer();
+                await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()));
               } else if (!PLAN_TOOLS.has(event.name)) {
                 // Non-plan/non-agent tool: only update status bar if no plan or agents active
                 if (planTasks.length === 0 && activeAgents.length === 0) {
@@ -438,9 +457,10 @@ export class FeishuConnector implements Connector {
               if (event.name === "Agent") {
                 const idx = activeAgents.findIndex((a) => a.toolUseId === event.toolUseId);
                 if (idx !== -1) activeAgents.splice(idx, 1);
+                syncHeartbeatRenderer();
               }
               // Update status bar
-              const combined = renderCombinedStatus(planTasks, activeAgents);
+              const combined = renderCombinedStatus(planTasks, activeAgents, session.getElapsed());
               await session.updateStatus(combined || "🤔 Thinking...");
               // Update the matching pending entry
               const entry = toolEntries.findLast((e) => e.status === "pending");

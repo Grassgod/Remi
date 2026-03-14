@@ -153,6 +153,13 @@ export interface ProxyConfig {
   noProxy: string;
 }
 
+export interface EmbeddingConfig {
+  provider: string;
+  apiKey: string;
+  model?: string;
+  dimensions?: number;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -181,6 +188,8 @@ export interface RemiConfig {
   bots: BotProfile[];
   /** Proxy settings for outbound HTTP requests. */
   proxy: ProxyConfig;
+  /** Embedding config for vector search (optional). */
+  embedding?: EmbeddingConfig;
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -284,6 +293,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
   const botsData = (fileData.bots ?? []) as Array<Record<string, unknown>>;
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
+  const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
@@ -383,6 +393,14 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       replyMode: ((b.reply_mode as string) ?? "direct") as BotProfile["replyMode"],
       systemPrompt: (b.system_prompt as string) ?? "",
     })),
+    embedding: embeddingData
+      ? {
+          provider: (embeddingData.provider as string) ?? "voyage",
+          apiKey: (embeddingData.api_key as string) ?? "",
+          model: (embeddingData.model as string) ?? undefined,
+          dimensions: embeddingData.dimensions != null ? parseInt(String(embeddingData.dimensions), 10) : undefined,
+        }
+      : undefined,
     tracing: (() => {
       const t = (fileData.tracing ?? {}) as Record<string, unknown>;
       return {

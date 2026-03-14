@@ -211,6 +211,7 @@ export class FeishuStreamingSession {
   private static HEARTBEAT_INTERVAL_MS = 10_000;
   private _startTime = 0;
   private _lastStatusText = "";
+  private _heartbeatRenderer: ((elapsed: number) => string) | null = null;
 
   // Overflow protection: max bytes for process content (~10KB)
   private static PROCESS_BUDGET = 10000;
@@ -466,6 +467,16 @@ export class FeishuStreamingSession {
     }
   }
 
+  /** Register a custom renderer for heartbeat status (e.g. plan/agent mode). */
+  setHeartbeatRenderer(renderer: ((elapsed: number) => string) | null): void {
+    this._heartbeatRenderer = renderer;
+  }
+
+  /** Get elapsed seconds since session started. */
+  getElapsed(): number {
+    return Math.round((Date.now() - this._startTime) / 1000);
+  }
+
   // ── Public update methods (fire-and-forget, don't block caller) ──
 
   async update(text: string): Promise<void> {
@@ -583,8 +594,9 @@ export class FeishuStreamingSession {
   private _sendHeartbeat(): void {
     if (!this.state || this.closed) return;
     const elapsed = Math.round((Date.now() - this._startTime) / 1000);
-    const label = this._lastStatusText || "Running";
-    const heartbeatText = `⏳ ${label} (${elapsed}s)`;
+    const heartbeatText = this._heartbeatRenderer
+      ? this._heartbeatRenderer(elapsed)
+      : `⏳ ${this._lastStatusText || "Running"} (${elapsed}s)`;
     // Bypass throttle — heartbeat is already rate-limited by its own timer
     this.queue = this.queue.then(() =>
       this._updateElementRaw("status_bar", heartbeatText),
