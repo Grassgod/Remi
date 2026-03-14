@@ -13,7 +13,7 @@
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync, readFileSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { exportSpan, registerSpanStart } from "./langsmith-exporter.js";
+import { exportSpan, registerSpan } from "./langsmith-exporter.js";
 
 // ── Data types (OTel-compatible) ──────────────────────────────────
 
@@ -113,7 +113,7 @@ class SpanImpl implements Span {
     this._startTime = new Date().toISOString();
     this._startMs = performance.now();
     this._attributes = { ...attributes };
-    registerSpanStart(this.spanId, traceId, parentSpanId, this._startTime);
+    registerSpan(this.spanId, traceId, parentSpanId, operationName, attributes);
   }
 
   context(): TraceContext {

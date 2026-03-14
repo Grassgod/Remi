@@ -1,27 +1,31 @@
 /**
- * LangSmith exporter — async, fire-and-forget span upload.
+ * LangSmith exporter — uses RunTree SDK for automatic trace hierarchy.
  *
- * Converts Remi SpanData into LangSmith runs.
- * Enabled when tracing.langsmith_api_key is set in remi.toml (or LANGCHAIN_API_KEY env).
+ * Two-phase lifecycle per span:
+ *   1. registerSpan()  — called at span creation, creates RunTree + postRun()
+ *   2. exportSpan()    — called at span end, sets outputs + patchRun()
+ *
+ * RunTree.createChild() handles trace_id, dotted_order, parent_run_id automatically.
  */
 
-import { Client } from "langsmith";
+import { RunTree } from "langsmith/run_trees";
 import type { SpanData } from "./tracing.js";
 import type { TracingConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("langsmith");
 
-let client: Client | null = null;
-let projectName = "remi";
+let projectName = "Remi";
 let enabled = false;
 
-// Cache dotted_order per spanId so child spans can reference their parent's dotted_order.
-const dottedOrderCache = new Map<string, string>();
-// Map traceId → root spanId so all spans in a trace share the same LangSmith trace_id.
-const rootSpanMap = new Map<string, string>();
-// Map traceId → session_key so all spans (including children) can carry the thread identifier.
-const traceSessionMap = new Map<string, string>();
+// spanId → RunTree instance (alive between registerSpan and exportSpan)
+const runTreeMap = new Map<string, RunTree>();
+// traceId → session_key for Thread grouping
+const sessionMap = new Map<string, string>();
+
+const CLEANUP_MS = 10 * 60 * 1000;
+
+// ── Init ─────────────────────────────────────────────────────────
 
 export function initLangSmith(config: TracingConfig): boolean {
   const apiKey = config.langsmithApiKey;
@@ -30,10 +34,9 @@ export function initLangSmith(config: TracingConfig): boolean {
     return false;
   }
 
-  client = new Client({
-    apiKey,
-    apiUrl: config.langsmithEndpoint,
-  });
+  process.env.LANGCHAIN_API_KEY = apiKey;
+  if (config.langsmithEndpoint) process.env.LANGCHAIN_ENDPOINT = config.langsmithEndpoint;
+
   projectName = config.langsmithProject;
   enabled = true;
   log.info(`LangSmith exporter initialized (project=${projectName})`);
@@ -44,167 +47,128 @@ export function isLangSmithEnabled(): boolean {
   return enabled;
 }
 
-/**
- * Register a span at creation time to build its dotted_order early,
- * so child spans can look up their parent's dotted_order when they end.
- */
-/** Register session_key for a trace so all child spans inherit it for Thread grouping. */
+// ── Session registration ─────────────────────────────────────────
+
 export function registerTraceSession(traceId: string, sessionKey: string): void {
-  traceSessionMap.set(traceId, sessionKey);
-  setTimeout(() => traceSessionMap.delete(traceId), 10 * 60 * 1000);
+  sessionMap.set(traceId, sessionKey);
+  setTimeout(() => sessionMap.delete(traceId), CLEANUP_MS);
 }
 
-export function registerSpanStart(spanId: string, traceId: string, parentSpanId: string | undefined, startTime: string): void {
-  const runId = toUuid(spanId).replace(/-/g, "");
-  const ts = toDottedTs(startTime);
-  const selfSegment = `${ts}${runId}`;
+// ── Span lifecycle ───────────────────────────────────────────────
 
-  if (parentSpanId) {
-    const parentDotted = dottedOrderCache.get(parentSpanId);
-    dottedOrderCache.set(spanId, parentDotted ? `${parentDotted}.${selfSegment}` : selfSegment);
-  } else {
-    // Root span: register as LangSmith trace root
-    dottedOrderCache.set(spanId, selfSegment);
-    rootSpanMap.set(traceId, spanId);
+/** Called at span creation — creates RunTree and posts it. */
+export function registerSpan(
+  spanId: string,
+  traceId: string,
+  parentSpanId: string | undefined,
+  operationName: string,
+  attributes?: Record<string, string | number | boolean>,
+): void {
+  if (!enabled) return;
+
+  const runType = resolveRunType(operationName);
+  const sessionKey = sessionMap.get(traceId);
+  const metadata = { session_id: sessionKey };
+  const inputs = buildInputs(operationName, attributes);
+
+  try {
+    let runTree: RunTree;
+
+    if (parentSpanId) {
+      const parent = runTreeMap.get(parentSpanId);
+      if (parent) {
+        runTree = parent.createChild({
+          name: operationName,
+          run_type: runType,
+          inputs,
+          extra: { metadata },
+        });
+      } else {
+        log.debug(`Parent not found for ${operationName}, creating standalone`);
+        runTree = new RunTree({
+          name: operationName,
+          run_type: runType,
+          project_name: projectName,
+          inputs,
+          extra: { metadata },
+        });
+      }
+    } else {
+      runTree = new RunTree({
+        name: operationName,
+        run_type: runType,
+        project_name: projectName,
+        inputs,
+        extra: { metadata },
+      });
+    }
+
+    runTreeMap.set(spanId, runTree);
+    runTree.postRun().catch((err) => log.warn(`postRun failed for ${operationName}: ${err.message}`));
+    setTimeout(() => runTreeMap.delete(spanId), CLEANUP_MS);
+  } catch (err) {
+    log.warn(`registerSpan failed for ${operationName}: ${(err as Error).message}`);
   }
-  // Auto-cleanup after 10 minutes
-  setTimeout(() => dottedOrderCache.delete(spanId), 10 * 60 * 1000);
 }
 
-/** Pad a hex string to UUID format for LangSmith compatibility. */
-function toUuid(hex: string): string {
-  const padded = hex.padStart(32, "0");
-  return `${padded.slice(0, 8)}-${padded.slice(8, 12)}-${padded.slice(12, 16)}-${padded.slice(16, 20)}-${padded.slice(20, 32)}`;
-}
-
-/** Convert ISO timestamp to LangSmith dotted_order timestamp format: "YYYYMMDDTHHMMSSsss000Z" */
-function toDottedTs(isoTime: string): string {
-  // "2026-03-14T09:58:27.316Z" → "20260314T095827316000Z"
-  const d = new Date(isoTime);
-  const iso = d.toISOString(); // "2026-03-14T09:58:27.316Z"
-  return iso.slice(0, -1).replace(/[-:.]/g, "") + "000Z"; // strip trailing Z, remove separators, add 000 for microseconds + Z
-}
-
-/**
- * Export a completed span to LangSmith as a run.
- * Fire-and-forget — errors are logged but never thrown.
- */
+/** Called at span end — sets outputs and patches the run. */
 export function exportSpan(span: SpanData): void {
-  if (!enabled || !client) {
-    log.info(`exportSpan skipped: enabled=${enabled}, client=${!!client}, op=${span.operationName}`);
+  if (!enabled) return;
+
+  const runTree = runTreeMap.get(span.spanId);
+  if (!runTree) {
+    log.debug(`No RunTree for ${span.operationName}, skipping export`);
     return;
   }
 
-  const isRoot = !span.parentSpanId;
-  const isLLM = span.operationName === "provider.chat" || span.operationName === "provider.chat.fallback";
-
-  // Map operation to LangSmith run_type
-  let runType: "chain" | "llm" | "tool" = "chain";
-  if (isLLM) runType = "llm";
-  else if (span.operationName.startsWith("tool.")) runType = "tool";
-
-  // Build inputs/outputs for LangSmith Dashboard
-  const inputs: Record<string, unknown> = {};
-  const outputs: Record<string, unknown> = {};
-
-  // Include all span attributes as inputs for full visibility
-  for (const [k, v] of Object.entries(span.attributes)) {
-    // Move output-related fields to outputs instead
-    if (k === "tool.output" || k === "tool.duration_ms" || k === "llm.response" || k === "llm.thinking") continue;
-    inputs[k] = v;
-  }
-
-  // Tool-specific: put tool.input in inputs, tool.output in outputs
-  if (span.operationName.startsWith("tool.")) {
-    if (span.attributes["tool.input"]) {
-      try { inputs.input = JSON.parse(span.attributes["tool.input"] as string); } catch { inputs.input = span.attributes["tool.input"]; }
-    }
-    if (span.attributes["tool.output"]) outputs.output = span.attributes["tool.output"];
-  }
-
-  // Span-specific structured outputs
-  if (isLLM) {
-    outputs.model = span.attributes["llm.model"] ?? "unknown";
-    outputs.input_tokens = span.attributes["llm.input_tokens"] ?? 0;
-    outputs.output_tokens = span.attributes["llm.output_tokens"] ?? 0;
-    outputs.cost_usd = span.attributes["llm.cost_usd"] ?? 0;
-    outputs.duration_ms = span.attributes["llm.duration_ms"] ?? 0;
-    if (span.attributes["llm.response"]) outputs.response = span.attributes["llm.response"];
-    if (span.attributes["llm.thinking"]) outputs.thinking = span.attributes["llm.thinking"];
-  }
-
-  outputs.duration_ms = span.durationMs;
-  outputs.status = span.status;
-  if (span.statusMessage) outputs.error = span.statusMessage;
-
-  // Convert IDs to UUID format (LangSmith requires 32-hex or UUID pattern)
-  const runId = toUuid(span.spanId);
-  const parentRunId = span.parentSpanId ? toUuid(span.parentSpanId) : undefined;
-
-  // LangSmith trace_id must match the first segment's runId in dotted_order (= root span's runId).
-  // rootSpanMap is populated at span creation time (registerSpanStart) so it's always available.
-  const rootSpanId = rootSpanMap.get(span.traceId) ?? span.spanId;
-  const traceId = toUuid(rootSpanId);
-
-  // Look up dotted_order from cache (populated by registerSpanStart at span creation time)
-  let dottedOrder = dottedOrderCache.get(span.spanId);
-  if (!dottedOrder) {
-    // Fallback: build it now (shouldn't happen if registerSpanStart was called)
-    const ts = toDottedTs(span.startTime);
-    const strippedRunId = runId.replace(/-/g, "");
-    dottedOrder = `${ts}${strippedRunId}`;
-    log.debug(`dotted_order cache miss for ${span.operationName}, built fallback`);
-  }
-
-  log.debug(`exportSpan ${span.operationName}: dottedOrder=${dottedOrder ? dottedOrder.slice(0, 40) + "..." : "EMPTY"}, runId=${runId}`);
-
-  // Session/thread grouping: cache on root, propagate to all children
-  const chatId = (span.attributes["chat.id"] as string) ?? undefined;
-  let sessionKey = (span.attributes["session.key"] as string) ?? undefined;
-  if (isRoot && sessionKey) {
-    traceSessionMap.set(span.traceId, sessionKey);
-  } else if (!sessionKey) {
-    sessionKey = traceSessionMap.get(span.traceId);
-  }
-
-  // Async create — fire-and-forget
-  client.createRun({
-    id: runId,
-    trace_id: traceId,
-    dotted_order: dottedOrder,
-    parent_run_id: parentRunId,
-    name: span.operationName,
-    run_type: runType,
-    project_name: projectName,
-    tags: chatId ? [chatId] : undefined,
-    inputs,
-    outputs,
-    start_time: new Date(span.startTime).getTime(),
-    end_time: span.endTime ? new Date(span.endTime).getTime() : undefined,
-    status: span.status === "ERROR" ? "error" : "success",
-    error: span.statusMessage ?? undefined,
-    extra: {
-      metadata: {
-        // LangSmith recognizes session_id/thread_id/conversation_id for Thread grouping
-        session_id: sessionKey,
-        chat_id: chatId,
-        connector: span.attributes["connector.name"] ?? undefined,
-      },
-      attributes: span.attributes,
-      events: span.events,
-    },
-  }).catch((err) => {
-    log.warn(`LangSmith export failed for ${span.operationName}: ${err.message}`);
+  runTree.end({
+    outputs: buildOutputs(span),
+    error: span.status === "ERROR" ? (span.statusMessage ?? "unknown error") : undefined,
   });
+
+  runTree.patchRun().catch((err) => log.warn(`patchRun failed for ${span.operationName}: ${err.message}`));
+  runTreeMap.delete(span.spanId);
 }
 
-/** Flush pending uploads. Call on graceful shutdown. */
+/** Flush pending uploads on graceful shutdown. */
 export async function flushLangSmith(): Promise<void> {
-  if (client) {
-    try {
-      await new Promise((r) => setTimeout(r, 2000));
-    } catch {
-      // ignore
-    }
+  await Promise.allSettled([...runTreeMap.values()].map((rt) => rt.patchRun()));
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+
+function resolveRunType(op: string): "chain" | "llm" | "tool" {
+  if (op === "provider.chat" || op === "provider.chat.fallback") return "llm";
+  if (op.startsWith("tool.")) return "tool";
+  return "chain";
+}
+
+function buildInputs(op: string, attrs?: Record<string, string | number | boolean>): Record<string, unknown> {
+  if (!attrs) return {};
+  const inputs: Record<string, unknown> = {};
+  const skipKeys = new Set(["tool.output", "tool.duration_ms", "llm.response", "llm.thinking"]);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (!skipKeys.has(k)) inputs[k] = v;
   }
+  if (op.startsWith("tool.") && attrs["tool.input"]) {
+    try { inputs.input = JSON.parse(attrs["tool.input"] as string); }
+    catch { inputs.input = attrs["tool.input"]; }
+  }
+  return inputs;
+}
+
+function buildOutputs(span: SpanData): Record<string, unknown> {
+  const out: Record<string, unknown> = { duration_ms: span.durationMs, status: span.status };
+  if (span.statusMessage) out.error = span.statusMessage;
+  const a = span.attributes;
+  if (a["llm.model"]) {
+    Object.assign(out, {
+      model: a["llm.model"], input_tokens: a["llm.input_tokens"] ?? 0,
+      output_tokens: a["llm.output_tokens"] ?? 0, cost_usd: a["llm.cost_usd"] ?? 0,
+    });
+    if (a["llm.response"]) out.response = a["llm.response"];
+    if (a["llm.thinking"]) out.thinking = a["llm.thinking"];
+  }
+  if (a["tool.output"]) out.output = a["tool.output"];
+  return out;
 }
