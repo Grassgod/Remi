@@ -203,7 +203,8 @@ export class Remi {
     const lock = this._getLaneLock(sessionKey);
     await lock.acquire();
     // Create root trace span
-    const rootSpan = this.traceCollector.startTrace("core.handle", {
+    const msgPreview = msg.text.slice(0, 50).replace(/\n/g, " ");
+    const rootSpan = this.traceCollector.startTrace(`handle: ${msgPreview}`, {
       "chat.id": msg.chatId,
       "session.key": sessionKey,
       "connector.name": msg.connectorName ?? "",
@@ -313,12 +314,14 @@ export class Remi {
         const toolSpan = providerSpan.context().startSpan(`tool.${event.name}`, {
           "tool.name": event.name,
           "tool.use_id": event.toolUseId,
+          "tool.input": JSON.stringify(event.input ?? {}).slice(0, 4096),
         });
         toolSpans.set(event.toolUseId, toolSpan);
       } else if (event.kind === "tool_result") {
         const toolSpan = toolSpans.get(event.toolUseId);
         if (toolSpan) {
           if (event.durationMs != null) toolSpan.setAttribute("tool.duration_ms", event.durationMs);
+          if (event.result) toolSpan.setAttribute("tool.output", event.result.slice(0, 4096));
           toolSpan.end();
           toolSpans.delete(event.toolUseId);
         }

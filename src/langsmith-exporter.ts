@@ -103,13 +103,23 @@ export function exportSpan(span: SpanData): void {
   if (isLLM) runType = "llm";
   else if (span.operationName.startsWith("tool.")) runType = "tool";
 
-  // Build inputs/outputs — pass all attributes so LangSmith Dashboard shows full context
+  // Build inputs/outputs for LangSmith Dashboard
   const inputs: Record<string, unknown> = {};
   const outputs: Record<string, unknown> = {};
 
-  // Always include all span attributes as inputs for full visibility
+  // Include all span attributes as inputs for full visibility
   for (const [k, v] of Object.entries(span.attributes)) {
+    // Move output-related fields to outputs instead
+    if (k === "tool.output" || k === "tool.duration_ms") continue;
     inputs[k] = v;
+  }
+
+  // Tool-specific: put tool.input in inputs, tool.output in outputs
+  if (span.operationName.startsWith("tool.")) {
+    if (span.attributes["tool.input"]) {
+      try { inputs.input = JSON.parse(span.attributes["tool.input"] as string); } catch { inputs.input = span.attributes["tool.input"]; }
+    }
+    if (span.attributes["tool.output"]) outputs.output = span.attributes["tool.output"];
   }
 
   // Span-specific structured outputs
