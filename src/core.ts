@@ -21,6 +21,7 @@ import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { registerTraceSession } from "./langsmith-exporter.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
+import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
@@ -680,6 +681,17 @@ export class Remi {
       feishu.setBotProfiles(config.bots);
       remi.addConnector(feishu);
       log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
+
+      // Bot menu sync (fire-and-forget on startup)
+      if (config.botMenu.default?.length || config.botMenu.users?.length) {
+        const menuSyncer = new MenuSyncer({
+          appId: config.feishu.appId,
+          appSecret: config.feishu.appSecret,
+        });
+        menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
+          log.warn(`Bot menu sync failed: ${err.message}`);
+        });
+      }
     }
 
     // 4. Restart handler

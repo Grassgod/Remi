@@ -146,6 +146,50 @@ export interface TokenSyncRuleConfig {
   extraKeys?: Record<string, string>;
 }
 
+// ── Bot Menu (千人千面菜单) ─────────────────────────────────
+
+export interface BotMenuBehavior {
+  type: "target" | "event_key" | "send_message";
+  /** URL for type=target — maps to target.common_url. */
+  url?: string;
+  /** Event key for type=event_key. */
+  eventKey?: string;
+  isPrimary?: boolean;
+}
+
+export interface BotMenuIcon {
+  /** Icon library token (e.g. "search_outlined"). */
+  token?: string;
+  /** Icon color (e.g. "blue"). */
+  color?: string;
+  /** Custom image key. */
+  fileKey?: string;
+}
+
+export interface BotMenuItemConfig {
+  name: string;
+  i18nName?: Record<string, string>;
+  icon?: BotMenuIcon;
+  tag?: string;
+  behaviors?: BotMenuBehavior[];
+  children?: BotMenuItemConfig[];
+}
+
+export interface BotMenuUserConfig {
+  userId: string;
+  userIdType?: "open_id" | "union_id" | "user_id";
+  /** Display label for Dashboard (not sent to API). */
+  label?: string;
+  items: BotMenuItemConfig[];
+}
+
+export interface BotMenuConfig {
+  /** Global default menu items (visible to all users). */
+  default?: BotMenuItemConfig[];
+  /** Per-user personalized menus (千人千面). */
+  users?: BotMenuUserConfig[];
+}
+
 export interface ProxyConfig {
   /** HTTP/HTTPS proxy URL. Empty = no proxy. */
   http: string;
@@ -194,6 +238,8 @@ export interface RemiConfig {
   projects: Record<string, string>;
   /** Configurable bot profiles for specific groups. */
   bots: BotProfile[];
+  /** Bot menu config (千人千面菜单). */
+  botMenu: BotMenuConfig;
   /** Proxy settings for outbound HTTP requests. */
   proxy: ProxyConfig;
   /** Embedding config for vector search (optional). */
@@ -254,6 +300,7 @@ export function defaultRemiConfig(): RemiConfig {
     services: [],
     projects: {},
     bots: [],
+    botMenu: {},
     proxy: { http: "", noProxy: "" },
     tracing: {
       enabled: true,
@@ -309,6 +356,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
+  const botMenuData = (fileData.bot_menu ?? {}) as Record<string, unknown>;
 
   const env = process.env;
 
@@ -407,6 +455,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       replyMode: ((b.reply_mode as string) ?? "direct") as BotProfile["replyMode"],
       systemPrompt: (b.system_prompt as string) ?? "",
     })),
+    botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData
       ? {
           provider: (embeddingData.provider as string) ?? "voyage",
@@ -607,6 +656,54 @@ function buildCronJobsToml(jobs: CronJobConfig[]): string {
 
 function tomlStr(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+// ── Bot Menu TOML parsing ────────────────────────────────────
+
+function parseBotMenuBehavior(b: Record<string, unknown>): BotMenuBehavior {
+  return {
+    type: (b.type as BotMenuBehavior["type"]) ?? "send_message",
+    url: (b.url as string) ?? undefined,
+    eventKey: (b.event_key as string) ?? undefined,
+    isPrimary: (b.is_primary as boolean) ?? undefined,
+  };
+}
+
+function parseBotMenuIcon(icon: Record<string, unknown>): BotMenuIcon {
+  return {
+    token: (icon.token as string) ?? undefined,
+    color: (icon.color as string) ?? undefined,
+    fileKey: (icon.file_key as string) ?? undefined,
+  };
+}
+
+function parseBotMenuItem(item: Record<string, unknown>): BotMenuItemConfig {
+  const behaviors = (item.behaviors as Array<Record<string, unknown>> | undefined)?.map(parseBotMenuBehavior);
+  const children = (item.children as Array<Record<string, unknown>> | undefined)?.map(parseBotMenuItem);
+  const icon = item.icon ? parseBotMenuIcon(item.icon as Record<string, unknown>) : undefined;
+
+  return {
+    name: (item.name as string) ?? "",
+    i18nName: (item.i18n_name as Record<string, string>) ?? undefined,
+    icon,
+    tag: (item.tag as string) ?? undefined,
+    behaviors,
+    children,
+  };
+}
+
+function parseBotMenuConfig(data: Record<string, unknown>): BotMenuConfig {
+  const defaultItems = (data.default as Array<Record<string, unknown>> | undefined)?.map(parseBotMenuItem);
+  const usersData = data.users as Array<Record<string, unknown>> | undefined;
+
+  const users = usersData?.map((u) => ({
+    userId: (u.user_id as string) ?? "",
+    userIdType: (u.user_id_type as BotMenuUserConfig["userIdType"]) ?? "open_id",
+    label: (u.label as string) ?? undefined,
+    items: ((u.items as Array<Record<string, unknown>>) ?? []).map(parseBotMenuItem),
+  }));
+
+  return { default: defaultItems, users };
 }
 
 function parseCronHourFromExpr(cronExpr: string): number {
