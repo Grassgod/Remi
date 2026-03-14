@@ -321,7 +321,7 @@ export class Remi {
         const toolSpan = toolSpans.get(event.toolUseId);
         if (toolSpan) {
           if (event.durationMs != null) toolSpan.setAttribute("tool.duration_ms", event.durationMs);
-          if (event.result) toolSpan.setAttribute("tool.output", event.result.slice(0, 4096));
+          if (event.resultPreview) toolSpan.setAttribute("tool.output", event.resultPreview.slice(0, 4096));
           toolSpan.end();
           toolSpans.delete(event.toolUseId);
         }
