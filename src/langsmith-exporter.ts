@@ -48,6 +48,12 @@ export function isLangSmithEnabled(): boolean {
  * Register a span at creation time to build its dotted_order early,
  * so child spans can look up their parent's dotted_order when they end.
  */
+/** Register session_key for a trace so all child spans inherit it for Thread grouping. */
+export function registerTraceSession(traceId: string, sessionKey: string): void {
+  traceSessionMap.set(traceId, sessionKey);
+  setTimeout(() => traceSessionMap.delete(traceId), 10 * 60 * 1000);
+}
+
 export function registerSpanStart(spanId: string, traceId: string, parentSpanId: string | undefined, startTime: string): void {
   const runId = toUuid(spanId).replace(/-/g, "");
   const ts = toDottedTs(startTime);
