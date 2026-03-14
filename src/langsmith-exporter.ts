@@ -110,7 +110,7 @@ export function exportSpan(span: SpanData): void {
   // Include all span attributes as inputs for full visibility
   for (const [k, v] of Object.entries(span.attributes)) {
     // Move output-related fields to outputs instead
-    if (k === "tool.output" || k === "tool.duration_ms") continue;
+    if (k === "tool.output" || k === "tool.duration_ms" || k === "llm.response" || k === "llm.thinking") continue;
     inputs[k] = v;
   }
 
@@ -129,6 +129,8 @@ export function exportSpan(span: SpanData): void {
     outputs.output_tokens = span.attributes["llm.output_tokens"] ?? 0;
     outputs.cost_usd = span.attributes["llm.cost_usd"] ?? 0;
     outputs.duration_ms = span.attributes["llm.duration_ms"] ?? 0;
+    if (span.attributes["llm.response"]) outputs.response = span.attributes["llm.response"];
+    if (span.attributes["llm.thinking"]) outputs.thinking = span.attributes["llm.thinking"];
   }
 
   outputs.duration_ms = span.durationMs;

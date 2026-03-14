@@ -395,6 +395,8 @@ export class Remi {
           "llm.output_tokens": resultResponse.outputTokens ?? 0,
           "llm.cost_usd": resultResponse.costUsd ?? 0,
           "llm.duration_ms": resultResponse.durationMs ?? 0,
+          "llm.response": resultResponse.text.slice(0, 4096),
+          "llm.thinking": (resultResponse.thinking ?? "").slice(0, 4096),
         });
       }
 
