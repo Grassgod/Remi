@@ -160,6 +160,11 @@ export interface EmbeddingConfig {
   dimensions?: number;
 }
 
+export interface GoogleConfig {
+  apiKey: string;
+  model: string;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -193,6 +198,8 @@ export interface RemiConfig {
   proxy: ProxyConfig;
   /** Embedding config for vector search (optional). */
   embedding?: EmbeddingConfig;
+  /** Google API config for Gemini image generation (optional). */
+  google?: GoogleConfig;
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -300,6 +307,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const botsData = (fileData.bots ?? []) as Array<Record<string, unknown>>;
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
+  const googleData = fileData.google as Record<string, unknown> | undefined;
   const projectsData = (fileData.projects ?? {}) as Record<string, string>;
 
   const env = process.env;
@@ -405,6 +413,12 @@ export function loadConfig(configPath?: string | null): RemiConfig {
           apiKey: (embeddingData.api_key as string) ?? "",
           model: (embeddingData.model as string) ?? undefined,
           dimensions: embeddingData.dimensions != null ? parseInt(String(embeddingData.dimensions), 10) : undefined,
+        }
+      : undefined,
+    google: googleData
+      ? {
+          apiKey: env.GOOGLE_API_KEY ?? (googleData.api_key as string) ?? "",
+          model: (googleData.model as string) ?? "gemini-2.5-flash-image",
         }
       : undefined,
     tracing: (() => {
