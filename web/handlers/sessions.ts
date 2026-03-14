@@ -1,18 +1,19 @@
+import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 
-export function registerSessionHandlers(router: any, data: RemiData) {
-  router.get("/api/v1/sessions", () => {
-    return Response.json(data.readSessions());
+export function registerSessionHandlers(app: Hono, data: RemiData) {
+  app.get("/api/v1/sessions", (c) => {
+    return c.json(data.readSessions());
   });
 
-  router.delete("/api/v1/sessions/:key", (_req: Request, params: Record<string, string>) => {
-    const ok = data.clearSession(decodeURIComponent(params.key));
-    if (!ok) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ ok: true });
+  app.delete("/api/v1/sessions/:key", (c) => {
+    const ok = data.clearSession(decodeURIComponent(c.req.param("key")));
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
   });
 
-  router.delete("/api/v1/sessions", () => {
+  app.delete("/api/v1/sessions", (c) => {
     const count = data.clearAllSessions();
-    return Response.json({ ok: true, cleared: count });
+    return c.json({ ok: true, cleared: count });
   });
 }

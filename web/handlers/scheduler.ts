@@ -1,23 +1,22 @@
+import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 
-export function registerSchedulerHandlers(router: any, data: RemiData) {
+export function registerSchedulerHandlers(app: Hono, data: RemiData) {
   // Current status of all jobs
-  router.get("/api/v1/scheduler/status", () => {
-    return Response.json(data.getSchedulerStatus());
+  app.get("/api/v1/scheduler/status", (c) => {
+    return c.json(data.getSchedulerStatus());
   });
 
   // Execution history (optionally filtered by jobId)
-  router.get("/api/v1/scheduler/history", (req: Request) => {
-    const url = new URL(req.url);
-    const jobId = url.searchParams.get("jobId") ?? undefined;
-    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
-    return Response.json(data.getSchedulerHistory(jobId, limit));
+  app.get("/api/v1/scheduler/history", (c) => {
+    const jobId = c.req.query("jobId") ?? undefined;
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+    return c.json(data.getSchedulerHistory(jobId, limit));
   });
 
   // Daily summary for last N days
-  router.get("/api/v1/scheduler/summary", (req: Request) => {
-    const url = new URL(req.url);
-    const days = Math.min(parseInt(url.searchParams.get("days") ?? "7", 10), 30);
-    return Response.json(data.getSchedulerSummary(days));
+  app.get("/api/v1/scheduler/summary", (c) => {
+    const days = Math.min(parseInt(c.req.query("days") ?? "7", 10), 30);
+    return c.json(data.getSchedulerSummary(days));
   });
 }

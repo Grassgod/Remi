@@ -1,72 +1,73 @@
+import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 
-export function registerMemoryHandlers(router: any, data: RemiData) {
+export function registerMemoryHandlers(app: Hono, data: RemiData) {
   // Global memory
-  router.get("/api/v1/memory/global", () => {
-    return Response.json({ content: data.readGlobalMemory() });
+  app.get("/api/v1/memory/global", (c) => {
+    return c.json({ content: data.readGlobalMemory() });
   });
 
-  router.put("/api/v1/memory/global", async (req: Request) => {
-    const body = await req.json();
+  app.put("/api/v1/memory/global", async (c) => {
+    const body = await c.req.json();
     if (!body.content || typeof body.content !== "string") {
-      return Response.json({ error: "content required" }, { status: 400 });
+      return c.json({ error: "content required" }, 400);
     }
     data.writeGlobalMemory(body.content);
-    return Response.json({ ok: true });
+    return c.json({ ok: true });
   });
 
   // Entities
-  router.get("/api/v1/memory/entities", () => {
-    return Response.json(data.listEntities());
+  app.get("/api/v1/memory/entities", (c) => {
+    return c.json(data.listEntities());
   });
 
-  router.get("/api/v1/memory/entities/:type/:name", (_req: Request, params: Record<string, string>) => {
-    const entity = data.readEntity(params.type, decodeURIComponent(params.name));
-    if (!entity) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json(entity);
+  app.get("/api/v1/memory/entities/:type/:name", (c) => {
+    const entity = data.readEntity(c.req.param("type"), decodeURIComponent(c.req.param("name")));
+    if (!entity) return c.json({ error: "not found" }, 404);
+    return c.json(entity);
   });
 
-  router.post("/api/v1/memory/entities", async (req: Request) => {
-    const body = await req.json();
+  app.post("/api/v1/memory/entities", async (c) => {
+    const body = await c.req.json();
     if (!body.type || !body.name) {
-      return Response.json({ error: "type and name required" }, { status: 400 });
+      return c.json({ error: "type and name required" }, 400);
     }
     data.createEntity(body);
-    return Response.json({ ok: true }, { status: 201 });
+    return c.json({ ok: true }, 201);
   });
 
-  router.put("/api/v1/memory/entities/:type/:name", async (req: Request, params: Record<string, string>) => {
-    const body = await req.json();
+  app.put("/api/v1/memory/entities/:type/:name", async (c) => {
+    const body = await c.req.json();
     if (!body.content) {
-      return Response.json({ error: "content required" }, { status: 400 });
+      return c.json({ error: "content required" }, 400);
     }
-    const ok = data.updateEntity(params.type, decodeURIComponent(params.name), body.content);
-    if (!ok) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ ok: true });
+    const ok = data.updateEntity(c.req.param("type"), decodeURIComponent(c.req.param("name")), body.content);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
   });
 
-  router.delete("/api/v1/memory/entities/:type/:name", (_req: Request, params: Record<string, string>) => {
-    const ok = data.deleteEntity(params.type, decodeURIComponent(params.name));
-    if (!ok) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ ok: true });
+  app.delete("/api/v1/memory/entities/:type/:name", (c) => {
+    const ok = data.deleteEntity(c.req.param("type"), decodeURIComponent(c.req.param("name")));
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json({ ok: true });
   });
 
   // Search
-  router.get("/api/v1/memory/search", (req: Request) => {
-    const url = new URL(req.url);
-    const q = url.searchParams.get("q") ?? "";
-    if (!q) return Response.json([]);
-    return Response.json(data.searchMemory(q));
+  app.get("/api/v1/memory/search", (c) => {
+    const q = c.req.query("q") ?? "";
+    if (!q) return c.json([]);
+    return c.json(data.searchMemory(q));
   });
 
   // Daily logs
-  router.get("/api/v1/memory/daily", () => {
-    return Response.json(data.listDailyDates());
+  app.get("/api/v1/memory/daily", (c) => {
+    return c.json(data.listDailyDates());
   });
 
-  router.get("/api/v1/memory/daily/:date", (_req: Request, params: Record<string, string>) => {
-    const content = data.readDaily(params.date);
-    if (!content) return Response.json({ error: "not found" }, { status: 404 });
-    return Response.json({ date: params.date, content });
+  app.get("/api/v1/memory/daily/:date", (c) => {
+    const date = c.req.param("date");
+    const content = data.readDaily(date);
+    if (!content) return c.json({ error: "not found" }, 404);
+    return c.json({ date, content });
   });
 }

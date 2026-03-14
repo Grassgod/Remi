@@ -1,19 +1,19 @@
 /**
- * Simple bearer token authentication middleware
+ * Bearer token authentication middleware for Hono
  */
 
-export function checkAuth(req: Request, authToken: string): boolean {
-  if (!authToken) return true; // no token configured = auth disabled
+import type { MiddlewareHandler } from "hono";
 
-  const header = req.headers.get("Authorization");
-  if (header === `Bearer ${authToken}`) return true;
+export function authMiddleware(authToken: string): MiddlewareHandler {
+  return async (c, next) => {
+    if (!authToken) return next();
 
-  const url = new URL(req.url);
-  if (url.searchParams.get("token") === authToken) return true;
+    const header = c.req.header("Authorization");
+    if (header === `Bearer ${authToken}`) return next();
 
-  return false;
-}
+    const queryToken = c.req.query("token");
+    if (queryToken === authToken) return next();
 
-export function unauthorizedResponse(): Response {
-  return Response.json({ error: "Unauthorized" }, { status: 401 });
+    return c.json({ error: "Unauthorized" }, 401);
+  };
 }

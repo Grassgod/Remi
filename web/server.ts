@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Remi Web Dashboard — Independent API + static file server
+ * Remi Web Dashboard — Hono-based API + static file server
  *
  * Can run standalone:
  *   bun run web/server.ts              # Production (serves API + built frontend)
@@ -10,11 +10,12 @@
  *   import { startWebDashboard, stopWebDashboard } from "./web/server.js";
  */
 
-import { join, extname } from "node:path";
-import { existsSync } from "node:fs";
-import { Router } from "./router.js";
+import { join } from "node:path";
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { serveStatic } from "hono/bun";
+import { authMiddleware } from "./auth.js";
 import { RemiData } from "./remi-data.js";
-import { checkAuth, unauthorizedResponse } from "./auth.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
 import { registerSessionHandlers } from "./handlers/sessions.js";
@@ -27,20 +28,6 @@ import { registerLogsHandlers } from "./handlers/logs.js";
 import { registerMonitorHandlers } from "./handlers/monitor.js";
 import { registerSchedulerHandlers } from "./handlers/scheduler.js";
 
-// ── MIME types ─────────────────────────────────────────
-
-const MIME: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
-
 // ── Exported start/stop ────────────────────────────────
 
 let _server: ReturnType<typeof Bun.serve> | null = null;
@@ -51,101 +38,67 @@ export interface WebDashboardOptions {
   devMode?: boolean;
 }
 
-export function startWebDashboard(opts: WebDashboardOptions = {}): { port: number } {
-  const port = opts.port ?? parseInt(process.env.REMI_WEB_PORT ?? "6120", 10);
-  const authToken = opts.authToken ?? process.env.REMI_WEB_AUTH_TOKEN ?? "";
+export function createApp(opts: { authToken?: string; devMode?: boolean } = {}): Hono {
+  const authToken = opts.authToken ?? "";
   const devMode = opts.devMode ?? false;
   const staticDir = join(import.meta.dir, "frontend", "dist");
 
   const data = new RemiData();
-  const router = new Router();
+  const app = new Hono();
 
-  registerStatusHandlers(router, data);
-  registerMemoryHandlers(router, data);
-  registerSessionHandlers(router, data);
-  registerAuthHandlers(router, data);
-  registerConfigHandlers(router, data);
-  registerProjectHandlers(router, data);
-  registerAnalyticsHandlers(router, data);
-  registerTracesHandlers(router, data);
-  registerLogsHandlers(router, data);
-  registerMonitorHandlers(router, data);
-  registerSchedulerHandlers(router, data);
+  // Global middleware
+  if (devMode) {
+    app.use("/api/*", cors());
+  }
+  app.use("/api/*", authMiddleware(authToken));
+
+  // Global error handler
+  app.onError((err, c) => {
+    console.error("[API Error]", err);
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
+  // Register all handler modules
+  registerStatusHandlers(app, data);
+  registerMemoryHandlers(app, data);
+  registerSessionHandlers(app, data);
+  registerAuthHandlers(app, data);
+  registerConfigHandlers(app, data);
+  registerProjectHandlers(app, data);
+  registerAnalyticsHandlers(app, data);
+  registerTracesHandlers(app, data);
+  registerLogsHandlers(app, data);
+  registerMonitorHandlers(app, data);
+  registerSchedulerHandlers(app, data);
+
+  // Static files (production only)
+  if (!devMode) {
+    app.use("/*", serveStatic({ root: staticDir }));
+    app.get("/*", serveStatic({ path: join(staticDir, "index.html") }));
+  }
+
+  // Dev mode fallback
+  if (devMode) {
+    app.all("/*", (c) => {
+      return c.json({
+        message: "Remi Web API (dev mode). Frontend at http://localhost:5173",
+      });
+    });
+  }
+
+  return app;
+}
+
+export function startWebDashboard(opts: WebDashboardOptions = {}): { port: number } {
+  const port = opts.port ?? parseInt(process.env.REMI_WEB_PORT ?? "6120", 10);
+  const authToken = opts.authToken ?? process.env.REMI_WEB_AUTH_TOKEN ?? "";
+  const devMode = opts.devMode ?? false;
+
+  const app = createApp({ authToken, devMode });
 
   _server = Bun.serve({
     port,
-    async fetch(req) {
-      const url = new URL(req.url);
-
-      // CORS for dev mode
-      if (devMode && req.method === "OPTIONS") {
-        return new Response(null, {
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          },
-        });
-      }
-
-      // API routes
-      if (url.pathname.startsWith("/api/")) {
-        if (!checkAuth(req, authToken)) {
-          return unauthorizedResponse();
-        }
-
-        const match = router.match(req);
-        if (match) {
-          try {
-            const response = await match.handler(req, match.params);
-            if (devMode) {
-              const headers = new Headers(response.headers);
-              headers.set("Access-Control-Allow-Origin", "*");
-              return new Response(response.body, {
-                status: response.status,
-                statusText: response.statusText,
-                headers,
-              });
-            }
-            return response;
-          } catch (err) {
-            console.error("[API Error]", err);
-            return Response.json({ error: "Internal server error" }, { status: 500 });
-          }
-        }
-
-        return Response.json({ error: "Not found" }, { status: 404 });
-      }
-
-      // Static files (production only)
-      if (!devMode && existsSync(staticDir)) {
-        let filePath = join(staticDir, url.pathname === "/" ? "index.html" : url.pathname);
-
-        const file = Bun.file(filePath);
-        if (await file.exists()) {
-          const ext = extname(filePath);
-          return new Response(file, {
-            headers: { "Content-Type": MIME[ext] ?? "application/octet-stream" },
-          });
-        }
-
-        // SPA fallback
-        const indexFile = Bun.file(join(staticDir, "index.html"));
-        if (await indexFile.exists()) {
-          return new Response(indexFile, {
-            headers: { "Content-Type": "text/html" },
-          });
-        }
-      }
-
-      if (devMode) {
-        return Response.json({
-          message: "Remi Web API (dev mode). Frontend at http://localhost:5173",
-        });
-      }
-
-      return new Response("Not found", { status: 404 });
-    },
+    fetch: app.fetch,
   });
 
   return { port };
