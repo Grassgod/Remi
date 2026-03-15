@@ -6,10 +6,13 @@
  */
 
 import { Queue, Worker } from "bunqueue/client";
-import { QUEUES, type ConversationJobData, type MemoryJobData } from "./queues.js";
+import { QUEUES, type ConversationJobData, type MemoryJobData, type CronJobData } from "./queues.js";
 import { handleConversationJob } from "./handlers/conversation.js";
 import { handleMemoryJob } from "./handlers/memory.js";
+import { handleCronJob } from "./handlers/cron-bridge.js";
 import type { MemoryStore } from "../memory/store.js";
+import type { Remi } from "../core.js";
+import type { CronJobConfig } from "../config.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("queue");
@@ -22,6 +25,7 @@ export class RemiQueueManager {
   // ── Queues ──
   private conversationQueue: Queue<ConversationJobData>;
   private memoryQueue: Queue<MemoryJobData>;
+  private cronQueue: Queue<CronJobData>;
 
   // ── Workers ──
   private workers: Worker[] = [];
@@ -34,11 +38,17 @@ export class RemiQueueManager {
   private pushCount = 0;
   private pushCountResetAt = Date.now();
 
+  // ── Remi ref for cron handlers ──
+  private remi: Remi | null = null;
+
   constructor(private memory: MemoryStore) {
     this.conversationQueue = new Queue<ConversationJobData>(QUEUES.CONVERSATION, {
       embedded: true,
     });
     this.memoryQueue = new Queue<MemoryJobData>(QUEUES.MEMORY, {
+      embedded: true,
+    });
+    this.cronQueue = new Queue<CronJobData>(QUEUES.CRON, {
       embedded: true,
     });
   }
@@ -105,6 +115,64 @@ export class RemiQueueManager {
   }
 
   // ══════════════════════════════════════════════════════════
+  //  Cron scheduler setup
+  // ══════════════════════════════════════════════════════════
+
+  /**
+   * Register cron jobs from config using BunQueue's upsertJobScheduler.
+   * Replaces CronTimer + JobStore + JobRunner.
+   */
+  async setupSchedulers(cronJobs: CronJobConfig[], remi: Remi): Promise<void> {
+    this.remi = remi;
+
+    for (const job of cronJobs) {
+      if (job.enabled === false) continue;
+
+      let repeatOpts: { pattern?: string; every?: number } | undefined;
+
+      if (job.cron) {
+        repeatOpts = { pattern: job.cron };
+      } else if (job.every) {
+        const ms = RemiQueueManager.parseIntervalToMs(job.every);
+        repeatOpts = { every: ms };
+      }
+      // "at" jobs (one-shot) are added as delayed jobs, not schedulers
+
+      if (repeatOpts) {
+        try {
+          await this.cronQueue.upsertJobScheduler(
+            `remi:${job.id}`,
+            repeatOpts,
+            {
+              name: "cron",
+              data: { handler: job.handler, handlerConfig: job.handlerConfig },
+              opts: {
+                attempts: 2,
+                backoff: { type: "exponential", delay: 30_000 },
+                removeOnComplete: { age: 86400 },
+              },
+            },
+          );
+          log.info(`Scheduler registered: ${job.id} (${job.cron ?? job.every})`);
+        } catch (e) {
+          log.error(`Failed to register scheduler ${job.id}:`, e);
+        }
+      } else if (job.at) {
+        // One-shot delayed job
+        const delayMs = new Date(job.at).getTime() - Date.now();
+        if (delayMs > 0) {
+          await this.cronQueue.add("cron", { handler: job.handler, handlerConfig: job.handlerConfig }, {
+            delay: delayMs,
+            jobId: `remi:${job.id}`,
+            attempts: 2,
+          });
+          log.info(`One-shot job registered: ${job.id} (at ${job.at})`);
+        }
+      }
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
   //  Lifecycle
   // ══════════════════════════════════════════════════════════
 
@@ -112,7 +180,7 @@ export class RemiQueueManager {
     const memory = this.memory;
     const self = this;
 
-    // Conversation Worker — writes to SQLite, triggers memory extraction
+    // Conversation Worker — triggers memory extraction
     const convWorker = new Worker<ConversationJobData>(
       QUEUES.CONVERSATION,
       async (job) => handleConversationJob(job, self),
@@ -126,7 +194,17 @@ export class RemiQueueManager {
       { embedded: true, concurrency: 1 },
     );
 
-    this.workers = [convWorker, memWorker];
+    // Cron Worker — dispatches to handler functions
+    const cronWorker = new Worker<CronJobData>(
+      QUEUES.CRON,
+      async (job) => {
+        if (!self.remi) throw new Error("Remi not initialized for cron");
+        await handleCronJob(job, self.remi);
+      },
+      { embedded: true, concurrency: 1 },
+    );
+
+    this.workers = [convWorker, memWorker, cronWorker];
 
     // Attach error handlers — log only, never push
     for (const w of this.workers) {
@@ -156,14 +234,31 @@ export class RemiQueueManager {
     }
     try { await this.conversationQueue.close(); } catch { /* */ }
     try { await this.memoryQueue.close(); } catch { /* */ }
+    try { await this.cronQueue.close(); } catch { /* */ }
     log.info("RemiQueueManager stopped");
   }
 
   // ── Internal ──
 
+  /** Parse interval string to milliseconds: "30s", "5m", "2h", "1d", "300" (raw seconds). */
+  private static parseIntervalToMs(val: string | number): number {
+    if (typeof val === "number") return val * 1000;
+    const match = val.match(/^(\d+)\s*(s|m|h|d)?$/i);
+    if (!match) return 300_000;
+    const num = parseInt(match[1], 10);
+    const unit = (match[2] ?? "s").toLowerCase();
+    switch (unit) {
+      case "s": return num * 1000;
+      case "m": return num * 60_000;
+      case "h": return num * 3_600_000;
+      case "d": return num * 86_400_000;
+      default: return num * 1000;
+    }
+  }
+
   private async cleanStaleJobs(): Promise<void> {
     const STALE_THRESHOLD = 10 * 60 * 1000; // 10 minutes
-    for (const q of [this.conversationQueue, this.memoryQueue]) {
+    for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue]) {
       try {
         const active = q.getActive();
         for (const job of active) {

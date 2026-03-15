@@ -6,10 +6,9 @@
  * - "serve":          Production mode (PM2 subprocess, with connectors + scheduler)
  */
 
-import { loadConfig, migrateConfigFile } from "./config.js";
+import { loadConfig, migrateConfigFile, migrateToCronJobs } from "./config.js";
 import { Remi } from "./core.js";
 import { CLIConnector } from "./connectors/cli.js";
-import { CronTimer } from "./scheduler/cron-timer.js";
 import { setLogLevel, createLogger, initLogPersistence } from "./logger.js";
 import { runAuth } from "./auth/oauth-cli.js";
 import { pm2Start, pm2Stop } from "./pm2.js";
@@ -49,15 +48,17 @@ async function runServe(): Promise<void> {
   }
 
   const remi = Remi.boot(config);
-  const cronTimer = new CronTimer(remi, config);
 
-  // PM2 sends SIGTERM to stop — use AbortController to signal CronTimer
-  const ac = new AbortController();
-  process.on("SIGTERM", () => ac.abort());
-  process.on("SIGINT", () => ac.abort());
+  // PM2 sends SIGTERM to stop
+  process.on("SIGTERM", () => { remi.queue.stop(); remi.stop(); });
+  process.on("SIGINT", () => { remi.queue.stop(); remi.stop(); });
 
-  // Start BunQueue workers (conversation + memory)
+  // Start BunQueue workers (conversation + memory + cron)
   await remi.queue.start();
+
+  // Register cron schedulers from config (replaces CronTimer)
+  const cronJobs = migrateToCronJobs(config);
+  await remi.queue.setupSchedulers(cronJobs, remi);
 
   log.info("=".repeat(60));
   log.info(`Remi starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${config.provider.name})`);
@@ -66,16 +67,12 @@ async function runServe(): Promise<void> {
   setTimeout(() => remi.sendRestartNotify(), 5000);
 
   try {
-    await Promise.all([
-      remi.start(),
-      cronTimer.start(ac.signal),
-    ]);
+    await remi.start();
   } catch (e) {
     if ((e as Error).name !== "AbortError") {
       throw e;
     }
   } finally {
-    ac.abort(); // Ensure CronTimer stops in all exit paths
     await remi.queue.stop();
     await remi.stop();
     log.info("Remi stopped.");
