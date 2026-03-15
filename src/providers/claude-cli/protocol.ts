@@ -39,6 +39,7 @@ export interface ResultMessage {
   kind: "result";
   result: string;
   sessionId: string;
+  requestId: string | null;
   costUsd: number | null;
   model: string;
   isError: boolean;
@@ -94,6 +95,14 @@ export type ParsedMessage =
   | Record<string, unknown>;
 
 // ── Parsing (stdout line -> typed message) ─────────────────────
+
+/** Last requestId seen from an assistant message (set during parseLine). */
+let _lastRequestId: string | null = null;
+
+/** Get the last captured requestId from CLI assistant messages. */
+export function getLastRequestId(): string | null {
+  return _lastRequestId;
+}
 
 export function parseLine(line: string): ParsedMessage {
   let data: Record<string, unknown>;
@@ -157,6 +166,8 @@ export function parseLine(line: string): ParsedMessage {
 
   // Assistant message with complete content blocks (non-streaming path)
   if (msgType === "assistant") {
+    // Capture requestId for CLI JSONL correlation
+    if (typeof data.requestId === "string") _lastRequestId = data.requestId;
     const message = (data.message as Record<string, unknown>) ?? {};
     const content = (message.content as Array<Record<string, unknown>>) ?? [];
 
@@ -242,11 +253,14 @@ export function parseLine(line: string): ParsedMessage {
 
   // Result (end of turn)
   if (msgType === "result") {
+    // Capture requestId if present on result, otherwise use last seen from assistant
+    if (typeof data.request_id === "string") _lastRequestId = data.request_id;
     const usage = (data.usage as Record<string, unknown>) ?? {};
     return {
       kind: "result",
       result: (data.result as string) ?? "",
       sessionId: (data.session_id as string) ?? "",
+      requestId: _lastRequestId,
       costUsd: (data.cost_usd as number) ?? null,
       model: (data.model as string) ?? "",
       isError: (data.is_error as boolean) ?? false,

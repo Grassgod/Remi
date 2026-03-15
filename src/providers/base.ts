@@ -28,6 +28,7 @@ export interface AgentResponse {
   text: string;
   thinking?: string | null;
   sessionId?: string | null;
+  requestId?: string | null;
   costUsd?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -79,6 +80,7 @@ export function createAgentResponse(partial: Partial<AgentResponse> & { text: st
   return {
     thinking: null,
     sessionId: null,
+    requestId: null,
     costUsd: null,
     inputTokens: null,
     outputTokens: null,

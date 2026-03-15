@@ -216,6 +216,7 @@ export class ClaudeCLIProvider implements Provider {
             text: resultMsg.result || fullText,
             thinking,
             sessionId: resultMsg.sessionId,
+            requestId: resultMsg.requestId,
             costUsd: resultMsg.costUsd,
             model: resultMsg.model || sessionModel || null,
             inputTokens: resultMsg.inputTokens,

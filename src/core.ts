@@ -27,6 +27,7 @@ import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
 import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
+import { insertConversation } from "./db/index.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
@@ -284,11 +285,7 @@ export class Remi {
     let promptTooLong = false;
     let staleSession = false;
 
-    // ── Capture events for JSONL trace (source of truth) ──
-    type CapturedEvent = import("./queue/queues.js").CapturedEvent;
-    const capturedEvents: CapturedEvent[] = [];
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
-    let thinkingBuf = "";
 
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
       log.debug(`received event: ${event.kind}`);
@@ -315,14 +312,6 @@ export class Remi {
       }
 
       yield event;
-
-      // Capture event for JSONL trace
-      if (event.kind === "thinking_delta") {
-        thinkingBuf += event.text;
-      } else if (event.kind !== "content_delta") {
-        // Capture non-delta events (tool_use, tool_result, rate_limit, error, result)
-        capturedEvents.push({ kind: event.kind, ts: Date.now(), ...("name" in event ? { name: event.name } : {}), ...("toolUseId" in event ? { toolUseId: event.toolUseId } : {}), ...("error" in event ? { error: event.error } : {}) });
-      }
 
       if (event.kind === "result") {
         resultResponse = event.response;
@@ -487,25 +476,51 @@ export class Remi {
         });
       }
 
-      // Enqueue conversation record (fire-and-forget, non-blocking)
-      // JSONL = source of truth (full events); SQLite = derived summary for queries
-      this.queue.enqueueConversation({
-        sessionKey,
-        chatId: msg.chatId,
-        sender: msg.sender,
-        connector: msg.connectorName,
-        userText: msg.text,
-        assistantText: resultResponse.text ?? "",
-        thinking: thinkingBuf || undefined,
-        toolCalls: toolCallMap.size > 0 ? [...toolCallMap.values()] : undefined,
-        events: capturedEvents.length > 0 ? capturedEvents : undefined,
-        model: resultResponse.model ?? undefined,
-        inputTokens: resultResponse.inputTokens ?? undefined,
-        outputTokens: resultResponse.outputTokens ?? undefined,
-        costUsd: resultResponse.costUsd ?? undefined,
-        durationMs: resultResponse.durationMs ?? undefined,
-        timestamp: new Date().toISOString(),
-      }).catch((e) => log.warn("enqueue conversation failed:", e));
+      // Write conversation record to SQLite (Remi business context + CLI correlation)
+      // CLI JSONL (~/.claude/projects/) is the full trace; this table is the index.
+      try {
+        const spans: Array<Record<string, unknown>> = [];
+
+        // Memory assembly span (duration not available from Span interface)
+        spans.push({ op: "memory.assemble" });
+
+        // Provider chat span
+        spans.push({
+          op: "provider.chat",
+          ms: resultResponse.durationMs ?? 0,
+          model: resultResponse.model,
+          tool_count: toolCallMap.size,
+        });
+
+        // Tool call details
+        for (const tc of toolCallMap.values()) {
+          spans.push({ op: `tool.${tc.name}`, ms: tc.durationMs ?? 0 });
+        }
+
+        insertConversation({
+          chatId: msg.chatId,
+          senderId: msg.sender,
+          connector: msg.connectorName,
+          messageId: msg.metadata?.messageId as string | undefined,
+          costUsd: resultResponse.costUsd ?? undefined,
+          durationMs: resultResponse.durationMs ?? undefined,
+          cliSessionId: resultResponse.sessionId ?? undefined,
+          cliRequestId: resultResponse.requestId ?? undefined,
+          cliCwd: cwd ?? undefined,
+          model: resultResponse.model ?? undefined,
+          inputTokens: resultResponse.inputTokens ?? undefined,
+          outputTokens: resultResponse.outputTokens ?? undefined,
+          spans,
+        });
+
+        // Trigger memory extraction check via BunQueue (fire-and-forget)
+        this.queue.enqueueConversation({
+          sessionKey,
+          chatId: msg.chatId,
+        }).catch((e) => log.warn("enqueue conversation trigger failed:", e));
+      } catch (e) {
+        log.warn("insert conversation failed:", e);
+      }
     }
   }
 

@@ -45,23 +45,32 @@ export function getDb(): Database {
     );
 
     CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY,
-      session_key TEXT NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      -- Remi business context (CLI doesn't know these)
       chat_id TEXT NOT NULL,
-      sender TEXT,
-      user_text TEXT,
-      assistant_text TEXT,
+      sender_id TEXT,
+      connector TEXT,
+      message_id TEXT,
+      card_id TEXT,
+      cost_usd REAL,
+      duration_ms INTEGER,
+      -- CLI correlation (precise per-round linkage)
+      cli_session_id TEXT,
+      cli_request_id TEXT,
+      cli_cwd TEXT,
+      -- Summary (avoid reading JSONL for common queries)
       model TEXT,
       input_tokens INTEGER,
       output_tokens INTEGER,
-      cost_usd REAL,
-      duration_ms INTEGER,
-      tool_count INTEGER DEFAULT 0,
+      -- Remi processing steps (extensible JSON array)
+      spans TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_key);
+    CREATE INDEX IF NOT EXISTS idx_conv_chat ON conversations(chat_id);
     CREATE INDEX IF NOT EXISTS idx_conv_date ON conversations(created_at);
+    CREATE INDEX IF NOT EXISTS idx_conv_cli_req ON conversations(cli_request_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)
@@ -106,4 +115,51 @@ export function kvSet(key: string, value: string): void {
 export function kvDelete(key: string): void {
   const db = getDb();
   db.run("DELETE FROM kv WHERE key = ?", [key]);
+}
+
+// ── Conversations helpers ──
+
+export interface ConversationRow {
+  chatId: string;
+  senderId?: string;
+  connector?: string;
+  messageId?: string;
+  cardId?: string;
+  costUsd?: number;
+  durationMs?: number;
+  cliSessionId?: string;
+  cliRequestId?: string;
+  cliCwd?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  spans?: unknown[];
+}
+
+export function insertConversation(row: ConversationRow): void {
+  const db = getDb();
+  db.run(
+    `INSERT INTO conversations (
+      chat_id, sender_id, connector, message_id, card_id,
+      cost_usd, duration_ms,
+      cli_session_id, cli_request_id, cli_cwd,
+      model, input_tokens, output_tokens, spans
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.chatId,
+      row.senderId ?? null,
+      row.connector ?? null,
+      row.messageId ?? null,
+      row.cardId ?? null,
+      row.costUsd ?? null,
+      row.durationMs ?? null,
+      row.cliSessionId ?? null,
+      row.cliRequestId ?? null,
+      row.cliCwd ?? null,
+      row.model ?? null,
+      row.inputTokens ?? null,
+      row.outputTokens ?? null,
+      row.spans ? JSON.stringify(row.spans) : null,
+    ],
+  );
 }
