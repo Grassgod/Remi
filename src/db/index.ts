@@ -56,6 +56,7 @@ export function getDb(): Database {
       output_tokens INTEGER,
       cost_usd REAL,
       duration_ms INTEGER,
+      tool_count INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now'))
     );
 

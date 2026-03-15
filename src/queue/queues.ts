@@ -8,6 +8,19 @@ export const QUEUES = {
   CRON: "remi:cron",
 } as const;
 
+/** A single StreamEvent captured during processing (for JSONL trace). */
+export interface CapturedEvent {
+  kind: string;
+  ts: number; // Date.now() at capture time
+  name?: string;
+  toolUseId?: string;
+  input?: Record<string, unknown>;
+  resultPreview?: string;
+  text?: string;
+  error?: string;
+  durationMs?: number;
+}
+
 /** remi:conversation — 每轮对话记录 */
 export interface ConversationJobData {
   sessionKey: string;
@@ -16,6 +29,9 @@ export interface ConversationJobData {
   connector?: string;
   userText: string;
   assistantText: string;
+  thinking?: string;
+  toolCalls?: Array<{ name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>;
+  events?: CapturedEvent[]; // 完整事件流，写入 JSONL
   model?: string;
   inputTokens?: number;
   outputTokens?: number;

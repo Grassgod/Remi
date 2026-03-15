@@ -284,6 +284,12 @@ export class Remi {
     let promptTooLong = false;
     let staleSession = false;
 
+    // ── Capture events for JSONL trace (source of truth) ──
+    type CapturedEvent = import("./queue/queues.js").CapturedEvent;
+    const capturedEvents: CapturedEvent[] = [];
+    const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
+    let thinkingBuf = "";
+
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
       log.debug(`received event: ${event.kind}`);
 
@@ -309,19 +315,36 @@ export class Remi {
       }
 
       yield event;
+
+      // Capture event for JSONL trace
+      if (event.kind === "thinking_delta") {
+        thinkingBuf += event.text;
+      } else if (event.kind !== "content_delta") {
+        // Capture non-delta events (tool_use, tool_result, rate_limit, error, result)
+        capturedEvents.push({ kind: event.kind, ts: Date.now(), ...("name" in event ? { name: event.name } : {}), ...("toolUseId" in event ? { toolUseId: event.toolUseId } : {}), ...("error" in event ? { error: event.error } : {}) });
+      }
+
       if (event.kind === "result") {
         resultResponse = event.response;
       } else if (event.kind === "rate_limit" && event.rateLimitType) {
         this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
         providerSpan?.addEvent("rate_limit", { type: event.rateLimitType });
-      } else if (event.kind === "tool_use" && providerSpan) {
-        const toolSpan = providerSpan.context().startSpan(`tool.${event.name}`, {
-          "tool.name": event.name,
-          "tool.use_id": event.toolUseId,
-          "tool.input": JSON.stringify(event.input ?? {}).slice(0, 4096),
-        });
-        toolSpans.set(event.toolUseId, toolSpan);
+      } else if (event.kind === "tool_use") {
+        toolCallMap.set(event.toolUseId, { name: event.name, toolUseId: event.toolUseId, input: event.input });
+        if (providerSpan) {
+          const toolSpan = providerSpan.context().startSpan(`tool.${event.name}`, {
+            "tool.name": event.name,
+            "tool.use_id": event.toolUseId,
+            "tool.input": JSON.stringify(event.input ?? {}).slice(0, 4096),
+          });
+          toolSpans.set(event.toolUseId, toolSpan);
+        }
       } else if (event.kind === "tool_result") {
+        const tc = toolCallMap.get(event.toolUseId);
+        if (tc) {
+          tc.resultPreview = event.resultPreview?.slice(0, 2048);
+          tc.durationMs = event.durationMs;
+        }
         const toolSpan = toolSpans.get(event.toolUseId);
         if (toolSpan) {
           if (event.durationMs != null) toolSpan.setAttribute("tool.duration_ms", event.durationMs);
@@ -465,6 +488,7 @@ export class Remi {
       }
 
       // Enqueue conversation record (fire-and-forget, non-blocking)
+      // JSONL = source of truth (full events); SQLite = derived summary for queries
       this.queue.enqueueConversation({
         sessionKey,
         chatId: msg.chatId,
@@ -472,6 +496,9 @@ export class Remi {
         connector: msg.connectorName,
         userText: msg.text,
         assistantText: resultResponse.text ?? "",
+        thinking: thinkingBuf || undefined,
+        toolCalls: toolCallMap.size > 0 ? [...toolCallMap.values()] : undefined,
+        events: capturedEvents.length > 0 ? capturedEvents : undefined,
         model: resultResponse.model ?? undefined,
         inputTokens: resultResponse.inputTokens ?? undefined,
         outputTokens: resultResponse.outputTokens ?? undefined,
