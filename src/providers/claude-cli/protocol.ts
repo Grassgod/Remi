@@ -99,9 +99,24 @@ export type ParsedMessage =
 /** Last requestId seen from an assistant message (set during parseLine). */
 let _lastRequestId: string | null = null;
 
+/** Accumulated message.id values from assistant messages in current turn. */
+let _messageIds: string[] = [];
+
 /** Get the last captured requestId from CLI assistant messages. */
 export function getLastRequestId(): string | null {
   return _lastRequestId;
+}
+
+/** Get all accumulated message IDs and reset for next turn. */
+export function consumeMessageIds(): string[] {
+  const ids = [..._messageIds];
+  _messageIds = [];
+  return ids;
+}
+
+/** Reset message ID accumulator (call at start of each turn). */
+export function resetMessageIds(): void {
+  _messageIds = [];
 }
 
 export function parseLine(line: string): ParsedMessage {
@@ -168,7 +183,10 @@ export function parseLine(line: string): ParsedMessage {
   if (msgType === "assistant") {
     // Capture requestId for CLI JSONL correlation
     if (typeof data.requestId === "string") _lastRequestId = data.requestId;
+    // Capture message.id (msg_xxx) — the key for CLI JSONL round correlation
     const message = (data.message as Record<string, unknown>) ?? {};
+    const msgId = message.id as string | undefined;
+    if (msgId) _messageIds.push(msgId);
     const content = (message.content as Array<Record<string, unknown>>) ?? [];
 
     // Parse all blocks into typed messages

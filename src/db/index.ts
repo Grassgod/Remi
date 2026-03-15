@@ -57,10 +57,12 @@ export function getDb(): Database {
       card_id TEXT,
       cost_usd REAL,
       duration_ms INTEGER,
-      -- CLI correlation (precise per-round linkage)
+      -- CLI correlation
       cli_session_id TEXT,
-      cli_request_id TEXT,
       cli_cwd TEXT,
+      cli_round_start TEXT,
+      cli_round_end TEXT,
+      cli_message_ids TEXT,    -- JSON array of msg_xxx from CLI stdout
       -- Summary (avoid reading JSONL for common queries)
       model TEXT,
       input_tokens INTEGER,
@@ -72,7 +74,6 @@ export function getDb(): Database {
 
     CREATE INDEX IF NOT EXISTS idx_conv_chat ON conversations(chat_id);
     CREATE INDEX IF NOT EXISTS idx_conv_date ON conversations(created_at);
-    CREATE INDEX IF NOT EXISTS idx_conv_cli_req ON conversations(cli_request_id);
     CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
     CREATE INDEX IF NOT EXISTS idx_conv_status ON conversations(status) WHERE status != 'completed';
   `);
@@ -84,6 +85,19 @@ export function getDb(): Database {
   ).get();
   if (!exists) {
     db.exec("CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[1024])");
+  }
+
+  // ── Migrations: add new columns to conversations if missing ──
+  const colCheck = db.query("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
+  const colNames = new Set(colCheck.map(c => c.name));
+  if (!colNames.has("cli_round_start")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN cli_round_start TEXT");
+  }
+  if (!colNames.has("cli_round_end")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN cli_round_end TEXT");
+  }
+  if (!colNames.has("cli_message_ids")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN cli_message_ids TEXT");
   }
 
   _db = db;
@@ -133,11 +147,11 @@ export interface ConversationInsert {
   cliCwd?: string;
 }
 
-export function insertConversationProcessing(row: ConversationInsert): number {
+export function insertConversationProcessing(row: ConversationInsert & { cliRoundStart?: string }): number {
   const db = getDb();
   const result = db.run(
-    `INSERT INTO conversations (status, chat_id, sender_id, connector, message_id, cli_session_id, cli_cwd)
-     VALUES ('processing', ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO conversations (status, chat_id, sender_id, connector, message_id, cli_session_id, cli_cwd, cli_round_start)
+     VALUES ('processing', ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.chatId,
       row.senderId ?? null,
@@ -145,6 +159,7 @@ export function insertConversationProcessing(row: ConversationInsert): number {
       row.messageId ?? null,
       row.cliSessionId ?? null,
       row.cliCwd ?? null,
+      row.cliRoundStart ?? new Date().toISOString(),
     ],
   );
   return Number(result.lastInsertRowid);
@@ -157,7 +172,8 @@ export interface ConversationComplete {
   costUsd?: number;
   durationMs?: number;
   cliSessionId?: string;
-  cliRequestId?: string;
+  cliRoundEnd?: string;
+  cliMessageIds?: string[];
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
@@ -171,7 +187,8 @@ export function completeConversation(row: ConversationComplete): void {
       status = 'completed',
       card_id = ?, cost_usd = ?, duration_ms = ?,
       cli_session_id = COALESCE(?, cli_session_id),
-      cli_request_id = ?,
+      cli_round_end = ?,
+      cli_message_ids = ?,
       model = ?, input_tokens = ?, output_tokens = ?,
       spans = ?
      WHERE id = ?`,
@@ -180,7 +197,8 @@ export function completeConversation(row: ConversationComplete): void {
       row.costUsd ?? null,
       row.durationMs ?? null,
       row.cliSessionId ?? null,
-      row.cliRequestId ?? null,
+      row.cliRoundEnd ?? new Date().toISOString(),
+      row.cliMessageIds ? JSON.stringify(row.cliMessageIds) : null,
       row.model ?? null,
       row.inputTokens ?? null,
       row.outputTokens ?? null,

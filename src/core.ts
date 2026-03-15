@@ -229,6 +229,7 @@ export class Remi {
         messageId: msg.metadata?.messageId as string | undefined,
         cliSessionId: existingSessionId ?? undefined,
         cliCwd: (msg.metadata?.cwd as string) ?? undefined,
+        cliRoundStart: new Date().toISOString(),
       });
     } catch (e) {
       log.warn("insert conversation (processing) failed:", e);
@@ -525,7 +526,8 @@ export class Remi {
             costUsd: resultResponse.costUsd ?? undefined,
             durationMs: startMs ? Date.now() - startMs : resultResponse.durationMs ?? undefined,
             cliSessionId: resultResponse.sessionId ?? undefined,
-            cliRequestId: resultResponse.requestId ?? undefined,
+            cliRoundEnd: new Date().toISOString(),
+            cliMessageIds: (resultResponse.metadata?.messageIds as string[]) ?? undefined,
             model: resultResponse.model ?? undefined,
             inputTokens: resultResponse.inputTokens ?? undefined,
             outputTokens: resultResponse.outputTokens ?? undefined,

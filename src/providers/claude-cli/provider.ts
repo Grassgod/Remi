@@ -29,6 +29,7 @@ import type {
   ToolResultMessage,
   ToolUseRequest,
 } from "./protocol.js";
+import { consumeMessageIds, resetMessageIds } from "./protocol.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("provider");
@@ -154,6 +155,9 @@ export class ClaudeCLIProvider implements Provider {
       { allowedTools: options?.allowedTools, addDirs: options?.addDirs },
     );
 
+    // Reset message ID accumulator for this turn
+    resetMessageIds();
+
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
     const toolCalls: Array<Record<string, unknown>> = [];
@@ -223,6 +227,7 @@ export class ClaudeCLIProvider implements Provider {
             outputTokens: resultMsg.outputTokens,
             durationMs: resultMsg.durationMs,
             toolCalls,
+            metadata: { messageIds: consumeMessageIds() },
           }),
         };
       }
