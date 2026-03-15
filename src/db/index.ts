@@ -43,6 +43,24 @@ export function getDb(): Database {
       metadata TEXT,
       embedded_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      session_key TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      sender TEXT,
+      user_text TEXT,
+      assistant_text TEXT,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cost_usd REAL,
+      duration_ms INTEGER,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_key);
+    CREATE INDEX IF NOT EXISTS idx_conv_date ON conversations(created_at);
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)

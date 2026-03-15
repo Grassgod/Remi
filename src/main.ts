@@ -56,6 +56,9 @@ async function runServe(): Promise<void> {
   process.on("SIGTERM", () => ac.abort());
   process.on("SIGINT", () => ac.abort());
 
+  // Start BunQueue workers (conversation + memory)
+  await remi.queue.start();
+
   log.info("=".repeat(60));
   log.info(`Remi starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${config.provider.name})`);
 
@@ -73,6 +76,7 @@ async function runServe(): Promise<void> {
     }
   } finally {
     ac.abort(); // Ensure CronTimer stops in all exit paths
+    await remi.queue.stop();
     await remi.stop();
     log.info("Remi stopped.");
   }

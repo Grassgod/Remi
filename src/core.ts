@@ -25,6 +25,7 @@ import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
+import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
@@ -88,6 +89,7 @@ export class Remi {
   memory: MemoryStore;
   metrics: MetricsCollector;
   traceCollector: TraceCollector;
+  queue: RemiQueueManager;
   authStore: AuthStore | null = null;
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
@@ -103,6 +105,7 @@ export class Remi {
     this.memory = new MemoryStore(config.memoryDir);
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
     this.traceCollector = new TraceCollector(config.tracing.tracesDir);
+    this.queue = new RemiQueueManager(this.memory);
     this._loadSessions();
   }
 
@@ -460,6 +463,22 @@ export class Remi {
           connector: msg.connectorName ?? null,
         });
       }
+
+      // Enqueue conversation record (fire-and-forget, non-blocking)
+      this.queue.enqueueConversation({
+        sessionKey,
+        chatId: msg.chatId,
+        sender: msg.sender,
+        connector: msg.connectorName,
+        userText: msg.text,
+        assistantText: resultResponse.text ?? "",
+        model: resultResponse.model ?? undefined,
+        inputTokens: resultResponse.inputTokens ?? undefined,
+        outputTokens: resultResponse.outputTokens ?? undefined,
+        costUsd: resultResponse.costUsd ?? undefined,
+        durationMs: resultResponse.durationMs ?? undefined,
+        timestamp: new Date().toISOString(),
+      }).catch((e) => log.warn("enqueue conversation failed:", e));
     }
   }
 
