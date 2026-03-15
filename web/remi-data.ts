@@ -12,7 +12,8 @@ import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
 import { CliUsageScanner } from "../src/metrics/cli-parser.js";
-import { TraceCollector, type TraceData, type SpanData } from "../src/tracing.js";
+import { type TraceData, type SpanData, rowToTraceData } from "../src/tracing.js";
+import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
 
 // ── Types ──────────────────────────────────────────────
@@ -90,7 +91,6 @@ export class RemiData {
   readonly root: string;       // ~/.remi
   readonly memoryDir: string;  // ~/.remi/memory
   private _metrics: MetricsCollector;
-  private _traceCollector: TraceCollector;
   private _analyticsCache: { data: AnalyticsSummary; ts: number } | null = null;
   private readonly _cacheTTL = 60_000; // 60s
 
@@ -98,7 +98,6 @@ export class RemiData {
     this.root = remiDir ?? join(homedir(), ".remi");
     this.memoryDir = join(this.root, "memory");
     this._metrics = new MetricsCollector(this.root);
-    this._traceCollector = new TraceCollector(join(this.root, "traces"));
 
     // Auto-scan CLI metrics on first startup
     try {
@@ -590,11 +589,24 @@ export class RemiData {
   // ── Traces ─────────────────────────────────────────
 
   getTraces(date: string, limit: number): TraceData[] {
-    return this._traceCollector.getRecentTraces(limit, date);
+    const db = getDb();
+    const rows = db.query(`
+      SELECT id, status, error, chat_id, sender_id, connector,
+             cli_session_id, cost_usd, duration_ms, model,
+             input_tokens, output_tokens, spans,
+             created_at, cli_round_start, cli_round_end
+      FROM conversations
+      WHERE DATE(created_at) = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(date, limit) as any[];
+    return rows.map(rowToTraceData);
   }
 
   getTrace(traceId: string): TraceData | null {
-    return this._traceCollector.getTrace(traceId);
+    const db = getDb();
+    const row = db.query("SELECT * FROM conversations WHERE id = ?").get(Number(traceId)) as any | null;
+    return row ? rowToTraceData(row) : null;
   }
 
   // ── Logs ──────────────────────────────────────────
@@ -663,15 +675,17 @@ export class RemiData {
     const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
     const requestsLastHour = todayMetrics.filter(m => m.ts >= oneHourAgo).length;
 
-    // Trace stats
-    const todaySpans = this._traceCollector.readDay(today);
-    const rootSpans = todaySpans.filter(s => !s.parentSpanId);
-    const errorSpans = rootSpans.filter(s => s.status === "ERROR");
-    const errorRate = rootSpans.length > 0 ? (errorSpans.length / rootSpans.length) * 100 : 0;
+    // Trace stats from DB
+    const convRows = getDb().query(`
+      SELECT status, duration_ms, spans FROM conversations WHERE DATE(created_at) = ?
+    `).all(today) as Array<{ status: string; duration_ms: number | null; spans: string | null }>;
 
-    // Latency percentiles from root spans
-    const durations = rootSpans
-      .map(s => s.durationMs ?? 0)
+    const traceTotal = convRows.length;
+    const errorSpansCount = convRows.filter(r => r.status === "failed").length;
+    const errorRate = traceTotal > 0 ? (errorSpansCount / traceTotal) * 100 : 0;
+
+    const durations = convRows
+      .map(r => r.duration_ms ?? 0)
       .filter(d => d > 0)
       .sort((a, b) => a - b);
 
@@ -679,15 +693,19 @@ export class RemiData {
     const p95 = durations.length > 0 ? durations[Math.floor(durations.length * 0.95)] : null;
     const avg = durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
 
-    // Top operations
+    // Top operations from spans JSON
     const opMap = new Map<string, { count: number; totalMs: number }>();
-    for (const s of todaySpans) {
-      const existing = opMap.get(s.operationName);
-      if (existing) {
-        existing.count++;
-        existing.totalMs += s.durationMs ?? 0;
-      } else {
-        opMap.set(s.operationName, { count: 1, totalMs: s.durationMs ?? 0 });
+    for (const row of convRows) {
+      let spanArr: Array<{ op: string; ms?: number }> = [];
+      try { spanArr = JSON.parse(row.spans ?? "[]"); } catch { /* skip */ }
+      for (const s of spanArr) {
+        const existing = opMap.get(s.op);
+        if (existing) {
+          existing.count++;
+          existing.totalMs += s.ms ?? 0;
+        } else {
+          opMap.set(s.op, { count: 1, totalMs: s.ms ?? 0 });
+        }
       }
     }
     const topOperations = [...opMap.entries()]
@@ -710,12 +728,12 @@ export class RemiData {
       activeSessions,
       requestsToday,
       requestsLastHour,
-      errorsToday: errorSpans.length,
+      errorsToday: errorSpansCount,
       errorRate: Math.round(errorRate * 10) / 10,
       latencyP50: p50,
       latencyP95: p95,
       latencyAvg: avg,
-      tracesCount: rootSpans.length,
+      tracesCount: traceTotal,
       logsCount,
       topOperations,
     };

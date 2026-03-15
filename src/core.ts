@@ -104,7 +104,7 @@ export class Remi {
     this.config = config;
     this.memory = new MemoryStore(config.memoryDir);
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
-    this.traceCollector = new TraceCollector(config.tracing.tracesDir);
+    this.traceCollector = new TraceCollector();
     this.queue = new RemiQueueManager(this.memory);
     this._loadSessions();
   }
