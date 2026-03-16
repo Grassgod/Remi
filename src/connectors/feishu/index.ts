@@ -134,8 +134,16 @@ export class FeishuConnector implements Connector {
   /** Active streaming sessions keyed by chatId (for /esc abort). */
   private _activeSessions = new Map<string, FeishuStreamingSession>();
 
+  /** Callback to kill the CLI process on /esc (set by Remi core via setAbortHandler). */
+  private _abortHandler: ((chatId: string) => Promise<void>) | null = null;
+
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
+  }
+
+  /** Register a handler that kills the CLI process for a given chatId. */
+  setAbortHandler(handler: (chatId: string) => Promise<void>): void {
+    this._abortHandler = handler;
   }
 
   /** Set bot profiles for per-group reply mode configuration. */
@@ -213,6 +221,11 @@ export class FeishuConnector implements Connector {
       if (session && session.isActive()) {
         log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
         await session.abort();
+        // Also kill the underlying CLI process
+        if (this._abortHandler) {
+          await this._abortHandler(msg.chatId).catch((e) =>
+            log.warn(`abort handler failed: ${String(e)}`));
+        }
       } else {
         log.info(`/esc received but no active session in ${msg.chatId}`);
       }

@@ -760,6 +760,13 @@ export class Remi {
       const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       feishu.setBotProfiles(config.bots);
+      // Wire /esc abort to kill CLI process
+      feishu.setAbortHandler(async (chatId: string) => {
+        const provider = remi._getProvider();
+        if ("clearSession" in provider && typeof provider.clearSession === "function") {
+          await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(chatId);
+        }
+      });
       remi.addConnector(feishu);
       log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
 
