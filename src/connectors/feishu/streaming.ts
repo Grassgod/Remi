@@ -627,7 +627,6 @@ export class FeishuStreamingSession {
       tag: "button",
       text: { tag: "plain_text", content: "📤 提交回答" },
       type: "primary",
-      complex_interaction: { width: "default" },
       form_action_type: "submit",
     });
 
