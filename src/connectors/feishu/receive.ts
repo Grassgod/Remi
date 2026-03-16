@@ -431,7 +431,9 @@ export async function processFeishuMessageEvent(
     const mentionedTriggerUser = opts?.triggerUserIds?.length
       ? (event.message.mentions ?? []).some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
       : false;
-    if (!ctx.mentionedBot && !isMonitor && !mentionedTriggerUser) {
+    // Allow /esc command without @mention (abort needs to bypass mention requirement)
+    const isEscCommand = /^\/esc$/i.test(ctx.content.trim());
+    if (!ctx.mentionedBot && !isMonitor && !mentionedTriggerUser && !isEscCommand) {
       log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
       return null;
     }

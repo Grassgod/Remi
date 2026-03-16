@@ -12,8 +12,6 @@
 
 import type {
   AgentResponse,
-  AskUserQuestionData,
-  PlanReviewData,
   Provider,
   SendOptions,
   StreamEvent,
@@ -199,44 +197,6 @@ export class ClaudeCLIProvider implements Provider {
         toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
         log.debug(`yield tool_use: ${tu.name}`);
 
-        // Interactive tools: yield special events for user interaction
-        if (tu.name === "AskUserQuestion" && tu.input?.questions) {
-          const questions = tu.input.questions as AskUserQuestionData["questions"];
-          const { promise, resolve, reject } = Promise.withResolvers<Record<string, string>>();
-          yield {
-            kind: "ask_user",
-            data: { toolUseId: tu.toolUseId, questions, resolve, reject },
-          } as StreamEvent;
-          // Wait for user response (up to 30 min timeout set in process.ts)
-          try {
-            const answers = await promise;
-            log.info(`AskUserQuestion resolved: ${JSON.stringify(answers).slice(0, 200)}`);
-            await mgr.sendToolResult(tu.toolUseId, JSON.stringify({ answers }));
-            log.info(`AskUserQuestion tool result sent to CLI`);
-          } catch (err) {
-            log.warn(`AskUserQuestion rejected: ${String(err)}`);
-            await mgr.sendToolResult(tu.toolUseId, `User did not respond: ${String(err)}`, true);
-          }
-          continue;
-        }
-        if (tu.name === "ExitPlanMode") {
-          const { promise, resolve, reject } = Promise.withResolvers<string>();
-          yield {
-            kind: "plan_review",
-            data: { toolUseId: tu.toolUseId, resolve, reject },
-          } as StreamEvent;
-          try {
-            const result = await promise;
-            log.info(`ExitPlanMode resolved: ${result}`);
-            await mgr.sendToolResult(tu.toolUseId, JSON.stringify({ decision: result }));
-            log.info(`ExitPlanMode tool result sent to CLI`);
-          } catch (err) {
-            log.warn(`ExitPlanMode rejected: ${String(err)}`);
-            await mgr.sendToolResult(tu.toolUseId, `User did not respond: ${String(err)}`, true);
-          }
-          continue;
-        }
-
         yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input } as StreamEvent;
       } else if (msg.kind === "tool_result") {
         const tr = msg as ToolResultMessage;
@@ -269,6 +229,7 @@ export class ClaudeCLIProvider implements Provider {
             durationMs: resultMsg.durationMs,
             toolCalls,
             metadata: { messageIds: consumeMessageIds() },
+            permissionDenials: resultMsg.permissionDenials.length > 0 ? resultMsg.permissionDenials : undefined,
           }),
         };
       }
@@ -330,8 +291,6 @@ export class ClaudeCLIProvider implements Provider {
 
   // ── Internal: streaming path ──────────────────────────────
 
-  /** Tool names that require user interaction (handled externally via card actions). */
-  private static INTERACTIVE_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
 
   /** Get the process manager for a chat (for sending tool results externally). */
   getProcessManager(chatId?: string | null): ClaudeProcessManager | null {
@@ -362,7 +321,6 @@ export class ClaudeCLIProvider implements Provider {
       cwd: cwd ?? this.cwd,
       resumeSessionId: sessionId,
     });
-    mgr.interactiveTools = ClaudeCLIProvider.INTERACTIVE_TOOLS;
     await mgr.start();
 
     this._pool.set(key, mgr);

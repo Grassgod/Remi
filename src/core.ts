@@ -79,6 +79,11 @@ export const SYSTEM_PROMPT = `\
 - **lark_render** — 将Markdown内容写入飞书文档，可创建新文档或更新已有文档。
 
 <context> 末尾的"可用记忆"表格是摘要目录，使用 recall 可查看完整详情。
+
+## 交互工具说明
+当 AskUserQuestion 工具被拒绝时，网关已经捕获了你的问题并将通过交互式表单呈现给用户。不要报告错误，只需告诉用户你有问题需要确认，然后等待。始终将 multiSelect 设为 false。
+当 ExitPlanMode 工具被拒绝时，网关已经捕获了你的计划并将呈现审批按钮给用户。不要报告错误。
+注意：你应该正常使用这些工具（AskUserQuestion、EnterPlanMode、ExitPlanMode），不要因为它们可能被拒绝而回避使用。拒绝是预期行为，网关会处理。
 `;
 
 /** Max age for persisted sessions — 7 days. */

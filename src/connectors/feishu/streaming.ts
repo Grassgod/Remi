@@ -43,6 +43,12 @@ export interface StreamingCloseOptions {
   mentionOpenId?: string;
   /** Session ID for dynamic card header name (e.g. "好奇的 Remi"). */
   sessionId?: string | null;
+  /** Permission denials from CLI — used to embed AskUserQuestion / ExitPlanMode forms. */
+  permissionDenials?: import("../../providers/claude-cli/protocol.js").PermissionDenial[];
+  /** Pre-built AskUserQuestion form data (actionId + questions). Set by index.ts after registerPendingAction. */
+  askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
+  /** Pre-built ExitPlanMode data (actionId). Set by index.ts after registerPendingAction. */
+  planReview?: { actionId: string };
 }
 
 /** Step data for process panel rendering. */
@@ -115,6 +121,10 @@ function buildFinalCard(opts: {
   stats?: string | null;
   mentionOpenId?: string;
   sessionId?: string | null;
+  /** AskUserQuestion questions from permission_denials — rendered as form in final card. */
+  askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
+  /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
+  planReview?: { actionId: string };
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -166,7 +176,93 @@ function buildFinalCard(opts: {
 
   elements.push(...buildContentElements(opts.text || ""));
 
-  // Stats bar with optional @mention
+  // AskUserQuestion form — between content and stats bar
+  if (opts.askQuestions) {
+    const formElements: Record<string, unknown>[] = [];
+    for (let i = 0; i < opts.askQuestions.questions.length; i++) {
+      const q = opts.askQuestions.questions[i];
+      // Full description as markdown list (no truncation)
+      const optionLines = (q.options ?? []).map((opt) =>
+        opt.description ? `- **${opt.label}** — ${opt.description}` : `- ${opt.label}`
+      );
+      formElements.push({
+        tag: "markdown",
+        content: `**${i + 1}. ${q.question}**\n${optionLines.join("\n")}`,
+      });
+      // Dropdown for quick selection (multi_select_static when multiSelect=true)
+      if (q.options && q.options.length > 0) {
+        formElements.push({
+          tag: q.multiSelect ? "multi_select_static" : "select_static",
+          name: `q${i}`,
+          placeholder: { tag: "plain_text", content: q.multiSelect ? "可多选..." : "请选择..." },
+          options: q.options.map((opt) => ({
+            text: { tag: "plain_text", content: opt.label },
+            value: opt.label,
+          })),
+        });
+      }
+      // Custom input (overrides selection)
+      formElements.push({
+        tag: "input",
+        name: `q${i}_custom`,
+        placeholder: { tag: "plain_text", content: "或自定义回答..." },
+        max_length: 500,
+      });
+    }
+    formElements.push({
+      tag: "button",
+      name: opts.askQuestions.actionId,
+      text: { tag: "plain_text", content: "📤 提交回答" },
+      type: "primary",
+      form_action_type: "submit",
+    });
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "form",
+      name: `form_${opts.askQuestions.actionId}`,
+      elements: formElements,
+    });
+  }
+
+  // ExitPlanMode — between content and stats bar (matches Claude Code CLI wording)
+  if (opts.planReview) {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "markdown",
+      content: "**Plan ready for review.** How would you like to proceed?",
+    });
+    elements.push({
+      tag: "form",
+      name: `form_plan_${opts.planReview.actionId}`,
+      elements: [
+        {
+          tag: "select_static",
+          name: "decision",
+          placeholder: { tag: "plain_text", content: "Select action..." },
+          options: [
+            { text: { tag: "plain_text", content: "Yes, proceed" }, value: "approved" },
+            { text: { tag: "plain_text", content: "No, stop" }, value: "rejected" },
+            { text: { tag: "plain_text", content: "Give feedback" }, value: "feedback" },
+          ],
+        },
+        {
+          tag: "input",
+          name: "feedback_text",
+          placeholder: { tag: "plain_text", content: "Optional feedback or changes..." },
+          max_length: 1000,
+        },
+        {
+          tag: "button",
+          name: opts.planReview.actionId,
+          text: { tag: "plain_text", content: "Submit" },
+          type: "primary",
+          form_action_type: "submit",
+        },
+      ],
+    });
+  }
+
+  // Stats bar with optional @mention (always last)
   const statsContent = opts.mentionOpenId
     ? `<at id=${opts.mentionOpenId}></at> ${opts.stats ?? "✅"}`
     : opts.stats;
@@ -549,144 +645,9 @@ export class FeishuStreamingSession {
     return this.state?.cardId ?? null;
   }
 
-  // ── Interactive form elements (AskUserQuestion / PlanReview) ──
+  // ── DEPRECATED: Interactive cards moved to buildFinalCard embedded forms ──
 
-  /**
-   * Append an interactive form to the streaming card for AskUserQuestion.
-   * Uses appendCardElements API to add form elements during streaming.
-   */
-  /**
-   * Send a separate interactive message card for AskUserQuestion.
-   * CardKit streaming cards don't support card.action.trigger via WS,
-   * so we send a regular message card (im/v1/messages) instead.
-   * Returns the message_id so it can be deleted after the user responds.
-   */
-  async sendAskUserCard(
-    actionId: string,
-    chatId: string,
-    questions: Array<{
-      question: string;
-      header?: string;
-      options: Array<{ label: string; description?: string }>;
-      multiSelect?: boolean;
-    }>,
-  ): Promise<string | null> {
-    const formElements: Record<string, unknown>[] = [];
-
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      const fieldName = `q_${i}`;
-
-      // Question label
-      formElements.push({
-        tag: "markdown",
-        content: `**${i + 1}. ${q.question}**${q.header ? ` \`${q.header}\`` : ""}`,
-      });
-
-      if (q.multiSelect) {
-        // Checkbox group for multi-select
-        formElements.push({
-          tag: "checker",
-          name: fieldName,
-          checked: false,
-          overall_checkable: false,
-          options: q.options.map((opt, j) => ({
-            text: { tag: "plain_text", content: opt.label },
-            value: `opt_${j}`,
-          })),
-        });
-      } else {
-        // Dropdown select for single choice
-        formElements.push({
-          tag: "select_static",
-          name: fieldName,
-          placeholder: { tag: "plain_text", content: "请选择..." },
-          options: q.options.map((opt, j) => ({
-            text: { tag: "plain_text", content: opt.label },
-            value: `opt_${j}`,
-          })),
-        });
-      }
-
-      // Custom input (optional, overrides selection)
-      formElements.push({
-        tag: "input",
-        name: `${fieldName}_custom`,
-        placeholder: { tag: "plain_text", content: "自定义回答（可选）" },
-        max_length: 500,
-      });
-    }
-
-    // Submit button
-    formElements.push({
-      tag: "button",
-      name: "submit_btn",
-      text: { tag: "plain_text", content: "📤 提交回答" },
-      type: "primary",
-      form_action_type: "submit",
-    });
-
-    const card = {
-      config: { wide_screen_mode: true },
-      header: {
-        title: { tag: "plain_text", content: "🤔 需要你确认" },
-        template: "blue",
-      },
-      elements: [
-        {
-          tag: "form",
-          name: actionId,
-          elements: formElements,
-        },
-      ],
-    };
-
-    const apiBase = resolveApiBase(this.creds.domain);
-    try {
-      const res = await fetch(`${apiBase}/im/v1/messages?receive_id_type=chat_id`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await this._getToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          receive_id: chatId,
-          content: JSON.stringify(card),
-          msg_type: "interactive",
-        }),
-      });
-      const body = await res.json() as Record<string, unknown>;
-      if (body.code !== 0) {
-        this.log(`sendAskUserCard failed: ${JSON.stringify(body).slice(0, 300)}`);
-        return null;
-      }
-      const messageId = (body.data as Record<string, unknown>)?.message_id as string;
-      this.log(`sendAskUserCard OK: messageId=${messageId}`);
-      return messageId;
-    } catch (e) {
-      this.log(`sendAskUserCard error: ${String(e)}`);
-      return null;
-    }
-  }
-
-  /** Delete a message (used to clean up the ask-user card after response). */
-  async deleteMessage(messageId: string): Promise<void> {
-    const apiBase = resolveApiBase(this.creds.domain);
-    try {
-      await fetch(`${apiBase}/im/v1/messages/${messageId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${await this._getToken()}` },
-      });
-    } catch { /* best effort */ }
-  }
-
-  /**
-   * Append plan review buttons to the streaming card for ExitPlanMode.
-   */
-  /**
-   * Send a separate interactive message card for ExitPlanMode (plan review).
-   * Returns message_id for deletion after user responds.
-   */
+  /** @deprecated — kept only for backwards compat, no longer called. */
   async sendPlanReviewCard(actionId: string, chatId: string): Promise<string | null> {
     const card = {
       config: { wide_screen_mode: true },
@@ -977,6 +938,11 @@ export class FeishuStreamingSession {
       this.log(`Close failed: ${String(e)}`);
     }
 
+    // Extract interactive forms from permission_denials
+    const permDenials = typeof finalTextOrOptions === "object" ? finalTextOrOptions?.permissionDenials : undefined;
+    const askQuestions = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { askQuestions?: Parameters<typeof buildFinalCard>[0]["askQuestions"] }).askQuestions : undefined;
+    const planReview = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { planReview?: Parameters<typeof buildFinalCard>[0]["planReview"] }).planReview : undefined;
+
     // Replace with static card — process panel collapsed with icon divs
     try {
       const finalCard = buildFinalCard({
@@ -989,6 +955,8 @@ export class FeishuStreamingSession {
         stats,
         mentionOpenId,
         sessionId,
+        askQuestions,
+        planReview,
       });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },

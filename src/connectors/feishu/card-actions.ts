@@ -65,15 +65,6 @@ export function resolvePendingAction(actionId: string, value: unknown): boolean 
   return true;
 }
 
-/**
- * Wrap a pending action's resolve to add a post-resolve hook (e.g., delete message).
- */
-export function wrapPendingResolve(actionId: string, wrapper: (origResolve: (v: unknown) => void) => (v: unknown) => void): void {
-  const action = pendingActions.get(actionId);
-  if (action) {
-    action.resolve = wrapper(action.resolve);
-  }
-}
 
 /**
  * Process a card form submission event.
@@ -116,34 +107,20 @@ export function handleFormSubmission(
   if (questions) {
     const answers: Record<string, string> = {};
     for (let i = 0; i < questions.length; i++) {
-      const customKey = `q_${i}_custom`;
-      const selectKey = `q_${i}`;
+      const customKey = `q${i}_custom`;
+      const selectKey = `q${i}`;
       const customValue = String(formValue[customKey] ?? "").trim();
 
       if (customValue) {
-        // Custom input overrides selection
+        // Custom input overrides checker selection
         answers[questions[i].question] = customValue;
       } else {
-        // Use selected option
-        const selectedValue = formValue[selectKey];
-        if (typeof selectedValue === "string" && selectedValue.startsWith("opt_")) {
-          const optIdx = parseInt(selectedValue.replace("opt_", ""), 10);
-          const option = questions[i].options[optIdx];
-          answers[questions[i].question] = option?.label ?? selectedValue;
-        } else if (Array.isArray(selectedValue)) {
-          // Multi-select: array of values
-          const labels = selectedValue
-            .map((v) => {
-              if (typeof v === "string" && v.startsWith("opt_")) {
-                const idx = parseInt(v.replace("opt_", ""), 10);
-                return questions[i].options[idx]?.label ?? v;
-              }
-              return String(v);
-            })
-            .join(", ");
-          answers[questions[i].question] = labels;
+        // Use checker selection (may be array for multi-select or string)
+        const selected = formValue[selectKey];
+        if (Array.isArray(selected)) {
+          answers[questions[i].question] = selected.join(", ");
         } else {
-          answers[questions[i].question] = String(selectedValue ?? "");
+          answers[questions[i].question] = String(selected ?? "");
         }
       }
     }

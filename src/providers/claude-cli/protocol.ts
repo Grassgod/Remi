@@ -35,6 +35,12 @@ export interface ToolUseRequest {
   input: Record<string, unknown>;
 }
 
+export interface PermissionDenial {
+  toolName: string;
+  toolUseId: string;
+  toolInput: Record<string, unknown>;
+}
+
 export interface ResultMessage {
   kind: "result";
   result: string;
@@ -46,6 +52,7 @@ export interface ResultMessage {
   durationMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  permissionDenials: PermissionDenial[];
 }
 
 export interface ToolResultMessage {
@@ -285,6 +292,13 @@ export function parseLine(line: string): ParsedMessage {
       durationMs: (data.duration_ms as number) ?? null,
       inputTokens: (usage.input_tokens as number) ?? null,
       outputTokens: (usage.output_tokens as number) ?? null,
+      permissionDenials: Array.isArray(data.permission_denials)
+        ? (data.permission_denials as Array<Record<string, unknown>>).map((d) => ({
+            toolName: (d.tool_name as string) ?? "",
+            toolUseId: (d.tool_use_id as string) ?? "",
+            toolInput: (d.tool_input as Record<string, unknown>) ?? {},
+          }))
+        : [],
     };
   }
 

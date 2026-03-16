@@ -24,8 +24,7 @@ import {
   TOOL_EMOJI,
   shortPath,
 } from "./tool-formatters.js";
-import { registerPendingAction, rejectAllPendingActions, wrapPendingResolve } from "./card-actions.js";
-import type { AskUserQuestionData, PlanReviewData } from "../../providers/base.js";
+import { registerPendingAction, rejectAllPendingActions } from "./card-actions.js";
 import {
   startWebSocketListener,
   flushDedupCacheSync,
@@ -539,46 +538,6 @@ export class FeishuConnector implements Connector {
                 session.addStep("_default", `⚠️ Rate limited, retrying in ${secs}s`);
               }
               break;
-            case "ask_user": {
-              const askData = event.data as AskUserQuestionData;
-              // Register pending action and get unique ID (pass questions for answer parsing)
-              const askActionId = registerPendingAction(
-                (answers) => askData.resolve(answers as Record<string, string>),
-                (reason) => askData.reject(reason),
-                askData.questions,
-              );
-              // Send a separate interactive message card (not CardKit streaming card)
-              // because CardKit cards don't support card.action.trigger via WS
-              const askMsgId = await session.sendAskUserCard(askActionId, chatId, askData.questions);
-              // Wrap resolve to also delete the confirmation card
-              if (askMsgId) {
-                wrapPendingResolve(askActionId, (orig) => (v) => {
-                  session.deleteMessage(askMsgId);
-                  orig(v);
-                });
-              }
-              await session.updateStatus("⏳ 等待你确认...");
-              session.addStep("AskUserQuestion", "等待用户确认");
-              break;
-            }
-            case "plan_review": {
-              const planData = event.data as PlanReviewData;
-              const planActionId = registerPendingAction(
-                (decision) => planData.resolve(decision as string),
-                (reason) => planData.reject(reason),
-              );
-              // Send separate interactive card for plan review
-              const planMsgId = await session.sendPlanReviewCard(planActionId, chatId);
-              if (planMsgId) {
-                wrapPendingResolve(planActionId, (orig) => (v) => {
-                  session.deleteMessage(planMsgId);
-                  orig(v);
-                });
-              }
-              await session.updateStatus("📋 等待你审批计划...");
-              session.addStep("ExitPlanMode", "等待计划审批");
-              break;
-            }
             case "error":
               contentText += `\n\n**Error:** ${event.error}\n`;
               await session.update(contentText);
@@ -593,6 +552,72 @@ export class FeishuConnector implements Connector {
         // @mention is embedded in the final card for group chats (single message)
         const stats = finalResponse ? this._formatStats(finalResponse) : null;
         const mentionOpenId: string | undefined = undefined;
+
+        // Extract permission_denials and register card actions for AskUserQuestion / ExitPlanMode
+        let askQuestions: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> } | undefined;
+        let planReviewAction: { actionId: string } | undefined;
+        const denials = finalResponse?.permissionDenials;
+
+        if (denials && denials.length > 0) {
+          for (const denial of denials) {
+            if (denial.toolName === "AskUserQuestion" && denial.toolInput?.questions) {
+              const questions = denial.toolInput.questions as typeof askQuestions extends { questions: infer Q } | undefined ? Q : never;
+              // Register action: on resolve, send answers as new user message to CLI
+              // Capture replyToMessageId for group chat thread context
+              const capturedReplyTo = replyToMessageId;
+              const actionId = registerPendingAction(
+                (answers) => {
+                  const answerMap = answers as Record<string, string>;
+                  const lines = Object.entries(answerMap).map(([q, a], i) => `${i + 1}. ${q}: ${a}`);
+                  const answerText = `用户回答了之前的问题:\n${lines.join("\n")}`;
+                  log.info(`AskUserQuestion answered, sending as new streaming message`);
+                  // Use full _handleStreaming to render the CLI response in a new card
+                  this._handleStreaming(
+                    { ...incoming, text: answerText },
+                    chatId,
+                    capturedReplyTo,
+                  ).catch((e) => log.error(`Failed to relay AskUserQuestion answer: ${e}`));
+                },
+                () => {},
+                questions,
+              );
+              askQuestions = { actionId, questions };
+              log.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
+            } else if (denial.toolName === "ExitPlanMode") {
+              const capturedReplyTo = replyToMessageId;
+              const actionId = registerPendingAction(
+                (rawDecision) => {
+                  // Form submits { decision: "approved"|"rejected"|"feedback", feedback_text?: string }
+                  const formData = typeof rawDecision === "object" && rawDecision !== null
+                    ? rawDecision as Record<string, string>
+                    : { decision: String(rawDecision) };
+                  const d = formData.decision;
+                  const feedback = String(formData.feedback_text ?? "").trim();
+                  let decisionText: string;
+                  if (d === "approved") {
+                    decisionText = "Plan approved, please proceed.";
+                  } else if (d === "feedback" && feedback) {
+                    decisionText = `User has feedback on the plan:\n${feedback}\nPlease revise accordingly.`;
+                  } else if (d === "feedback") {
+                    decisionText = "User wants to give feedback but didn't write anything. Please ask what they'd like changed.";
+                  } else {
+                    decisionText = "Plan rejected. Please stop.";
+                  }
+                  log.info(`ExitPlanMode answered: ${d}, feedback=${feedback.slice(0, 100)}`);
+                  this._handleStreaming(
+                    { ...incoming, text: decisionText },
+                    chatId,
+                    capturedReplyTo,
+                  ).catch((e) => log.error(`Failed to relay ExitPlanMode decision: ${e}`));
+                },
+                () => {},
+              );
+              planReviewAction = { actionId };
+              log.info(`Embedded ExitPlanMode buttons: actionId=${actionId}`);
+            }
+          }
+        }
+
         await session.close({
           finalText: finalResponse?.text ?? contentText,
           thinking: thinkingText || finalResponse?.thinking || null,
@@ -602,6 +627,8 @@ export class FeishuConnector implements Connector {
           stats,
           mentionOpenId,
           sessionId: finalResponse?.sessionId,
+          askQuestions,
+          planReview: planReviewAction,
         });
 
       } catch (err) {
