@@ -431,7 +431,7 @@ export class FeishuStreamingSession {
     this._resetHeartbeat();
     // Track last status for heartbeat display context
     if (stateField === "currentStatus") {
-      this._lastStatusText = content.replace(/[⏳✍️🤔⚙️📋🤖]/g, "").trim();
+      this._lastStatusText = content;
     }
 
     const throttle = this._getThrottle(elementId);
@@ -596,7 +596,7 @@ export class FeishuStreamingSession {
     const elapsed = Math.round((Date.now() - this._startTime) / 1000);
     const heartbeatText = this._heartbeatRenderer
       ? this._heartbeatRenderer(elapsed)
-      : `⏳ ${this._lastStatusText || "Running"} (${elapsed}s)`;
+      : `${this._lastStatusText || "⏳ Running"} (${elapsed}s)`;
     // Bypass throttle — heartbeat is already rate-limited by its own timer
     this.queue = this.queue.then(() =>
       this._updateElementRaw("status_bar", heartbeatText),
