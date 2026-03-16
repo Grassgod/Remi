@@ -131,6 +131,9 @@ export class FeishuConnector implements Connector {
   private _streamHandler: StreamingHandler | null = null;
   private _tokenProvider: TokenProvider | null = null;
 
+  /** Active streaming sessions keyed by chatId (for /esc abort). */
+  private _activeSessions = new Map<string, FeishuStreamingSession>();
+
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
   }
@@ -203,6 +206,18 @@ export class FeishuConnector implements Connector {
 
   private async _handleFeishuMessage(msg: ParsedFeishuMessage): Promise<void> {
     if (!this._handler) return;
+
+    // ── /esc: abort active session (bypasses Lane Queue) ──
+    if (msg.text.trim() === "/esc") {
+      const session = this._activeSessions.get(msg.chatId);
+      if (session && session.isActive()) {
+        log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
+        await session.abort();
+      } else {
+        log.info(`/esc received but no active session in ${msg.chatId}`);
+      }
+      return;
+    }
 
     // Convert Feishu media to protocol MediaAttachment
     const media: MediaAttachment[] = msg.media.map((m) => ({
@@ -324,6 +339,9 @@ export class FeishuConnector implements Connector {
     const session = new FeishuStreamingSession(client, creds, {
       tokenProvider: this._tokenProvider ?? undefined,
     });
+
+    // Register active session for /esc abort
+    this._activeSessions.set(chatId, session);
 
     let thinkingText = "";
     let contentText = "";
@@ -552,6 +570,9 @@ export class FeishuConnector implements Connector {
             finalText: contentText || `Error: ${String(err)}`,
           }).catch(() => {});
         }
+      } finally {
+        // Unregister active session
+        this._activeSessions.delete(chatId);
       }
     });
   }

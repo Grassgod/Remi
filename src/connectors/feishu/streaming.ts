@@ -32,6 +32,8 @@ export interface StreamingCloseOptions {
   thinking?: string | null;
   /** Tool entries for building nested collapsible panels in the final card. */
   toolEntries?: ToolEntry[];
+  /** Whether the session was aborted by user (/esc). */
+  aborted?: boolean;
   /** Thinking text after the last tool call. */
   trailingThinking?: string | null;
   /** Number of tool calls for the process panel header. */
@@ -774,6 +776,21 @@ export class FeishuStreamingSession {
     return this._abortController.signal;
   }
 
+  /**
+   * Abort the streaming session (triggered by user /esc command).
+   * Signals upstream to break the stream loop, then closes the card with a notice.
+   */
+  async abort(): Promise<void> {
+    if (this.closed) return;
+    this.log("User abort requested");
+    this._abortController?.abort();
+    // Update status bar to indicate interruption before closing
+    try {
+      await this.updateStatus("⏹ 已中断");
+    } catch { /* best-effort */ }
+    await this.close({ aborted: true });
+  }
+
   private _resetSafetyTimer(): void {
     if (this.safetyTimer) clearTimeout(this.safetyTimer);
     this.safetyTimer = setTimeout(() => {
@@ -894,7 +911,10 @@ export class FeishuStreamingSession {
       sessionId = finalTextOrOptions.sessionId;
     }
 
-    const text = finalText ?? this.state.currentText;
+    // Append abort notice to content if user interrupted
+    const aborted = typeof finalTextOrOptions === "object" && finalTextOrOptions?.aborted;
+    const rawText = finalText ?? this.state.currentText;
+    const text = aborted ? (rawText ? rawText + "\n\n---\n⏹ *已被用户中断*" : "⏹ *已被用户中断*") : rawText;
     const thinkingText = thinking ?? this.state.currentThinking;
     const apiBase = resolveApiBase(this.creds.domain);
 
