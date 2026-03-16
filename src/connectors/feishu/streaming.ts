@@ -571,23 +571,59 @@ export class FeishuStreamingSession {
       multiSelect?: boolean;
     }>,
   ): Promise<string | null> {
-    const elements: Record<string, unknown>[] = [];
+    const formElements: Record<string, unknown>[] = [];
 
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
-      elements.push({
+      const fieldName = `q_${i}`;
+
+      // Question label
+      formElements.push({
         tag: "markdown",
         content: `**${i + 1}. ${q.question}**${q.header ? ` \`${q.header}\`` : ""}`,
       });
-      // Each option as a button
-      const actions = q.options.map((opt, j) => ({
-        tag: "button",
-        text: { tag: "plain_text", content: opt.label },
-        type: j === 0 ? "primary" : "default",
-        value: { _action_id: actionId, q: String(i), opt: String(j), label: opt.label },
-      }));
-      elements.push({ tag: "action", actions });
+
+      if (q.multiSelect) {
+        // Checkbox group for multi-select
+        formElements.push({
+          tag: "checker",
+          name: fieldName,
+          checked: false,
+          overall_checkable: false,
+          options: q.options.map((opt, j) => ({
+            text: { tag: "plain_text", content: opt.label },
+            value: `opt_${j}`,
+          })),
+        });
+      } else {
+        // Dropdown select for single choice
+        formElements.push({
+          tag: "select_static",
+          name: fieldName,
+          placeholder: { tag: "plain_text", content: "请选择..." },
+          options: q.options.map((opt, j) => ({
+            text: { tag: "plain_text", content: opt.label },
+            value: `opt_${j}`,
+          })),
+        });
+      }
+
+      // Custom input (optional, overrides selection)
+      formElements.push({
+        tag: "input",
+        name: `${fieldName}_custom`,
+        placeholder: { tag: "plain_text", content: "自定义回答（可选）" },
+        max_length: 500,
+      });
     }
+
+    // Submit button
+    formElements.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "📤 提交回答" },
+      type: "primary",
+      form_action_type: "submit",
+    });
 
     const card = {
       config: { wide_screen_mode: true },
@@ -595,7 +631,13 @@ export class FeishuStreamingSession {
         title: { tag: "plain_text", content: "🤔 需要你确认" },
         template: "blue",
       },
-      elements,
+      elements: [
+        {
+          tag: "form",
+          name: actionId,
+          elements: formElements,
+        },
+      ],
     };
 
     const apiBase = resolveApiBase(this.creds.domain);
