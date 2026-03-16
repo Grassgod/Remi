@@ -617,14 +617,13 @@ export class FeishuStreamingSession {
       });
     }
 
-    // Submit button
+    // Submit button — name is set to actionId so WS callback can route it
     formElements.push({
       tag: "button",
-      name: "submit_btn",
+      name: actionId,
       text: { tag: "plain_text", content: "📤 提交回答" },
       type: "primary",
       form_action_type: "submit",
-      value: { _form_action_id: actionId },
     });
 
     const card = {
