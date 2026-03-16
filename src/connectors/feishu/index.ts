@@ -208,7 +208,7 @@ export class FeishuConnector implements Connector {
     if (!this._handler) return;
 
     // ── /esc: abort active session (bypasses Lane Queue) ──
-    if (msg.text.trim() === "/esc") {
+    if (/^\/esc$/i.test(msg.text.trim())) {
       const session = this._activeSessions.get(msg.chatId);
       if (session && session.isActive()) {
         log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
