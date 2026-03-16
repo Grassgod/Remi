@@ -568,8 +568,15 @@ export class FeishuConnector implements Connector {
                 (decision) => planData.resolve(decision as string),
                 (reason) => planData.reject(reason),
               );
-              // Append plan review buttons to the streaming card
-              await session.appendPlanReview(planActionId);
+              // Send separate interactive card for plan review
+              const planMsgId = await session.sendPlanReviewCard(planActionId, chatId);
+              if (planMsgId) {
+                const origPlanResolve = planData.resolve;
+                planData.resolve = (decision: string) => {
+                  session.deleteMessage(planMsgId);
+                  origPlanResolve(decision);
+                };
+              }
               await session.updateStatus("📋 等待你审批计划...");
               session.addStep("ExitPlanMode", "等待计划审批");
               break;

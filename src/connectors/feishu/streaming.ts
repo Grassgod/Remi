@@ -573,17 +573,6 @@ export class FeishuStreamingSession {
   ): Promise<string | null> {
     const formElements: Record<string, unknown>[] = [];
 
-    // Hidden field to carry actionId in form_value (WS callback doesn't expose form.name)
-    formElements.push({
-      tag: "input",
-      name: "_action_id",
-      value: { text: actionId },
-      label: { tag: "plain_text", content: " " },
-      label_position: "left",
-      disabled: true,
-      width: "fill",
-    });
-
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       const fieldName = `q_${i}`;
@@ -694,137 +683,70 @@ export class FeishuStreamingSession {
   /**
    * Append plan review buttons to the streaming card for ExitPlanMode.
    */
-  async appendPlanReview(actionId: string): Promise<void> {
-    if (!this.state || this.closed) return;
-
-    const elements: Record<string, unknown>[] = [
-      { tag: "hr" },
-      {
-        tag: "markdown",
-        content: "**📋 执行计划已就绪，请确认：**",
-      },
-      {
-        tag: "action",
-        actions: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "✅ 批准执行" },
-            type: "primary",
-            value: JSON.stringify({ action: actionId, decision: "approved" }),
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "❌ 拒绝" },
-            type: "danger",
-            value: JSON.stringify({ action: actionId, decision: "rejected" }),
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "✏️ 提供反馈" },
-            type: "default",
-            value: JSON.stringify({ action: actionId, decision: "feedback" }),
-          },
-        ],
-      },
-      // Hidden input for feedback text (shown after clicking "提供反馈")
-      {
-        tag: "form",
-        name: `${actionId}_feedback`,
-        elements: [
-          {
-            tag: "input",
-            name: "feedback_text",
-            placeholder: { tag: "plain_text", content: "请输入修改意见..." },
-            max_length: 2000,
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "📤 提交反馈" },
-            type: "primary",
-            form_action_type: "submit",
-          },
-        ],
-      },
-    ];
-
-    await this._appendElements(elements);
-  }
-
   /**
-   * Low-level: append elements to the streaming card via CardKit API.
+   * Send a separate interactive message card for ExitPlanMode (plan review).
+   * Returns message_id for deletion after user responds.
    */
-  private async _appendElements(elements: Record<string, unknown>[]): Promise<void> {
-    if (!this.state || this.closed) return;
-    this._resetSafetyTimer();
-
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+  async sendPlanReviewCard(actionId: string, chatId: string): Promise<string | null> {
+    const card = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: "plain_text", content: "📋 执行计划审批" },
+        template: "green",
+      },
+      elements: [
         {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "append",
-            elements: JSON.stringify(elements),
-            sequence: this.state.sequence,
-            uuid: `a_${this.state.cardId}_${this.state.sequence}`,
-          }),
+          tag: "markdown",
+          content: "计划已就绪，请选择操作：",
         },
-      );
-      const body = await res.text().catch(() => "");
-      if (!res.ok) {
-        this.log(`appendElements HTTP ${res.status}: ${body.slice(0, 300)}`);
-      } else {
-        // Log response to debug rendering issues
-        this.log(`appendElements response: ${body.slice(0, 500)}`);
-      }
-    } catch (e) {
-      this.log(`appendElements failed: ${String(e)}`);
-    }
+        {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "✅ 批准执行" },
+              type: "primary",
+              value: { action: actionId, decision: "approved" },
+            },
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "❌ 拒绝" },
+              type: "danger",
+              value: { action: actionId, decision: "rejected" },
+            },
+          ],
+        },
+      ],
+    };
 
-    // Disable streaming mode so card.action.trigger callbacks can fire
-    await this._setStreamingMode(false);
-  }
-
-  /**
-   * Enable or disable streaming mode on the card.
-   * card.action.trigger callbacks are suppressed while streaming_mode is true.
-   */
-  private async _setStreamingMode(enabled: boolean): Promise<void> {
-    if (!this.state || this.closed) return;
     const apiBase = resolveApiBase(this.creds.domain);
     try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            settings: JSON.stringify({ config: { streaming_mode: enabled } }),
-            sequence: ++this.state.sequence,
-            uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-          }),
+      const res = await fetch(`${apiBase}/im/v1/messages?receive_id_type=chat_id`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await this._getToken()}`,
+          "Content-Type": "application/json",
         },
-      );
-      const body = await res.text().catch(() => "");
-      if (!res.ok) {
-        this.log(`setStreamingMode(${enabled}) HTTP ${res.status}: ${body.slice(0, 300)}`);
-      } else {
-        this.log(`setStreamingMode(${enabled}) OK: ${body.slice(0, 200)}`);
+        body: JSON.stringify({
+          receive_id: chatId,
+          content: JSON.stringify(card),
+          msg_type: "interactive",
+        }),
+      });
+      const body = await res.json() as Record<string, unknown>;
+      if (body.code !== 0) {
+        this.log(`sendPlanReviewCard failed: ${JSON.stringify(body).slice(0, 300)}`);
+        return null;
       }
+      const messageId = (body.data as Record<string, unknown>)?.message_id as string;
+      this.log(`sendPlanReviewCard OK: messageId=${messageId}`);
+      return messageId;
     } catch (e) {
-      this.log(`setStreamingMode failed: ${String(e)}`);
+      this.log(`sendPlanReviewCard error: ${String(e)}`);
+      return null;
     }
   }
+
 
 
   // ── Flush all pending throttled updates ────────────────────
