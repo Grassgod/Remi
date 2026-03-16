@@ -27,7 +27,7 @@ import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
 import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
-import { insertConversation } from "./db/index.js";
+import { insertConversationProcessing, completeConversation, failConversation } from "./db/index.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
@@ -217,11 +217,32 @@ export class Remi {
     });
     registerTraceSession(rootSpan.traceId, sessionKey);
     const existingSessionId = this._sessions.get(sessionKey) ?? null;
+
+    // Phase 1: record "processing" immediately so we know this message exists
+    let convId: number | null = null;
+    const startMs = Date.now();
     try {
-      await consumer(this._processStream(msg, rootSpan.context()), { sessionId: existingSessionId });
+      convId = insertConversationProcessing({
+        chatId: msg.chatId,
+        senderId: msg.sender,
+        connector: msg.connectorName,
+        messageId: msg.metadata?.messageId as string | undefined,
+        cliSessionId: existingSessionId ?? undefined,
+        cliCwd: (msg.metadata?.cwd as string) ?? undefined,
+      });
+    } catch (e) {
+      log.warn("insert conversation (processing) failed:", e);
+    }
+
+    try {
+      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs), { sessionId: existingSessionId });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));
+      // Phase 2b: mark failed
+      if (convId != null) {
+        try { failConversation(convId, e instanceof Error ? e.message : String(e), Date.now() - startMs); } catch {}
+      }
       throw e;
     } finally {
       // Guarantee span is always recorded — SpanImpl._ended prevents double-write
@@ -231,7 +252,7 @@ export class Remi {
     }
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext): AsyncGenerator<StreamEvent> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number): AsyncGenerator<StreamEvent> {
     // Handle slash commands — emit as immediate result
     const cmdResponse = await this._tryCommand(msg.text, msg);
     if (cmdResponse) {
@@ -497,21 +518,20 @@ export class Remi {
           spans.push({ op: `tool.${tc.name}`, ms: tc.durationMs ?? 0 });
         }
 
-        insertConversation({
-          chatId: msg.chatId,
-          senderId: msg.sender,
-          connector: msg.connectorName,
-          messageId: msg.metadata?.messageId as string | undefined,
-          costUsd: resultResponse.costUsd ?? undefined,
-          durationMs: resultResponse.durationMs ?? undefined,
-          cliSessionId: resultResponse.sessionId ?? undefined,
-          cliRequestId: resultResponse.requestId ?? undefined,
-          cliCwd: cwd ?? undefined,
-          model: resultResponse.model ?? undefined,
-          inputTokens: resultResponse.inputTokens ?? undefined,
-          outputTokens: resultResponse.outputTokens ?? undefined,
-          spans,
-        });
+        // Phase 2a: update to "completed" with full results
+        if (convId != null) {
+          completeConversation({
+            id: convId,
+            costUsd: resultResponse.costUsd ?? undefined,
+            durationMs: startMs ? Date.now() - startMs : resultResponse.durationMs ?? undefined,
+            cliSessionId: resultResponse.sessionId ?? undefined,
+            cliRequestId: resultResponse.requestId ?? undefined,
+            model: resultResponse.model ?? undefined,
+            inputTokens: resultResponse.inputTokens ?? undefined,
+            outputTokens: resultResponse.outputTokens ?? undefined,
+            spans,
+          });
+        }
 
         // Trigger memory extraction check via BunQueue (fire-and-forget)
         this.queue.enqueueConversation({

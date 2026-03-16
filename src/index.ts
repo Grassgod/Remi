@@ -28,5 +28,5 @@ export { CLIConnector } from "./connectors/cli.js";
 // Memory
 export { MemoryStore } from "./memory/store.js";
 
-// Scheduler
-export { CronTimer } from "./scheduler/cron-timer.js";
+// Queue (replaced CronTimer)
+export { RemiQueueManager } from "./queue/index.js";

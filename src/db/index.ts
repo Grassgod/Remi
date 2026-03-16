@@ -46,6 +46,9 @@ export function getDb(): Database {
 
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      -- Status tracking (two-phase: processing → completed/failed)
+      status TEXT NOT NULL DEFAULT 'processing',
+      error TEXT,
       -- Remi business context (CLI doesn't know these)
       chat_id TEXT NOT NULL,
       sender_id TEXT,
@@ -71,6 +74,7 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_conv_date ON conversations(created_at);
     CREATE INDEX IF NOT EXISTS idx_conv_cli_req ON conversations(cli_request_id);
     CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
+    CREATE INDEX IF NOT EXISTS idx_conv_status ON conversations(status) WHERE status != 'completed';
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)
@@ -119,47 +123,78 @@ export function kvDelete(key: string): void {
 
 // ── Conversations helpers ──
 
-export interface ConversationRow {
+/** Phase 1: Insert a "processing" record when message arrives. Returns row id. */
+export interface ConversationInsert {
   chatId: string;
   senderId?: string;
   connector?: string;
   messageId?: string;
+  cliSessionId?: string;
+  cliCwd?: string;
+}
+
+export function insertConversationProcessing(row: ConversationInsert): number {
+  const db = getDb();
+  const result = db.run(
+    `INSERT INTO conversations (status, chat_id, sender_id, connector, message_id, cli_session_id, cli_cwd)
+     VALUES ('processing', ?, ?, ?, ?, ?, ?)`,
+    [
+      row.chatId,
+      row.senderId ?? null,
+      row.connector ?? null,
+      row.messageId ?? null,
+      row.cliSessionId ?? null,
+      row.cliCwd ?? null,
+    ],
+  );
+  return Number(result.lastInsertRowid);
+}
+
+/** Phase 2a: Update to "completed" with full results. */
+export interface ConversationComplete {
+  id: number;
   cardId?: string;
   costUsd?: number;
   durationMs?: number;
   cliSessionId?: string;
   cliRequestId?: string;
-  cliCwd?: string;
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
   spans?: unknown[];
 }
 
-export function insertConversation(row: ConversationRow): void {
+export function completeConversation(row: ConversationComplete): void {
   const db = getDb();
   db.run(
-    `INSERT INTO conversations (
-      chat_id, sender_id, connector, message_id, card_id,
-      cost_usd, duration_ms,
-      cli_session_id, cli_request_id, cli_cwd,
-      model, input_tokens, output_tokens, spans
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `UPDATE conversations SET
+      status = 'completed',
+      card_id = ?, cost_usd = ?, duration_ms = ?,
+      cli_session_id = COALESCE(?, cli_session_id),
+      cli_request_id = ?,
+      model = ?, input_tokens = ?, output_tokens = ?,
+      spans = ?
+     WHERE id = ?`,
     [
-      row.chatId,
-      row.senderId ?? null,
-      row.connector ?? null,
-      row.messageId ?? null,
       row.cardId ?? null,
       row.costUsd ?? null,
       row.durationMs ?? null,
       row.cliSessionId ?? null,
       row.cliRequestId ?? null,
-      row.cliCwd ?? null,
       row.model ?? null,
       row.inputTokens ?? null,
       row.outputTokens ?? null,
       row.spans ? JSON.stringify(row.spans) : null,
+      row.id,
     ],
+  );
+}
+
+/** Phase 2b: Update to "failed" with error message. */
+export function failConversation(id: number, error: string, durationMs?: number): void {
+  const db = getDb();
+  db.run(
+    `UPDATE conversations SET status = 'failed', error = ?, duration_ms = ? WHERE id = ?`,
+    [error, durationMs ?? null, id],
   );
 }
