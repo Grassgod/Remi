@@ -545,6 +545,15 @@ export function startWebSocketListener(
     verificationToken: config.verificationToken,
   });
 
+  // Debug: log ALL events received by the dispatcher
+  const origInvoke = eventDispatcher.invoke.bind(eventDispatcher);
+  eventDispatcher.invoke = async function (data: any, params?: any) {
+    const parsed = (eventDispatcher as any).requestHandle?.parse?.(data);
+    const eventType = parsed?.header?.event_type ?? parsed?.type ?? "unknown";
+    log.info(`[dispatcher] event received: type=${eventType}`);
+    return origInvoke(data, params);
+  };
+
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
       if (stopped) return;
