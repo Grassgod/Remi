@@ -52,15 +52,17 @@ export function createFeishuWSClient(creds: Credentials): Lark.WSClient {
   });
 }
 
-/** Create an event dispatcher for encrypting/verifying webhook events. */
-export function createEventDispatcher(creds: {
+/**
+ * Create an event dispatcher for WS long-connection mode.
+ * Per Feishu docs, encryptKey and verificationToken MUST be empty strings
+ * for long-connection mode — passing actual values causes card callbacks
+ * (card.action.trigger) to fail verification and be silently dropped.
+ */
+export function createEventDispatcher(_creds?: {
   encryptKey?: string;
   verificationToken?: string;
 }): Lark.EventDispatcher {
-  return new Lark.EventDispatcher({
-    encryptKey: creds.encryptKey ?? "",
-    verificationToken: creds.verificationToken ?? "",
-  });
+  return new Lark.EventDispatcher({});
 }
 
 /** Probe the bot info to get botOpenId. Cached for 15 min. */

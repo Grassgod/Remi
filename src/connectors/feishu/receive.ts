@@ -545,15 +545,7 @@ export function startWebSocketListener(
     verificationToken: config.verificationToken,
   });
 
-  // Debug: log ALL events received by the dispatcher (raw data)
-  const origInvoke = eventDispatcher.invoke.bind(eventDispatcher);
-  eventDispatcher.invoke = async function (data: any, params?: any) {
-    try {
-      const raw = typeof data === "string" ? data : JSON.stringify(data);
-      log.info(`[dispatcher] raw invoke: ${raw.slice(0, 600)}`);
-    } catch { /* ignore */ }
-    return origInvoke(data, params);
-  };
+
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
