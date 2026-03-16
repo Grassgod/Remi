@@ -720,6 +720,7 @@ export class FeishuStreamingSession {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            type: "append",
             elements: JSON.stringify(elements),
             sequence: this.state.sequence,
             uuid: `a_${this.state.cardId}_${this.state.sequence}`,
