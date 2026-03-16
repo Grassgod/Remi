@@ -87,12 +87,6 @@ export function buildCardHeader(sessionId?: string | null) {
   };
 }
 
-/** Sanitize markdown for Feishu card rendering: headings → bold, remove horizontal rules. */
-export function sanitizeHeadings(md: string): string {
-  return md
-    .replace(/^#{1,6}\s+(.+)$/gm, "**$1**")
-    .replace(/^[-_]{3,}$/gm, "***");
-}
 
 /** Feishu image marker pattern: ![alt](feishu-image:img_key) */
 const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
@@ -108,7 +102,7 @@ export function buildContentElements(text: string): Array<Record<string, unknown
   for (const match of text.matchAll(FEISHU_IMAGE_RE)) {
     const before = text.slice(lastIndex, match.index);
     if (before.trim()) {
-      elements.push({ tag: "markdown", content: sanitizeHeadings(before.trim()) });
+      elements.push({ tag: "markdown", content: before.trim() });
     }
     elements.push({
       tag: "img",
@@ -120,7 +114,7 @@ export function buildContentElements(text: string): Array<Record<string, unknown
 
   const after = text.slice(lastIndex);
   if (after.trim()) {
-    elements.push({ tag: "markdown", content: sanitizeHeadings(after.trim()) });
+    elements.push({ tag: "markdown", content: after.trim() });
   }
 
   // Fallback: if no elements (empty text), add empty markdown

@@ -47,6 +47,9 @@ export interface StreamingCloseOptions {
 export interface StepInfo {
   tool: string;
   desc: string;
+  /** Thinking text offset when this step was added (for timeline interleaving). */
+  thinkingOffset?: number;
+  durationMs?: number;
 }
 
 // ── Token cache (shared across sessions) ────────────────────
@@ -90,7 +93,7 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
-import { buildCardHeader, sanitizeHeadings, buildContentElements } from "./send.js";
+import { buildCardHeader, buildContentElements } from "./send.js";
 
 /**
  * Build the final static card JSON.
@@ -219,8 +222,9 @@ export class FeishuStreamingSession {
   // AbortController for signalling upstream when safety timeout fires
   private _abortController: AbortController | null = null;
 
-  // Step tracking for icon-based process panel
+  // Timeline: thinking + steps interleaved
   private _steps: StepInfo[] = [];
+  private _fullThinking = "";
 
   constructor(
     client: Client,
@@ -480,11 +484,12 @@ export class FeishuStreamingSession {
   // ── Public update methods (fire-and-forget, don't block caller) ──
 
   async update(text: string): Promise<void> {
-    this._throttledUpdate("content", sanitizeHeadings(text), "currentText");
+    this._throttledUpdate("content", text, "currentText");
   }
 
   async updateThinking(text: string): Promise<void> {
-    this._throttledUpdate("process_content", this._truncateIfNeeded(text), "currentThinking");
+    this._fullThinking = text;
+    this._renderTimeline();
   }
 
   async updateStatus(text: string): Promise<void> {
@@ -492,20 +497,44 @@ export class FeishuStreamingSession {
   }
 
   /**
-   * Add a step to the process panel (icon + one-liner).
-   * Uses emoji in streaming markdown; final card uses standard_icon divs.
+   * Add a step to the process panel timeline.
+   * Snapshots current thinking offset so thinking + steps render interleaved.
    */
   addStep(toolName: string, desc: string): void {
-    this._steps.push({ tool: toolName, desc });
-    const stepLines = this._steps
-      .map((s) => {
-        const e = TOOL_EMOJI[s.tool] ?? TOOL_EMOJI._default ?? "⚙️";
-        return `${e}  <font color='grey'>${s.desc}</font>`;
-      })
-      .join("\n");
-    // Prepend step count since collapsible_panel header can't be updated via element API
-    const stepsMarkdown = `**${this._steps.length} steps**\n${stepLines}`;
-    this._throttledUpdate("process_content", this._truncateIfNeeded(stepsMarkdown), "currentThinking");
+    this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
+    this._renderTimeline();
+  }
+
+  /** Update the last pending step with its duration. */
+  updateStepDuration(durationMs: number): void {
+    const step = this._steps.findLast((s) => !s.durationMs);
+    if (step) {
+      step.durationMs = durationMs;
+      this._renderTimeline();
+    }
+  }
+
+  /** Render thinking + steps as a single interleaved timeline markdown. */
+  private _renderTimeline(): void {
+    const parts: string[] = [];
+    let lastOffset = 0;
+
+    for (const step of this._steps) {
+      const offset = step.thinkingOffset ?? 0;
+      const slice = this._fullThinking.slice(lastOffset, offset).trim();
+      if (slice) parts.push(slice);
+      const emoji = TOOL_EMOJI[step.tool] ?? TOOL_EMOJI._default ?? "⚙️";
+      const dur = step.durationMs ? ` (${(step.durationMs / 1000).toFixed(1)}s)` : "";
+      parts.push(`${emoji}  <font color='grey'>${step.desc}${dur}</font>`);
+      lastOffset = offset;
+    }
+
+    const remaining = this._fullThinking.slice(lastOffset).trim();
+    if (remaining) parts.push(remaining);
+
+    const count = this._steps.length;
+    const header = count > 0 ? `**${count} steps**\n` : "";
+    this._throttledUpdate("process_content", this._truncateIfNeeded(header + parts.join("\n")), "currentThinking");
   }
 
   /** Get collected steps for final card rendering. */

@@ -99,8 +99,11 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
   switch (name) {
     case "Read":
       return `${emoji} Reading ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
-    case "Bash":
-      return `${emoji} Running: ${trunc(shortPath(s(input?.command)), MAX)}...`;
+    case "Bash": {
+      // Take first line only to prevent markdown injection (# in multi-line scripts → headings)
+      const cmd = s(input?.command).split("\n")[0];
+      return `${emoji} Running: \`${trunc(shortPath(cmd), MAX)}\``;
+    }
     case "Grep":
       return `${emoji} Searching: ${trunc(s(input?.pattern), MAX)}...`;
     case "Edit":
@@ -377,7 +380,7 @@ export class FeishuConnector implements Connector {
               if (planTasks.length === 0 && activeAgents.length === 0) {
                 await session.updateStatus("🤔 Thinking...");
               }
-              // Show thinking status (no step added — thinking is not a tool step)
+              await session.updateThinking(thinkingText);
               break;
             case "content_delta":
               contentText += event.text;
@@ -478,7 +481,8 @@ export class FeishuConnector implements Connector {
                 entry.durationMs = event.durationMs;
                 entry.resultPreview = event.resultPreview;
               }
-              // Steps panel is already updated by addStep() — no need to update process_content here
+              // Update step duration in timeline
+              if (event.durationMs) session.updateStepDuration(event.durationMs);
               break;
             }
             case "rate_limit":
