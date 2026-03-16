@@ -16,6 +16,7 @@ import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeF
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu } from "./send.js";
+import { handleFormSubmission, handleButtonClick } from "./card-actions.js";
 
 // ── Dedup (persisted across restarts) ────────────────────────
 const DEDUP_TTL_MS = 30 * 60 * 1000;
@@ -567,6 +568,39 @@ export function startWebSocketListener(
     "im.chat.member.bot.deleted_v1": async (data) => {
       const event = data as unknown as { chat_id: string };
       log.info(`bot removed from chat ${event.chat_id}`);
+    },
+    // Card action callback — handles form submissions and button clicks
+    "card.action.trigger": async (data: any) => {
+      if (stopped) return;
+      try {
+        const event = data as unknown as {
+          operator?: { open_id?: string };
+          action?: {
+            value?: Record<string, unknown>;
+            tag?: string;
+            form_value?: Record<string, unknown>;
+            name?: string;
+          };
+          card?: { card_id?: string };
+        };
+        const action = event.action;
+        if (!action) return;
+
+        log.info(`card action: tag=${action.tag} name=${action.name ?? ""}`);
+
+        if (action.tag === "form" && action.form_value && action.name) {
+          // Form submission — route to pending action handler
+          handleFormSubmission(action.name, action.form_value);
+        } else if (action.tag === "button" && action.value) {
+          // Button click — route to pending action handler
+          const valueStr = typeof action.value === "string"
+            ? action.value
+            : JSON.stringify(action.value);
+          handleButtonClick(valueStr);
+        }
+      } catch (err) {
+        log.error(`error handling card action: ${String(err)}`);
+      }
     },
   });
 

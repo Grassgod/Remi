@@ -24,6 +24,8 @@ import {
   TOOL_EMOJI,
   shortPath,
 } from "./tool-formatters.js";
+import { registerPendingAction } from "./card-actions.js";
+import type { AskUserQuestionData, PlanReviewData } from "../../providers/base.js";
 import {
   startWebSocketListener,
   flushDedupCacheSync,
@@ -487,6 +489,32 @@ export class FeishuConnector implements Connector {
                 session.addStep("_default", `⚠️ Rate limited, retrying in ${secs}s`);
               }
               break;
+            case "ask_user": {
+              const askData = event.data as AskUserQuestionData;
+              // Register pending action and get unique ID (pass questions for answer parsing)
+              const askActionId = registerPendingAction(
+                (answers) => askData.resolve(answers as Record<string, string>),
+                (reason) => askData.reject(reason),
+                askData.questions,
+              );
+              // Append interactive form to the streaming card
+              await session.appendAskUserForm(askActionId, askData.questions);
+              await session.updateStatus("⏳ 等待你确认...");
+              session.addStep("AskUserQuestion", "等待用户确认");
+              break;
+            }
+            case "plan_review": {
+              const planData = event.data as PlanReviewData;
+              const planActionId = registerPendingAction(
+                (decision) => planData.resolve(decision as string),
+                (reason) => planData.reject(reason),
+              );
+              // Append plan review buttons to the streaming card
+              await session.appendPlanReview(planActionId);
+              await session.updateStatus("📋 等待你审批计划...");
+              session.addStep("ExitPlanMode", "等待计划审批");
+              break;
+            }
             case "error":
               contentText += `\n\n**Error:** ${event.error}\n`;
               await session.update(contentText);

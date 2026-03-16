@@ -513,6 +513,197 @@ export class FeishuStreamingSession {
     return this._steps;
   }
 
+  /** Get the card ID (for card action routing). */
+  getCardId(): string | null {
+    return this.state?.cardId ?? null;
+  }
+
+  // ── Interactive form elements (AskUserQuestion / PlanReview) ──
+
+  /**
+   * Append an interactive form to the streaming card for AskUserQuestion.
+   * Uses appendCardElements API to add form elements during streaming.
+   */
+  async appendAskUserForm(
+    actionId: string,
+    questions: Array<{
+      question: string;
+      header?: string;
+      options: Array<{ label: string; description?: string }>;
+      multiSelect?: boolean;
+    }>,
+  ): Promise<void> {
+    if (!this.state || this.closed) return;
+
+    const formElements: Record<string, unknown>[] = [];
+
+    // Divider before form
+    formElements.push({
+      tag: "hr",
+    });
+    formElements.push({
+      tag: "markdown",
+      content: "**🤔 需要你确认以下问题：**",
+    });
+
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const fieldName = `q_${i}`;
+
+      // Question label
+      formElements.push({
+        tag: "markdown",
+        content: `**${i + 1}. ${q.question}**${q.header ? ` \`${q.header}\`` : ""}`,
+      });
+
+      if (q.multiSelect) {
+        // Checkbox group for multi-select
+        formElements.push({
+          tag: "checker",
+          name: fieldName,
+          checked: false,
+          overall_checkable: false,
+          button_area: { pc_display_rule: "always" },
+          options: q.options.map((opt, j) => ({
+            text: { tag: "plain_text", content: opt.label },
+            value: `opt_${j}`,
+          })),
+        });
+      } else {
+        // Radio-style select for single choice
+        formElements.push({
+          tag: "select_static",
+          name: fieldName,
+          placeholder: { tag: "plain_text", content: "请选择..." },
+          options: q.options.map((opt, j) => ({
+            text: { tag: "plain_text", content: opt.label },
+            value: `opt_${j}`,
+          })),
+        });
+      }
+
+      // Custom input field (always shown, placeholder explains it's optional)
+      formElements.push({
+        tag: "input",
+        name: `${fieldName}_custom`,
+        placeholder: { tag: "plain_text", content: "自定义回答（可选，填写后覆盖上方选择）" },
+        max_length: 500,
+      });
+    }
+
+    // Submit button
+    formElements.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "📤 提交回答" },
+      type: "primary",
+      complex_interaction: { width: "default" },
+      form_action_type: "submit",
+    });
+
+    // Wrap in form container
+    const formContainer: Record<string, unknown> = {
+      tag: "form",
+      name: actionId,
+      elements: formElements,
+    };
+
+    await this._appendElements([formContainer]);
+  }
+
+  /**
+   * Append plan review buttons to the streaming card for ExitPlanMode.
+   */
+  async appendPlanReview(actionId: string): Promise<void> {
+    if (!this.state || this.closed) return;
+
+    const elements: Record<string, unknown>[] = [
+      { tag: "hr" },
+      {
+        tag: "markdown",
+        content: "**📋 执行计划已就绪，请确认：**",
+      },
+      {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "✅ 批准执行" },
+            type: "primary",
+            value: JSON.stringify({ action: actionId, decision: "approved" }),
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "❌ 拒绝" },
+            type: "danger",
+            value: JSON.stringify({ action: actionId, decision: "rejected" }),
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "✏️ 提供反馈" },
+            type: "default",
+            value: JSON.stringify({ action: actionId, decision: "feedback" }),
+          },
+        ],
+      },
+      // Hidden input for feedback text (shown after clicking "提供反馈")
+      {
+        tag: "form",
+        name: `${actionId}_feedback`,
+        elements: [
+          {
+            tag: "input",
+            name: "feedback_text",
+            placeholder: { tag: "plain_text", content: "请输入修改意见..." },
+            max_length: 2000,
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "📤 提交反馈" },
+            type: "primary",
+            form_action_type: "submit",
+          },
+        ],
+      },
+    ];
+
+    await this._appendElements(elements);
+  }
+
+  /**
+   * Low-level: append elements to the streaming card via CardKit API.
+   */
+  private async _appendElements(elements: Record<string, unknown>[]): Promise<void> {
+    if (!this.state || this.closed) return;
+    this._resetSafetyTimer();
+
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            elements: JSON.stringify(elements),
+            sequence: this.state.sequence,
+            uuid: `a_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`appendElements HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+    } catch (e) {
+      this.log(`appendElements failed: ${String(e)}`);
+    }
+  }
+
 
   // ── Flush all pending throttled updates ────────────────────
 

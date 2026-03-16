@@ -5,6 +5,29 @@
 /** Callback for streaming text chunks. */
 export type StreamCallback = (chunk: string) => void;
 
+/** Question from Claude's AskUserQuestion tool. */
+export interface AskUserQuestionData {
+  toolUseId: string;
+  questions: Array<{
+    question: string;
+    header?: string;
+    options: Array<{ label: string; description?: string }>;
+    multiSelect?: boolean;
+  }>;
+  /** Resolve this promise with the user's answers to unblock the stream. */
+  resolve: (answers: Record<string, string>) => void;
+  /** Reject to cancel (e.g. timeout). */
+  reject: (reason: string) => void;
+}
+
+/** Plan review request from Claude's ExitPlanMode tool. */
+export interface PlanReviewData {
+  toolUseId: string;
+  /** Resolve with "approved", "rejected", or user feedback text. */
+  resolve: (result: string) => void;
+  reject: (reason: string) => void;
+}
+
 /** Streaming event emitted during real-time generation. */
 export type StreamEvent =
   | { kind: "thinking_delta"; text: string }
@@ -13,7 +36,9 @@ export type StreamEvent =
   | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number }
   | { kind: "rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string }
   | { kind: "error"; error: string; code?: string }
-  | { kind: "result"; response: AgentResponse };
+  | { kind: "result"; response: AgentResponse }
+  | { kind: "ask_user"; data: AskUserQuestionData }
+  | { kind: "plan_review"; data: PlanReviewData };
 
 /** Custom tool that the agent can call, handled within Remi. */
 export interface ToolDefinition {

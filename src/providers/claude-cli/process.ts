@@ -158,6 +158,13 @@ export class ClaudeProcessManager {
     this._started = true;
   }
 
+  /**
+   * Set of tool names that should NOT be handled by the tool handler.
+   * Instead, they are yielded as tool_use events for external handling.
+   * The caller is responsible for writing the tool result via sendToolResult().
+   */
+  interactiveTools = new Set<string>();
+
   async *sendAndStream(
     text: string,
     toolHandler?: ToolHandler | null,
@@ -265,6 +272,12 @@ export class ClaudeProcessManager {
         // Tool use with complete input (non-streaming assistant message)
         if (msg.kind === "tool_use" && Object.keys(msg.input).length > 0) {
           yield msg;
+          // Interactive tools: yield and let caller handle via sendToolResult()
+          if (this.interactiveTools.has(msg.name)) {
+            // Extend timeout — user may take up to 30 min to respond
+            this._dynamicTimeoutMs = 30 * 60 * 1000;
+            continue;
+          }
           if (toolHandler) {
             const t0 = Date.now();
             const resultText = await toolHandler(msg);
@@ -315,6 +328,13 @@ export class ClaudeProcessManager {
             }
 
             yield pendingTool;
+            // Interactive tools: yield and let caller handle via sendToolResult()
+            if (this.interactiveTools.has(pendingTool.name)) {
+              this._dynamicTimeoutMs = 30 * 60 * 1000;
+              pendingTool = null;
+              inputChunks = [];
+              continue;
+            }
             if (toolHandler) {
               const t0 = Date.now();
               const resultText = await toolHandler(pendingTool);
@@ -379,6 +399,10 @@ export class ClaudeProcessManager {
               yield block;
             } else if (block.kind === "tool_use") {
               yield block;
+              if (this.interactiveTools.has((block as ToolUseRequest).name)) {
+                this._dynamicTimeoutMs = 30 * 60 * 1000;
+                continue;
+              }
               if (toolHandler) {
                 const t0 = Date.now();
                 const resultText = await toolHandler(block as ToolUseRequest);
@@ -561,6 +585,11 @@ export class ClaudeProcessManager {
     } finally {
       this._lock.release();
     }
+  }
+
+  /** Send a tool result back to the CLI subprocess (public, for external tool handling). */
+  async sendToolResult(toolUseId: string, result: string, isError = false): Promise<void> {
+    await this._writeLine(formatToolResult(toolUseId, result, isError));
   }
 
   private async _writeLine(data: string): Promise<void> {
