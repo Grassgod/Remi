@@ -727,9 +727,12 @@ export class FeishuStreamingSession {
           }),
         },
       );
+      const body = await res.text().catch(() => "");
       if (!res.ok) {
-        const body = await res.text().catch(() => "");
         this.log(`appendElements HTTP ${res.status}: ${body.slice(0, 300)}`);
+      } else {
+        // Log response to debug rendering issues
+        this.log(`appendElements response: ${body.slice(0, 500)}`);
       }
     } catch (e) {
       this.log(`appendElements failed: ${String(e)}`);
