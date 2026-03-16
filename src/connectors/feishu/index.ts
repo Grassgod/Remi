@@ -134,9 +134,6 @@ export class FeishuConnector implements Connector {
   /** Active streaming sessions keyed by chatId (for /esc abort). */
   private _activeSessions = new Map<string, FeishuStreamingSession>();
 
-  /** Per-chat abort flags — set by /esc, checked when new session starts. */
-  private _pendingAborts = new Set<string>();
-
   /** Callback to kill the CLI process on /esc (set by Remi core via setAbortHandler). */
   private _abortHandler: ((chatId: string) => Promise<void>) | null = null;
 
@@ -223,7 +220,6 @@ export class FeishuConnector implements Connector {
       const session = this._activeSessions.get(msg.chatId);
       if (session && session.isActive()) {
         log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
-        this._pendingAborts.add(msg.chatId);
         await session.abort();
         // Also kill the underlying CLI process
         if (this._abortHandler) {
@@ -231,15 +227,10 @@ export class FeishuConnector implements Connector {
             log.warn(`abort handler failed: ${String(e)}`));
         }
       } else {
-        // No active session yet — set flag so next session aborts immediately
-        log.info(`/esc received, setting pending abort for ${msg.chatId}`);
-        this._pendingAborts.add(msg.chatId);
+        log.info(`/esc received but no active session in ${msg.chatId}`);
       }
       return;
     }
-
-    // Clear any stale pending abort — user sent a real message
-    this._pendingAborts.delete(msg.chatId);
 
     // Convert Feishu media to protocol MediaAttachment
     const media: MediaAttachment[] = msg.media.map((m) => ({
@@ -364,14 +355,6 @@ export class FeishuConnector implements Connector {
 
     // Register active session for /esc abort
     this._activeSessions.set(chatId, session);
-
-    // Check if /esc was sent while we were queued
-    if (this._pendingAborts.has(chatId)) {
-      this._pendingAborts.delete(chatId);
-      log.info(`pending abort found for ${chatId} — skipping execution`);
-      this._activeSessions.delete(chatId);
-      return;
-    }
 
     let thinkingText = "";
     let contentText = "";
