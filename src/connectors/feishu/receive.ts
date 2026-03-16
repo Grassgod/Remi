@@ -545,12 +545,13 @@ export function startWebSocketListener(
     verificationToken: config.verificationToken,
   });
 
-  // Debug: log ALL events received by the dispatcher
+  // Debug: log ALL events received by the dispatcher (raw data)
   const origInvoke = eventDispatcher.invoke.bind(eventDispatcher);
   eventDispatcher.invoke = async function (data: any, params?: any) {
-    const parsed = (eventDispatcher as any).requestHandle?.parse?.(data);
-    const eventType = parsed?.header?.event_type ?? parsed?.type ?? "unknown";
-    log.info(`[dispatcher] event received: type=${eventType}`);
+    try {
+      const raw = typeof data === "string" ? data : JSON.stringify(data);
+      log.info(`[dispatcher] raw invoke: ${raw.slice(0, 600)}`);
+    } catch { /* ignore */ }
     return origInvoke(data, params);
   };
 
