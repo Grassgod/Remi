@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
+import { loadConfig, findConfigPath } from "../../src/config.js";
 import { MenuSyncer } from "../../src/connectors/feishu/menu-sync.js";
 
 export function registerBotMenuHandlers(app: Hono, data: RemiData) {
@@ -18,58 +19,24 @@ export function registerBotMenuHandlers(app: Hono, data: RemiData) {
   });
 
   // POST — sync current config to Feishu API
+  // Reuses loadConfig() for parsing, same path as core.ts startup sync
   app.post("/api/v1/bot-menu/sync", async (c) => {
-    const config = data.readConfig();
-    const botMenu = config.bot_menu ?? {};
-    const feishu = config.feishu ?? {};
-    const triggerUserIds = (feishu.trigger_user_ids as string[]) ?? [];
+    const config = loadConfig(findConfigPath());
 
-    if (!feishu.app_id || !feishu.app_secret) {
+    if (!config.feishu.appId || !config.feishu.appSecret) {
       return c.json({ error: "feishu credentials not configured" }, 400);
     }
 
     const syncer = new MenuSyncer({
-      appId: feishu.app_id as string,
-      appSecret: feishu.app_secret as string,
+      appId: config.feishu.appId,
+      appSecret: config.feishu.appSecret,
     });
 
-    // Parse config into the format MenuSyncer expects
-    const menuConfig = {
-      default: (botMenu.default as any[])?.map(parseMenuItem),
-      users: (botMenu.users as any[])?.map((u: any) => ({
-        userId: u.user_id,
-        userIdType: u.user_id_type ?? "open_id",
-        label: u.label,
-        items: (u.items as any[])?.map(parseMenuItem) ?? [],
-      })),
-    };
-
     try {
-      await syncer.syncAll(menuConfig, triggerUserIds);
+      await syncer.syncAll(config.botMenu, config.feishu.triggerUserIds);
       return c.json({ ok: true });
     } catch (err: any) {
       return c.json({ error: err.message }, 500);
     }
   });
-}
-
-// Convert TOML-style config to MenuSyncer format
-function parseMenuItem(item: any): any {
-  return {
-    name: item.name ?? "",
-    i18nName: item.i18n_name,
-    icon: item.icon ? {
-      token: item.icon.token,
-      color: item.icon.color,
-      fileKey: item.icon.file_key,
-    } : undefined,
-    tag: item.tag,
-    behaviors: item.behaviors?.map((b: any) => ({
-      type: b.type,
-      url: b.url,
-      eventKey: b.event_key,
-      isPrimary: b.is_primary,
-    })),
-    children: item.children?.map(parseMenuItem),
-  };
 }
