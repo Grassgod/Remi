@@ -573,6 +573,17 @@ export class FeishuStreamingSession {
   ): Promise<string | null> {
     const formElements: Record<string, unknown>[] = [];
 
+    // Hidden field to carry actionId in form_value (WS callback doesn't expose form.name)
+    formElements.push({
+      tag: "input",
+      name: "_action_id",
+      value: { text: actionId },
+      label: { tag: "plain_text", content: " " },
+      label_position: "left",
+      disabled: true,
+      width: "fill",
+    });
+
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       const fieldName = `q_${i}`;
@@ -617,10 +628,10 @@ export class FeishuStreamingSession {
       });
     }
 
-    // Submit button — name is set to actionId so WS callback can route it
+    // Submit button
     formElements.push({
       tag: "button",
-      name: actionId,
+      name: "submit_btn",
       text: { tag: "plain_text", content: "📤 提交回答" },
       type: "primary",
       form_action_type: "submit",
