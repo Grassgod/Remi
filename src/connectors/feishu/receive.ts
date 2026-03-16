@@ -570,8 +570,9 @@ export function startWebSocketListener(
       log.info(`bot removed from chat ${event.chat_id}`);
     },
     // Card action callback — handles form submissions and button clicks
+    // Must return a toast response within 3s for Feishu to acknowledge the interaction
     "card.action.trigger": async (data: any) => {
-      if (stopped) return;
+      if (stopped) return { toast: { type: "info", content: "Remi is stopped" } };
       try {
         const event = data as unknown as {
           operator?: { open_id?: string };
@@ -584,7 +585,7 @@ export function startWebSocketListener(
           card?: { card_id?: string };
         };
         const action = event.action;
-        if (!action) return;
+        if (!action) return { toast: { type: "info", content: "No action" } };
 
         log.info(`card action: tag=${action.tag} name=${action.name ?? ""}`);
 
@@ -598,8 +599,11 @@ export function startWebSocketListener(
             : JSON.stringify(action.value);
           handleButtonClick(valueStr);
         }
+
+        return { toast: { type: "success", content: "已提交，处理中..." } };
       } catch (err) {
         log.error(`error handling card action: ${String(err)}`);
+        return { toast: { type: "error", content: "处理失败" } };
       }
     },
   });
