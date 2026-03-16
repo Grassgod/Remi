@@ -620,6 +620,7 @@ export class FeishuStreamingSession {
     // Submit button
     formElements.push({
       tag: "button",
+      name: "submit_btn",
       text: { tag: "plain_text", content: "📤 提交回答" },
       type: "primary",
       form_action_type: "submit",
