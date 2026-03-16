@@ -9,7 +9,8 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "serve": "bun run src/main.ts serve",
-    "test": "bun test"
+    "test": "bun test",
+    "postinstall": "node scripts/patch-lark-sdk.mjs"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
