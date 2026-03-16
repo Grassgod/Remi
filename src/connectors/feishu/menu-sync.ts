@@ -122,13 +122,16 @@ function iconToApi(icon: BotMenuItemConfig["icon"]): ApiMenuIcon | undefined {
 function menuItemToApi(item: BotMenuItemConfig): ApiMenuItem {
   const api: ApiMenuItem = { name: item.name };
 
-  if (item.i18nName) api.i18n_name = item.i18nName;
+  // i18n_name is required by the API — fallback to name if not provided
+  api.i18n_name = item.i18nName ?? { en_us: item.name };
   if (item.icon) api.icon = iconToApi(item.icon);
   if (item.tag) api.tag = item.tag;
 
   // behaviors and children are mutually exclusive
+  // Note: icon is also incompatible with children (API returns 9499)
   if (item.children && item.children.length > 0) {
     api.children = item.children.map(menuItemToApi);
+    delete api.icon; // Cannot have icon when using children
   } else if (item.behaviors && item.behaviors.length > 0) {
     api.behaviors = item.behaviors.map(behaviorToApi);
   }
