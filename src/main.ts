@@ -48,9 +48,21 @@ async function runServe(): Promise<void> {
 
   const remi = Remi.boot(config);
 
-  // PM2 sends SIGTERM to stop
-  process.on("SIGTERM", () => { remi.queue.stop(); remi.stop(); });
-  process.on("SIGINT", () => { remi.queue.stop(); remi.stop(); });
+  // PM2 sends SIGTERM to stop — must exit promptly to avoid SIGKILL zombie processes
+  const gracefulShutdown = async (signal: string) => {
+    log.info(`${signal} received — shutting down gracefully...`);
+    try {
+      await Promise.race([
+        (async () => { await remi.queue.stop(); await remi.stop(); })(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("shutdown timeout")), 1200)),
+      ]);
+    } catch {
+      log.warn("Shutdown timed out, forcing exit");
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 
   // Start BunQueue workers (conversation + memory + cron)
   await remi.queue.start();
