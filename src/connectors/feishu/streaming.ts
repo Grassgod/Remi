@@ -759,6 +759,7 @@ export class FeishuStreamingSession {
           },
           body: JSON.stringify({
             settings: { config: { streaming_mode: enabled } },
+            sequence: ++this.state.sequence,
           }),
         },
       );
