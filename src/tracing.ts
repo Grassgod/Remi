@@ -13,7 +13,6 @@
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync, readFileSync, existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { exportSpan, registerSpan } from "./langsmith-exporter.js";
 
 // ── Data types (OTel-compatible) ──────────────────────────────────
 
@@ -113,7 +112,6 @@ class SpanImpl implements Span {
     this._startTime = new Date().toISOString();
     this._startMs = performance.now();
     this._attributes = { ...attributes };
-    registerSpan(this.spanId, traceId, parentSpanId, operationName, attributes);
   }
 
   context(): TraceContext {
@@ -208,12 +206,11 @@ export class TraceCollector {
     return new SpanImpl(traceId, undefined, operationName, this, attributes);
   }
 
-  /** Record a completed span to JSONL and export to LangSmith. */
+  /** Record a completed span to JSONL. */
   recordSpan(span: SpanData): void {
     const date = span.startTime.slice(0, 10);
     const filePath = join(this.tracesDir, `${date}.jsonl`);
     appendFileSync(filePath, JSON.stringify(span) + "\n");
-    exportSpan(span);
   }
 
   /** Read all spans for a given date. */

@@ -18,7 +18,6 @@ import type { BotProfile, RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
-import { registerTraceSession } from "./langsmith-exporter.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
@@ -215,7 +214,6 @@ export class Remi {
       "connector.name": msg.connectorName ?? "",
       "message.text": msg.text.slice(0, 200),
     });
-    registerTraceSession(rootSpan.traceId, sessionKey);
     const existingSessionId = this._sessions.get(sessionKey) ?? null;
 
     // Phase 1: record "processing" immediately so we know this message exists
