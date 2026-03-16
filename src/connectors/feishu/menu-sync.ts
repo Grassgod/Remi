@@ -128,10 +128,8 @@ function menuItemToApi(item: BotMenuItemConfig): ApiMenuItem {
   if (item.tag) api.tag = item.tag;
 
   // behaviors and children are mutually exclusive
-  // Note: icon is also incompatible with children (API returns 9499)
   if (item.children && item.children.length > 0) {
     api.children = item.children.map(menuItemToApi);
-    delete api.icon; // Cannot have icon when using children
   } else if (item.behaviors && item.behaviors.length > 0) {
     api.behaviors = item.behaviors.map(behaviorToApi);
   }
