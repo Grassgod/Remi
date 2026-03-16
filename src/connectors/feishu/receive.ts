@@ -589,7 +589,7 @@ export function startWebSocketListener(
         const action = event.action;
         if (!action) return { toast: { type: "info", content: "No action" } };
 
-        log.info(`card action: tag=${action.tag} name=${action.name ?? ""} form_value=${action.form_value ? JSON.stringify(action.form_value).slice(0, 300) : "none"} value=${action.value ? JSON.stringify(action.value).slice(0, 200) : "none"}`);
+        log.info(`card action: tag=${action.tag} name=${action.name ?? ""}`);
 
         if (action.form_value) {
           // Form submission via WS: action.name is the button name, not form name.
