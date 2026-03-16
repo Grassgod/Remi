@@ -24,7 +24,7 @@ import {
   TOOL_EMOJI,
   shortPath,
 } from "./tool-formatters.js";
-import { registerPendingAction } from "./card-actions.js";
+import { registerPendingAction, rejectAllPendingActions } from "./card-actions.js";
 import type { AskUserQuestionData, PlanReviewData } from "../../providers/base.js";
 import {
   startWebSocketListener,
@@ -217,6 +217,10 @@ export class FeishuConnector implements Connector {
 
     // ── /esc: abort active session (bypasses Lane Queue) ──
     if (/^\/esc$/i.test(msg.text.trim())) {
+      // First, reject any pending interactive actions (AskUserQuestion / ExitPlanMode)
+      // so the provider's `await promise` unblocks and the lane lock can be released.
+      rejectAllPendingActions("User sent /esc");
+
       const session = this._activeSessions.get(msg.chatId);
       if (session && session.isActive()) {
         log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
@@ -299,6 +303,17 @@ export class FeishuConnector implements Connector {
         thinkingReactionId = result.reactionId;
       } catch {
         // Non-critical: skip typing indicator if it fails
+      }
+
+      // If there's an active session for this chat (previous message still processing),
+      // reject any pending interactive actions to unblock the lane lock.
+      // This handles the P2P case where user sends a new message instead of clicking the form.
+      const existingSession = this._activeSessions.get(msg.chatId);
+      if (existingSession && existingSession.isActive()) {
+        const rejected = rejectAllPendingActions("New message received, cancelling pending interaction");
+        if (rejected > 0) {
+          log.info(`Cancelled ${rejected} pending action(s) for chat ${msg.chatId} — new message takes priority`);
+        }
       }
 
       // Determine reply mode: p2p chats never use thread; groups check bot profile
@@ -532,8 +547,17 @@ export class FeishuConnector implements Connector {
                 (reason) => askData.reject(reason),
                 askData.questions,
               );
-              // Append interactive form to the streaming card
-              await session.appendAskUserForm(askActionId, askData.questions);
+              // Send a separate interactive message card (not CardKit streaming card)
+              // because CardKit cards don't support card.action.trigger via WS
+              const askMsgId = await session.sendAskUserCard(askActionId, chatId, askData.questions);
+              // Store message ID so we can delete the card after user responds
+              if (askMsgId) {
+                const origResolve = askData.resolve;
+                askData.resolve = (answers: Record<string, string>) => {
+                  session.deleteMessage(askMsgId);
+                  origResolve(answers);
+                };
+              }
               await session.updateStatus("⏳ 等待你确认...");
               session.addStep("AskUserQuestion", "等待用户确认");
               break;

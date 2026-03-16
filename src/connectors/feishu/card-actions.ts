@@ -133,17 +133,58 @@ export function handleFormSubmission(
 }
 
 /**
- * Process a button click event (for plan review).
+ * Process a button click event (for plan review or AskUserQuestion).
  */
 export function handleButtonClick(valueJson: string): boolean {
   try {
-    const value = JSON.parse(valueJson) as { action?: string; decision?: string };
-    if (!value.action || !value.decision) return false;
-    return resolvePendingAction(value.action, value.decision);
+    const value = JSON.parse(valueJson) as Record<string, string>;
+
+    // AskUserQuestion button: { _action_id, q, opt, label }
+    if (value._action_id) {
+      const action = pendingActions.get(value._action_id);
+      if (!action) {
+        log.warn(`No pending action for button: ${value._action_id}`);
+        return false;
+      }
+      const questions = action.questions;
+      if (questions) {
+        const qIdx = parseInt(value.q ?? "0", 10);
+        const question = questions[qIdx]?.question ?? `q_${qIdx}`;
+        const answers: Record<string, string> = { [question]: value.label };
+        return resolvePendingAction(value._action_id, answers);
+      }
+      return resolvePendingAction(value._action_id, value.label);
+    }
+
+    // Plan review button: { action, decision }
+    if (value.action && value.decision) {
+      return resolvePendingAction(value.action, value.decision);
+    }
+
+    return false;
   } catch {
     log.warn(`Failed to parse button value: ${valueJson}`);
     return false;
   }
+}
+
+/**
+ * Reject ALL pending actions (AskUserQuestion / ExitPlanMode).
+ * Used when /esc is sent or a new message arrives while an interactive prompt is pending.
+ * This unblocks the provider's `await promise`, which in turn releases the lane lock.
+ */
+export function rejectAllPendingActions(reason: string): number {
+  let count = 0;
+  for (const [actionId, action] of pendingActions) {
+    clearTimeout(action.timeoutTimer);
+    action.reject(reason);
+    count++;
+  }
+  pendingActions.clear();
+  if (count > 0) {
+    log.info(`Rejected ${count} pending action(s): ${reason}`);
+  }
+  return count;
 }
 
 /** Get count of pending actions (for diagnostics). */

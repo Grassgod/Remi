@@ -555,89 +555,86 @@ export class FeishuStreamingSession {
    * Append an interactive form to the streaming card for AskUserQuestion.
    * Uses appendCardElements API to add form elements during streaming.
    */
-  async appendAskUserForm(
+  /**
+   * Send a separate interactive message card for AskUserQuestion.
+   * CardKit streaming cards don't support card.action.trigger via WS,
+   * so we send a regular message card (im/v1/messages) instead.
+   * Returns the message_id so it can be deleted after the user responds.
+   */
+  async sendAskUserCard(
     actionId: string,
+    chatId: string,
     questions: Array<{
       question: string;
       header?: string;
       options: Array<{ label: string; description?: string }>;
       multiSelect?: boolean;
     }>,
-  ): Promise<void> {
-    if (!this.state || this.closed) return;
-
-    const formElements: Record<string, unknown>[] = [];
-
-    // Divider before form
-    formElements.push({
-      tag: "hr",
-    });
-    formElements.push({
-      tag: "markdown",
-      content: "**🤔 需要你确认以下问题：**",
-    });
+  ): Promise<string | null> {
+    const elements: Record<string, unknown>[] = [];
 
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
-      const fieldName = `q_${i}`;
-
-      // Question label
-      formElements.push({
+      elements.push({
         tag: "markdown",
         content: `**${i + 1}. ${q.question}**${q.header ? ` \`${q.header}\`` : ""}`,
       });
-
-      if (q.multiSelect) {
-        // Checkbox group for multi-select
-        formElements.push({
-          tag: "checker",
-          name: fieldName,
-          checked: false,
-          overall_checkable: false,
-          button_area: { pc_display_rule: "always" },
-          options: q.options.map((opt, j) => ({
-            text: { tag: "plain_text", content: opt.label },
-            value: `opt_${j}`,
-          })),
-        });
-      } else {
-        // Radio-style select for single choice
-        formElements.push({
-          tag: "select_static",
-          name: fieldName,
-          placeholder: { tag: "plain_text", content: "请选择..." },
-          options: q.options.map((opt, j) => ({
-            text: { tag: "plain_text", content: opt.label },
-            value: `opt_${j}`,
-          })),
-        });
-      }
-
-      // Custom input field (always shown, placeholder explains it's optional)
-      formElements.push({
-        tag: "input",
-        name: `${fieldName}_custom`,
-        placeholder: { tag: "plain_text", content: "自定义回答（可选，填写后覆盖上方选择）" },
-        max_length: 500,
-      });
+      // Each option as a button
+      const actions = q.options.map((opt, j) => ({
+        tag: "button",
+        text: { tag: "plain_text", content: opt.label },
+        type: j === 0 ? "primary" : "default",
+        value: { _action_id: actionId, q: String(i), opt: String(j), label: opt.label },
+      }));
+      elements.push({ tag: "action", actions });
     }
 
-    // Submit button
-    formElements.push({
-      tag: "button",
-      text: { tag: "plain_text", content: "📤 提交回答" },
-      type: "primary",
-      form_action_type: "submit",
-    });
-
-    // Wrap in form container
-    const formContainer: Record<string, unknown> = {
-      tag: "form",
-      name: actionId,
-      elements: formElements,
+    const card = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: "plain_text", content: "🤔 需要你确认" },
+        template: "blue",
+      },
+      elements,
     };
 
-    await this._appendElements([formContainer]);
+    const apiBase = resolveApiBase(this.creds.domain);
+    try {
+      const res = await fetch(`${apiBase}/im/v1/messages?receive_id_type=chat_id`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await this._getToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          receive_id: chatId,
+          content: JSON.stringify(card),
+          msg_type: "interactive",
+        }),
+      });
+      const body = await res.json() as Record<string, unknown>;
+      if (body.code !== 0) {
+        this.log(`sendAskUserCard failed: ${JSON.stringify(body).slice(0, 300)}`);
+        return null;
+      }
+      const messageId = (body.data as Record<string, unknown>)?.message_id as string;
+      this.log(`sendAskUserCard OK: messageId=${messageId}`);
+      return messageId;
+    } catch (e) {
+      this.log(`sendAskUserCard error: ${String(e)}`);
+      return null;
+    }
+  }
+
+  /** Delete a message (used to clean up the ask-user card after response). */
+  async deleteMessage(messageId: string): Promise<void> {
+    const apiBase = resolveApiBase(this.creds.domain);
+    try {
+      await fetch(`${apiBase}/im/v1/messages/${messageId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${await this._getToken()}` },
+      });
+    } catch { /* best effort */ }
   }
 
   /**
