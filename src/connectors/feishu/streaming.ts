@@ -736,6 +736,39 @@ export class FeishuStreamingSession {
     } catch (e) {
       this.log(`appendElements failed: ${String(e)}`);
     }
+
+    // Disable streaming mode so card.action.trigger callbacks can fire
+    await this._setStreamingMode(false);
+  }
+
+  /**
+   * Enable or disable streaming mode on the card.
+   * card.action.trigger callbacks are suppressed while streaming_mode is true.
+   */
+  private async _setStreamingMode(enabled: boolean): Promise<void> {
+    if (!this.state || this.closed) return;
+    const apiBase = resolveApiBase(this.creds.domain);
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            settings: { config: { streaming_mode: enabled } },
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`setStreamingMode(${enabled}) HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+    } catch (e) {
+      this.log(`setStreamingMode failed: ${String(e)}`);
+    }
   }
 
 
