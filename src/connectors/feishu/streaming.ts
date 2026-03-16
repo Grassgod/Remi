@@ -624,6 +624,7 @@ export class FeishuStreamingSession {
       text: { tag: "plain_text", content: "📤 提交回答" },
       type: "primary",
       form_action_type: "submit",
+      value: { _form_action_id: actionId },
     });
 
     const card = {

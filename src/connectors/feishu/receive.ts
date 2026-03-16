@@ -591,9 +591,11 @@ export function startWebSocketListener(
 
         log.info(`card action: tag=${action.tag} name=${action.name ?? ""} form_value=${action.form_value ? JSON.stringify(action.form_value).slice(0, 300) : "none"} value=${action.value ? JSON.stringify(action.value).slice(0, 200) : "none"}`);
 
-        if (action.tag === "form" && action.form_value && action.name) {
-          // Form submission — route to pending action handler
-          handleFormSubmission(action.name, action.form_value);
+        if (action.form_value) {
+          // Form submission — extract actionId from value._form_action_id or action.name
+          const val = action.value as Record<string, unknown> | undefined;
+          const formActionId = (val?._form_action_id as string) || action.name || "";
+          if (formActionId) handleFormSubmission(formActionId, action.form_value);
         } else if (action.tag === "button" && action.value) {
           // Button click — route to pending action handler
           const valueStr = typeof action.value === "string"
