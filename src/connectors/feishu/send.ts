@@ -167,10 +167,25 @@ export function buildRichCard(options: {
   // Main content (may include embedded images)
   elements.push(...buildContentElements(options.text));
 
-  // Stats footer
+  // Stats footer (column_set with icons, same as streaming)
   if (options.stats) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: options.stats });
+    const statsParts = options.stats.split(" · ");
+    const iconTokens = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
+    elements.push({
+      tag: "column_set",
+      flex_mode: "flow",
+      horizontal_spacing: "small",
+      columns: statsParts.map((part, i) => ({
+        tag: "column",
+        width: "auto",
+        elements: [{
+          tag: "div",
+          icon: { tag: "standard_icon", token: iconTokens[i] ?? "setting-inter_outlined", color: "grey" },
+          text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
+        }],
+      })),
+    });
   }
 
   return {

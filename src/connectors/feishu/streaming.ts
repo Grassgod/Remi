@@ -285,7 +285,7 @@ function buildFinalCard(opts: {
     if (!opts.mentionOpenId) elements.push({ tag: "hr" });
     // Parse stats string "21.3s · 4→260 tokens · 8 tools" into column_set
     const statsParts = opts.stats.split(" · ");
-    if (statsParts.length >= 3) {
+    if (statsParts.length >= 1) {
       const iconMap = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
       elements.push({
         tag: "column_set",
