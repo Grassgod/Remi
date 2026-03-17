@@ -34,23 +34,7 @@ export const TOOL_ICONS: Record<string, string> = {
   _default:  "setting-inter_outlined",
 };
 
-/** Emoji fallback for streaming markdown (element_id updates only support text). */
-export const TOOL_EMOJI: Record<string, string> = {
-  Bash:      "⚙️",
-  Read:      "📖",
-  Write:     "✏️",
-  Edit:      "✏️",
-  Glob:      "📂",
-  Grep:      "🔍",
-  WebFetch:  "🌐",
-  WebSearch: "🔎",
-  Agent:     "🤖",
-  Skill:     "📋",
-  TodoWrite: "📋",
-  NotebookEdit: "✏️",
-  EnterPlanMode: "📋",
-  _default:  "🔧",
-};
+// TOOL_EMOJI removed — all rendering now uses standard_icon via TOOL_ICONS or plain text.
 
 /** Build a Feishu Card 2.0 div element with standard_icon for final card. */
 export function buildStepDiv(toolName: string, desc: string): Record<string, unknown> {
@@ -94,10 +78,10 @@ export function formatToolEntryMarkdown(
   const inputSummary = formatToolInputSummary(name, input);
 
   if (status === "pending") {
-    parts.push(`\n🔧 **${name}** ${inputSummary} ⏳`);
+    parts.push(`\n→ **${name}** ${inputSummary}`);
   } else {
     const dur = durationMs != null ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
-    parts.push(`\n✅ **${name}** ${inputSummary}${dur}`);
+    parts.push(`\n✓ **${name}** ${inputSummary}${dur}`);
   }
 
   if (resultPreview) {
@@ -110,7 +94,7 @@ export function formatToolEntryMarkdown(
 }
 
 /**
- * Replace the last ⏳ marker in thinking text with ✅ + result preview.
+ * Replace the last pending marker (→) in thinking text with ✓ + result preview.
  * Returns the updated thinking text.
  */
 export function replaceLastPending(
@@ -119,71 +103,39 @@ export function replaceLastPending(
   resultPreview?: string,
   durationMs?: number,
 ): string {
+  const PENDING = "→ **";
   const dur = durationMs != null ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
-  let replacement = `✅${dur}`;
-  if (resultPreview) {
-    const preview = formatResultPreview(resultPreview);
-    if (preview) replacement += "\n" + preview;
-  }
-  replacement += "\n";
-
-  // Replace the last ⏳ (with optional trailing whitespace/newline)
-  const lastIdx = thinkingText.lastIndexOf("⏳");
+  let replacement = `✓ **`;
+  // Find the last pending marker
+  const lastIdx = thinkingText.lastIndexOf(PENDING);
   if (lastIdx === -1) return thinkingText;
 
-  // Find the end of the ⏳ line
-  const afterEmoji = lastIdx + "⏳".length;
-  let endIdx = afterEmoji;
-  while (endIdx < thinkingText.length && thinkingText[endIdx] === " ") endIdx++;
-  if (endIdx < thinkingText.length && thinkingText[endIdx] === "\n") endIdx++;
+  // Find end of line
+  const lineEnd = thinkingText.indexOf("\n", lastIdx);
+  const endIdx = lineEnd === -1 ? thinkingText.length : lineEnd + 1;
 
-  return thinkingText.slice(0, lastIdx) + replacement + thinkingText.slice(endIdx);
+  // Reconstruct: replace "→ **Name** summary" with "✓ **Name** summary (dur)"
+  const oldLine = thinkingText.slice(lastIdx, lineEnd === -1 ? undefined : lineEnd);
+  const newLine = oldLine.replace("→", "✓") + dur;
+
+  let result = thinkingText.slice(0, lastIdx) + newLine;
+  if (resultPreview) {
+    const preview = formatResultPreview(resultPreview);
+    if (preview) result += "\n" + preview;
+  }
+  result += "\n" + thinkingText.slice(endIdx);
+
+  return result;
 }
 
-// ── Final card mode: nested collapsible_panel JSON ───────
+// ── Final card mode: lightweight div element ─────────────
 
-/** Build a nested collapsible_panel element for one tool call. */
-export function buildToolCollapsible(entry: ToolEntry): Record<string, unknown> {
+/** Build a lightweight div element for one tool call (no Input/Output). */
+export function buildToolDiv(entry: ToolEntry): Record<string, unknown> {
   const dur = entry.durationMs != null ? ` (${(entry.durationMs / 1000).toFixed(1)}s)` : "";
-  const emoji = TOOL_EMOJI[entry.name] ?? TOOL_EMOJI._default ?? "⚙️";
   const summary = formatToolInputSummary(entry.name, entry.input);
-
-  // Build detailed markdown content for inside the collapsible
-  const details: string[] = [];
-
-  // Input section
-  const inputLines = formatToolInputDetailed(entry.name, entry.input);
-  if (inputLines) {
-    details.push("**Input:**");
-    details.push(inputLines);
-  }
-
-  // Output section
-  if (entry.resultPreview) {
-    details.push("**Output:**");
-    const trimmed = entry.resultPreview.trim();
-    const truncated = trimmed.length > MAX_RESULT_PREVIEW
-      ? trimmed.slice(0, MAX_RESULT_PREVIEW) + "\n... (truncated)"
-      : trimmed;
-    details.push("```\n" + truncated + "\n```");
-  }
-
-  return {
-    tag: "collapsible_panel",
-    expanded: false,
-    header: {
-      title: {
-        tag: "plain_text",
-        content: `${emoji} ${entry.name} ${summary}${dur}`,
-        text_color: "grey",
-        text_size: "notation",
-      },
-    },
-    vertical_spacing: "2px",
-    elements: details.length > 0
-      ? [{ tag: "markdown", content: details.join("\n") }]
-      : [{ tag: "markdown", content: "*No details available*" }],
-  };
+  const desc = `${entry.name} ${summary}${dur}`.trim();
+  return buildStepDiv(entry.name, desc);
 }
 
 // ── Tool-specific input summary (one-liner for headers) ──

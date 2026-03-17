@@ -15,7 +15,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
-import { type ToolEntry, buildToolCollapsible, buildStepDiv, TOOL_EMOJI } from "./tool-formatters.js";
+import { type ToolEntry, buildToolDiv, buildStepDiv, TOOL_ICONS } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -147,7 +147,7 @@ function buildFinalCard(opts: {
         panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
       }
       for (const entry of visibleEntries) {
-        panelElements.push(buildToolCollapsible(entry));
+        panelElements.push(buildToolDiv(entry));
       }
     } else if (hasSteps) {
       const steps = opts.steps!;
@@ -173,11 +173,11 @@ function buildFinalCard(opts: {
         header: {
           title: {
             tag: "plain_text",
-            content: `${stepCount} steps`,
+            content: `Show ${stepCount} steps`,
             text_color: "grey",
             text_size: "notation",
           },
-          icon: { tag: "standard_icon", token: "right_outlined", color: "grey" },
+          icon: { tag: "standard_icon", token: "list-check_outlined", color: "grey" },
           icon_position: "right",
           icon_expanded_angle: 90,
         },
@@ -276,13 +276,35 @@ function buildFinalCard(opts: {
   }
 
   // Stats bar with optional @mention (always last)
-  const statsContent = opts.mentionOpenId
-    ? `<at id=${opts.mentionOpenId}></at> ${opts.stats ?? "✅"}`
-    : opts.stats;
-
-  if (statsContent) {
+  if (opts.mentionOpenId) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: statsContent });
+    elements.push({ tag: "markdown", content: `<at id=${opts.mentionOpenId}></at>` });
+  }
+
+  if (opts.stats) {
+    if (!opts.mentionOpenId) elements.push({ tag: "hr" });
+    // Parse stats string "21.3s · 4→260 tokens · 8 tools" into column_set
+    const statsParts = opts.stats.split(" · ");
+    if (statsParts.length >= 3) {
+      const iconMap = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
+      elements.push({
+        tag: "column_set",
+        flex_mode: "flow",
+        horizontal_spacing: "small",
+        columns: statsParts.map((part, i) => ({
+          tag: "column",
+          width: "auto",
+          elements: [{
+            tag: "div",
+            icon: { tag: "standard_icon", token: iconMap[i] ?? "setting-inter_outlined", color: "grey" },
+            text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
+          }],
+        })),
+      });
+    } else {
+      // Fallback: single markdown line
+      elements.push({ tag: "markdown", content: opts.stats });
+    }
   }
 
   return {
@@ -391,7 +413,7 @@ export class FeishuStreamingSession {
                 text_color: "grey",
                 text_size: "notation",
               },
-              icon: { tag: "standard_icon", token: "right_outlined", color: "grey" },
+              icon: { tag: "standard_icon", token: "list-check_outlined", color: "grey" },
               icon_position: "right",
               icon_expanded_angle: 90,
             },
@@ -643,9 +665,8 @@ export class FeishuStreamingSession {
       const offset = step.thinkingOffset ?? 0;
       const slice = this._fullThinking.slice(lastOffset, offset).trim();
       if (slice) parts.push(slice);
-      const emoji = TOOL_EMOJI[step.tool] ?? TOOL_EMOJI._default ?? "⚙️";
       const dur = step.durationMs ? ` (${(step.durationMs / 1000).toFixed(1)}s)` : "";
-      parts.push(`${emoji}  <font color='grey'>${step.desc}${dur}</font>`);
+      parts.push(`<font color='grey'>${step.desc}${dur}</font>`);
       lastOffset = offset;
     }
 
@@ -788,7 +809,7 @@ export class FeishuStreamingSession {
     this._abortController?.abort();
     // Update status bar to indicate interruption before closing
     try {
-      await this.updateStatus("⏹ 已中断");
+      await this.updateStatus("Interrupted");
     } catch { /* best-effort */ }
     await this.close({ aborted: true });
   }
@@ -835,7 +856,7 @@ export class FeishuStreamingSession {
     const elapsed = Math.round((Date.now() - this._startTime) / 1000);
     const heartbeatText = this._heartbeatRenderer
       ? this._heartbeatRenderer(elapsed)
-      : `${this._lastStatusText || "⏳ Running"} (${elapsed}s)`;
+      : `${this._lastStatusText || "Running"} (${elapsed}s)`;
     // Bypass throttle — heartbeat is already rate-limited by its own timer
     this.queue = this.queue.then(() =>
       this._updateElementRaw("status_bar", heartbeatText),

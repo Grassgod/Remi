@@ -81,9 +81,14 @@ export function buildCardHeader(sessionId?: string | null) {
     sessionId ? getSessionName(sessionId) :
     sessionId === null ? getNewbornName() :
     "Remi";
+  const now = new Date();
+  const hh = String(now.getUTCHours() + 8).padStart(2, "0"); // Beijing time (UTC+8)
+  const mm = String(now.getMinutes()).padStart(2, "0");
   return {
     title: { tag: "plain_text" as const, content: title },
-    template: "indigo" as const,
+    subtitle: { tag: "plain_text" as const, content: `${hh}:${mm}` },
+    template: "default" as const,
+    icon: { tag: "standard_icon" as const, token: "robot_outlined", color: "grey" },
   };
 }
 

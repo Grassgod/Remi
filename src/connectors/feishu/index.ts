@@ -21,7 +21,6 @@ import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js
 import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
 import {
   type ToolEntry,
-  TOOL_EMOJI,
   shortPath,
 } from "./tool-formatters.js";
 import { registerPendingAction, rejectAllPendingActions } from "./card-actions.js";
@@ -54,14 +53,14 @@ function renderPlanStatus(tasks: PlanTask[], elapsed?: number): string {
   if (tasks.length === 0) return "";
   const completed = tasks.filter((t) => t.status === "completed").length;
   const header = elapsed != null
-    ? `📋 **Plan** (${completed}/${tasks.length}) · ⏳ ${elapsed}s`
-    : `📋 **Plan** (${completed}/${tasks.length})`;
+    ? `Plan (${completed}/${tasks.length}) · ${elapsed}s`
+    : `Plan (${completed}/${tasks.length})`;
   const lines = [header];
   for (const t of tasks) {
     const icon =
-      t.status === "completed" ? "✅"
-      : t.status === "in_progress" ? "⏳"
-      : "◻";
+      t.status === "completed" ? "✓"
+      : t.status === "in_progress" ? "→"
+      : "·";
     lines.push(`${icon} ${t.subject}`);
   }
   return lines.join("\n");
@@ -76,11 +75,11 @@ function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]
   }
 
   if (activeAgents.length > 0) {
-    const elapsedSuffix = elapsed != null && planTasks.length === 0 ? ` · ⏳ ${elapsed}s` : "";
-    const agentLines = [`🤖 **Agents** (${activeAgents.length} active)${elapsedSuffix}`];
+    const elapsedSuffix = elapsed != null && planTasks.length === 0 ? ` · ${elapsed}s` : "";
+    const agentLines = [`Agents (${activeAgents.length} active)${elapsedSuffix}`];
     for (const a of activeAgents) {
       const agentElapsed = ((Date.now() - a.startTime) / 1000).toFixed(0);
-      agentLines.push(`⏳ ${a.description} (${agentElapsed}s)`);
+      agentLines.push(`→ ${a.description} (${agentElapsed}s)`);
     }
     parts.push(agentLines.join("\n"));
   }
@@ -92,32 +91,30 @@ function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]
 function formatToolStatus(name: string, input?: Record<string, unknown>): string {
   const s = (v: unknown) => (v == null ? "" : String(v));
   const trunc = (t: string, max: number) => t.length <= max ? t : t.slice(0, max - 3) + "...";
-  const emoji = TOOL_EMOJI[name] ?? TOOL_EMOJI._default ?? "⚙️";
   const MAX = 200;
 
   switch (name) {
     case "Read":
-      return `${emoji} Reading ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
+      return `Reading ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
     case "Bash": {
-      // Take first line only to prevent markdown injection (# in multi-line scripts → headings)
       const cmd = s(input?.command).split("\n")[0];
-      return `${emoji} Running: \`${trunc(shortPath(cmd), MAX)}\``;
+      return `Running: \`${trunc(shortPath(cmd), MAX)}\``;
     }
     case "Grep":
-      return `${emoji} Searching: ${trunc(s(input?.pattern), MAX)}...`;
+      return `Searching: ${trunc(s(input?.pattern), MAX)}...`;
     case "Edit":
     case "Write":
-      return `${emoji} Editing ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
+      return `Editing ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
     case "Glob":
-      return `${emoji} Finding: ${trunc(s(input?.pattern), MAX)}...`;
+      return `Finding: ${trunc(s(input?.pattern), MAX)}...`;
     case "WebFetch":
-      return `${emoji} Fetching: ${trunc(s(input?.url), MAX)}...`;
+      return `Fetching: ${trunc(s(input?.url), MAX)}...`;
     case "WebSearch":
-      return `${emoji} Searching: ${trunc(s(input?.query), MAX)}...`;
+      return `Searching: ${trunc(s(input?.query), MAX)}...`;
     case "Agent":
-      return `${emoji} Agent: ${trunc(s(input?.description ?? input?.prompt), MAX)}...`;
+      return `Agent: ${trunc(s(input?.description ?? input?.prompt), MAX)}...`;
     default:
-      return `${emoji} Tool: ${name}...`;
+      return `Tool: ${name}...`;
   }
 }
 
@@ -388,7 +385,7 @@ export class FeishuConnector implements Connector {
     const syncHeartbeatRenderer = () => {
       if (planTasks.length > 0 || activeAgents.length > 0) {
         session.setHeartbeatRenderer((elapsed) =>
-          renderCombinedStatus(planTasks, activeAgents, elapsed) || `⏳ Running (${elapsed}s)`,
+          renderCombinedStatus(planTasks, activeAgents, elapsed) || `Running (${elapsed}s)`,
         );
       } else {
         session.setHeartbeatRenderer(null);
@@ -423,14 +420,14 @@ export class FeishuConnector implements Connector {
               thinkingText += event.text;
               currentThinkingSegment += event.text;
               if (planTasks.length === 0 && activeAgents.length === 0) {
-                await session.updateStatus("🤔 Thinking...");
+                await session.updateStatus("Thinking...");
               }
               await session.updateThinking(thinkingText);
               break;
             case "content_delta":
               contentText += event.text;
               if (planTasks.length === 0 && activeAgents.length === 0) {
-                await session.updateStatus("✍️ Writing...");
+                await session.updateStatus("Writing...");
               }
               await session.update(contentText);
               break;
@@ -518,7 +515,7 @@ export class FeishuConnector implements Connector {
               }
               // Update status bar
               const combined = renderCombinedStatus(planTasks, activeAgents, session.getElapsed());
-              await session.updateStatus(combined || "🤔 Thinking...");
+              await session.updateStatus(combined || "Thinking...");
               // Update the matching pending entry
               const entry = toolEntries.findLast((e) => e.status === "pending");
               if (entry) {
@@ -678,21 +675,21 @@ export class FeishuConnector implements Connector {
     const parts: string[] = [];
 
     if (response.durationMs != null) {
-      parts.push(`⏱ ${(response.durationMs / 1000).toFixed(1)}s`);
+      parts.push(`${(response.durationMs / 1000).toFixed(1)}s`);
     }
     if (response.inputTokens != null || response.outputTokens != null) {
       const inTok = response.inputTokens ?? "?";
       const outTok = response.outputTokens ?? "?";
-      parts.push(`📥 ${inTok} → 📤 ${outTok} tokens`);
+      parts.push(`${inTok}→${outTok} tokens`);
     }
     if (response.toolCalls && response.toolCalls.length > 0) {
-      parts.push(`🔧 ${response.toolCalls.length} tools`);
+      parts.push(`${response.toolCalls.length} tools`);
     }
     if (response.costUsd != null) {
-      parts.push(`💰 $${response.costUsd.toFixed(4)}`);
+      parts.push(`$${response.costUsd.toFixed(4)}`);
     }
 
-    return parts.length > 0 ? parts.join(" | ") : null;
+    return parts.length > 0 ? parts.join(" · ") : null;
   }
 }
 
