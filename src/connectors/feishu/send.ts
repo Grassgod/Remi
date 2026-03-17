@@ -85,8 +85,7 @@ export function buildCardHeader(sessionId?: string | null) {
   const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");
   const mm = String(now.getUTCMinutes()).padStart(2, "0");
   return {
-    title: { tag: "plain_text" as const, content: title },
-    subtitle: { tag: "plain_text" as const, content: `${hh}:${mm}` },
+    title: { tag: "plain_text" as const, content: `${title}  ${hh}:${mm}` },
     template: "default" as const,
     icon: { tag: "standard_icon" as const, token: "robot_outlined", color: "grey" },
   };
