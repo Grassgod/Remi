@@ -2,7 +2,7 @@
  * Tool-specific formatters for Feishu card display.
  *
  * Provides three display modes:
- * 1. Streaming steps: emoji + one-liner per tool (for process_content markdown)
+ * 1. Streaming steps: div + standard_icon per tool (appended to process_panel)
  * 2. Final card steps: div + standard_icon per tool (for process_panel elements)
  * 3. Final card detail: nested collapsible_panel with input/output per tool
  */

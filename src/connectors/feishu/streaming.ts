@@ -349,8 +349,7 @@ export class FeishuStreamingSession {
   private _lastStatusText = "";
   private _heartbeatRenderer: ((elapsed: number) => string) | null = null;
 
-  // Overflow protection: max bytes for process content (~10KB)
-  private static PROCESS_BUDGET = 10000;
+  // (PROCESS_BUDGET removed — steps are now individual div elements, no markdown accumulation)
 
   // AbortController for signalling upstream when safety timeout fires
   private _abortController: AbortController | null = null;
@@ -419,9 +418,7 @@ export class FeishuStreamingSession {
             },
             vertical_spacing: "2px",
             element_id: "process_panel",
-            elements: [
-              { tag: "markdown", content: "", element_id: "process_content" },
-            ],
+            elements: [],
           },
           { tag: "markdown", content: "", element_id: "content" },
           { tag: "hr", element_id: "stats_hr" },
@@ -540,6 +537,54 @@ export class FeishuStreamingSession {
     }
   }
 
+  /**
+   * Append a new element to a container (e.g. collapsible_panel) via CardKit insert element API.
+   */
+  private async _appendElement(
+    targetElementId: string,
+    element: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.state || this.closed) return;
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    const seq = this.state.sequence;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(
+          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${await this._getToken()}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "append",
+              target_element_id: targetElementId,
+              sequence: seq,
+              elements: JSON.stringify([element]),
+            }),
+          },
+        );
+        if (res.ok) return;
+        const body = await res.text().catch(() => "");
+        if (attempt === 0 && res.status >= 500) {
+          this.log(`Append to ${targetElementId} HTTP ${res.status}, retrying...`);
+          continue;
+        }
+        this.log(`Append to ${targetElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+        return;
+      } catch (e) {
+        if (attempt === 0) {
+          this.log(`Append to ${targetElementId} failed, retrying: ${String(e)}`);
+          continue;
+        }
+        this.log(`Append to ${targetElementId} failed: ${String(e)}`);
+      }
+    }
+  }
+
   // ── Per-element throttle helpers ───────────────────────────
 
   private _getThrottle(elementId: string): ElementThrottle {
@@ -622,7 +667,8 @@ export class FeishuStreamingSession {
 
   async updateThinking(text: string): Promise<void> {
     this._fullThinking = text;
-    this._renderTimeline();
+    // Thinking text is accumulated for final card only — not rendered during streaming
+    // (steps are now individual div elements with icons, not interleaved in markdown)
   }
 
   async updateStatus(text: string): Promise<void> {
@@ -630,59 +676,43 @@ export class FeishuStreamingSession {
   }
 
   /**
-   * Add a step to the process panel timeline.
-   * Snapshots current thinking offset so thinking + steps render interleaved.
+   * Add a step to the process panel by appending a div with standard_icon.
    */
   addStep(toolName: string, desc: string): void {
+    const stepIndex = this._steps.length;
     this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
-    this._renderTimeline();
+    const iconToken = TOOL_ICONS[toolName] ?? TOOL_ICONS._default;
+    const element = {
+      tag: "div",
+      element_id: `step_${stepIndex}`,
+      icon: { tag: "standard_icon", token: iconToken, color: "grey" },
+      text: { tag: "plain_text", content: desc, text_color: "grey", text_size: "notation" },
+    };
+    // Update process panel header with step count
+    this._updateProcessHeader();
+    // Append div to process panel (fire-and-forget)
+    this._appendElement("process_panel", element);
   }
 
   /** Update the last pending step with its duration. */
   updateStepDuration(durationMs: number): void {
     const step = this._steps.findLast((s) => !s.durationMs);
-    if (step) {
-      step.durationMs = durationMs;
-      this._renderTimeline();
-    }
+    if (!step) return;
+    const stepIndex = this._steps.indexOf(step);
+    step.durationMs = durationMs;
+    const dur = ` (${(durationMs / 1000).toFixed(1)}s)`;
+    // Update the existing div's text via element update
+    this._updateElementRaw(`step_${stepIndex}`, `${step.desc}${dur}`);
   }
 
-  /** Max steps visible in streaming process panel (sliding window). */
-  private static MAX_VISIBLE_STEPS = 8;
-
-  /** Render thinking + steps as a single interleaved timeline markdown. */
-  private _renderTimeline(): void {
-    const parts: string[] = [];
+  /** Update the process panel header title with current step count. */
+  private _updateProcessHeader(): void {
     const total = this._steps.length;
-    const maxVisible = FeishuStreamingSession.MAX_VISIBLE_STEPS;
-    const hidden = Math.max(0, total - maxVisible);
-    const visibleSteps = hidden > 0 ? this._steps.slice(-maxVisible) : this._steps;
-
-    // Start thinking offset from the first visible step
-    let lastOffset = hidden > 0 ? (visibleSteps[0]?.thinkingOffset ?? 0) : 0;
-
-    for (const step of visibleSteps) {
-      const offset = step.thinkingOffset ?? 0;
-      const slice = this._fullThinking.slice(lastOffset, offset).trim();
-      if (slice) parts.push(slice);
-      const dur = step.durationMs ? ` (${(step.durationMs / 1000).toFixed(1)}s)` : "";
-      parts.push(`<font color='grey'>${step.desc}${dur}</font>`);
-      lastOffset = offset;
-    }
-
-    const remaining = this._fullThinking.slice(lastOffset).trim();
-    if (remaining) parts.push(remaining);
-
-    // Header always preserved outside truncation
-    let header = "";
-    if (total > 0) {
-      header = hidden > 0
-        ? `**${total} steps** *(+${hidden} earlier)*\n`
-        : `**${total} steps**\n`;
-    }
-    const body = this._truncateIfNeeded(parts.join("\n"));
-    this._throttledUpdate("process_content", header + body, "currentThinking");
+    // collapsible_panel header title can't be updated via element API,
+    // so we keep it as-is ("steps"). The step count is visible from the divs inside.
   }
+
+  // _renderTimeline removed — steps now use _appendElement (div + standard_icon)
 
   /** Get collected steps for final card rendering. */
   getSteps(): StepInfo[] {
@@ -874,32 +904,6 @@ export class FeishuStreamingSession {
     }
   }
 
-  // ── Overflow protection ────────────────────────────────────
-
-  /**
-   * Truncate process content from the head to stay within the 30KB card limit.
-   * Keeps the most recent thinking + tool entries visible.
-   */
-  private _truncateIfNeeded(text: string): string {
-    if (Buffer.byteLength(text, "utf-8") <= FeishuStreamingSession.PROCESS_BUDGET) {
-      return text;
-    }
-    const marker = "... *(earlier content truncated)*\n\n---\n\n";
-    let start = 0;
-    while (
-      Buffer.byteLength(marker + text.slice(start), "utf-8") >
-      FeishuStreamingSession.PROCESS_BUDGET
-    ) {
-      const nextBreak = text.indexOf("\n---\n", start + 1);
-      if (nextBreak === -1) {
-        start += 500;
-        break;
-      }
-      start = nextBreak + 5; // skip past "\n---\n"
-    }
-    return marker + text.slice(start);
-  }
-
   // ── Close streaming card ───────────────────────────────────
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
@@ -946,9 +950,7 @@ export class FeishuStreamingSession {
     if (text && text !== this.state.currentText) {
       await this._updateElementRaw("content", text);
     }
-    if (thinkingText && thinkingText !== this.state.currentThinking) {
-      await this._updateElementRaw("process_content", thinkingText);
-    }
+    // process_content removed — steps are now individual div elements appended to process_panel
     if (stats) {
       await this._updateElementRaw("stats_text", stats);
     }
