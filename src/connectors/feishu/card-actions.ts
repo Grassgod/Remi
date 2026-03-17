@@ -66,6 +66,16 @@ export function resolvePendingAction(actionId: string, value: unknown): boolean 
 }
 
 /**
+ * Wrap a pending action's resolve to add a post-resolve hook (e.g., delete message).
+ */
+export function wrapPendingResolve(actionId: string, wrapper: (origResolve: (v: unknown) => void) => (v: unknown) => void): void {
+  const action = pendingActions.get(actionId);
+  if (action) {
+    action.resolve = wrapper(action.resolve);
+  }
+}
+
+/**
  * Process a card form submission event.
  * Extracts answers from form_value and resolves the pending action.
  */

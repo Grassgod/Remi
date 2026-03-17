@@ -24,7 +24,7 @@ import {
   TOOL_EMOJI,
   shortPath,
 } from "./tool-formatters.js";
-import { registerPendingAction, rejectAllPendingActions } from "./card-actions.js";
+import { registerPendingAction, rejectAllPendingActions, wrapPendingResolve } from "./card-actions.js";
 import type { AskUserQuestionData, PlanReviewData } from "../../providers/base.js";
 import {
   startWebSocketListener,
@@ -550,13 +550,12 @@ export class FeishuConnector implements Connector {
               // Send a separate interactive message card (not CardKit streaming card)
               // because CardKit cards don't support card.action.trigger via WS
               const askMsgId = await session.sendAskUserCard(askActionId, chatId, askData.questions);
-              // Store message ID so we can delete the card after user responds
+              // Wrap resolve to also delete the confirmation card
               if (askMsgId) {
-                const origResolve = askData.resolve;
-                askData.resolve = (answers: Record<string, string>) => {
+                wrapPendingResolve(askActionId, (orig) => (v) => {
                   session.deleteMessage(askMsgId);
-                  origResolve(answers);
-                };
+                  orig(v);
+                });
               }
               await session.updateStatus("⏳ 等待你确认...");
               session.addStep("AskUserQuestion", "等待用户确认");
@@ -571,11 +570,10 @@ export class FeishuConnector implements Connector {
               // Send separate interactive card for plan review
               const planMsgId = await session.sendPlanReviewCard(planActionId, chatId);
               if (planMsgId) {
-                const origPlanResolve = planData.resolve;
-                planData.resolve = (decision: string) => {
+                wrapPendingResolve(planActionId, (orig) => (v) => {
                   session.deleteMessage(planMsgId);
-                  origPlanResolve(decision);
-                };
+                  orig(v);
+                });
               }
               await session.updateStatus("📋 等待你审批计划...");
               session.addStep("ExitPlanMode", "等待计划审批");

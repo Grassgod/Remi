@@ -210,8 +210,11 @@ export class ClaudeCLIProvider implements Provider {
           // Wait for user response (up to 30 min timeout set in process.ts)
           try {
             const answers = await promise;
+            log.info(`AskUserQuestion resolved: ${JSON.stringify(answers).slice(0, 200)}`);
             await mgr.sendToolResult(tu.toolUseId, JSON.stringify({ answers }));
+            log.info(`AskUserQuestion tool result sent to CLI`);
           } catch (err) {
+            log.warn(`AskUserQuestion rejected: ${String(err)}`);
             await mgr.sendToolResult(tu.toolUseId, `User did not respond: ${String(err)}`, true);
           }
           continue;
@@ -224,8 +227,11 @@ export class ClaudeCLIProvider implements Provider {
           } as StreamEvent;
           try {
             const result = await promise;
+            log.info(`ExitPlanMode resolved: ${result}`);
             await mgr.sendToolResult(tu.toolUseId, JSON.stringify({ decision: result }));
+            log.info(`ExitPlanMode tool result sent to CLI`);
           } catch (err) {
+            log.warn(`ExitPlanMode rejected: ${String(err)}`);
             await mgr.sendToolResult(tu.toolUseId, `User did not respond: ${String(err)}`, true);
           }
           continue;
