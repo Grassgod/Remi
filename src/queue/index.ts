@@ -244,7 +244,10 @@ export class RemiQueueManager {
   private static parseIntervalToMs(val: string | number): number {
     if (typeof val === "number") return val * 1000;
     const match = val.match(/^(\d+)\s*(s|m|h|d)?$/i);
-    if (!match) return 300_000;
+    if (!match) {
+      log.warn(`Invalid interval "${val}", falling back to 300s`);
+      return 300_000;
+    }
     const num = parseInt(match[1], 10);
     const unit = (match[2] ?? "s").toLowerCase();
     switch (unit) {
@@ -257,7 +260,7 @@ export class RemiQueueManager {
   }
 
   private async cleanStaleJobs(): Promise<void> {
-    const STALE_THRESHOLD = 10 * 60 * 1000; // 10 minutes
+    const STALE_THRESHOLD = 30 * 60 * 1000; // 30 minutes (cron jobs like compaction/skill:gen can take 5-10min)
     for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue]) {
       try {
         const active = q.getActive();

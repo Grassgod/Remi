@@ -187,14 +187,69 @@ handlers.set("skill:push", async (remi, config) => {
   }
 });
 
+handlers.set("skill:run", async (remi, config) => {
+  if (!config?.skillName) throw new Error("Missing handlerConfig.skillName");
+
+  const skillName = config.skillName as string;
+  const today = localDateStr(new Date());
+  const outputDir = (config.outputDir as string) ?? join(homedir(), ".remi", "skill-reports", skillName);
+
+  // ── Phase 1: Generate ──
+  log.info(`[skill:run] Generating: ${skillName} for ${today}`);
+
+  const skillPath = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
+  if (!existsSync(skillPath)) throw new Error(`Skill file not found: ${skillPath}`);
+
+  let content = readFileSync(skillPath, "utf-8");
+  const frontmatterMatch = content.match(/^---\n[\s\S]*?\n---\n/);
+  if (frontmatterMatch) content = content.slice(frontmatterMatch[0].length);
+  content = content.replace(/YYYY-MM-DD/g, today);
+
+  const provider = remi._getProvider();
+  const response = await provider.send(content.trim());
+  const text = response.text.trim();
+
+  if (!text || text.startsWith("[Provider error") || text.startsWith("[Provider timeout")) {
+    throw new Error(`Generation failed: ${text.slice(0, 100)}`);
+  }
+
+  if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, `${today}.md`), text, "utf-8");
+  log.info(`[skill:run] Report saved: ${skillName} → ${outputDir}/${today}.md`);
+
+  // ── Phase 2: Deliver (optional) ──
+  const delivery = config.delivery as Record<string, any> | undefined;
+  if (!delivery) return;
+
+  const connectorName = (delivery.connectorName as string) ?? "feishu";
+  const connectors = remi["_connectors"] as Connector[];
+  const connector = connectors.find((c) => c.name === connectorName);
+  if (!connector) throw new Error(`Connector "${connectorName}" not found`);
+
+  const maxLen = (delivery.maxPushLength as number) ?? 4000;
+  let pushContent = text;
+
+  if (pushContent.length > maxLen) {
+    const truncated = pushContent.slice(0, maxLen);
+    const lastSection = truncated.lastIndexOf("\n## ");
+    const cutPoint = lastSection > maxLen * 0.5 ? lastSection : maxLen;
+    pushContent = pushContent.slice(0, cutPoint).trim() + "\n\n> 回复「完整报告」查看完整内容";
+  }
+
+  const pushTargets = (delivery.pushTargets as string[]) ?? [];
+  for (const target of pushTargets) {
+    await connector.reply(target, { text: pushContent });
+    log.info(`[skill:run] Pushed: ${skillName} → ${target}`);
+  }
+});
+
 // ── Dispatcher (BunQueue Worker handler) ─────────────────────────
 
 export async function handleCronJob(job: Job<CronJobData>, remi: Remi): Promise<void> {
   const { handler, handlerConfig } = job.data;
   const fn = handlers.get(handler);
   if (!fn) {
-    log.error(`Unknown cron handler: ${handler}`);
-    return;
+    throw new Error(`Unknown cron handler: ${handler}`);
   }
   log.info(`Executing cron job: ${handler}`);
   const start = Date.now();
