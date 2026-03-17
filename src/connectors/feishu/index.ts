@@ -490,6 +490,12 @@ export class FeishuConnector implements Connector {
                 status: "pending",
                 thinkingBefore: currentThinkingSegment,
               });
+              // Add thinking div before tool step if thinking segment is non-empty
+              if (currentThinkingSegment.trim()) {
+                const thinkingSummary = currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n");
+                const thinkingDesc = thinkingSummary.length > 100 ? thinkingSummary.slice(0, 97) + "..." : thinkingSummary;
+                session.addStep("_thinking", thinkingDesc);
+              }
               currentThinkingSegment = "";
               // Add icon step to process panel (strip emoji prefix from formatToolStatus to avoid double emoji in addStep)
               const stepDesc = formatToolStatus(event.name, event.input)

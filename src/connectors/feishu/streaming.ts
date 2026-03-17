@@ -15,7 +15,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
-import { type ToolEntry, buildToolDiv, buildStepDiv, TOOL_ICONS } from "./tool-formatters.js";
+import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, TOOL_ICONS } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -147,7 +147,14 @@ export function buildFinalCard(opts: {
         panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
       }
       for (const entry of visibleEntries) {
+        if (entry.thinkingBefore?.trim()) {
+          panelElements.push(buildThinkingDiv(entry.thinkingBefore));
+        }
         panelElements.push(buildToolDiv(entry));
+      }
+      // Trailing thinking after last tool
+      if (opts.trailingThinking?.trim()) {
+        panelElements.push(buildThinkingDiv(opts.trailingThinking));
       }
     } else if (hasSteps) {
       const steps = opts.steps!;
@@ -160,8 +167,8 @@ export function buildFinalCard(opts: {
         panelElements.push(buildStepDiv(step.tool, step.desc));
       }
     } else if (opts.thinking) {
-      // No tools/steps — fallback to raw thinking markdown
-      panelElements.push({ tag: "markdown", content: opts.thinking });
+      // No tools/steps — fallback to thinking div (consistent with tool steps)
+      panelElements.push(buildThinkingDiv(opts.thinking));
     }
 
     if (panelElements.length > 0) {

@@ -31,6 +31,7 @@ export const TOOL_ICONS: Record<string, string> = {
   TodoWrite: "task_outlined",
   NotebookEdit: "edit_outlined",
   EnterPlanMode: "task_outlined",
+  _thinking: "robot_outlined",
   _default:  "setting-inter_outlined",
 };
 
@@ -51,6 +52,22 @@ export function buildStepDiv(toolName: string, desc: string): Record<string, unk
   };
 }
 
+
+/** Build a Feishu Card 2.0 div element for thinking text (robot icon, grey notation). */
+export function buildThinkingDiv(text: string): Record<string, unknown> {
+  const clean = text.trim().replace(/\n{3,}/g, "\n\n");
+  const content = clean.length > 200 ? clean.slice(0, 197) + "..." : clean;
+  return {
+    tag: "div",
+    icon: { tag: "standard_icon", token: "robot_outlined", color: "grey" },
+    text: {
+      tag: "plain_text",
+      text_color: "grey",
+      text_size: "notation",
+      content,
+    },
+  };
+}
 
 // ── Tool entry data structure ────────────────────────────
 
