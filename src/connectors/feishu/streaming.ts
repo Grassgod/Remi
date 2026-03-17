@@ -764,9 +764,11 @@ export class FeishuStreamingSession {
           }),
         },
       );
+      const body = await res.text().catch(() => "");
       if (!res.ok) {
-        const body = await res.text().catch(() => "");
         this.log(`setStreamingMode(${enabled}) HTTP ${res.status}: ${body.slice(0, 300)}`);
+      } else {
+        this.log(`setStreamingMode(${enabled}) OK: ${body.slice(0, 200)}`);
       }
     } catch (e) {
       this.log(`setStreamingMode failed: ${String(e)}`);
