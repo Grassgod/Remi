@@ -400,12 +400,7 @@ export class FeishuStreamingSession {
       },
       body: {
         elements: [
-          {
-            tag: "div",
-            element_id: "status_bar",
-            icon: { tag: "standard_icon", token: "time_outlined", color: "grey" },
-            text: { tag: "plain_text", content: "Thinking...", text_color: "grey", text_size: "notation" },
-          },
+          { tag: "markdown", content: "", element_id: "status_bar" },
           {
             tag: "collapsible_panel",
             expanded: false,
