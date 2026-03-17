@@ -128,10 +128,10 @@ export class RemiQueueManager {
     for (const job of cronJobs) {
       if (job.enabled === false) continue;
 
-      let repeatOpts: { pattern?: string; every?: number } | undefined;
+      let repeatOpts: { pattern?: string; every?: number; timezone?: string } | undefined;
 
       if (job.cron) {
-        repeatOpts = { pattern: job.cron };
+        repeatOpts = { pattern: job.cron, timezone: job.tz ?? "Asia/Shanghai" };
       } else if (job.every) {
         const ms = RemiQueueManager.parseIntervalToMs(job.every);
         repeatOpts = { every: ms };
