@@ -592,9 +592,10 @@ export function startWebSocketListener(
         log.info(`card action: tag=${action.tag} name=${action.name ?? ""} form_value=${action.form_value ? JSON.stringify(action.form_value).slice(0, 300) : "none"} value=${action.value ? JSON.stringify(action.value).slice(0, 200) : "none"}`);
 
         if (action.form_value) {
-          // Form submission — extract actionId from hidden _action_id field in form_value
-          const formActionId = String(action.form_value._action_id ?? action.name ?? "");
-          if (formActionId) handleFormSubmission(formActionId, action.form_value);
+          // Form submission via WS: action.name is the button name, not form name.
+          // Try _action_id in form_value, then action.name, then first pending action.
+          const formActionId = String(action.form_value._action_id || "");
+          handleFormSubmission(formActionId || action.name || "", action.form_value);
         } else if (action.tag === "button" && action.value) {
           // Button click — route to pending action handler
           const valueStr = typeof action.value === "string"

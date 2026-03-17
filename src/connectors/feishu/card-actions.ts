@@ -73,8 +73,9 @@ export function handleFormSubmission(
   formName: string,
   formValue: Record<string, unknown>,
 ): boolean {
-  // formName is the action ID we set on the form
-  const action = pendingActions.get(formName);
+  // Try exact match first, then fallback to first pending action with questions
+  let actionId = formName;
+  let action = pendingActions.get(formName);
   if (!action) {
     // Check if it's a feedback form (actionId_feedback)
     if (formName.endsWith("_feedback")) {
@@ -85,8 +86,19 @@ export function handleFormSubmission(
         return resolvePendingAction(baseActionId, feedbackText || "User provided empty feedback");
       }
     }
-    log.warn(`No pending action for form: ${formName}`);
-    return false;
+    // Fallback: find first pending action with questions (AskUserQuestion)
+    for (const [id, a] of pendingActions) {
+      if (a.questions) {
+        actionId = id;
+        action = a;
+        log.info(`Form fallback: matched pending action ${id} for form "${formName}"`);
+        break;
+      }
+    }
+    if (!action) {
+      log.warn(`No pending action for form: ${formName}`);
+      return false;
+    }
   }
 
   // Parse form values into answers dict using stored question metadata
@@ -125,11 +137,11 @@ export function handleFormSubmission(
         }
       }
     }
-    return resolvePendingAction(formName, answers);
+    return resolvePendingAction(actionId, answers);
   }
 
   // Generic form: resolve with raw form values
-  return resolvePendingAction(formName, formValue);
+  return resolvePendingAction(actionId, formValue);
 }
 
 /**
