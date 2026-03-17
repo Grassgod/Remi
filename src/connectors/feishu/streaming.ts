@@ -758,8 +758,9 @@ export class FeishuStreamingSession {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            settings: { config: { streaming_mode: enabled } },
+            settings: JSON.stringify({ config: { streaming_mode: enabled } }),
             sequence: ++this.state.sequence,
+            uuid: `s_${this.state.cardId}_${this.state.sequence}`,
           }),
         },
       );
