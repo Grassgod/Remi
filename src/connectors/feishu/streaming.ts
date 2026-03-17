@@ -1013,8 +1013,9 @@ export class FeishuStreamingSession {
         path: { message_id: this.state.messageId },
         data: { content: JSON.stringify(finalCard) },
       });
-    } catch (e) {
-      this.log(`Final card patch failed: ${String(e)}, retrying with lightweight card...`);
+    } catch (e: any) {
+      const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
+      this.log(`Final card patch failed: ${String(e)} ${detail}`);
       // Fallback: rebuild with lightweight step divs only (no nested collapsible_panel)
       try {
         const fallbackCard = buildFinalCard({
