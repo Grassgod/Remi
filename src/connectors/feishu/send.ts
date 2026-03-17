@@ -82,8 +82,8 @@ export function buildCardHeader(sessionId?: string | null) {
     sessionId === null ? getNewbornName() :
     "Remi";
   const now = new Date();
-  const hh = String(now.getUTCHours() + 8).padStart(2, "0"); // Beijing time (UTC+8)
-  const mm = String(now.getMinutes()).padStart(2, "0");
+  const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");
+  const mm = String(now.getUTCMinutes()).padStart(2, "0");
   return {
     title: { tag: "plain_text" as const, content: title },
     subtitle: { tag: "plain_text" as const, content: `${hh}:${mm}` },
