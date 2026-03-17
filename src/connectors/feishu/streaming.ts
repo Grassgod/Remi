@@ -132,18 +132,31 @@ function buildFinalCard(opts: {
   const hasSteps = opts.steps && opts.steps.length > 0;
   const hasThinking = opts.thinking || hasTools || hasSteps;
 
+  // Max tool entries in final card to avoid Feishu element limits
+  const MAX_FINAL_TOOL_ENTRIES = 20;
+
   if (hasThinking) {
     // Build step elements for the collapsed panel
     const panelElements: Record<string, unknown>[] = [];
 
     if (hasTools) {
-      // Rich mode: each tool entry becomes an icon div, clickable for details via nested collapsible
-      for (const entry of opts.toolEntries!) {
+      const entries = opts.toolEntries!;
+      const omitted = Math.max(0, entries.length - MAX_FINAL_TOOL_ENTRIES);
+      const visibleEntries = omitted > 0 ? entries.slice(-MAX_FINAL_TOOL_ENTRIES) : entries;
+      if (omitted > 0) {
+        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
+      }
+      for (const entry of visibleEntries) {
         panelElements.push(buildToolCollapsible(entry));
       }
     } else if (hasSteps) {
-      // Lightweight mode: icon divs from step descriptions
-      for (const step of opts.steps!) {
+      const steps = opts.steps!;
+      const omitted = Math.max(0, steps.length - MAX_FINAL_TOOL_ENTRIES);
+      const visibleSteps = omitted > 0 ? steps.slice(-MAX_FINAL_TOOL_ENTRIES) : steps;
+      if (omitted > 0) {
+        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
+      }
+      for (const step of visibleSteps) {
         panelElements.push(buildStepDiv(step.tool, step.desc));
       }
     } else if (opts.thinking) {
@@ -612,12 +625,21 @@ export class FeishuStreamingSession {
     }
   }
 
+  /** Max steps visible in streaming process panel (sliding window). */
+  private static MAX_VISIBLE_STEPS = 8;
+
   /** Render thinking + steps as a single interleaved timeline markdown. */
   private _renderTimeline(): void {
     const parts: string[] = [];
-    let lastOffset = 0;
+    const total = this._steps.length;
+    const maxVisible = FeishuStreamingSession.MAX_VISIBLE_STEPS;
+    const hidden = Math.max(0, total - maxVisible);
+    const visibleSteps = hidden > 0 ? this._steps.slice(-maxVisible) : this._steps;
 
-    for (const step of this._steps) {
+    // Start thinking offset from the first visible step
+    let lastOffset = hidden > 0 ? (visibleSteps[0]?.thinkingOffset ?? 0) : 0;
+
+    for (const step of visibleSteps) {
       const offset = step.thinkingOffset ?? 0;
       const slice = this._fullThinking.slice(lastOffset, offset).trim();
       if (slice) parts.push(slice);
@@ -630,9 +652,15 @@ export class FeishuStreamingSession {
     const remaining = this._fullThinking.slice(lastOffset).trim();
     if (remaining) parts.push(remaining);
 
-    const count = this._steps.length;
-    const header = count > 0 ? `**${count} steps**\n` : "";
-    this._throttledUpdate("process_content", this._truncateIfNeeded(header + parts.join("\n")), "currentThinking");
+    // Header always preserved outside truncation
+    let header = "";
+    if (total > 0) {
+      header = hidden > 0
+        ? `**${total} steps** *(+${hidden} earlier)*\n`
+        : `**${total} steps**\n`;
+    }
+    const body = this._truncateIfNeeded(parts.join("\n"));
+    this._throttledUpdate("process_content", header + body, "currentThinking");
   }
 
   /** Get collected steps for final card rendering. */
@@ -963,7 +991,30 @@ export class FeishuStreamingSession {
         data: { content: JSON.stringify(finalCard) },
       });
     } catch (e) {
-      this.log(`Final card patch failed: ${String(e)}`);
+      this.log(`Final card patch failed: ${String(e)}, retrying with lightweight card...`);
+      // Fallback: rebuild with lightweight step divs only (no nested collapsible_panel)
+      try {
+        const fallbackCard = buildFinalCard({
+          text,
+          thinking: thinkingText,
+          toolEntries: undefined, // force lightweight mode
+          steps: this._steps.length > 0 ? this._steps.slice(-20) : undefined,
+          trailingThinking,
+          toolCount,
+          stats,
+          mentionOpenId,
+          sessionId,
+          askQuestions,
+          planReview,
+        });
+        await this.client.im.message.patch({
+          path: { message_id: this.state.messageId },
+          data: { content: JSON.stringify(fallbackCard) },
+        });
+        this.log(`Fallback card patch succeeded`);
+      } catch (e2) {
+        this.log(`Fallback card patch also failed: ${String(e2)}`);
+      }
     }
 
     this.log(`Closed streaming: cardId=${this.state.cardId}`);
