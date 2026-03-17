@@ -589,7 +589,7 @@ export function startWebSocketListener(
         const action = event.action;
         if (!action) return { toast: { type: "info", content: "No action" } };
 
-        log.info(`card action: tag=${action.tag} name=${action.name ?? ""}`);
+        log.info(`card action: tag=${action.tag} name=${action.name ?? ""} form_value=${action.form_value ? JSON.stringify(action.form_value).slice(0, 300) : "none"} value=${action.value ? JSON.stringify(action.value).slice(0, 200) : "none"}`);
 
         if (action.tag === "form" && action.form_value && action.name) {
           // Form submission — route to pending action handler
