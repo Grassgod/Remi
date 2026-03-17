@@ -201,7 +201,7 @@ export class RemiQueueManager {
         if (!self.remi) throw new Error("Remi not initialized for cron");
         await handleCronJob(job, self.remi);
       },
-      { embedded: true, concurrency: 1 },
+      { embedded: true, concurrency: 5 },
     );
 
     this.workers = [convWorker, memWorker, cronWorker];

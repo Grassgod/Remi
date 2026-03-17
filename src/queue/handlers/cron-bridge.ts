@@ -190,10 +190,26 @@ export async function handleCronJob(job: Job<CronJobData>, remi: Remi): Promise<
   const start = Date.now();
   try {
     await fn(remi, handlerConfig);
-    log.info(`Cron job ${handler} completed in ${Date.now() - start}ms`);
+    const durationMs = Date.now() - start;
+    log.info(`Cron job ${handler} completed in ${durationMs}ms`);
+    appendRunLog(handler, "ok", durationMs);
   } catch (e) {
-    log.error(`Cron job ${handler} failed after ${Date.now() - start}ms:`, e);
+    const durationMs = Date.now() - start;
+    log.error(`Cron job ${handler} failed after ${durationMs}ms:`, e);
+    appendRunLog(handler, "error", durationMs, String(e));
     throw e; // re-throw so BunQueue records failure + retries
+  }
+}
+
+function appendRunLog(handler: string, status: "ok" | "error", durationMs: number, error?: string): void {
+  try {
+    const runsDir = join(homedir(), ".remi", "cron", "runs");
+    if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
+    const safeId = handler.replace(/[:/]/g, "_");
+    const entry = JSON.stringify({ ts: new Date().toISOString(), status, durationMs, ...(error && { error: error.slice(0, 500) }) });
+    appendFileSync(join(runsDir, `${safeId}.jsonl`), entry + "\n", "utf-8");
+  } catch {
+    // non-critical, don't let logging failure break cron
   }
 }
 
