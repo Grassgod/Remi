@@ -98,7 +98,7 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
       return `Reading ${trunc(shortPath(s(input?.file_path)), MAX)}...`;
     case "Bash": {
       const cmd = s(input?.command).split("\n")[0];
-      return `Running: \`${trunc(shortPath(cmd), MAX)}\``;
+      return `Running: ${trunc(shortPath(cmd), MAX)}`;
     }
     case "Grep":
       return `Searching: ${trunc(s(input?.pattern), MAX)}...`;
