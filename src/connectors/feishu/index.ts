@@ -17,8 +17,8 @@ import { tmpdir } from "node:os";
 
 const log = createLogger("feishu");
 import { createFeishuClient } from "./client.js";
-import { sendMarkdownCardFeishu, sendCardFeishu, buildRichCard } from "./send.js";
-import { FeishuStreamingSession, type TokenProvider } from "./streaming.js";
+import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";
+import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./streaming.js";
 import {
   type ToolEntry,
   shortPath,
@@ -199,7 +199,7 @@ export class FeishuConnector implements Connector {
     const text = response.text;
     const stats = this._formatStats(response);
     if (response.thinking || stats) {
-      const card = buildRichCard({ text, thinking: response.thinking, stats });
+      const card = buildFinalCard({ text, thinking: response.thinking, stats });
       await sendCardFeishu(client, chatId, card);
     } else {
       await sendMarkdownCardFeishu(client, chatId, text);
@@ -656,7 +656,7 @@ export class FeishuConnector implements Connector {
     const text = response.text;
     const stats = this._formatStats(response);
     if (response.thinking || stats) {
-      const card = buildRichCard({ text, thinking: response.thinking, stats });
+      const card = buildFinalCard({ text, thinking: response.thinking, stats });
       await sendCardFeishu(client, chatId, card, { replyToMessageId });
     } else {
       await sendMarkdownCardFeishu(client, chatId, text, { replyToMessageId });

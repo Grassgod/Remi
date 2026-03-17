@@ -110,7 +110,7 @@ import { buildCardHeader, buildContentElements } from "./send.js";
  * 1. Outer: icon step divs (grey, notation size) — quick overview
  * 2. Inner: each step is a collapsible_panel with input/output details on click
  */
-function buildFinalCard(opts: {
+export function buildFinalCard(opts: {
   text: string;
   thinking?: string | null;
   toolEntries?: ToolEntry[];

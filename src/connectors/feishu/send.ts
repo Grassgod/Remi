@@ -142,59 +142,6 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   };
 }
 
-/** Build a rich Feishu card with optional thinking panel and stats footer. */
-export function buildRichCard(options: {
-  text: string;
-  thinking?: string | null;
-  stats?: string | null;
-}): Record<string, unknown> {
-  const elements: Array<Record<string, unknown>> = [];
-
-  // Collapsible thinking panel
-  if (options.thinking) {
-    elements.push({
-      tag: "collapsible_panel",
-      expanded: false,
-      background_style: "default",
-      header: { title: { tag: "plain_text", content: "⚙️ Process" } },
-      vertical_spacing: "2px",
-      elements: [
-        { tag: "markdown", content: options.thinking },
-      ],
-    });
-  }
-
-  // Main content (may include embedded images)
-  elements.push(...buildContentElements(options.text));
-
-  // Stats footer (column_set with icons, same as streaming)
-  if (options.stats) {
-    elements.push({ tag: "hr" });
-    const statsParts = options.stats.split(" · ");
-    const iconTokens = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
-    elements.push({
-      tag: "column_set",
-      flex_mode: "flow",
-      horizontal_spacing: "small",
-      columns: statsParts.map((part, i) => ({
-        tag: "column",
-        width: "auto",
-        elements: [{
-          tag: "div",
-          icon: { tag: "standard_icon", token: iconTokens[i] ?? "setting-inter_outlined", color: "grey" },
-          text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
-        }],
-      })),
-    });
-  }
-
-  return {
-    schema: "2.0",
-    header: buildCardHeader(),
-    config: { width_mode: "fill" },
-    body: { elements },
-  };
-}
 
 /** Send a card message. */
 export async function sendCardFeishu(
