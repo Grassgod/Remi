@@ -28,9 +28,9 @@ export const TOOL_ICONS: Record<string, string> = {
   WebSearch: "search_outlined",
   Agent:     "robot_outlined",
   Skill:     "file-link-mindnote_outlined",
-  TodoWrite: "task_outlined",
+  TodoWrite: "list-check_outlined",
   NotebookEdit: "edit_outlined",
-  EnterPlanMode: "task_outlined",
+  EnterPlanMode: "list-check_outlined",
   _thinking: "robot_outlined",
   _default:  "setting-inter_outlined",
 };
