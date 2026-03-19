@@ -19,11 +19,18 @@ const MODEL_COLORS = [
 
 export function Analytics() {
   const { summary, recentMetrics, loading, fetchSummary, fetchRecent } = useAnalyticsStore();
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     fetchSummary();
     fetchRecent(50);
   }, []);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([fetchSummary(), fetchRecent(50)]);
+    setRefreshing(false);
+  };
 
   const today = summary?.today;
   const week = summary?.week;
@@ -199,6 +206,7 @@ export function Analytics() {
       <HudPanel
         title="14-Day Usage Trend"
         icon={<IconAnalytics />}
+        action={{ label: refreshing ? "Refreshing..." : "Refresh", onClick: handleRefresh }}
         delay={0.36}
         maxHeight={300}
       >
