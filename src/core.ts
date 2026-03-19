@@ -108,7 +108,15 @@ export class Remi {
 
   constructor(config: RemiConfig) {
     this.config = config;
-    this.memory = new MemoryStore(config.memoryDir);
+    // Initialize VectorStore if embedding config is available
+    let vectorStore: InstanceType<typeof import("./db/vector-store.js").VectorStore> | null = null;
+    if (config.embedding?.apiKey) {
+      try {
+        const { VectorStore } = require("./db/vector-store.js");
+        vectorStore = new VectorStore(config.embedding);
+      } catch { /* vector search unavailable */ }
+    }
+    this.memory = new MemoryStore(config.memoryDir, vectorStore);
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
     this.traceCollector = new TraceCollector();
     this.queue = new RemiQueueManager(this.memory);

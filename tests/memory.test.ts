@@ -190,14 +190,14 @@ describe("Backup", () => {
 });
 
 describe("Recall", () => {
-  it("exact name match returns full text", () => {
+  it("exact name match returns full text", async () => {
     store.remember("Alice Chen", "person", "CV expert at Acme");
-    const result = store.recall("Alice Chen");
+    const result = await store.recall("Alice Chen");
     expect(result).toContain("type: person");
     expect(result).toContain("Alice Chen");
   });
 
-  it("matches aliases", () => {
+  it("matches aliases", async () => {
     const entityDir = join(store.root, "entities", "people");
     mkdirSync(entityDir, { recursive: true });
     const content =
@@ -215,24 +215,24 @@ describe("Recall", () => {
     writeFileSync(join(entityDir, "Alice-Chen.md"), content, "utf-8");
     store._buildIndex();
 
-    const result = store.recall("Alice");
+    const result = await store.recall("Alice");
     expect(result).toBeTruthy();
   });
 
-  it("matches body substring", () => {
+  it("matches body substring", async () => {
     store.remember("Bob", "person", "works on PaddleOCR pipeline");
-    const result = store.recall("PaddleOCR");
+    const result = await store.recall("PaddleOCR");
     expect(result).toContain("Bob");
   });
 
-  it("filters by type", () => {
+  it("filters by type", async () => {
     store.remember("Alice", "person", "engineer");
     store.remember("Acme", "organization", "tech company");
-    const result = store.recall("engineer", { type: "person" });
+    const result = await store.recall("engineer", { type: "person" });
     expect(result).toContain("Alice");
   });
 
-  it("filters by tags", () => {
+  it("filters by tags", async () => {
     const entityDir = join(store.root, "entities", "people");
     const content =
       "---\n" +
@@ -249,17 +249,17 @@ describe("Recall", () => {
     writeFileSync(join(entityDir, "Tagged-Person.md"), content, "utf-8");
     store._buildIndex();
 
-    const result = store.recall("Tagged Person", { tags: ["colleague"] });
+    const result = await store.recall("Tagged Person", { tags: ["colleague"] });
     expect(result).toContain("Tagged Person");
   });
 
-  it("searches daily logs", () => {
+  it("searches daily logs", async () => {
     store.appendDaily("discussed PaddleOCR optimization", "2026-02-17");
-    const result = store.recall("PaddleOCR");
+    const result = await store.recall("PaddleOCR");
     expect(result).toContain("2026-02-17");
   });
 
-  it("searches project memory", () => {
+  it("searches project memory", async () => {
     const project = join(tmpDir, "myproject");
     mkdirSync(join(project, ".remi"), { recursive: true });
     writeFileSync(
@@ -267,12 +267,12 @@ describe("Recall", () => {
       "# MyProject — Hub-spoke architecture\n",
       "utf-8",
     );
-    const result = store.recall("Hub-spoke", { cwd: project });
+    const result = await store.recall("Hub-spoke", { cwd: project });
     expect(result).toBeTruthy();
   });
 
-  it("returns empty for no match", () => {
-    const result = store.recall("nonexistent-query-12345");
+  it("returns empty for no match", async () => {
+    const result = await store.recall("nonexistent-query-12345");
     expect(result).toBe("");
   });
 });

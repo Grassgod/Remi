@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__remi-memory__recall",
+      "mcp__remi-memory__remember",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)"
+    ]
+  }
+}

@@ -1,8 +1,8 @@
 /**
  * Memory extraction Worker handler.
  *
- * Receives aggregated conversation text and extracts entities/decisions/observations
- * into the memory store via the maintenance prompt + LLM pipeline.
+ * Receives aggregated conversation text, runs the memory-extract agent
+ * (Haiku via CC CLI) to extract entities/decisions/observations.
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -10,18 +10,13 @@ import { join } from "node:path";
 import type { Job } from "bunqueue/client";
 import type { MemoryJobData } from "../queues.js";
 import type { MemoryStore } from "../../memory/store.js";
-import {
-  buildMaintenancePrompt,
-  parseMaintenanceResponse,
-  executeMaintenanceActions,
-} from "../../memory/maintenance.js";
+import { AgentRunner } from "../../agents/index.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("queue:memory");
 
 /**
- * Describe current memory structure for the maintenance prompt.
- * Adapted from MemoryDaemon._describeMemoryStructure().
+ * Describe current memory structure for the agent prompt context.
  */
 function describeMemoryStructure(store: MemoryStore): string {
   const lines: string[] = [];
@@ -56,23 +51,30 @@ export async function handleMemoryJob(
     `Processing memory extraction: session=${sessionKey}, rounds=${roundCount}, hash=${contentHash}`,
   );
 
-  // 1. Build maintenance prompt
-  const prompt = buildMaintenancePrompt(
-    null, // cwd — not available in queue context
-    "", // summary
-    aggregatedText.slice(0, 8000), // recent turns (limit to avoid token overflow)
-    describeMemoryStructure(memory),
-  );
+  const prompt = `
+## 当前记忆结构
+${describeMemoryStructure(memory)}
 
-  // 2. Call LLM for extraction
-  // TODO: Wire up a lightweight LLM call (e.g. Haiku) here.
-  // For now, log the prompt size and skip LLM. When ready:
-  //   const response = await callLLM(prompt);
-  //   const actions = parseMaintenanceResponse(response);
-  //   const executed = executeMaintenanceActions(memory, actions);
-  //   log.info(`Memory extraction complete: ${executed} actions executed`);
+## 对话上下文
+Session: ${sessionKey}
+
+## 对话内容（最近部分）
+${aggregatedText.slice(0, 8000)}
+
+请分析以上对话，提取值得长期记忆的信息。使用 recall 工具检查已有记忆避免重复，使用 remember 工具写入新信息。
+`;
+
+  const runner = new AgentRunner();
+  const result = await runner.run("memory-extract", prompt);
+
+  if (result.exitCode !== 0) {
+    log.error(
+      `memory-extract agent failed (exit=${result.exitCode}): ${result.stderr.slice(0, 500)}`,
+    );
+    throw new Error(`memory-extract agent failed with exit code ${result.exitCode}`);
+  }
 
   log.info(
-    `Maintenance prompt built (${prompt.length} chars), LLM call pending — same as daemon.ts TODO`,
+    `Memory extraction complete: session=${sessionKey}, duration=${result.durationMs}ms`,
   );
 }

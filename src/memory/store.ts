@@ -23,6 +23,7 @@ import {
 import { join, relative, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
+import type { VectorStore } from "../db/vector-store.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("memory");
@@ -40,14 +41,19 @@ interface IndexEntry {
   tags: string[];
   summary: string;
   aliases: string[];
+  importance: number;
+  lastAccessed: string;
+  accessCount: number;
 }
 
 export class MemoryStore {
   root: string;
   private _index = new Map<string, IndexEntry>();
+  private _vectorStore: VectorStore | null = null;
 
-  constructor(root: string) {
+  constructor(root: string, vectorStore?: VectorStore | null) {
     this.root = root;
+    this._vectorStore = vectorStore ?? null;
     this._ensureInitialized();
     this._buildIndex();
   }
@@ -100,6 +106,11 @@ export class MemoryStore {
           tags: (meta.tags as string[]) ?? [],
           summary: (meta.summary as string) ?? "",
           aliases: (meta.aliases as string[]) ?? [],
+          importance: (meta.importance as number) ?? 0.5,
+          lastAccessed: meta.last_accessed instanceof Date
+            ? (meta.last_accessed as Date).toISOString().slice(0, 10)
+            : ((meta.last_accessed as string) ?? ""),
+          accessCount: (meta.access_count as number) ?? 0,
         });
       }
     }
@@ -113,6 +124,11 @@ export class MemoryStore {
       tags: (meta.tags as string[]) ?? [],
       summary: (meta.summary as string) ?? "",
       aliases: (meta.aliases as string[]) ?? [],
+      importance: (meta.importance as number) ?? 0.5,
+      lastAccessed: meta.last_accessed instanceof Date
+            ? (meta.last_accessed as Date).toISOString().slice(0, 10)
+            : ((meta.last_accessed as string) ?? ""),
+      accessCount: (meta.access_count as number) ?? 0,
     });
   }
 
@@ -189,6 +205,9 @@ export class MemoryStore {
       `summary: ""\n` +
       `aliases: []\n` +
       `related: []\n` +
+      `importance: 0.5\n` +
+      `last_accessed: ${ts.slice(0, 10)}\n` +
+      `access_count: 0\n` +
       `---\n\n` +
       `# ${entity}\n\n` +
       `## 备注\n` +
@@ -244,14 +263,14 @@ export class MemoryStore {
 
   // ── 2.5 Hot Path tools ────────────────────────────────────
 
-  recall(
+  async recall(
     query: string,
     options?: {
       type?: string | null;
       tags?: string[] | null;
       cwd?: string | null;
     },
-  ): string {
+  ): Promise<string> {
     const type = options?.type ?? null;
     const tags = options?.tags ?? null;
     const cwd = options?.cwd ?? null;
@@ -321,7 +340,136 @@ export class MemoryStore {
       });
     }
 
+    // L1 check: if exact name match found, return immediately
+    const q = query.toLowerCase();
+    for (const r of results) {
+      if (r.source === "entity" && "name" in r.meta && (r.meta as IndexEntry).name.toLowerCase() === q) {
+        this._updateAccessStats(r.path);
+        log.info(`recall "${query}" → L1 exact match: ${(r.meta as IndexEntry).name}`);
+        return readFileSync(r.path, "utf-8");
+      }
+    }
+
+    // Check L1 result quality — if only low-quality matches (short daily refs), continue to L2
+    const formatted = results.length > 0 ? this._formatResults(results, query) : "";
+    const l1Quality = formatted.length >= 50 && results.some(r => r.source === "entity");
+
+    if (l1Quality && results.length <= 5) {
+      log.info(`recall "${query}" → L1 substring: ${results.length} results (${formatted.length} chars)`);
+      return formatted;
+    }
+
+    // L2: Vector search (if available and L1 quality is insufficient)
+    if (this._vectorStore && !l1Quality) {
+      try {
+        const vecResults = await this._vectorStore.search(query, 10);
+        for (const vr of vecResults) {
+          if (existsSync(vr.id)) {
+            const meta = this._index.get(vr.id);
+            if (meta) {
+              results.push({ source: "vector", path: vr.id, meta });
+            }
+          }
+        }
+        log.info(`recall "${query}" → L2 vector: ${results.length} candidates`);
+      } catch (e) {
+        log.warn("Vector search failed:", e);
+      }
+    }
+
+    if (results.length === 0) {
+      log.info(`recall "${query}" → no results at any level`);
+      return "";
+    }
+
+    // L3: Rerank if too many candidates
+    if (results.length > 3) {
+      try {
+        log.info(`recall "${query}" → L3 rerank: ${results.length} candidates → top 3`);
+        const reranked = await this._rerank(results, query);
+        return this._formatResults(reranked, query);
+      } catch (e) {
+        log.warn("Rerank failed, returning unranked:", e);
+      }
+    }
+
     return this._formatResults(results, query);
+  }
+
+  private async _rerank(
+    candidates: Array<{ source: string; path: string; meta: IndexEntry | Record<string, never> }>,
+    query: string,
+  ): Promise<Array<{ source: string; path: string; meta: IndexEntry | Record<string, never> }>> {
+    const { AgentRunner } = await import("../agents/index.js");
+    const runner = new AgentRunner();
+
+    const candidateTexts = candidates.map((c, i) => {
+      const name = "name" in c.meta ? (c.meta as IndexEntry).name : basename(c.path, ".md");
+      const type = "type" in c.meta ? (c.meta as IndexEntry).type : c.source;
+      const preview = existsSync(c.path) ? readFileSync(c.path, "utf-8").slice(0, 500) : "";
+      return `[${i + 1}] ${name} (${type})\n${preview}`;
+    }).join("\n\n");
+
+    const result = await runner.run("memory-rerank", `从以下候选中选出与查询最相关的 top 3。
+输出 JSON 数组：[{ "index": 1, "reason": "..." }, ...]
+
+查询：${query}
+
+候选：
+${candidateTexts}`);
+
+    try {
+      // Strip markdown code fences if present
+      let output = result.stdout;
+      const fenceMatch = output.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenceMatch) output = fenceMatch[1];
+
+      // Find JSON array
+      const arrMatch = output.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      if (!arrMatch) return candidates.slice(0, 3);
+
+      const parsed = JSON.parse(arrMatch[0]) as Array<{ index: number }>;
+      log.info(`rerank parsed: ${JSON.stringify(parsed.map(r => r.index))}, candidates: ${candidates.length}`);
+      if (!Array.isArray(parsed) || parsed.length === 0) return candidates.slice(0, 3);
+
+      const mapped = parsed
+        .slice(0, 3)
+        .map((r) => {
+          const idx = r.index - 1; // 1-based → 0-based
+          if (idx < 0 || idx >= candidates.length) {
+            log.warn(`rerank index ${r.index} out of range (candidates: ${candidates.length})`);
+            return null;
+          }
+          return candidates[idx];
+        })
+        .filter(Boolean);
+
+      if (mapped.length === 0) return candidates.slice(0, 3);
+      return mapped as typeof candidates;
+    } catch {
+      return candidates.slice(0, 3);
+    }
+  }
+
+  private _updateAccessStats(path: string): void {
+    try {
+      let content = readFileSync(path, "utf-8");
+      const today = new Date().toISOString().slice(0, 10);
+
+      if (content.includes("last_accessed:")) {
+        content = content.replace(/^last_accessed:.*$/m, `last_accessed: ${today}`);
+      }
+      if (content.includes("access_count:")) {
+        content = content.replace(/^access_count:.*$/m, (match) => {
+          const count = parseInt(match.split(":")[1]) || 0;
+          return `access_count: ${count + 1}`;
+        });
+      }
+      writeFileSync(path, content, "utf-8");
+      this._invalidateIndex(path);
+    } catch {
+      // non-critical
+    }
   }
 
   remember(
@@ -348,12 +496,13 @@ export class MemoryStore {
 
     const path = this._resolveEntityPath(entity, type, baseDir);
 
+    let result: string;
     if (existsSync(path)) {
       this._backup(path);
       this._appendObservation(path, observation);
       this._updateFrontmatterTimestamp(path);
       this._invalidateIndex(path);
-      return `已更新 ${entity}：${observation}`;
+      result = `已更新 ${entity}：${observation}`;
     } else {
       const content = this._renderNewEntity(entity, type, observation, "user-explicit");
       const dir = dirname(path);
@@ -362,8 +511,36 @@ export class MemoryStore {
       }
       writeFileSync(path, content, "utf-8");
       this._invalidateIndex(path);
-      return `已创建 ${entity}（${type}）：${observation}`;
+      result = `已创建 ${entity}（${type}）：${observation}`;
     }
+
+    // Async vector index update
+    if (this._vectorStore) {
+      const fileContent = readFileSync(path, "utf-8");
+      this._vectorStore.upsert(path, fileContent, { type, name: entity })
+        .catch((e: unknown) => log.warn("Vector upsert failed:", e));
+    }
+
+    return result;
+  }
+
+  async reindex(): Promise<number> {
+    if (!this._vectorStore) return 0;
+    let count = 0;
+    for (const [path, meta] of this._index) {
+      try {
+        const content = readFileSync(path, "utf-8");
+        await this._vectorStore.upsert(path, content, {
+          type: meta.type,
+          name: meta.name,
+        });
+        count++;
+      } catch (e) {
+        log.warn(`Reindex failed for ${path}:`, e);
+      }
+    }
+    log.info(`Reindexed ${count} entities`);
+    return count;
   }
 
   private _matches(mdFile: string, query: string, meta: IndexEntry): boolean {
@@ -429,7 +606,7 @@ export class MemoryStore {
     // Otherwise return summary list
     const lines: string[] = [];
     for (const { source, path, meta } of results) {
-      if (source === "entity" && "name" in meta) {
+      if ((source === "entity" || source === "vector") && "name" in meta) {
         const m = meta as IndexEntry;
         lines.push(`- [${source}] ${m.name} (${m.type}): ${m.summary}`);
       } else if (source === "daily") {
@@ -596,33 +773,31 @@ export class MemoryStore {
       });
     }
 
-    // 2. Extended memory sections (from MEMORY.md, not injected into context)
-    const globalMemory = join(this.root, "MEMORY.md");
-    if (existsSync(globalMemory)) {
-      const content = readFileSync(globalMemory, "utf-8");
-      if (content.trim()) {
-        const { extended } = this._splitMemorySections(content);
-        for (const sec of extended) {
-          // First bullet point as summary preview
-          const firstBullet = sec.body.split("\n").find((l) => l.trim().startsWith("-"));
-          const summary = firstBullet
-            ? firstBullet.trim().replace(/^-\s*/, "").slice(0, 50) + "…"
-            : "";
-          rows.push({
-            source: "记忆",
-            name: sec.heading,
-            summary,
-          });
-        }
-      }
-    }
+    // 2. Extended memory sections removed in v3 — use recall instead
 
-    // 3. Entity directory (from in-memory index)
-    for (const [, meta] of this._index) {
+    // 3. Entity directory — top 10 by activity score
+    const scored = [...this._index.entries()].map(([path, meta]) => {
+      const daysSince = meta.lastAccessed
+        ? (Date.now() - new Date(meta.lastAccessed).getTime()) / 86_400_000
+        : 30;
+      const recency = Math.exp(-daysSince / 14);
+      const score = (meta.importance ?? 0.5) * recency + Math.log(Math.max(meta.accessCount ?? 1, 1)) * 0.1;
+      return { path, meta, score };
+    }).sort((a, b) => b.score - a.score);
+
+    const top = scored.slice(0, 10);
+    for (const { meta } of top) {
       rows.push({
         source: "实体",
         name: `${meta.name} (${meta.type})`,
         summary: meta.summary,
+      });
+    }
+    if (scored.length > 10) {
+      rows.push({
+        source: "实体",
+        name: `+${scored.length - 10} more`,
+        summary: `recall("关键词") 查看`,
       });
     }
 
@@ -875,317 +1050,5 @@ export class MemoryStore {
     return removed;
   }
 
-  // ── 2.8 Claude Code Bridge ─────────────────────────────────
-
-  private static BRIDGE_FILE = "claude-bridge.md";
-  private static BRIDGE_SNAPSHOT = ".bridge-snapshot";
-  private static BRIDGE_MAX_LINES = 150;
-  private static CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
-
-  /**
-   * Regenerate the bridge file that Claude Code reads via auto-injection.
-   * Content is curated from Remi's authoritative stores, kept ≤150 lines.
-   */
-  regenerateBridge(): void {
-    const bridgePath = join(this.root, MemoryStore.BRIDGE_FILE);
-    const sections: string[] = [];
-
-    // 1. Core sections from MEMORY.md (identity + preferences + paths)
-    const globalMem = this.readMemory();
-    const coreSection = this._extractCoreSections(globalMem);
-    if (coreSection) sections.push(coreSection);
-
-    // 2. Key entities summary (top 10 by most recently updated)
-    const entitySummary = this._buildEntitySummary(10);
-    if (entitySummary) sections.push(entitySummary);
-
-    // 3. Recent decisions
-    const decisionsSummary = this._buildDecisionsSummary(5);
-    if (decisionsSummary) sections.push(decisionsSummary);
-
-    // 4. Recent daily log summaries from MEMORY.md (compacted)
-    const recentSummaries = this._extractRecentSummaries(globalMem, 3);
-    if (recentSummaries) sections.push(recentSummaries);
-
-    let content = sections.join("\n\n");
-
-    // Enforce line limit
-    const lines = content.split("\n");
-    if (lines.length > MemoryStore.BRIDGE_MAX_LINES) {
-      content = lines.slice(0, MemoryStore.BRIDGE_MAX_LINES).join("\n");
-    }
-
-    // Atomic write: write to tmp then rename
-    const tmpPath = bridgePath + ".tmp";
-    writeFileSync(tmpPath, content, "utf-8");
-    renameSync(tmpPath, bridgePath);
-
-    // Update snapshot for diffing
-    writeFileSync(join(this.root, MemoryStore.BRIDGE_SNAPSHOT), content, "utf-8");
-
-    log.info(`Bridge regenerated: ${content.split("\n").length} lines`);
-  }
-
-  /**
-   * Detect content that Claude Code's auto-memory appended to the bridge file,
-   * and ingest it into Remi's proper memory stores.
-   */
-  ingestBridgeChanges(): string[] {
-    const bridgePath = join(this.root, MemoryStore.BRIDGE_FILE);
-    const snapshotPath = join(this.root, MemoryStore.BRIDGE_SNAPSHOT);
-
-    if (!existsSync(bridgePath)) return [];
-
-    const current = readFileSync(bridgePath, "utf-8");
-    let lastKnown = "";
-    if (existsSync(snapshotPath)) {
-      lastKnown = readFileSync(snapshotPath, "utf-8");
-    }
-
-    if (current === lastKnown) return [];
-
-    // Find lines in current that are not in lastKnown
-    const oldLines = new Set(lastKnown.split("\n").map((l) => l.trim()));
-    const newLines = current
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l && !oldLines.has(l))
-      // Skip markdown headers and table formatting
-      .filter((l) => !l.startsWith("#") && !l.startsWith("|") && !l.startsWith("---"));
-
-    const ingested: string[] = [];
-    for (const line of newLines) {
-      this._routeToStore(line);
-      ingested.push(line);
-    }
-
-    if (ingested.length > 0) {
-      log.info(`Ingested ${ingested.length} new items from Claude bridge`);
-    }
-
-    // Update snapshot to current state
-    writeFileSync(snapshotPath, current, "utf-8");
-    return ingested;
-  }
-
-  /**
-   * Scan all Claude Code project MEMORY.md files and ingest
-   * non-symlinked project memories into Remi's store.
-   */
-  syncAllClaudeProjectMemories(): void {
-    const projectsDir = MemoryStore.CLAUDE_PROJECTS_DIR;
-    if (!existsSync(projectsDir)) return;
-
-    const bridgeRealPath = join(this.root, MemoryStore.BRIDGE_FILE);
-
-    for (const projDir of readdirSync(projectsDir)) {
-      const memPath = join(projectsDir, projDir, "memory", "MEMORY.md");
-      if (!existsSync(memPath)) continue;
-
-      // Skip if this is a symlink to our bridge file
-      try {
-        if (lstatSync(memPath).isSymbolicLink()) {
-          const target = realpathSync(memPath);
-          if (target === bridgeRealPath) continue;
-        }
-      } catch {
-        continue;
-      }
-
-      // Read and diff against our global memory
-      try {
-        const content = readFileSync(memPath, "utf-8");
-        const globalMem = this.readMemory();
-
-        // Extract bullet-point lines not already in our memory
-        const existingLines = new Set(globalMem.split("\n").map((l) => l.trim()));
-        const newBullets = content
-          .split("\n")
-          .map((l) => l.trim())
-          .filter((l) => l.startsWith("- ") && !existingLines.has(l));
-
-        if (newBullets.length > 0) {
-          // Convert project dir name back to path
-          const projectPath = "/" + projDir.slice(1).replace(/-/g, "/");
-          const section = `## From Claude Code (${projectPath})`;
-
-          // Check if we already have this section
-          if (!globalMem.includes(section)) {
-            this.appendMemory(`\n${section}\n${newBullets.join("\n")}`);
-            log.info(`Ingested ${newBullets.length} items from Claude project: ${projDir}`);
-          }
-        }
-      } catch (e) {
-        log.warn(`Failed to sync Claude project memory ${projDir}:`, e);
-      }
-    }
-  }
-
-  // ── Bridge helper methods ──────────────────────────────────
-
-  /**
-   * Extract stable core sections (关于主人, 用户偏好, 重要路径) from MEMORY.md.
-   */
-  private _extractCoreSections(globalMem: string): string {
-    const coreSectionNames = ["关于主人", "用户偏好", "重要路径", "长期目标", "近期焦点"];
-    const lines = globalMem.split("\n");
-    const parts: string[] = ["# 全局记忆"];
-    let capturing = false;
-
-    for (const line of lines) {
-      if (line.startsWith("## ")) {
-        const heading = line.replace(/^## /, "").trim();
-        if (coreSectionNames.includes(heading)) {
-          capturing = true;
-          parts.push("", line);
-          continue;
-        } else {
-          capturing = false;
-        }
-      }
-      if (capturing) {
-        parts.push(line);
-      }
-    }
-
-    return parts.length > 1 ? parts.join("\n").trimEnd() : "";
-  }
-
-  /**
-   * Build a compact summary of the N most recently updated entities.
-   */
-  private _buildEntitySummary(limit: number): string {
-    const entries: Array<{ name: string; type: string; summary: string; updated: number }> = [];
-
-    for (const [pathStr, meta] of this._index) {
-      let updated = 0;
-      try {
-        const fm = this._parseFrontmatter(pathStr);
-        if (fm.updated) {
-          updated = new Date(fm.updated as string).getTime();
-        } else {
-          updated = statSync(pathStr).mtimeMs;
-        }
-      } catch {
-        try { updated = statSync(pathStr).mtimeMs; } catch { /* skip */ }
-      }
-      entries.push({ name: meta.name, type: meta.type, summary: meta.summary, updated });
-    }
-
-    entries.sort((a, b) => b.updated - a.updated);
-    const top = entries.slice(0, limit);
-
-    if (top.length === 0) return "";
-
-    const lines = ["## 关键实体"];
-    for (const e of top) {
-      const desc = e.summary ? ` — ${e.summary}` : "";
-      lines.push(`- **${e.name}** (${e.type})${desc}`);
-    }
-    return lines.join("\n");
-  }
-
-  /**
-   * Build a compact summary of recent decisions.
-   */
-  private _buildDecisionsSummary(limit: number): string {
-    const decisions: Array<{ name: string; summary: string; updated: number }> = [];
-
-    for (const [pathStr, meta] of this._index) {
-      if (meta.type !== "decision") continue;
-      let updated = 0;
-      try { updated = statSync(pathStr).mtimeMs; } catch { /* skip */ }
-      decisions.push({ name: meta.name, summary: meta.summary, updated });
-    }
-
-    decisions.sort((a, b) => b.updated - a.updated);
-    const top = decisions.slice(0, limit);
-
-    if (top.length === 0) return "";
-
-    const lines = ["## 近期决策"];
-    for (const d of top) {
-      const desc = d.summary ? ` — ${d.summary}` : "";
-      lines.push(`- **${d.name}**${desc}`);
-    }
-    return lines.join("\n");
-  }
-
-  /**
-   * Extract the last N "## From YYYY-MM-DD" sections from MEMORY.md.
-   */
-  private _extractRecentSummaries(globalMem: string, limit: number): string {
-    const sections: Array<{ header: string; body: string }> = [];
-    const lines = globalMem.split("\n");
-    let current: { header: string; body: string[] } | null = null;
-
-    for (const line of lines) {
-      if (line.startsWith("## From ")) {
-        if (current) {
-          sections.push({ header: current.header, body: current.body.join("\n").trimEnd() });
-        }
-        current = { header: line, body: [] };
-      } else if (current) {
-        current.body.push(line);
-      }
-    }
-    if (current) {
-      sections.push({ header: current.header, body: current.body.join("\n").trimEnd() });
-    }
-
-    // Take last N
-    const recent = sections.slice(-limit);
-    if (recent.length === 0) return "";
-
-    const parts: string[] = [];
-    for (const s of recent) {
-      // Compact: only take first 10 lines of each section body
-      const bodyLines = s.body.split("\n").slice(0, 10);
-      parts.push(`${s.header}\n${bodyLines.join("\n")}`);
-    }
-    return parts.join("\n\n");
-  }
-
-  /**
-   * Route a new line from Claude Code's auto-memory to the appropriate store.
-   * Heuristic: bullet points starting with "- " are appended to global MEMORY.md.
-   */
-  private _routeToStore(line: string): void {
-    // Strip leading "- " for analysis
-    const clean = line.startsWith("- ") ? line.slice(2).trim() : line.trim();
-    if (!clean) return;
-
-    // Try to match known entity names
-    for (const [, meta] of this._index) {
-      if (clean.toLowerCase().includes(meta.name.toLowerCase()) && meta.name.length > 2) {
-        this._appendObservationByName(meta.name, clean);
-        return;
-      }
-    }
-
-    // Default: append to global MEMORY.md in a dedicated section
-    const globalMem = this.readMemory();
-    const section = "## Claude Code 新增";
-    if (!globalMem.includes(section)) {
-      this.appendMemory(`\n${section}\n- ${clean}`);
-    } else {
-      // Append under existing section
-      const lines = globalMem.split("\n");
-      const idx = lines.findIndex((l) => l.trim() === section);
-      if (idx >= 0) {
-        lines.splice(idx + 1, 0, `- ${clean}`);
-        this.writeMemory(lines.join("\n"));
-      }
-    }
-  }
-
-  private _appendObservationByName(name: string, observation: string): void {
-    const path = this._findEntityByName(name);
-    if (path) {
-      this._backup(path);
-      this._appendObservation(path, observation);
-      this._updateFrontmatterTimestamp(path);
-      this._invalidateIndex(path);
-    }
-  }
+  // Bridge code removed in v3 — replaced by Symlink architecture
 }

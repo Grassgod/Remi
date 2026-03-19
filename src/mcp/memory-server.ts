@@ -16,20 +16,55 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { MemoryStore } from "../memory/store.js";
 
 // ── Constants ────────────────────────────────────────────────
 
 const MEMORY_ROOT = join(homedir(), ".remi", "memory");
 const SERVER_NAME = "remi-memory";
+
+// ── File-based logger (stderr not captured by PM2) ────────────
+
+const LOG_DIR = join(homedir(), ".remi", "logs");
+if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
+
+function mcpLog(msg: string): void {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] [${SERVER_NAME}] ${msg}\n`;
+  process.stderr.write(line);
+  try {
+    const today = ts.slice(0, 10);
+    appendFileSync(join(LOG_DIR, `mcp-memory-${today}.log`), line, "utf-8");
+  } catch { /* ignore */ }
+}
 const SERVER_VERSION = "1.0.0";
 const PROTOCOL_VERSION = "2024-11-05";
 
-// ── MemoryStore singleton ────────────────────────────────────
+// ── MemoryStore singleton (with optional VectorStore) ────────
 
 let store: MemoryStore;
 try {
-  store = new MemoryStore(MEMORY_ROOT);
+  // Try to load embedding config from remi.toml
+  let vectorStore = null;
+  try {
+    const tomlPath = join(homedir(), ".remi", "remi.toml");
+    if (existsSync(tomlPath)) {
+      const toml = readFileSync(tomlPath, "utf-8");
+      const apiKeyMatch = toml.match(/\[embedding\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
+      if (apiKeyMatch?.[1]) {
+        const { VectorStore } = require("../db/vector-store.js");
+        vectorStore = new VectorStore({
+          provider: "voyage",
+          apiKey: apiKeyMatch[1],
+        });
+        process.stderr.write(`[${SERVER_NAME}] VectorStore initialized\n`);
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`[${SERVER_NAME}] VectorStore unavailable: ${e}\n`);
+  }
+  store = new MemoryStore(MEMORY_ROOT, vectorStore);
 } catch (e) {
   process.stderr.write(`[${SERVER_NAME}] Failed to init MemoryStore: ${e}\n`);
   process.exit(1);
@@ -107,7 +142,7 @@ function jsonRpcError(id: string | number | null | undefined, code: number, mess
 
 // ── Request handler ──────────────────────────────────────────
 
-function handleRequest(req: JsonRpcRequest): Record<string, unknown> | null {
+async function handleRequest(req: JsonRpcRequest): Promise<Record<string, unknown> | null> {
   // Notifications (no id) — don't send response
   if (req.id === undefined || req.id === null) {
     if (req.method === "notifications/initialized") {
@@ -133,9 +168,12 @@ function handleRequest(req: JsonRpcRequest): Record<string, unknown> | null {
       const args = params?.arguments ?? {};
 
       if (toolName === "recall") {
-        const result = store.recall(args.query as string, {
+        const query = args.query as string;
+        mcpLog(`recall query="${query}"`);
+        const result = await store.recall(query, {
           cwd: (args.cwd as string) || null,
         });
+        mcpLog(`recall result: ${result ? result.length + " chars" : "empty"}`);
         return jsonRpcResult(req.id, {
           content: [{ type: "text", text: result || "(无匹配结果)" }],
         });
@@ -198,7 +236,7 @@ async function main(): Promise<void> {
       try {
         const req = JSON.parse(line) as JsonRpcRequest;
         process.stderr.write(`[${SERVER_NAME}] <- ${req.method}\n`);
-        const response = handleRequest(req);
+        const response = await handleRequest(req);
         if (response) {
           sendMessage(response);
         }
