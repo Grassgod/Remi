@@ -687,6 +687,12 @@ export class FeishuConnector implements Connector {
       parts.push(`${(response.durationMs / 1000).toFixed(1)}s`);
     }
 
+    if (response.inputTokens != null || response.outputTokens != null) {
+      const inTok = response.inputTokens ?? "?";
+      const outTok = response.outputTokens ?? "?";
+      parts.push(`${inTok}→${outTok} tokens`);
+    }
+
     // Context usage: input + cacheCreate + cacheRead + output
     const ctxTokens =
       (response.inputTokens ?? 0) +
