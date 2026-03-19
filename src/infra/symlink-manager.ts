@@ -34,6 +34,13 @@ const REMI_HOME = "/home/hehuajie/.remi";
 
 const CLAUDE_PROJECTS = join(CLAUDE_HOME, "projects");
 const REMI_PROJECTS = join(REMI_HOME, "projects");
+const REMI_MEMORY = join(REMI_HOME, "memory");
+
+// Home directory hashes — these get special treatment (memory → ~/.remi/memory/)
+const HOME_HASHES = new Set([
+  "-data00-home-hehuajie",
+  "-home-hehuajie",
+]);
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -158,11 +165,57 @@ export class SymlinkManager {
       results.push(result);
     }
 
+    // Special: home hash memory/ → ~/.remi/memory/ (personal memory)
+    this._ensureHomeMemoryLinks();
+
     log.info(
       `ensureAllProjects: ${results.length} processed (${results.filter((r) => r.action !== "ok").length} changed)`,
     );
 
     return results;
+  }
+
+  /**
+   * Ensure home-hash memory dirs point to ~/.remi/memory/ (personal memory).
+   * Home cwd is not a "project" — its memory is the individual knowledge base.
+   */
+  private _ensureHomeMemoryLinks(): void {
+    for (const hash of HOME_HASHES) {
+      const memDir = join(REMI_PROJECTS, hash, "memory");
+      if (!existsSync(join(REMI_PROJECTS, hash))) continue;
+
+      // Already a symlink → check it points to ~/.remi/memory/
+      if (this._isSymlink(memDir)) {
+        const target = readlinkSync(memDir);
+        if (target === "../../memory" || target === REMI_MEMORY) continue;
+      }
+
+      // Real dir → migrate from_*.md to ~/.remi/memory/, then replace
+      if (existsSync(memDir) && !this._isSymlink(memDir)) {
+        try {
+          for (const f of readdirSync(memDir)) {
+            if (f.startsWith("from_")) {
+              const src = join(memDir, f);
+              const dst = join(REMI_MEMORY, f);
+              if (!existsSync(dst)) cpSync(src, dst);
+            }
+          }
+          rmSync(memDir, { recursive: true, force: true });
+        } catch (e) {
+          log.warn(`failed to migrate home memory ${hash}: ${e}`);
+          continue;
+        }
+      }
+
+      // Create symlink
+      try {
+        mkdirSync(join(REMI_PROJECTS, hash), { recursive: true });
+        symlinkSync("../../memory", memDir);
+        log.info(`home memory linked: ${hash}/memory/ → ~/.remi/memory/`);
+      } catch (e) {
+        log.warn(`failed to link home memory ${hash}: ${e}`);
+      }
+    }
   }
 
   /**
@@ -378,14 +431,34 @@ export class SymlinkManager {
       });
     }
 
-    // Project dirs
+    // Project dirs + internal links
     if (existsSync(REMI_PROJECTS)) {
       for (const name of readdirSync(REMI_PROJECTS)) {
+        // Project dir symlink: ~/.claude/projects/{hash}/ → ~/.remi/projects/{hash}/
         pairs.push({
           source: join(CLAUDE_PROJECTS, name),
           target: join(REMI_PROJECTS, name),
           type: "dir",
         });
+
+        // Home hash special: memory/ → ~/.remi/memory/
+        if (HOME_HASHES.has(name)) {
+          pairs.push({
+            source: join(REMI_PROJECTS, name, "memory"),
+            target: REMI_MEMORY,
+            type: "dir",
+          });
+        }
+
+        // Wiki links: check if wiki/wiki.md exists
+        const wikiFile = join(REMI_PROJECTS, name, "wiki", "wiki.md");
+        if (existsSync(wikiFile) || existsSync(join(REMI_PROJECTS, name, "wiki"))) {
+          pairs.push({
+            source: join(REMI_PROJECTS, name, "wiki", "wiki.md"),
+            target: wikiFile,
+            type: "file",
+          });
+        }
       }
     }
 
