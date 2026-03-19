@@ -14,14 +14,16 @@ interface PendingAction {
   resolve: (value: unknown) => void;
   reject: (reason: string) => void;
   timeoutTimer: ReturnType<typeof setTimeout>;
+  /** ChatId that owns this action — used for scoped rejection. */
+  chatId?: string;
   /** Question metadata for AskUserQuestion form submissions. */
   questions?: Array<{ question: string; options: Array<{ label: string }> }>;
 }
 
 const pendingActions = new Map<string, PendingAction>();
 
-/** Timeout for user interaction (30 minutes). */
-const ACTION_TIMEOUT_MS = 30 * 60 * 1000;
+/** Timeout for user interaction (12 hours). */
+const ACTION_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 
 /**
  * Register a pending action that will be resolved when the user interacts with the card.
@@ -31,6 +33,7 @@ export function registerPendingAction(
   resolve: (value: unknown) => void,
   reject: (reason: string) => void,
   questions?: Array<{ question: string; options: Array<{ label: string }> }>,
+  chatId?: string,
 ): string {
   const actionId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -38,13 +41,13 @@ export function registerPendingAction(
     const action = pendingActions.get(actionId);
     if (action) {
       pendingActions.delete(actionId);
-      action.reject("Timed out waiting for user response (30 min)");
+      action.reject("Timed out waiting for user response (12h)");
       log.warn(`Action ${actionId} timed out`);
     }
   }, ACTION_TIMEOUT_MS);
 
-  pendingActions.set(actionId, { resolve, reject, timeoutTimer, questions });
-  log.info(`Registered pending action: ${actionId}`);
+  pendingActions.set(actionId, { resolve, reject, timeoutTimer, chatId, questions });
+  log.info(`Registered pending action: ${actionId} (chat=${chatId ?? "unknown"})`);
   return actionId;
 }
 
@@ -168,8 +171,28 @@ export function handleButtonClick(valueJson: string): boolean {
 }
 
 /**
+ * Reject pending actions for a specific chatId only.
+ * Used when a new message arrives — only cancels actions for that chat, not others.
+ */
+export function rejectPendingActionsForChat(chatId: string, reason: string): number {
+  let count = 0;
+  for (const [actionId, action] of pendingActions) {
+    if (action.chatId === chatId) {
+      clearTimeout(action.timeoutTimer);
+      action.reject(reason);
+      pendingActions.delete(actionId);
+      count++;
+    }
+  }
+  if (count > 0) {
+    log.info(`Rejected ${count} pending action(s) for chat ${chatId}: ${reason}`);
+  }
+  return count;
+}
+
+/**
  * Reject ALL pending actions (AskUserQuestion / ExitPlanMode).
- * Used when /esc is sent or a new message arrives while an interactive prompt is pending.
+ * Used when /esc is sent globally.
  * This unblocks the provider's `await promise`, which in turn releases the lane lock.
  */
 export function rejectAllPendingActions(reason: string): number {

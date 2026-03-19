@@ -23,7 +23,7 @@ import {
   type ToolEntry,
   shortPath,
 } from "./tool-formatters.js";
-import { registerPendingAction, rejectAllPendingActions } from "./card-actions.js";
+import { registerPendingAction, rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
 import {
   startWebSocketListener,
   flushDedupCacheSync,
@@ -306,7 +306,7 @@ export class FeishuConnector implements Connector {
       // This handles the P2P case where user sends a new message instead of clicking the form.
       const existingSession = this._activeSessions.get(msg.chatId);
       if (existingSession && existingSession.isActive()) {
-        const rejected = rejectAllPendingActions("New message received, cancelling pending interaction");
+        const rejected = rejectPendingActionsForChat(msg.chatId, "New message received, cancelling pending interaction");
         if (rejected > 0) {
           log.info(`Cancelled ${rejected} pending action(s) for chat ${msg.chatId} — new message takes priority`);
         }
@@ -583,6 +583,7 @@ export class FeishuConnector implements Connector {
                 },
                 () => {},
                 questions,
+                chatId,
               );
               askQuestions = { actionId, questions };
               log.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
@@ -614,6 +615,8 @@ export class FeishuConnector implements Connector {
                   ).catch((e) => log.error(`Failed to relay ExitPlanMode decision: ${e}`));
                 },
                 () => {},
+                undefined,
+                chatId,
               );
               planReviewAction = { actionId };
               log.info(`Embedded ExitPlanMode buttons: actionId=${actionId}`);
