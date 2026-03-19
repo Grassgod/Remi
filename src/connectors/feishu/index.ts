@@ -690,7 +690,7 @@ export class FeishuConnector implements Connector {
     if (response.inputTokens != null || response.outputTokens != null) {
       const inTok = response.inputTokens ?? "?";
       const outTok = response.outputTokens ?? "?";
-      parts.push(`${inTok}→${outTok} tokens`);
+      parts.push(`${inTok}→${outTok}`);
     }
 
     // Context usage: input + cacheCreate + cacheRead + output
@@ -700,15 +700,16 @@ export class FeishuConnector implements Connector {
       (response.cacheReadInputTokens ?? 0) +
       (response.outputTokens ?? 0);
     if (ctxTokens > 0 && response.contextWindow) {
-      const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K` : `${n}`);
-      parts.push(`Context: ${fmt(ctxTokens)}/${fmt(response.contextWindow)}`);
+      const fmt = (n: number) => {
+        if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1)}M`;
+        if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+        return `${n}`;
+      };
+      parts.push(`${fmt(ctxTokens)}/${fmt(response.contextWindow)}`);
     }
 
     if (response.toolCalls && response.toolCalls.length > 0) {
       parts.push(`${response.toolCalls.length} tools`);
-    }
-    if (response.costUsd != null) {
-      parts.push(`$${response.costUsd.toFixed(4)}`);
     }
 
     return parts.length > 0 ? parts.join(" · ") : null;

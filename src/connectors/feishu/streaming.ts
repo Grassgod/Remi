@@ -290,10 +290,10 @@ export function buildFinalCard(opts: {
 
   if (opts.stats) {
     if (!opts.mentionOpenId) elements.push({ tag: "hr" });
-    // Parse stats string "21.3s · 4→260 tokens · 8 tools" into column_set
+    // Parse stats string "21.3s · 5→569 · 116K/1M · 2 tools" into column_set
     const statsParts = opts.stats.split(" · ");
     if (statsParts.length >= 1) {
-      const iconMap = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
+      const iconMap = ["time_outlined", "translate_outlined", "insert-chart_outlined", "setting-inter_outlined"];
       elements.push({
         tag: "column_set",
         flex_mode: "flow",
