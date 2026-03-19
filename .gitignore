@@ -33,3 +33,5 @@ remi-jarvis-*.png
 
 # MCP config (contains credentials)
 .mcp.json
+
+.claude/CLAUDE.md

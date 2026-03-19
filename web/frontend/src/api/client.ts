@@ -130,6 +130,13 @@ export const getLogModules = (date?: string) =>
 // Monitor
 export const getMonitorStats = () => request<import("./types").MonitorStats>("/api/v1/monitor/stats");
 
+// Symlinks
+export const getSymlinksStatus = () => request<import("./types").SymlinksStatus>("/api/v1/symlinks/status");
+export const fixAllSymlinks = () =>
+  request<{ fixed: number; errors: string[] }>("/api/v1/symlinks/fix-all", { method: "POST" });
+export const ensureSymlink = (cwd: string) =>
+  request<{ ok: boolean }>(`/api/v1/symlinks/ensure/${encodeURIComponent(cwd)}`, { method: "POST" });
+
 // Database
 export const getDbStats = () => request<import("./types").DbStats>("/api/v1/db/stats");
 export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv");

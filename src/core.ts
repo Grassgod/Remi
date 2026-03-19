@@ -96,6 +96,7 @@ export class Remi {
   traceCollector: TraceCollector;
   queue: RemiQueueManager;
   authStore: AuthStore | null = null;
+  _symlinkManager: any = null; // SymlinkManager instance
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
   _sessions = new Map<string, string>(); // sessionKey → sessionId
@@ -644,6 +645,7 @@ export class Remi {
         }
 
         // Kill old process, bind new cwd
+        this._symlinkManager?.ensureForCwd(targetPath);
         this._sessionCwd.set(sessionKey, targetPath);
         this._sessions.delete(sessionKey);
         this._scheduleSessFlush();
@@ -787,7 +789,14 @@ export class Remi {
       }
     }
 
-    // 4. Restart handler
+    // 4. SymlinkManager — redirect CC knowledge output to ~/.remi/
+    const { symlinkManager } = require("./infra/symlink-manager");
+    remi._symlinkManager = symlinkManager;
+    symlinkManager.ensureAllProjects();
+    symlinkManager.ensureGlobals();
+    symlinkManager.ensureWikiLinks(config.projects);
+
+    // 5. Restart handler
     remi.onRestart((info) => remi._handleRestart(info));
 
     return remi;

@@ -15,6 +15,7 @@ import { Monitor } from "./pages/Monitor";
 import { Scheduler } from "./pages/Scheduler";
 import { Database } from "./pages/Database";
 import { BotMenu } from "./pages/BotMenu";
+import { Symlinks } from "./pages/Symlinks";
 import { Layout } from "./components/Layout";
 
 function Placeholder({ title }: { title: string }) {
@@ -54,6 +55,7 @@ export function App() {
         <Route path="/scheduler" component={Scheduler} />
         <Route path="/database" component={Database} />
         <Route path="/bot-menu" component={BotMenu} />
+        <Route path="/symlinks" component={Symlinks} />
         <Route path="/tools">{() => <Placeholder title="Tools" />}</Route>
         <Route>{() => <Placeholder title="Not Found" />}</Route>
       </Switch>

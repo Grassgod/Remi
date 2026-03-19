@@ -217,6 +217,19 @@ export interface DailySchedulerSummary {
   skipped: number;
 }
 
+// Symlinks
+export interface SymlinkMapping {
+  source: string;
+  target: string;
+  type: "dir" | "file";
+  status: "ok" | "broken" | "not_linked" | "missing_target";
+}
+
+export interface SymlinksStatus {
+  mappings: SymlinkMapping[];
+  stats: { total: number; ok: number; broken: number; notLinked: number };
+}
+
 // Database
 export interface DbStats {
   dbPath: string;
