@@ -142,15 +142,15 @@ export function Analytics() {
                       </div>
                     </div>
                     <div style={{
-                      height: 5, borderRadius: 3,
-                      background: "rgba(255,255,255,0.04)",
+                      height: 6, borderRadius: 3,
+                      background: "rgba(255,255,255,0.12)",
                       overflow: "hidden",
                     }}>
                       <div style={{
                         height: "100%", borderRadius: 3,
-                        width: `${Math.min(util, 100)}%`,
+                        width: `${Math.max(Math.min(util, 100), 2)}%`,
                         background: `linear-gradient(90deg, ${barColor}cc, ${barColor})`,
-                        boxShadow: `0 0 6px ${barColor}40`,
+                        boxShadow: `0 0 8px ${barColor}60`,
                         transition: "width 0.6s cubic-bezier(0.4,0,0.2,1)",
                       }} />
                     </div>
