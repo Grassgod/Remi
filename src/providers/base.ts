@@ -42,6 +42,7 @@ export interface AgentResponse {
   outputTokens?: number | null;
   cacheCreateInputTokens?: number | null;
   cacheReadInputTokens?: number | null;
+  contextWindow?: number | null;
   durationMs?: number | null;
   model?: string | null;
   metadata?: Record<string, unknown>;

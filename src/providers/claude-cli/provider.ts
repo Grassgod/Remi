@@ -228,6 +228,7 @@ export class ClaudeCLIProvider implements Provider {
             outputTokens: resultMsg.outputTokens,
             cacheCreateInputTokens: resultMsg.cacheCreateInputTokens,
             cacheReadInputTokens: resultMsg.cacheReadInputTokens,
+            contextWindow: resultMsg.contextWindow,
             durationMs: resultMsg.durationMs,
             toolCalls,
             metadata: { messageIds: consumeMessageIds() },

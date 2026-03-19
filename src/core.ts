@@ -567,7 +567,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p", "context"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -659,6 +659,16 @@ export class Remi {
         // Find alias name for display
         const aliasName = Object.entries(this.config.projects).find(([, p]) => p === targetPath)?.[0];
         return { text: `项目已切换: ${aliasName ? `${aliasName} (${targetPath})` : targetPath}\n下条消息将在新目录启动 Claude。` };
+      }
+      case "context": {
+        // Forward /context to CLI to get detailed context usage breakdown
+        const provider = this._getProvider();
+        try {
+          const resp = await provider.send("/context", { chatId: sessionKey, sessionId: this._sessions.get(sessionKey) ?? undefined });
+          return { text: resp.text || "无法获取 context 信息" };
+        } catch {
+          return { text: "无法获取 context 信息，当前会话可能未启动。" };
+        }
       }
       case "status": {
         const hasSession = this._sessions.has(sessionKey);

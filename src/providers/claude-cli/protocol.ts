@@ -54,6 +54,7 @@ export interface ResultMessage {
   outputTokens: number | null;
   cacheCreateInputTokens: number | null;
   cacheReadInputTokens: number | null;
+  contextWindow: number | null;
   permissionDenials: PermissionDenial[];
 }
 
@@ -283,6 +284,13 @@ export function parseLine(line: string): ParsedMessage {
     // Capture requestId if present on result, otherwise use last seen from assistant
     if (typeof data.request_id === "string") _lastRequestId = data.request_id;
     const usage = (data.usage as Record<string, unknown>) ?? {};
+    // Extract contextWindow from modelUsage (first model entry)
+    let contextWindow: number | null = null;
+    const modelUsage = data.modelUsage as Record<string, Record<string, unknown>> | undefined;
+    if (modelUsage) {
+      const firstModel = Object.values(modelUsage)[0];
+      if (firstModel?.contextWindow != null) contextWindow = firstModel.contextWindow as number;
+    }
     return {
       kind: "result",
       result: (data.result as string) ?? "",
@@ -296,6 +304,7 @@ export function parseLine(line: string): ParsedMessage {
       outputTokens: (usage.output_tokens as number) ?? null,
       cacheCreateInputTokens: (usage.cache_creation_input_tokens as number) ?? null,
       cacheReadInputTokens: (usage.cache_read_input_tokens as number) ?? null,
+      contextWindow,
       permissionDenials: Array.isArray(data.permission_denials)
         ? (data.permission_denials as Array<Record<string, unknown>>).map((d) => ({
             toolName: (d.tool_name as string) ?? "",
