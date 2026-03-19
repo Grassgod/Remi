@@ -10,7 +10,6 @@ interface AnalyticsState {
 
   fetchSummary: () => Promise<void>;
   fetchRecent: (limit?: number) => Promise<void>;
-  triggerCliScan: () => Promise<{ count: number }>;
 }
 
 export const useAnalyticsStore = create<AnalyticsState>((set) => ({
@@ -38,8 +37,4 @@ export const useAnalyticsStore = create<AnalyticsState>((set) => ({
     }
   },
 
-  triggerCliScan: async () => {
-    const result = await api.scanCliUsage();
-    return result;
-  },
 }));

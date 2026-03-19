@@ -104,9 +104,6 @@ export const getAnalyticsDaily = (start: string, end: string) =>
   request<import("./types").DailySummary[]>(`/api/v1/analytics/daily?start=${start}&end=${end}`);
 export const getRecentMetrics = (limit = 50) =>
   request<import("./types").TokenMetricEntry[]>(`/api/v1/analytics/recent?limit=${limit}`);
-export const scanCliUsage = () =>
-  request<{ count: number }>("/api/v1/analytics/scan-cli", { method: "POST" });
-
 // Traces
 export const getTraces = (date?: string, limit = 50) =>
   request<import("./types").TraceData[]>(`/api/v1/traces?${date ? `date=${date}&` : ""}limit=${limit}`);

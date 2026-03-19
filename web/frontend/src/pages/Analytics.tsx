@@ -18,28 +18,12 @@ const MODEL_COLORS = [
 ];
 
 export function Analytics() {
-  const { summary, recentMetrics, loading, fetchSummary, fetchRecent, triggerCliScan } = useAnalyticsStore();
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<string | null>(null);
+  const { summary, recentMetrics, loading, fetchSummary, fetchRecent } = useAnalyticsStore();
 
   useEffect(() => {
     fetchSummary();
     fetchRecent(50);
   }, []);
-
-  const handleScan = async () => {
-    setScanning(true);
-    setScanResult(null);
-    try {
-      const result = await triggerCliScan();
-      setScanResult(`Scanned ${result.count} entries`);
-      await fetchSummary();
-      await fetchRecent(50);
-    } catch (e: any) {
-      setScanResult(`Error: ${e.message}`);
-    }
-    setScanning(false);
-  };
 
   const today = summary?.today;
   const week = summary?.week;
@@ -215,18 +199,11 @@ export function Analytics() {
       <HudPanel
         title="14-Day Usage Trend"
         icon={<IconAnalytics />}
-        action={{ label: scanning ? "Scanning..." : "Scan CLI", onClick: handleScan }}
         delay={0.36}
         maxHeight={300}
       >
         <div style={{ padding: "12px 16px" }}>
           <SvgBarChart data={last14} height={220} />
-          {scanResult && (
-            <div style={{
-              fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--glow-accent)",
-              marginTop: 8, textAlign: "center",
-            }}>{scanResult}</div>
-          )}
         </div>
       </HudPanel>
 
