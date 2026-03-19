@@ -56,7 +56,7 @@ export function buildStepDiv(toolName: string, desc: string): Record<string, unk
 /** Build a Feishu Card 2.0 div element for thinking text (robot icon, grey notation). */
 export function buildThinkingDiv(text: string): Record<string, unknown> {
   const clean = text.trim().replace(/\n{3,}/g, "\n\n");
-  const content = clean.length > 200 ? clean.slice(0, 197) + "..." : clean;
+  const content = clean;
   return {
     tag: "div",
     icon: { tag: "standard_icon", token: "robot_outlined", color: "grey" },

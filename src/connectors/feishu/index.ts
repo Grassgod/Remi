@@ -493,7 +493,7 @@ export class FeishuConnector implements Connector {
               // Add thinking div before tool step if thinking segment is non-empty
               if (currentThinkingSegment.trim()) {
                 const thinkingSummary = currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n");
-                const thinkingDesc = thinkingSummary.length > 100 ? thinkingSummary.slice(0, 97) + "..." : thinkingSummary;
+                const thinkingDesc = thinkingSummary;
                 session.addStep("_thinking", thinkingDesc);
               }
               currentThinkingSegment = "";
