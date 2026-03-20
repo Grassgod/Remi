@@ -40,6 +40,8 @@ export interface AgentResponse {
   costUsd?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  cacheCreateInputTokens?: number | null;
+  cacheReadInputTokens?: number | null;
   durationMs?: number | null;
   model?: string | null;
   metadata?: Record<string, unknown>;

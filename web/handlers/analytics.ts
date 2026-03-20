@@ -19,8 +19,5 @@ export function registerAnalyticsHandlers(app: Hono, data: RemiData) {
     return c.json(data.getRecentMetrics(limit));
   });
 
-  app.post("/api/v1/analytics/scan-cli", (c) => {
-    const result = data.scanCliUsage();
-    return c.json(result);
-  });
+  // scan-cli endpoint removed — metrics now recorded in real-time via core.ts
 }

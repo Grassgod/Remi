@@ -226,6 +226,8 @@ export class ClaudeCLIProvider implements Provider {
             model: resultMsg.model || sessionModel || null,
             inputTokens: resultMsg.inputTokens,
             outputTokens: resultMsg.outputTokens,
+            cacheCreateInputTokens: resultMsg.cacheCreateInputTokens,
+            cacheReadInputTokens: resultMsg.cacheReadInputTokens,
             durationMs: resultMsg.durationMs,
             toolCalls,
             metadata: { messageIds: consumeMessageIds() },
@@ -414,6 +416,8 @@ export class ClaudeCLIProvider implements Provider {
         model: resultMsg.model,
         inputTokens: resultMsg.inputTokens,
         outputTokens: resultMsg.outputTokens,
+        cacheCreateInputTokens: resultMsg.cacheCreateInputTokens,
+        cacheReadInputTokens: resultMsg.cacheReadInputTokens,
         durationMs: resultMsg.durationMs,
         toolCalls,
       });

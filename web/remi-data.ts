@@ -11,7 +11,6 @@ import { homedir } from "node:os";
 import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
-import { CliUsageScanner } from "../src/metrics/cli-parser.js";
 import { type TraceData, type SpanData, rowToTraceData } from "../src/tracing.js";
 import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
@@ -98,13 +97,6 @@ export class RemiData {
     this.root = remiDir ?? join(homedir(), ".remi");
     this.memoryDir = join(this.root, "memory");
     this._metrics = new MetricsCollector(this.root);
-
-    // Auto-scan CLI metrics on first startup
-    try {
-      const scanner = new CliUsageScanner(this._metrics.metricsDir);
-      const entries = scanner.scanNew();
-      for (const entry of entries) this._metrics.record(entry);
-    } catch { /* non-critical */ }
   }
 
   // ── Memory: MEMORY.md ──────────────────────────────
@@ -576,15 +568,7 @@ export class RemiData {
     this._analyticsCache = null;
   }
 
-  scanCliUsage(): { count: number } {
-    const scanner = new CliUsageScanner(this._metrics.metricsDir);
-    const entries = scanner.scanNew();
-    for (const entry of entries) {
-      this._metrics.record(entry);
-    }
-    this._analyticsCache = null; // invalidate cache
-    return { count: entries.length };
-  }
+  // scanCliUsage removed — metrics now recorded in real-time via core.ts
 
   // ── Traces ─────────────────────────────────────────
 

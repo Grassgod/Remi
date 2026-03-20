@@ -493,8 +493,8 @@ export class Remi {
           model: resultResponse.model ?? null,
           in: resultResponse.inputTokens ?? 0,
           out: resultResponse.outputTokens ?? 0,
-          cacheCreate: 0,
-          cacheRead: 0,
+          cacheCreate: resultResponse.cacheCreateInputTokens ?? 0,
+          cacheRead: resultResponse.cacheReadInputTokens ?? 0,
           cost: resultResponse.costUsd ?? null,
           dur: resultResponse.durationMs ?? null,
           project: cwd ?? null,
@@ -535,6 +535,8 @@ export class Remi {
             model: resultResponse.model ?? undefined,
             inputTokens: resultResponse.inputTokens ?? undefined,
             outputTokens: resultResponse.outputTokens ?? undefined,
+            cacheCreateTokens: resultResponse.cacheCreateInputTokens ?? undefined,
+            cacheReadTokens: resultResponse.cacheReadInputTokens ?? undefined,
             spans,
           });
         }

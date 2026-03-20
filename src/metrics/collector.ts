@@ -291,7 +291,7 @@ function _estimateCost(model: string | null, entry: { in: number; out: number; c
 // ── Helpers ──────────────────────────────────────────
 
 function _dateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return d.toISOString().slice(0, 10);
 }
 
 function _emptySummary(date: string): DailySummary {

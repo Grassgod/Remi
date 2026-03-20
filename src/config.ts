@@ -504,7 +504,6 @@ function _legacyToCronJobs(config: RemiConfig): CronJobConfig[] {
     { id: "builtin:heartbeat", name: "Heartbeat", handler: "builtin:heartbeat", every: `${config.scheduler.heartbeatInterval}s` },
     { id: "builtin:compaction", name: "Memory Compaction", handler: "builtin:compaction", cron: config.scheduler.memoryCompactCron },
     { id: "builtin:cleanup", name: "Cleanup", handler: "builtin:cleanup", cron: `1 ${compactHour} * * *` },
-    { id: "builtin:cli-metrics", name: "CLI Metrics", handler: "builtin:cli-metrics", cron: `2 ${compactHour} * * *` },
   );
 
   for (const skill of config.scheduledSkills) {

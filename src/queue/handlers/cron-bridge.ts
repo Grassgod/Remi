@@ -9,7 +9,6 @@ import type { Job } from "bunqueue/client";
 import type { CronJobData } from "../queues.js";
 import type { Remi } from "../../core.js";
 import type { Connector } from "../../connectors/base.js";
-import { CliUsageScanner } from "../../metrics/cli-parser.js";
 import { createLogger } from "../../logger.js";
 import {
   existsSync,
@@ -97,14 +96,7 @@ handlers.set("builtin:compaction", async (remi) => {
   compressWeeklyLogs(remi);
   archiveOldLogs(remi);
 
-  try {
-    const ingested = remi.memory.ingestBridgeChanges();
-    if (ingested.length > 0) log.info(`Ingested ${ingested.length} new items from Claude bridge`);
-    remi.memory.syncAllClaudeProjectMemories();
-    remi.memory.regenerateBridge();
-  } catch (e) {
-    log.error("Claude memory bridge sync failed:", e);
-  }
+  // Bridge sync removed in v3 — replaced by Symlink architecture
 });
 
 handlers.set("builtin:cleanup", async (remi) => {
@@ -115,11 +107,39 @@ handlers.set("builtin:cleanup", async (remi) => {
   }
 });
 
-handlers.set("builtin:cli-metrics", async (remi) => {
-  const scanner = new CliUsageScanner(remi.metrics.metricsDir);
-  const entries = scanner.scanNew();
-  for (const entry of entries) remi.metrics.record(entry);
-  if (entries.length > 0) log.info(`Aggregated ${entries.length} CLI metric entries`);
+// builtin:cli-metrics removed — metrics now recorded in real-time via core.ts
+
+// ── Agent handlers ────────────────────────────────────────────
+
+handlers.set("agent:wiki-curate", async () => {
+  const { AgentRunner } = await import("../../agents/index.js");
+  const runner = new AgentRunner();
+  const prompt = `执行今日 Wiki 维护。扫描所有项目的 memory 和 wiki 目录，综合记忆碎片生成/更新 Wiki L0/L1/L2。`;
+  await runner.run("wiki-curate", prompt);
+});
+
+handlers.set("agent:memory-audit", async (remi) => {
+  const { AgentRunner } = await import("../../agents/index.js");
+  const runner = new AgentRunner();
+  const prompt = `执行今日记忆审计。扫描所有记忆实体，去重、合并碎片、删除过期、修复矛盾、补充 summary、更新 importance。
+最后读取 ~/.remi/agents/*/runs/ 下昨天的日志，汇总成一份可读汇报。`;
+  const result = await runner.run("memory-audit", prompt);
+
+  // Push audit report via connector if configured
+  if (result.exitCode === 0 && result.stdout.includes("--- 汇报 ---")) {
+    const report = result.stdout.split("--- 汇报 ---")[1]?.trim();
+    if (report) {
+      const connectors = remi["_connectors"] as any[];
+      const feishu = connectors.find((c: any) => c.name === "feishu");
+      if (feishu) {
+        const pushTarget = remi.config.ownerId;
+        if (pushTarget) {
+          await feishu.reply(pushTarget, { text: `📋 记忆维护日报\n\n${report}` });
+          log.info("[agent:memory-audit] Report pushed to owner");
+        }
+      }
+    }
+  }
 });
 
 handlers.set("skill:run", async (remi, config) => {

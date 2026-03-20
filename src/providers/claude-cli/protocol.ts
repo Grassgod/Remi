@@ -52,6 +52,8 @@ export interface ResultMessage {
   durationMs: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  cacheCreateInputTokens: number | null;
+  cacheReadInputTokens: number | null;
   permissionDenials: PermissionDenial[];
 }
 
@@ -292,6 +294,8 @@ export function parseLine(line: string): ParsedMessage {
       durationMs: (data.duration_ms as number) ?? null,
       inputTokens: (usage.input_tokens as number) ?? null,
       outputTokens: (usage.output_tokens as number) ?? null,
+      cacheCreateInputTokens: (usage.cache_creation_input_tokens as number) ?? null,
+      cacheReadInputTokens: (usage.cache_read_input_tokens as number) ?? null,
       permissionDenials: Array.isArray(data.permission_denials)
         ? (data.permission_denials as Array<Record<string, unknown>>).map((d) => ({
             toolName: (d.tool_name as string) ?? "",

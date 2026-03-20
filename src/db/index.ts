@@ -99,6 +99,12 @@ export function getDb(): Database {
   if (!colNames.has("cli_message_ids")) {
     db.exec("ALTER TABLE conversations ADD COLUMN cli_message_ids TEXT");
   }
+  if (!colNames.has("cache_create_tokens")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN cache_create_tokens INTEGER");
+  }
+  if (!colNames.has("cache_read_tokens")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN cache_read_tokens INTEGER");
+  }
 
   _db = db;
   return db;
@@ -177,6 +183,8 @@ export interface ConversationComplete {
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
+  cacheCreateTokens?: number;
+  cacheReadTokens?: number;
   spans?: unknown[];
 }
 
@@ -190,6 +198,7 @@ export function completeConversation(row: ConversationComplete): void {
       cli_round_end = ?,
       cli_message_ids = ?,
       model = ?, input_tokens = ?, output_tokens = ?,
+      cache_create_tokens = ?, cache_read_tokens = ?,
       spans = ?
      WHERE id = ?`,
     [
@@ -202,6 +211,8 @@ export function completeConversation(row: ConversationComplete): void {
       row.model ?? null,
       row.inputTokens ?? null,
       row.outputTokens ?? null,
+      row.cacheCreateTokens ?? null,
+      row.cacheReadTokens ?? null,
       row.spans ? JSON.stringify(row.spans) : null,
       row.id,
     ],
