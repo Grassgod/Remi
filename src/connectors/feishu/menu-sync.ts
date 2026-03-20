@@ -15,15 +15,18 @@ import { createLogger } from "../../logger.js";
 
 const log = createLogger("menu-sync");
 
-// The bot_menu API uses the bytedance internal endpoint
-const FSOPEN_BASE = "https://fsopen.bytedance.net/open-apis";
-const BOT_MENU_API = `${FSOPEN_BASE}/bot/v3/bot_menu`;
+function getBaseUrl(domain: string): string {
+  if (domain === "bytedance") return "https://fsopen.bytedance.net/open-apis";
+  if (domain === "lark") return "https://open.larksuite.com/open-apis";
+  return "https://open.feishu.cn/open-apis";
+}
 
 // ── Internal token management ────────────────────────────────
 
 interface FsopenCredentials {
   appId: string;
   appSecret: string;
+  domain: string;
 }
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
@@ -33,7 +36,8 @@ async function getFsopenToken(creds: FsopenCredentials): Promise<string> {
     return _cachedToken.token;
   }
 
-  const res = await fetch(`${FSOPEN_BASE}/auth/v3/tenant_access_token/internal`, {
+  const base = getBaseUrl(creds.domain);
+  const res = await fetch(`${base}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
@@ -141,9 +145,11 @@ function menuItemToApi(item: BotMenuItemConfig): ApiMenuItem {
 
 export class MenuSyncer {
   private _creds: FsopenCredentials;
+  private _menuApi: string;
 
   constructor(creds: FsopenCredentials) {
     this._creds = creds;
+    this._menuApi = `${getBaseUrl(creds.domain)}/bot/v3/bot_menu`;
   }
 
   /**
@@ -212,7 +218,7 @@ export class MenuSyncer {
       params.set("user_id", userId);
       params.set("user_id_type", userIdType);
     }
-    const url = `${BOT_MENU_API}${params.toString() ? `?${params}` : ""}`;
+    const url = `${this._menuApi}${params.toString() ? `?${params}` : ""}`;
 
     const res = await fetch(url, {
       method: "GET",
@@ -231,7 +237,7 @@ export class MenuSyncer {
   async deleteUserMenu(userId: string, userIdType = "open_id"): Promise<void> {
     const token = await getFsopenToken(this._creds);
     const params = new URLSearchParams({ user_id_type: userIdType });
-    const url = `${BOT_MENU_API}?${params}`;
+    const url = `${this._menuApi}?${params}`;
 
     const res = await fetch(url, {
       method: "DELETE",
@@ -253,7 +259,7 @@ export class MenuSyncer {
   private async _postMenu(payload: ApiMenuPayload, userIdType = "open_id"): Promise<void> {
     const token = await getFsopenToken(this._creds);
     const params = new URLSearchParams({ user_id_type: userIdType });
-    const url = `${BOT_MENU_API}?${params}`;
+    const url = `${this._menuApi}?${params}`;
 
     const res = await fetch(url, {
       method: "POST",

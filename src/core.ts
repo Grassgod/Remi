@@ -802,6 +802,7 @@ export class Remi {
         const menuSyncer = new MenuSyncer({
           appId: config.feishu.appId,
           appSecret: config.feishu.appSecret,
+          domain: config.feishu.domain,
         });
         menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
           log.warn(`Bot menu sync failed: ${err.message}`);
