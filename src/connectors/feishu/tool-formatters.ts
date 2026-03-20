@@ -293,7 +293,9 @@ function truncate(s: string, max: number): string {
 /** Shorten a file path for display — replace home dir with ~/, keep relative. */
 export function shortPath(path: string): string {
   if (!path) return "";
+  const home = process.env.HOME || "/home";
   return path
+    .replace(new RegExp(`^${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`), "~/")
     .replace(/^\/data00\/home\/hehuajie\//, "~/")
     .replace(/^\/home\/hehuajie\//, "~/");
 }

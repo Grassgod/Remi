@@ -29,15 +29,22 @@ const log = createLogger("symlink");
 
 // ── Constants ──────────────────────────────────────────────────
 
-const CLAUDE_HOME = "/home/hehuajie/.claude";
-const REMI_HOME = "/home/hehuajie/.remi";
+import { homedir } from "node:os";
+
+const HOME = homedir();
+const CLAUDE_HOME = join(HOME, ".claude");
+const REMI_HOME = join(HOME, ".remi");
 
 const CLAUDE_PROJECTS = join(CLAUDE_HOME, "projects");
 const REMI_PROJECTS = join(REMI_HOME, "projects");
 const REMI_MEMORY = join(REMI_HOME, "memory");
 
 // Home directory hashes — these get special treatment (memory → ~/.remi/memory/)
+// Hash is the home path with "/" replaced by "-"
+const HOME_HASH = HOME.replace(/\//g, "-");
 const HOME_HASHES = new Set([
+  HOME_HASH,
+  // Legacy server paths
   "-data00-home-hehuajie",
   "-home-hehuajie",
 ]);
