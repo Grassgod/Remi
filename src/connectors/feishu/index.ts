@@ -212,7 +212,7 @@ export class FeishuConnector implements Connector {
     if (!this._handler) return;
 
     // ── /esc: abort active session (bypasses Lane Queue) ──
-    if (/^\/esc$/i.test(msg.text.trim())) {
+    if (/^\/esc$/i.test(msg.rawContent.trim())) {
       // First, reject any pending interactive actions (AskUserQuestion / ExitPlanMode)
       // so the provider's `await promise` unblocks and the lane lock can be released.
       rejectAllPendingActions("User sent /esc");
@@ -280,6 +280,7 @@ export class FeishuConnector implements Connector {
         mediaCount: msg.media.length,
         quotedContent: msg.quotedContent,
         rootId: msg.rootId,
+        rawContent: msg.rawContent,
       },
     };
 

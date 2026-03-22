@@ -266,8 +266,9 @@ export class Remi {
   }
 
   private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number): AsyncGenerator<StreamEvent> {
-    // Handle slash commands — emit as immediate result
-    const cmdResponse = await this._tryCommand(msg.text, msg);
+    // Handle slash commands — use rawContent (without speaker prefix) for detection
+    const rawContent = (msg.metadata?.rawContent as string) ?? msg.text;
+    const cmdResponse = await this._tryCommand(rawContent, msg);
     if (cmdResponse) {
       yield { kind: "result", response: cmdResponse };
       return;

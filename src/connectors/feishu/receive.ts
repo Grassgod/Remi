@@ -389,6 +389,8 @@ export async function resolveFeishuMedia(
 
 export type ParsedFeishuMessage = {
   text: string;
+  /** Raw content without speaker prefix or quote wrapper (for command detection). */
+  rawContent: string;
   chatId: string;
   senderOpenId: string;
   senderName?: string;
@@ -417,9 +419,11 @@ export async function processFeishuMessageEvent(
   // Parse
   const ctx = parseFeishuMessageEvent(event, botOpenId);
 
-  // Two-layer group message filtering:
-  // 1) allowedGroups (whitelist) — empty means no restriction
-  // 2) monitorGroups — these groups don't require @mention
+  // Group message filtering:
+  // 1) allowedGroups whitelist — empty means no restriction
+  // 2) Skip messages directed at other users (has @mentions, none are the bot)
+  // 3) triggerUser @mentions only trigger on top-level messages (not in threads)
+  // 4) monitorGroups auto-reply for messages without explicit @mentions
   let monitored = false;
   if (ctx.chatType === "group") {
     const allowed = !opts?.allowedGroups?.length || opts.allowedGroups.includes(ctx.chatId);
@@ -428,14 +432,32 @@ export async function processFeishuMessageEvent(
       return null;
     }
     const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) ?? false;
+    const mentions = event.message.mentions ?? [];
+    const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
+    const isInThread = !!event.message.root_id;
     const mentionedTriggerUser = opts?.triggerUserIds?.length
-      ? (event.message.mentions ?? []).some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
+      ? mentions.some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
       : false;
-    // Allow /esc command without @mention (abort needs to bypass mention requirement)
-    // Use includes() to handle cases where menu send_message wraps extra content
-    const isEscCommand = /\/esc/i.test(ctx.content.trim());
-    if (!ctx.mentionedBot && !isMonitor && !mentionedTriggerUser && !isEscCommand) {
-      log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored, content="${ctx.content.trim().slice(0, 50)}")`);
+    // Allow /esc and other slash commands without @mention
+    const isSlashCommand = /^\/\w+/i.test(ctx.content.trim());
+
+    if (ctx.mentionedBot || isSlashCommand) {
+      // Always respond when bot is @mentioned or slash command
+    } else if (directedAtOthers && !mentionedTriggerUser) {
+      // Message @mentions other users (not trigger users) — skip
+      log.info(`skipped group message ${messageId} (directed at other users, not bot)`);
+      return null;
+    } else if (mentionedTriggerUser && isInThread) {
+      // Trigger user @mentioned inside a thread — skip (only top-level triggers)
+      log.info(`skipped group message ${messageId} (triggerUser mentioned in thread, not top-level)`);
+      return null;
+    } else if (!isMonitor && !mentionedTriggerUser) {
+      // Not monitor group, not mentioned, not trigger — skip
+      log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
+      return null;
+    } else if (isMonitor && directedAtOthers) {
+      // Monitor group but message directed at specific people — skip
+      log.info(`skipped group message ${messageId} (monitor group but directed at other users)`);
       return null;
     }
     monitored = (isMonitor || mentionedTriggerUser) && !ctx.mentionedBot;
@@ -492,6 +514,7 @@ export async function processFeishuMessageEvent(
 
   return {
     text,
+    rawContent: ctx.content,
     chatId: ctx.chatId,
     senderOpenId: ctx.senderOpenId,
     senderName,
