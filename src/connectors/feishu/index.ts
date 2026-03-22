@@ -625,7 +625,7 @@ export class FeishuConnector implements Connector {
         }
 
         await session.close({
-          finalText: finalResponse?.text ?? contentText,
+          finalText: contentText || finalResponse?.text,
           thinking: thinkingText || finalResponse?.thinking || null,
           toolEntries: toolEntries.length > 0 ? toolEntries : undefined,
           trailingThinking: currentThinkingSegment || undefined,

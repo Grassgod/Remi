@@ -218,7 +218,7 @@ export class ClaudeCLIProvider implements Provider {
         yield {
           kind: "result",
           response: createAgentResponse({
-            text: resultMsg.result || fullText,
+            text: fullText || resultMsg.result,
             thinking,
             sessionId: resultMsg.sessionId,
             requestId: resultMsg.requestId,
