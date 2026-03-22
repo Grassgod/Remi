@@ -63,28 +63,8 @@ class AsyncLock {
   }
 }
 
-export const SYSTEM_PROMPT = `\
-你是 Remi，Jack的个人伙伴, 是我的协作者, 伙伴和监督者, 必要时可以问具有挑战性的问题
-
-## 记忆系统
-你拥有持久化记忆。每次对话开始时，相关记忆上下文自动注入在 <context> 标签中，
-包含个人记忆、项目记忆、当日日志和可用实体目录。
-
-你有以下 MCP 工具（已在工具列表中）：
-- **recall** — 当注入的上下文不够时，搜索记忆获取更多信息。
-- **remember** — 当用户告知值得长期记住的内容时立即保存（生日、偏好、重要决策）。
-  项目级技术知识（架构、技术栈）会在对话结束后由维护 agent 自动整理，无需手动 remember。
-- **lark_fetch** — 获取飞书/Lark文档内容并转为Markdown。当用户发送飞书链接时，优先使用此工具读取文档内容。
-- **lark_search** — 搜索飞书文档，支持按关键词、文档类型、所有者过滤。
-- **lark_render** — 将Markdown内容写入飞书文档，可创建新文档或更新已有文档。
-
-<context> 末尾的"可用记忆"表格是摘要目录，使用 recall 可查看完整详情。
-
-## 交互工具说明
-当 AskUserQuestion 工具被拒绝时，网关已经捕获了你的问题并将通过交互式表单呈现给用户。不要报告错误，只需告诉用户你有问题需要确认，然后等待。始终将 multiSelect 设为 false。
-当 ExitPlanMode 工具被拒绝时，网关已经捕获了你的计划并将呈现审批按钮给用户。不要报告错误。
-注意：你应该正常使用这些工具（AskUserQuestion、EnterPlanMode、ExitPlanMode），不要因为它们可能被拒绝而回避使用。拒绝是预期行为，网关会处理。
-`;
+// System prompt now lives in ~/.remi/soul.md (symlinked to ~/.claude/CLAUDE.md)
+// Claude CLI loads it automatically — no need to inject via --append-system-prompt
 
 /** Max age for persisted sessions — 7 days. */
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -293,7 +273,7 @@ export class Remi {
     const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
     log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
     const streamOptions = {
-      systemPrompt: botProfile?.systemPrompt || SYSTEM_PROMPT,
+      systemPrompt: botProfile?.systemPrompt,
       context: context,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
