@@ -81,7 +81,7 @@ export class AgentRunner {
     if (exitCode !== 0) {
       log.error(
         `Agent ${agentName} exited with code ${exitCode} (${durationMs}ms)`,
-        stderr.slice(0, 500),
+        { stderr: stderr.slice(0, 500), stdout: stdout.slice(0, 500) },
       );
     } else {
       log.info(`Agent ${agentName} completed in ${durationMs}ms`);
@@ -98,6 +98,7 @@ export class AgentRunner {
       "--dangerously-skip-permissions",
       "--model", config.model,
       "--add-dir", join(homedir(), ".remi"),
+      "--mcp-config", join(homedir(), ".mcp.json"),
       "-p", prompt,
     ];
   }
