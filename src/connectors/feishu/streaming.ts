@@ -95,10 +95,17 @@ async function getToken(creds: Credentials): Promise<string> {
   return data.tenant_access_token;
 }
 
-function truncateSummary(text: string, max = 50): string {
+/**
+ * Build plain-text summary for Feishu card detail page.
+ * Strips markdown syntax, preserves full content so the detail page isn't blank.
+ */
+function buildSummary(text: string): string {
   if (!text) return "";
-  const clean = text.replace(/\n/g, " ").trim();
-  return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
+  return text
+    .replace(/[*_~`>#\-|]/g, "")    // strip markdown formatting
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // [link](url) → link
+    .replace(/\n{2,}/g, "\n")       // collapse blank lines
+    .trim();
 }
 
 import { buildCardHeader, buildContentElements } from "./send.js";
@@ -317,7 +324,7 @@ export function buildFinalCard(opts: {
   return {
     schema: "2.0",
     header: buildCardHeader(opts.sessionId),
-    config: { width_mode: "fill", summary: { content: truncateSummary(opts.text) } },
+    config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
     body: { elements },
   };
 }
@@ -980,7 +987,7 @@ export class FeishuStreamingSession {
             settings: JSON.stringify({
               config: {
                 streaming_mode: false,
-                summary: { content: truncateSummary(text) },
+                summary: { content: buildSummary(text) },
               },
             }),
             sequence: this.state.sequence,
