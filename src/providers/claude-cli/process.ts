@@ -94,7 +94,7 @@ export class ClaudeProcessManager {
   }
 
   get isAlive(): boolean {
-    return this._process !== null && !this._process.killed;
+    return this._process !== null && !this._process.killed && this._process.exitCode === null;
   }
 
   get sessionId(): string | null {
@@ -193,6 +193,8 @@ export class ClaudeProcessManager {
           // Distinguish timeout/hang from graceful EOF
           if (this._process && !this._process.killed) {
             log.error("readline returned null while process still alive — possible hang or timeout");
+            // Kill hung process so isAlive returns false and pool will respawn on next message
+            this._process.kill();
             yield {
               kind: "error",
               error: "CLI process stopped responding (timeout). The task may have exceeded context limits.",

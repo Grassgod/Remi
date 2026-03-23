@@ -209,6 +209,13 @@ export class ClaudeCLIProvider implements Provider {
       } else if (msg.kind === "error") {
         const err = msg as ErrorEvent;
         log.debug(`yield error: ${err.error}`);
+        // Remove hung process from pool to ensure respawn on next message
+        if (err.code === "process_hang") {
+          const key = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
+          this._pool.delete(key);
+          this._lastUsed.delete(key);
+          log.warn(`Evicted hung process from pool: chatId="${key}"`);
+        }
         yield { kind: "error", error: err.error, code: err.code } as StreamEvent;
       } else if (msg.kind === "result") {
         gotResult = true;
