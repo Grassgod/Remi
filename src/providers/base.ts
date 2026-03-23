@@ -65,6 +65,8 @@ export interface SendOptions {
   allowedTools?: string[];
   /** Additional directories to add via --add-dir (from bot profile). */
   addDirs?: string[];
+  /** Permission mode override (e.g. "plan", "auto", "default"). */
+  permissionMode?: string | null;
   /** Override stream deadline in ms (default: 15 minutes). Useful for long-running skills/jobs. */
   deadlineMs?: number;
 }

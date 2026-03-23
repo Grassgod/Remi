@@ -22,6 +22,7 @@ import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
+import { generateP2PMenu } from "./connectors/feishu/menu-generator.js";
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
@@ -83,6 +84,7 @@ export class Remi {
   _sessions = new Map<string, string>(); // sessionKey → sessionId
   _sessionCwd = new Map<string, string>(); // sessionKey → project cwd
   _sessionProvider = new Map<string, string>(); // sessionKey → providerName (P2P override)
+  _sessionMode = new Map<string, string>(); // sessionKey → permissionMode (e.g. "plan", "auto")
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
   private _sessDirty = false;
@@ -283,6 +285,7 @@ export class Remi {
       media: msg.media,
       allowedTools: botProfile?.allowedTools?.length ? botProfile.allowedTools : undefined,
       addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
+      permissionMode: this._sessionMode.get(sessionKey) ?? undefined,
     };
 
     // Provider selection:
@@ -567,7 +570,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p", "context", "switch"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "switch"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -585,6 +588,7 @@ export class Remi {
       case "clear":
       case "new": {
         this._sessions.delete(sessionKey);
+        this._sessionMode.delete(sessionKey);
         this._scheduleSessFlush();
         // Also clear the underlying provider's conversation context
         const provider = this._getProvider();
@@ -598,26 +602,88 @@ export class Remi {
         if (chatType === "group") {
           return { text: "群聊 provider 请在 remi.toml 的 [[bots]] 配置中修改。" };
         }
-        const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
-        const target = args.toLowerCase();
-        const providerName = target === "aiden" ? "aiden_cli" : target === "claude" ? "claude_cli" : target;
-        if (!this._providers.has(providerName)) {
-          const available = [...this._providers.keys()].join(", ");
-          return { text: `Provider "${target}" 不可用。可选: ${available}` };
+        const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim().toLowerCase();
+
+        if (!args) {
+          // Show current state + available options
+          const curProvider = this._sessionProvider.get(sessionKey) ?? this.config.provider.name;
+          const curMode = this._sessionMode.get(sessionKey) ?? (curProvider === "aiden_cli" ? "agentFull" : "bypass");
+          const curLabel = curProvider === "aiden_cli" ? "Aiden" : "Claude";
+          const lines = [
+            `当前: **${curLabel} · ${curMode}**`,
+            "",
+            "可用组合:",
+            "  `/switch claude:bypass` — Claude 全权限（默认）",
+            "  `/switch claude:plan` — Claude Plan 模式",
+            "  `/switch claude:auto` — Claude Auto 模式",
+            "  `/switch claude:default` — Claude 需确认模式",
+            "  `/switch claude:acceptEdits` — Claude 自动编辑",
+            "  `/switch aiden:agentFull` — Aiden 全权限（默认）",
+            "  `/switch aiden:plan` — Aiden Plan 模式",
+            "  `/switch aiden:ask` — Aiden 需确认模式",
+          ];
+          return { text: lines.join("\n") };
         }
-        // Clear old session (sessionId is provider-specific, not portable)
-        const oldProviderName = this._sessionProvider.get(sessionKey);
-        if (oldProviderName) {
-          const oldProvider = this._providers.get(oldProviderName);
+
+        // Parse provider:mode (e.g. "claude:plan", "aiden", "claude")
+        const [providerAlias, modeArg] = args.includes(":") ? args.split(":", 2) : [args, undefined];
+
+        // Resolve provider name
+        const PROVIDER_ALIASES: Record<string, string> = { claude: "claude_cli", aiden: "aiden_cli" };
+        const providerName = PROVIDER_ALIASES[providerAlias] ?? providerAlias;
+        if (!this._providers.has(providerName)) {
+          const available = Object.keys(PROVIDER_ALIASES).join(", ");
+          return { text: `Provider "${providerAlias}" 不可用。可选: ${available}` };
+        }
+
+        // Resolve default mode per provider
+        const CLAUDE_MODES = new Set(["bypass", "plan", "auto", "default", "acceptEdits", "bypassPermissions"]);
+        const AIDEN_MODES = new Set(["agentFull", "agent", "plan", "readOnly", "ask", "delegate"]);
+        const isClaude = providerName === "claude_cli";
+        const validModes = isClaude ? CLAUDE_MODES : AIDEN_MODES;
+        const defaultMode = isClaude ? "bypass" : "agentFull";
+
+        // Normalize "bypass" alias
+        let mode = modeArg ?? defaultMode;
+        if (isClaude && mode === "bypass") mode = "bypassPermissions";
+
+        if (!validModes.has(mode) && mode !== "bypassPermissions") {
+          return { text: `模式 "${modeArg}" 对 ${providerAlias} 不可用。可选: ${[...validModes].join(", ")}` };
+        }
+
+        const curProviderName = this._sessionProvider.get(sessionKey) ?? this.config.provider.name;
+        const providerChanged = curProviderName !== providerName;
+
+        if (providerChanged) {
+          // Switching provider — clear old session (sessionId is provider-specific)
+          const oldProvider = this._providers.get(curProviderName);
           if (oldProvider && "clearSession" in oldProvider && typeof (oldProvider as any).clearSession === "function") {
             await (oldProvider as any).clearSession(sessionKey);
           }
+          this._sessions.delete(sessionKey);
+          this._sessionProvider.set(sessionKey, providerName);
+        } else {
+          // Same provider, mode change only — kill process but keep sessionId for resume
+          const provider = this._providers.get(providerName);
+          if (provider && "clearSession" in provider && typeof (provider as any).clearSession === "function") {
+            await (provider as any).clearSession(sessionKey);
+          }
+          // Don't delete _sessions — preserve sessionId for --resume
         }
-        this._sessions.delete(sessionKey);
-        this._sessionProvider.set(sessionKey, providerName);
+
+        // Store mode (or clear if default)
+        const isDefaultMode = (isClaude && mode === "bypassPermissions") || (!isClaude && mode === "agentFull");
+        if (isDefaultMode) {
+          this._sessionMode.delete(sessionKey);
+        } else {
+          this._sessionMode.set(sessionKey, mode);
+        }
         this._scheduleSessFlush();
-        const label = providerName === "aiden_cli" ? "Aiden" : "Claude Code";
-        return { text: `已切换到 ${label}，新对话开始。` };
+
+        const providerLabel = isClaude ? "Claude" : "Aiden";
+        const modeLabel = isDefaultMode ? (isClaude ? "Bypass" : "AgentFull") : mode;
+        const resumeNote = !providerChanged ? "（上下文保留）" : "（新对话）";
+        return { text: `已切换到 **${providerLabel} · ${modeLabel}** ${resumeNote}` };
       }
       case "restart": {
         // Delay restart so the response gets sent first
@@ -627,6 +693,7 @@ export class Remi {
         }
         return { text: "正在重启 Remi..." };
       }
+      case "project":
       case "p": {
         const arg = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
 
@@ -827,16 +894,20 @@ export class Remi {
       log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
 
       // Bot menu sync (fire-and-forget on startup)
-      if (config.botMenu.default?.length || config.botMenu.users?.length) {
-        const menuSyncer = new MenuSyncer({
-          appId: config.feishu.appId,
-          appSecret: config.feishu.appSecret,
-          domain: config.feishu.domain,
-        });
-        menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
-          log.warn(`Bot menu sync failed: ${err.message}`);
-        });
-      }
+      // Generate dynamic P2P menu from skills + projects, fallback to static config
+      const menuSyncer = new MenuSyncer({
+        appId: config.feishu.appId,
+        appSecret: config.feishu.appSecret,
+        domain: config.feishu.domain,
+      });
+      const dynamicMenu = generateP2PMenu({
+        projects: config.projects,
+        dashboardUrl: "http://10.37.66.8:6120",
+      });
+      const menuConfig = { default: dynamicMenu, users: config.botMenu.users };
+      menuSyncer.syncAll(menuConfig, config.feishu.triggerUserIds).catch((err) => {
+        log.warn(`Bot menu sync failed: ${err.message}`);
+      });
     }
 
     // 4. SymlinkManager — redirect CC knowledge output to ~/.remi/
@@ -978,7 +1049,7 @@ export class Remi {
     try {
       if (!existsSync(this.config.sessionsFile)) return;
       const raw = readFileSync(this.config.sessionsFile, "utf-8");
-      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; providerMap?: [string, string][]; savedAt?: number };
+      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; providerMap?: [string, string][]; modeMap?: [string, string][]; savedAt?: number };
       if (!data.entries || !Array.isArray(data.entries)) return;
       if (data.savedAt && Date.now() - data.savedAt > SESSION_TTL_MS) {
         log.info("Persisted sessions expired (>7d), discarding");
@@ -997,7 +1068,12 @@ export class Remi {
           this._sessionProvider.set(key, provider);
         }
       }
-      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s), ${this._sessionProvider.size} provider override(s)`);
+      if (Array.isArray(data.modeMap)) {
+        for (const [key, mode] of data.modeMap) {
+          this._sessionMode.set(key, mode);
+        }
+      }
+      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s), ${this._sessionProvider.size} provider override(s), ${this._sessionMode.size} mode override(s)`);
     } catch (e) {
       log.warn("Failed to load sessions file:", e);
     }
@@ -1029,6 +1105,7 @@ export class Remi {
         entries: [...this._sessions.entries()],
         cwdMap: [...this._sessionCwd.entries()],
         providerMap: [...this._sessionProvider.entries()],
+        modeMap: [...this._sessionMode.entries()],
         savedAt: Date.now(),
       };
       writeFileSync(this.config.sessionsFile, JSON.stringify(data), "utf-8");

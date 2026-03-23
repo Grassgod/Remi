@@ -152,7 +152,7 @@ export class ClaudeCLIProvider implements Provider {
 
     const mgr = await this._ensureProcess(
       options?.chatId, options?.systemPrompt, options?.sessionId, options?.cwd,
-      { allowedTools: options?.allowedTools, addDirs: options?.addDirs },
+      { allowedTools: options?.allowedTools, addDirs: options?.addDirs, permissionMode: options?.permissionMode },
     );
 
     // Reset message ID accumulator for this turn
@@ -306,7 +306,7 @@ export class ClaudeCLIProvider implements Provider {
     systemPrompt?: string | null,
     sessionId?: string | null,
     cwd?: string | null,
-    overrides?: { allowedTools?: string[]; addDirs?: string[] },
+    overrides?: { allowedTools?: string[]; addDirs?: string[]; permissionMode?: string | null },
   ): Promise<ClaudeProcessManager> {
     const key = chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
@@ -323,6 +323,7 @@ export class ClaudeCLIProvider implements Provider {
       systemPrompt: systemPrompt ?? this.systemPrompt,
       cwd: cwd ?? this.cwd,
       resumeSessionId: sessionId,
+      permissionMode: overrides?.permissionMode ?? null,
     });
     await mgr.start();
 

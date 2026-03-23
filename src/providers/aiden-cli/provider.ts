@@ -248,7 +248,7 @@ export class AidenCLIProvider implements Provider {
       prompt,
       "--stream-json",
       "--one-shot",
-      "--permission-mode", "agentFull",
+      "--permission-mode", options?.permissionMode ?? "agentFull",
       "--add-dir", join(homedir(), ".remi"),
     ];
 
