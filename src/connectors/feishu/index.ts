@@ -127,18 +127,28 @@ export class FeishuConnector implements Connector {
   private _streamHandler: StreamingHandler | null = null;
   private _tokenProvider: TokenProvider | null = null;
 
-  /** Active streaming sessions keyed by chatId (for /esc abort). */
+  /** Active streaming sessions keyed by sessionKey (chatId + thread context, for /esc abort). */
   private _activeSessions = new Map<string, FeishuStreamingSession>();
 
   /** Callback to kill the CLI process on /esc (set by Remi core via setAbortHandler). */
-  private _abortHandler: ((chatId: string) => Promise<void>) | null = null;
+  private _abortHandler: ((sessionKey: string) => Promise<void>) | null = null;
 
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
   }
 
-  /** Register a handler that kills the CLI process for a given chatId. */
-  setAbortHandler(handler: (chatId: string) => Promise<void>): void {
+  /**
+   * Derive session key from a Feishu message, mirroring core._resolveSessionKey().
+   * Group threads use chatId:thread:rootId; new group @mentions use chatId:thread:messageId; P2P uses chatId.
+   */
+  private _resolveSessionKey(msg: ParsedFeishuMessage): string {
+    if (msg.rootId) return `${msg.chatId}:thread:${msg.rootId}`;
+    if (msg.chatType === "group") return `${msg.chatId}:thread:${msg.messageId}`;
+    return msg.chatId;
+  }
+
+  /** Register a handler that kills the CLI process for a given sessionKey. */
+  setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
     this._abortHandler = handler;
   }
 
@@ -217,17 +227,18 @@ export class FeishuConnector implements Connector {
       // so the provider's `await promise` unblocks and the lane lock can be released.
       rejectAllPendingActions("User sent /esc");
 
-      const session = this._activeSessions.get(msg.chatId);
+      const sessionKey = this._resolveSessionKey(msg);
+      const session = this._activeSessions.get(sessionKey);
       if (session && session.isActive()) {
-        log.info(`/esc received from ${msg.senderOpenId} — aborting active session in ${msg.chatId}`);
+        log.info(`/esc received from ${msg.senderOpenId} — aborting active session "${sessionKey}"`);
         await session.abort();
         // Also kill the underlying CLI process
         if (this._abortHandler) {
-          await this._abortHandler(msg.chatId).catch((e) =>
+          await this._abortHandler(sessionKey).catch((e) =>
             log.warn(`abort handler failed: ${String(e)}`));
         }
       } else {
-        log.info(`/esc received but no active session in ${msg.chatId}`);
+        log.info(`/esc received but no active session for "${sessionKey}"`);
       }
       return;
     }
@@ -302,14 +313,15 @@ export class FeishuConnector implements Connector {
         // Non-critical: skip typing indicator if it fails
       }
 
-      // If there's an active session for this chat (previous message still processing),
+      // If there's an active session for this topic (previous message still processing),
       // reject any pending interactive actions to unblock the lane lock.
       // This handles the P2P case where user sends a new message instead of clicking the form.
-      const existingSession = this._activeSessions.get(msg.chatId);
+      const sessionKey = this._resolveSessionKey(msg);
+      const existingSession = this._activeSessions.get(sessionKey);
       if (existingSession && existingSession.isActive()) {
         const rejected = rejectPendingActionsForChat(msg.chatId, "New message received, cancelling pending interaction");
         if (rejected > 0) {
-          log.info(`Cancelled ${rejected} pending action(s) for chat ${msg.chatId} — new message takes priority`);
+          log.info(`Cancelled ${rejected} pending action(s) for session "${sessionKey}" — new message takes priority`);
         }
       }
 
@@ -320,7 +332,7 @@ export class FeishuConnector implements Connector {
 
       // Use real streaming if streamHandler is available
       if (this._streamHandler) {
-        await this._handleStreaming(incoming, msg.chatId, replyToId);
+        await this._handleStreaming(incoming, msg.chatId, sessionKey, replyToId);
       } else {
         // Fallback: blocking handler → static card
         const response = await this._handler(incoming);
@@ -353,6 +365,7 @@ export class FeishuConnector implements Connector {
   private async _handleStreaming(
     incoming: IncomingMessage,
     chatId: string,
+    sessionKey: string,
     replyToMessageId?: string,
   ): Promise<void> {
     const creds = {
@@ -365,8 +378,8 @@ export class FeishuConnector implements Connector {
       tokenProvider: this._tokenProvider ?? undefined,
     });
 
-    // Register active session for /esc abort
-    this._activeSessions.set(chatId, session);
+    // Register active session for /esc abort (keyed by sessionKey to isolate topics)
+    this._activeSessions.set(sessionKey, session);
 
     let thinkingText = "";
     let contentText = "";
@@ -648,7 +661,7 @@ export class FeishuConnector implements Connector {
         }
       } finally {
         // Unregister active session
-        this._activeSessions.delete(chatId);
+        this._activeSessions.delete(sessionKey);
       }
     });
   }
