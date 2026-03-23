@@ -1,13 +1,46 @@
 /**
  * SQLite singleton with sqlite-vec extension.
  * DB file: ~/.remi/remi.db
+ *
+ * macOS ships a custom SQLite that disables extension loading.
+ * We use Database.setCustomSQLite() to load a vanilla build that supports it.
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import * as sqliteVec from "sqlite-vec";
+
+// macOS ships a proprietary SQLite build that disables extension loading.
+// Load a vanilla SQLite that supports loadExtension() when on Darwin.
+if (process.platform === "darwin") {
+  const envPath = process.env.SQLITE_LIB_PATH;
+  const candidates = envPath
+    ? [envPath]
+    : [
+        "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+        "/opt/miniconda3/lib/libsqlite3.dylib",
+        "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
+      ];
+
+  for (const p of candidates) {
+    if (statSync(p, { throwIfNoEntry: false })) {
+      try {
+        Database.setCustomSQLite(p);
+        break;
+      } catch {
+        // incompatible arch or other issue, try next
+      }
+    }
+  }
+}
+
+let sqliteVec: { load: (db: Database) => void } | null = null;
+try {
+  sqliteVec = require("sqlite-vec");
+} catch {
+  // sqlite-vec native binary not available — vector features disabled
+}
 
 const DB_PATH = join(homedir(), ".remi", "remi.db");
 
@@ -26,8 +59,16 @@ export function getDb(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
-  // Load sqlite-vec extension
-  sqliteVec.load(db);
+  // Load sqlite-vec extension (graceful degradation if unsupported)
+  let vecEnabled = false;
+  if (sqliteVec) {
+    try {
+      sqliteVec.load(db);
+      vecEnabled = true;
+    } catch (err) {
+      console.warn(`[db] sqlite-vec load failed (vector search disabled): ${(err as Error).message}`);
+    }
+  }
 
   // Create tables
   db.exec(`
@@ -79,12 +120,13 @@ export function getDb(): Database {
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)
-  // CREATE VIRTUAL TABLE is not idempotent, so check first
-  const exists = db.query(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'"
-  ).get();
-  if (!exists) {
-    db.exec("CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[1024])");
+  if (vecEnabled) {
+    const exists = db.query(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='vec_items'"
+    ).get();
+    if (!exists) {
+      db.exec("CREATE VIRTUAL TABLE vec_items USING vec0(embedding float[1024])");
+    }
   }
 
   // ── Migrations: add new columns to conversations if missing ──
