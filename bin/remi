@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Remi CLI entry point (installed by install.sh)
+REMI_HOME="${REMI_HOME:-$HOME/.remi}"
+exec bun run "$REMI_HOME/dist/remi.bundle.js" "$@"
