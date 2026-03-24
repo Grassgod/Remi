@@ -35,3 +35,4 @@ remi-jarvis-*.png
 .mcp.json
 
 .claude/CLAUDE.md
+.claude/settings.local.json
