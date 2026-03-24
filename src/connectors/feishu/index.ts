@@ -582,6 +582,7 @@ export class FeishuConnector implements Connector {
               // Register action: on resolve, send answers as new user message to CLI
               // Capture replyToMessageId for group chat thread context
               const capturedReplyTo = replyToMessageId;
+              const capturedSessionKey = sessionKey;
               const actionId = registerPendingAction(
                 (answers) => {
                   const answerMap = answers as Record<string, string>;
@@ -592,6 +593,7 @@ export class FeishuConnector implements Connector {
                   this._handleStreaming(
                     { ...incoming, text: answerText },
                     chatId,
+                    capturedSessionKey,
                     capturedReplyTo,
                   ).catch((e) => log.error(`Failed to relay AskUserQuestion answer: ${e}`));
                 },
@@ -603,6 +605,7 @@ export class FeishuConnector implements Connector {
               log.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
             } else if (denial.toolName === "ExitPlanMode") {
               const capturedReplyTo = replyToMessageId;
+              const capturedSessionKey = sessionKey;
               const actionId = registerPendingAction(
                 (rawDecision) => {
                   // Form submits { decision: "approved"|"rejected"|"feedback", feedback_text?: string }
@@ -625,6 +628,7 @@ export class FeishuConnector implements Connector {
                   this._handleStreaming(
                     { ...incoming, text: decisionText },
                     chatId,
+                    capturedSessionKey,
                     capturedReplyTo,
                   ).catch((e) => log.error(`Failed to relay ExitPlanMode decision: ${e}`));
                 },
