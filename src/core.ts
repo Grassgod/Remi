@@ -602,7 +602,7 @@ export class Remi {
         if (chatType === "group") {
           return { text: "群聊 provider 请在 remi.toml 的 [[bots]] 配置中修改。" };
         }
-        const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim().toLowerCase();
+        const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
 
         if (!args) {
           // Show current state + available options
@@ -626,7 +626,8 @@ export class Remi {
         }
 
         // Parse provider:mode (e.g. "claude:plan", "aiden", "claude")
-        const [providerAlias, modeArg] = args.includes(":") ? args.split(":", 2) : [args, undefined];
+        const [rawAlias, modeArg] = args.includes(":") ? args.split(":", 2) : [args, undefined];
+        const providerAlias = rawAlias.toLowerCase();
 
         // Resolve provider name
         const PROVIDER_ALIASES: Record<string, string> = { claude: "claude_cli", aiden: "aiden_cli" };
