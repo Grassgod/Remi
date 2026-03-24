@@ -18,6 +18,7 @@ import type { BotProfile, RemiConfig } from "./config.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
+import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
@@ -81,6 +82,7 @@ export class Remi {
   private _connectors: Connector[] = [];
   _sessions = new Map<string, string>(); // sessionKey → sessionId
   _sessionCwd = new Map<string, string>(); // sessionKey → project cwd
+  _sessionProvider = new Map<string, string>(); // sessionKey → providerName (P2P override)
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
   private _sessDirty = false;
@@ -283,7 +285,16 @@ export class Remi {
       addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
     };
 
-    const provider = this._getProvider();
+    // Provider selection:
+    // 1. Group → BotProfile.provider (static config)
+    // 2. P2P → _sessionProvider (user switched via /switch or bot menu)
+    // 3. Default → config.provider.name
+    const providerName =
+      botProfile?.provider                             // group-level config
+      ?? this._sessionProvider.get(sessionKey)         // P2P user choice
+      ?? null;                                         // fall through to default
+    const provider = this._getProvider(providerName);
+
     if (typeof provider.sendStream !== "function") {
       throw new Error(`Provider "${provider.name}" does not support streaming`);
     }
@@ -556,7 +567,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p", "context"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "p", "context", "switch"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -581,6 +592,32 @@ export class Remi {
           await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
         }
         return { text: "上下文已清除，开始新对话。" };
+      }
+      case "switch": {
+        const chatType = msg.metadata?.chatType as string | undefined;
+        if (chatType === "group") {
+          return { text: "群聊 provider 请在 remi.toml 的 [[bots]] 配置中修改。" };
+        }
+        const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+        const target = args.toLowerCase();
+        const providerName = target === "aiden" ? "aiden_cli" : target === "claude" ? "claude_cli" : target;
+        if (!this._providers.has(providerName)) {
+          const available = [...this._providers.keys()].join(", ");
+          return { text: `Provider "${target}" 不可用。可选: ${available}` };
+        }
+        // Clear old session (sessionId is provider-specific, not portable)
+        const oldProviderName = this._sessionProvider.get(sessionKey);
+        if (oldProviderName) {
+          const oldProvider = this._providers.get(oldProviderName);
+          if (oldProvider && "clearSession" in oldProvider && typeof (oldProvider as any).clearSession === "function") {
+            await (oldProvider as any).clearSession(sessionKey);
+          }
+        }
+        this._sessions.delete(sessionKey);
+        this._sessionProvider.set(sessionKey, providerName);
+        this._scheduleSessFlush();
+        const label = providerName === "aiden_cli" ? "Aiden" : "Claude Code";
+        return { text: `已切换到 ${label}，新对话开始。` };
       }
       case "restart": {
         // Delay restart so the response gets sent first
@@ -741,7 +778,7 @@ export class Remi {
     }
     remi.authStore = authStore;
 
-    // 2. Providers
+    // 2. Providers — register primary + fallback + secondary providers
     const provider = Remi._buildProvider(config);
     remi.addProvider(provider);
 
@@ -751,6 +788,17 @@ export class Remi {
         remi.addProvider(fallback);
       } catch (e) {
         log.warn("Failed to build fallback provider:", e);
+      }
+    }
+
+    // Always try to register aiden_cli as secondary (for /switch support)
+    if (!remi._providers.has("aiden_cli")) {
+      try {
+        const aiden = Remi._buildProvider(config, "aiden_cli");
+        remi.addProvider(aiden);
+        log.info("Aiden CLI provider registered (secondary, for /switch)");
+      } catch (e) {
+        log.debug("Aiden CLI not available:", (e as Error).message);
       }
     }
 
@@ -811,6 +859,13 @@ export class Remi {
         model: config.provider.model,
         timeout: config.provider.timeout,
         allowedTools: config.provider.allowedTools,
+        cwd: homedir(),
+      });
+    }
+    if (n === "aiden_cli") {
+      return new AidenCLIProvider({
+        model: config.provider.model,
+        timeout: config.provider.timeout,
         cwd: homedir(),
       });
     }
@@ -923,7 +978,7 @@ export class Remi {
     try {
       if (!existsSync(this.config.sessionsFile)) return;
       const raw = readFileSync(this.config.sessionsFile, "utf-8");
-      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; savedAt?: number };
+      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; providerMap?: [string, string][]; savedAt?: number };
       if (!data.entries || !Array.isArray(data.entries)) return;
       if (data.savedAt && Date.now() - data.savedAt > SESSION_TTL_MS) {
         log.info("Persisted sessions expired (>7d), discarding");
@@ -937,7 +992,12 @@ export class Remi {
           this._sessionCwd.set(key, cwd);
         }
       }
-      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s)`);
+      if (Array.isArray(data.providerMap)) {
+        for (const [key, provider] of data.providerMap) {
+          this._sessionProvider.set(key, provider);
+        }
+      }
+      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s), ${this._sessionProvider.size} provider override(s)`);
     } catch (e) {
       log.warn("Failed to load sessions file:", e);
     }
@@ -968,6 +1028,7 @@ export class Remi {
       const data = {
         entries: [...this._sessions.entries()],
         cwdMap: [...this._sessionCwd.entries()],
+        providerMap: [...this._sessionProvider.entries()],
         savedAt: Date.now(),
       };
       writeFileSync(this.config.sessionsFile, JSON.stringify(data), "utf-8");

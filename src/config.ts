@@ -128,6 +128,8 @@ export interface BotProfile {
   replyMode: "thread" | "direct";
   /** Override system prompt. Empty = use default. */
   systemPrompt: string;
+  /** Provider override for this group. e.g. "claude_cli" | "aiden_cli". Unset = global default. */
+  provider?: string;
 }
 
 export interface ByteDanceSSOConfig {
@@ -448,6 +450,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       addDirs: (b.add_dirs as string[]) ?? [],
       replyMode: ((b.reply_mode as string) ?? "direct") as BotProfile["replyMode"],
       systemPrompt: (b.system_prompt as string) ?? "",
+      provider: (b.provider as string) || undefined,
     })),
     botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData
