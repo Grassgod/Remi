@@ -1,6 +1,6 @@
 {
   "name": "remi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Remi - Personal AI Assistant",
   "type": "module",
   "bin": {
@@ -9,7 +9,9 @@
   "scripts": {
     "start": "bun run src/main.ts",
     "serve": "bun run src/main.ts serve",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "bun run scripts/build.ts",
+    "build:dev": "bun run scripts/build.ts --skip-obfuscate"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
@@ -20,6 +22,7 @@
     "sqlite-vec": "^0.1.7-alpha.2"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "javascript-obfuscator": "^4.1.1"
   }
 }
