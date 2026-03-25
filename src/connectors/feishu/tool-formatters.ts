@@ -178,7 +178,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   },
 
   Bash: (input) => {
-    const cmd = truncate(str(input.command), MAX_INPUT_LINE);
+    const cmd = truncate(shortPath(str(input.command)), MAX_INPUT_LINE);
     return `\`$ ${cmd}\``;
   },
 
@@ -190,7 +190,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   },
 
   Glob: (input) => {
-    const pattern = str(input.pattern);
+    const pattern = shortPath(str(input.pattern));
     const path = input.path ? ` in \`${shortPath(str(input.path))}\`` : "";
     return `\`${pattern}\`${path}`;
   },
