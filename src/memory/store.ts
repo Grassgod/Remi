@@ -20,7 +20,7 @@ import {
   realpathSync,
   symlinkSync,
 } from "node:fs";
-import { join, relative, dirname, basename, resolve } from "node:path";
+import { join, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
 import type { VectorStore } from "../db/vector-store.js";
@@ -33,7 +33,6 @@ const PLURAL_MAP: Record<string, string> = {
   child: "children",
 };
 
-export const CONTEXT_WARN_THRESHOLD = 6000;
 
 interface IndexEntry {
   type: string;
@@ -621,28 +620,14 @@ ${candidateTexts}`);
     return lines.join("\n");
   }
 
-  // ── 3. Manifest/TOC context assembly ──────────────────────
+  // ── 3. Context (removed — Claude Code loads CLAUDE.md + MEMORY.md natively) ──
 
-  gatherContext(cwd?: string | null): string {
-    this._ensureInitialized();
-    let context = this._assemble(cwd ?? null);
-    if (context.length > CONTEXT_WARN_THRESHOLD) {
-      log.warn(
-        `记忆上下文 ${context.length} 字符（阈值：${CONTEXT_WARN_THRESHOLD}）`,
-      );
-      context +=
-        `\n\n⚠️ 当前上下文 ${context.length} 字符（阈值：${CONTEXT_WARN_THRESHOLD}），` +
-        "建议用 recall 替代全文加载，或精简 MEMORY.md 的 ## 近期焦点 章节。";
-    }
-    return context;
-  }
-
-  /** Sections always injected into context (identity + behavioral constraints) */
+  /** Sections considered "core" identity — not returned by recall as extended sections. */
   private static CORE_SECTIONS = new Set(["关于主人", "用户偏好"]);
 
   /**
-   * Parse MEMORY.md into sections. Returns core (always injected) and
-   * extended (available via recall, listed in manifest) parts.
+   * Parse MEMORY.md into sections. Returns core (identity) and
+   * extended (searchable via recall) parts.
    */
   private _splitMemorySections(content: string): {
     core: string;
@@ -661,7 +646,6 @@ ${candidateTexts}`);
       } else if (current) {
         current.body.push(line);
       } else {
-        // Lines before any ## heading (e.g. "# 个人记忆")
         preamble.push(line);
       }
     }
@@ -684,57 +668,6 @@ ${candidateTexts}`);
     return { core: coreLines.join("\n").trim(), extended };
   }
 
-  private _assemble(cwd: string | null): string {
-    const parts: string[] = [];
-
-    // 1. Personal global memory — only core sections injected
-    const globalMemory = join(this.root, "MEMORY.md");
-    if (existsSync(globalMemory)) {
-      const content = readFileSync(globalMemory, "utf-8");
-      if (content.trim()) {
-        const { core } = this._splitMemorySections(content);
-        if (core) {
-          parts.push(`# 个人记忆\n${core}`);
-        }
-      }
-    }
-
-    // 2. Project + module memory (both loaded when they differ)
-    const projectRoot = cwd ? this._projectRoot(cwd) : null;
-    const currentMemory = cwd ? join(cwd, ".remi", "memory.md") : null;
-    const rootMemory = projectRoot
-      ? join(projectRoot, ".remi", "memory.md")
-      : null;
-
-    // 2a. Project root memory
-    if (
-      rootMemory &&
-      existsSync(rootMemory) &&
-      resolve(rootMemory) !== resolve(currentMemory ?? "")
-    ) {
-      parts.push(
-        `# 项目记忆 (${basename(projectRoot!)})\n${readFileSync(rootMemory, "utf-8")}`,
-      );
-    }
-
-    // 2b. Current module memory (sub-project level)
-    if (currentMemory && existsSync(currentMemory)) {
-      const label = basename(cwd!);
-      parts.push(
-        `# 当前模块记忆 (${label})\n${readFileSync(currentMemory, "utf-8")}`,
-      );
-    }
-
-    // 3. Today's daily log — not injected into context (available via recall)
-
-    // 4. Manifest
-    const manifest = this._buildManifest(cwd);
-    if (manifest) {
-      parts.push(manifest);
-    }
-
-    return parts.length > 0 ? parts.join("\n\n---\n\n") : "";
-  }
 
   _projectRoot(cwd: string): string | null {
     let p = resolve(cwd);
@@ -750,96 +683,6 @@ ${candidateTexts}`);
     return root;
   }
 
-  _buildManifest(cwd?: string | null): string {
-    const rows: Array<{ source: string; name: string; summary: string }> = [];
-
-    // 1. Project .remi/memory.md files
-    const projectRoot = cwd ? this._projectRoot(cwd) : null;
-    const currentMemory = cwd ? join(cwd, ".remi", "memory.md") : null;
-    if (projectRoot) {
-      this._findRemiMemoryFiles(projectRoot, (mdFile) => {
-        if (currentMemory && mdFile === currentMemory) return;
-        if (
-          !(currentMemory && existsSync(currentMemory)) &&
-          mdFile === join(projectRoot, ".remi", "memory.md")
-        ) {
-          return;
-        }
-        const summary = this._readFirstLine(mdFile);
-        const rel = relative(projectRoot, mdFile);
-        const source =
-          dirname(dirname(mdFile)) === projectRoot ? "项目记忆" : "模块记忆";
-        rows.push({ source, name: rel, summary });
-      });
-    }
-
-    // 2. Extended memory sections removed in v3 — use recall instead
-
-    // 3. Entity directory — top 10 by activity score
-    const scored = [...this._index.entries()].map(([path, meta]) => {
-      const daysSince = meta.lastAccessed
-        ? (Date.now() - new Date(meta.lastAccessed).getTime()) / 86_400_000
-        : 30;
-      const recency = Math.exp(-daysSince / 14);
-      const score = (meta.importance ?? 0.5) * recency + Math.log(Math.max(meta.accessCount ?? 1, 1)) * 0.1;
-      return { path, meta, score };
-    }).sort((a, b) => b.score - a.score);
-
-    const top = scored.slice(0, 10);
-    for (const { meta } of top) {
-      rows.push({
-        source: "实体",
-        name: `${meta.name} (${meta.type})`,
-        summary: meta.summary,
-      });
-    }
-    if (scored.length > 10) {
-      rows.push({
-        source: "实体",
-        name: `+${scored.length - 10} more`,
-        summary: `recall("关键词") 查看`,
-      });
-    }
-
-    // 4. Daily log entry
-    const dailyDir = join(this.root, "daily");
-    if (existsSync(dailyDir)) {
-      const days = readdirSync(dailyDir)
-        .filter((f) => f.endsWith(".md"))
-        .sort()
-        .reverse();
-      if (days.length > 0) {
-        rows.push({
-          source: "日志",
-          name: "daily/",
-          summary: `最近 ${Math.min(days.length, 7)} 天可用，recall("日期或关键词") 查看`,
-        });
-      }
-    }
-
-    if (rows.length === 0) return "";
-    let header = "# 可用记忆（使用 recall 工具查看详情）\n\n";
-    header += "| 来源 | 路径/名称 | 摘要 |\n|------|----------|------|\n";
-    for (const r of rows) {
-      header += `| ${r.source} | ${r.name} | ${r.summary} |\n`;
-    }
-    return header;
-  }
-
-  private _readFirstLine(mdFile: string): string {
-    try {
-      const content = readFileSync(mdFile, "utf-8");
-      for (const line of content.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          return trimmed.replace(/^#+\s*/, "").trim();
-        }
-      }
-      return "";
-    } catch {
-      return "";
-    }
-  }
 
   private _findRemiMemoryFiles(root: string, callback: (path: string) => void): void {
     const remiMemory = join(root, ".remi", "memory.md");

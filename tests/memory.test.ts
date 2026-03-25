@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { MemoryStore, CONTEXT_WARN_THRESHOLD } from "../src/memory/store.js";
+import { MemoryStore } from "../src/memory/store.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-mem-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -313,45 +313,6 @@ describe("Remember", () => {
   });
 });
 
-describe("GatherContext", () => {
-  it("default two layers", () => {
-    const project = join(tmpDir, "myproject");
-    mkdirSync(join(project, ".remi"), { recursive: true });
-    writeFileSync(
-      join(project, ".remi", "memory.md"),
-      "# MyProject — test project\n",
-      "utf-8",
-    );
-    store.writeMemory("# 个人记忆\n\nUser preference: dark mode");
-    const ctx = store.gatherContext(project);
-    expect(ctx).toContain("个人记忆");
-    expect(ctx).toContain("MyProject");
-  });
-
-  it("module layer", () => {
-    const project = join(tmpDir, "myproject");
-    const mod = join(project, "src", "module");
-    mkdirSync(join(project, ".remi"), { recursive: true });
-    writeFileSync(join(project, ".remi", "memory.md"), "# Root project\n", "utf-8");
-    mkdirSync(join(mod, ".remi"), { recursive: true });
-    writeFileSync(join(mod, ".remi", "memory.md"), "# Module memory\n", "utf-8");
-    const ctx = store.gatherContext(mod);
-    expect(ctx).toContain("当前模块记忆");
-    expect(ctx).toContain("Module memory");
-  });
-
-  it("warns on threshold", () => {
-    store.writeMemory("x".repeat(CONTEXT_WARN_THRESHOLD + 100));
-    const ctx = store.gatherContext();
-    expect(ctx).toContain("⚠️");
-  });
-
-  it("returns content for empty context", () => {
-    const freshStore = new MemoryStore(join(tmpDir, "fresh_memory"));
-    const ctx = freshStore.gatherContext();
-    expect(ctx).toContain("个人记忆");
-  });
-});
 
 describe("ProjectRoot", () => {
   it("finds highest layer", () => {
@@ -369,33 +330,6 @@ describe("ProjectRoot", () => {
   });
 });
 
-describe("BuildManifest", () => {
-  it("includes entity summary", () => {
-    store.remember("Alice", "person", "CV expert");
-    const manifest = store._buildManifest();
-    expect(manifest).toContain("Alice");
-    expect(manifest).toContain("实体");
-  });
-
-  it("includes daily entry", () => {
-    store.appendDaily("test log entry", "2026-02-18");
-    const manifest = store._buildManifest();
-    expect(manifest).toContain("日志");
-    expect(manifest).toContain("daily/");
-  });
-
-  it("includes project memory summary", () => {
-    const project = join(tmpDir, "proj");
-    const mod = join(project, "src", "mod");
-    mkdirSync(join(project, ".remi"), { recursive: true });
-    writeFileSync(join(project, ".remi", "memory.md"), "# Project root\n", "utf-8");
-    mkdirSync(join(mod, ".remi"), { recursive: true });
-    writeFileSync(join(mod, ".remi", "memory.md"), "# Module mem\n", "utf-8");
-
-    const manifest = store._buildManifest(mod);
-    expect(manifest).toContain("项目记忆");
-  });
-});
 
 describe("MaintenanceMethods", () => {
   it("creates entity", () => {

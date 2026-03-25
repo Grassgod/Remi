@@ -56,7 +56,6 @@ export type { MediaAttachment } from "./claude-cli/protocol.js";
 /** Common options for send/sendStream. */
 export interface SendOptions {
   systemPrompt?: string | null;
-  context?: string | null;
   cwd?: string | null;
   sessionId?: string | null;
   chatId?: string | null;

@@ -21,11 +21,10 @@ Connector → IncomingMessage → Remi → Provider.send() → AgentResponse →
 ```
 
 **Message flow in Remi._process():**
-1. Assemble memory context via `MemoryStore.gatherContext(cwd)`
-2. Resolve session (chatId → sessionId mapping for multi-turn)
-3. Route to provider (with fallback on failure)
-4. Append interaction to daily journal
-5. Return AgentResponse
+1. Resolve session (chatId → sessionId mapping for multi-turn)
+2. Route to provider (with fallback on failure)
+3. Append interaction to daily journal
+4. Return AgentResponse
 
 **Key interfaces** (in `*/base.ts`):
 - `Provider`: `send()`, `healthCheck()`, `name` — AI backend interface
@@ -35,7 +34,7 @@ Connector → IncomingMessage → Remi → Provider.send() → AgentResponse →
 
 **Connectors**: `CLIConnector` (dev REPL).
 
-**Memory**: Dual-layer markdown files at `~/.remi/memory/`. `MemoryStore` handles read/write with automatic `.versions/` backups. Hierarchical context assembly: root MEMORY.md → project memory.md → today's daily notes.
+**Memory**: Dual-layer markdown files at `~/.remi/memory/`. `MemoryStore` handles read/write with automatic `.versions/` backups. Context is loaded natively by Claude Code via CLAUDE.md + MEMORY.md; recall MCP tool provides on-demand search.
 
 **Scheduler**: Pure async, runs heartbeat (provider health) + daily memory compaction (summarize yesterday's notes → append to long-term memory) + cleanup (old dailies/versions).
 

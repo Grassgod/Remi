@@ -72,10 +72,7 @@ export class AidenCLIProvider implements Provider {
     message: string,
     options?: SendOptions,
   ): AsyncGenerator<StreamEvent> {
-    const context = options?.context;
-    const fullMessage = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
-
-    const cmd = this._buildCommand(fullMessage, options);
+    const cmd = this._buildCommand(message, options);
     const cwd = options?.cwd ?? this.cwd ?? undefined;
     const timeoutMs = (options?.deadlineMs ?? this.timeout * 1000);
     const deadline = Date.now() + timeoutMs;

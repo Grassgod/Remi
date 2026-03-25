@@ -211,14 +211,22 @@ export class Remi {
     let convId: number | null = null;
     const startMs = Date.now();
     try {
+      // Resolve thread_id: rootId if reply, messageId if new group msg, null for P2P
+      const _rootId = msg.metadata?.rootId as string | undefined;
+      const _msgId = msg.metadata?.messageId as string | undefined;
+      const _chatType = msg.metadata?.chatType as string | undefined;
+      const threadId = _rootId ?? (_chatType === "group" ? _msgId : undefined);
+
       convId = insertConversationProcessing({
         chatId: msg.chatId,
         senderId: msg.sender,
         connector: msg.connectorName,
-        messageId: msg.metadata?.messageId as string | undefined,
+        messageId: _msgId,
         cliSessionId: existingSessionId ?? undefined,
         cliCwd: (msg.metadata?.cwd as string) ?? undefined,
         cliRoundStart: new Date().toISOString(),
+        threadId,
+        userMessage: msg.text,
       });
     } catch (e) {
       log.warn("insert conversation (processing) failed:", e);
@@ -263,21 +271,11 @@ export class Remi {
     const botProfile = this._resolveBotProfile(msg);
     const cwd = botProfile?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
-    // Span: memory context assembly
-    const memSpan = traceCtx?.startSpan("memory.assemble", { "session.key": sessionKey, "bot.id": botProfile?.id ?? "" });
-    let context = botProfile ? undefined : (this.memory.gatherContext(cwd) || undefined);
-    memSpan?.end();
-
     const sessRow = sessDb.getSession(sessionKey);
-    // Inject session identity so the model knows "who am I"
-    if (context && sessRow?.display_name) {
-      context = `# Session\n你是「${sessRow.display_name}」。每个飞书话题对应一个独立 session，名称唯一，可通过 /sessions 查看全部。\n\n${context}`;
-    }
     const existingSessionId = sessRow?.session_id || undefined;
     log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
     const streamOptions = {
       systemPrompt: botProfile?.systemPrompt,
-      context: context,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,

@@ -131,9 +131,7 @@ export class ClaudeCLIProvider implements Provider {
     message: string,
     options?: SendOptions,
   ): Promise<AgentResponse> {
-    const context = options?.context;
-    const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
-    return this._sendStreaming(fullPrompt, {
+    return this._sendStreaming(message, {
       systemPrompt: options?.systemPrompt,
       chatId: options?.chatId,
       media: options?.media,
@@ -147,9 +145,6 @@ export class ClaudeCLIProvider implements Provider {
     message: string,
     options?: SendOptions,
   ): AsyncGenerator<StreamEvent> {
-    const context = options?.context;
-    const fullPrompt = context ? `<context>\n${context}\n</context>\n\n${message}` : message;
-
     const mgr = await this._ensureProcess(
       options?.chatId, options?.systemPrompt, options?.sessionId, options?.cwd,
       { allowedTools: options?.allowedTools, addDirs: options?.addDirs, permissionMode: options?.permissionMode },
@@ -168,7 +163,7 @@ export class ClaudeCLIProvider implements Provider {
     const poolKey = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
     for await (const msg of mgr.sendAndStream(
-      fullPrompt,
+      message,
       this._handleToolCall.bind(this),
       options?.media,
     )) {
