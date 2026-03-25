@@ -72,12 +72,14 @@ export async function sendMessageFeishu(
 
 /**
  * Build a Remi branded card header.
- * - sessionId string → deterministic name ("好奇的 Remi")
+ * - displayName string → use as-is (from DB registry)
+ * - sessionId string + no displayName → deterministic name ("好奇的 Remi·Vulpes")
  * - sessionId null → newborn name ("刚醒来的 Remi")
  * - sessionId undefined → plain "Remi" (non-streaming cards)
  */
-export function buildCardHeader(sessionId?: string | null) {
+export function buildCardHeader(sessionId?: string | null, displayName?: string | null) {
   const title =
+    displayName ? displayName :
     sessionId ? getSessionName(sessionId) :
     sessionId === null ? getNewbornName() :
     "Remi";

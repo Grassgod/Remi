@@ -41,8 +41,10 @@ export interface StreamingCloseOptions {
   stats?: string | null;
   /** Sender open ID — if provided, an @mention is embedded in the final card. */
   mentionOpenId?: string;
-  /** Session ID for dynamic card header name (e.g. "好奇的 Remi"). */
+  /** Session ID for dynamic card header name (e.g. "好奇的 Remi·Vulpes"). */
   sessionId?: string | null;
+  /** Display name from DB registry — takes precedence over sessionId-derived name. */
+  displayName?: string | null;
   /** Permission denials from CLI — used to embed AskUserQuestion / ExitPlanMode forms. */
   permissionDenials?: import("../../providers/claude-cli/protocol.js").PermissionDenial[];
   /** Pre-built AskUserQuestion form data (actionId + questions). Set by index.ts after registerPendingAction. */
@@ -323,7 +325,7 @@ export function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    header: buildCardHeader(opts.sessionId),
+    header: buildCardHeader(opts.sessionId, opts.displayName),
     config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
     body: { elements },
   };
@@ -395,14 +397,14 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; sessionId?: string | null },
+    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null },
   ): Promise<void> {
     if (this.state) return;
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
-      header: buildCardHeader(options?.sessionId),
+      header: buildCardHeader(options?.sessionId, options?.displayName),
       config: {
         width_mode: "fill",
         streaming_mode: true,

@@ -411,7 +411,7 @@ export class FeishuConnector implements Connector {
     await this._streamHandler!(incoming, async (stream, meta) => {
       // Start streaming card with session name (existing session → deterministic name, new → newborn)
       try {
-        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId });
+        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName });
       } catch (err) {
         log.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
         if (this._handler) {
@@ -651,6 +651,7 @@ export class FeishuConnector implements Connector {
           stats,
           mentionOpenId,
           sessionId: finalResponse?.sessionId,
+          displayName: meta.displayName,
           askQuestions,
           planReview: planReviewAction,
         });

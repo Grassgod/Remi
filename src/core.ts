@@ -29,6 +29,7 @@ import { MemoryStore } from "./memory/store.js";
 import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
 import { insertConversationProcessing, completeConversation, failConversation } from "./db/index.js";
+import * as sessDb from "./db/sessions.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
@@ -68,8 +69,6 @@ class AsyncLock {
 // System prompt now lives in ~/.remi/soul.md (symlinked to ~/.claude/CLAUDE.md)
 // Claude CLI loads it automatically — no need to inject via --append-system-prompt
 
-/** Max age for persisted sessions — 7 days. */
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class Remi {
   config: RemiConfig;
@@ -81,14 +80,8 @@ export class Remi {
   _symlinkManager: any = null; // SymlinkManager instance
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
-  _sessions = new Map<string, string>(); // sessionKey → sessionId
-  _sessionCwd = new Map<string, string>(); // sessionKey → project cwd
-  _sessionProvider = new Map<string, string>(); // sessionKey → providerName (P2P override)
-  _sessionMode = new Map<string, string>(); // sessionKey → permissionMode (e.g. "plan", "auto")
   private _laneLocks = new Map<string, AsyncLock>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
-  private _sessDirty = false;
-  private _sessFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: RemiConfig) {
     this.config = config;
@@ -104,7 +97,7 @@ export class Remi {
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
     this.traceCollector = new TraceCollector();
     this.queue = new RemiQueueManager(this.memory);
-    this._loadSessions();
+    this._migrateSessionsJson();
   }
 
   // ── Provider management ──────────────────────────────────
@@ -212,7 +205,7 @@ export class Remi {
       "connector.name": msg.connectorName ?? "",
       "message.text": msg.text.slice(0, 200),
     });
-    const existingSessionId = this._sessions.get(sessionKey) ?? null;
+    const existingSessionId = sessDb.getSessionId(sessionKey);
 
     // Phase 1: record "processing" immediately so we know this message exists
     let convId: number | null = null;
@@ -232,7 +225,8 @@ export class Remi {
     }
 
     try {
-      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs), { sessionId: existingSessionId });
+      const existingDisplayName = sessDb.getDisplayName(sessionKey);
+      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs), { sessionId: existingSessionId, displayName: existingDisplayName });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));
@@ -267,14 +261,19 @@ export class Remi {
 
     const sessionKey = this._resolveSessionKey(msg);
     const botProfile = this._resolveBotProfile(msg);
-    const cwd = botProfile?.cwd || this._sessionCwd.get(sessionKey) || (msg.metadata?.cwd as string) || undefined;
+    const cwd = botProfile?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     // Span: memory context assembly
     const memSpan = traceCtx?.startSpan("memory.assemble", { "session.key": sessionKey, "bot.id": botProfile?.id ?? "" });
-    const context = botProfile ? undefined : (this.memory.gatherContext(cwd) || undefined);
+    let context = botProfile ? undefined : (this.memory.gatherContext(cwd) || undefined);
     memSpan?.end();
 
-    const existingSessionId = this._sessions.get(sessionKey) ?? undefined;
+    const sessRow = sessDb.getSession(sessionKey);
+    // Inject session identity so the model knows "who am I"
+    if (context && sessRow?.display_name) {
+      context = `# Session\n你是「${sessRow.display_name}」。每个飞书话题对应一个独立 session，名称唯一，可通过 /sessions 查看全部。\n\n${context}`;
+    }
+    const existingSessionId = sessRow?.session_id || undefined;
     log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
     const streamOptions = {
       systemPrompt: botProfile?.systemPrompt,
@@ -285,16 +284,16 @@ export class Remi {
       media: msg.media,
       allowedTools: botProfile?.allowedTools?.length ? botProfile.allowedTools : undefined,
       addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
-      permissionMode: this._sessionMode.get(sessionKey) ?? undefined,
+      permissionMode: sessRow?.mode ?? undefined,
     };
 
     // Provider selection:
     // 1. Group → BotProfile.provider (static config)
-    // 2. P2P → _sessionProvider (user switched via /switch or bot menu)
+    // 2. P2P → DB session provider (user switched via /switch or bot menu)
     // 3. Default → config.provider.name
     const providerName =
       botProfile?.provider                             // group-level config
-      ?? this._sessionProvider.get(sessionKey)         // P2P user choice
+      ?? sessRow?.provider                             // P2P user choice
       ?? null;                                         // fall through to default
     const provider = this._getProvider(providerName);
 
@@ -382,9 +381,8 @@ export class Remi {
       log.warn(`Prompt too long for "${sessionKey}", auto-resetting session and retrying`);
       providerSpan?.endWithError("prompt_too_long");
 
-      // Clear session mapping
-      this._sessions.delete(sessionKey);
-      this._scheduleSessFlush();
+      // Clear session mapping (keep display_name)
+      sessDb.clearSessionId(sessionKey);
 
       // Kill the old process so a fresh one is spawned on retry
       if ("clearSession" in provider && typeof provider.clearSession === "function") {
@@ -411,8 +409,7 @@ export class Remi {
       log.warn(`Stale session for "${sessionKey}" (sessionId=${existingSessionId}), auto-resetting and retrying`);
       providerSpan?.endWithError("stale_session");
 
-      this._sessions.delete(sessionKey);
-      this._scheduleSessFlush();
+      sessDb.clearSessionId(sessionKey);
 
       if ("clearSession" in provider && typeof provider.clearSession === "function") {
         await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
@@ -479,9 +476,8 @@ export class Remi {
     // Update session + daily notes
     if (resultResponse) {
       if (resultResponse.sessionId) {
-        this._sessions.set(sessionKey, resultResponse.sessionId);
-        log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..."`);
-        this._scheduleSessFlush();
+        const displayName = sessDb.upsertSession(sessionKey, resultResponse.sessionId);
+        log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..." (${displayName})`);
       }
       this.memory.appendDaily(
         `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
@@ -570,7 +566,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "switch"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "switch", "sessions"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -587,9 +583,8 @@ export class Remi {
     switch (name) {
       case "clear":
       case "new": {
-        this._sessions.delete(sessionKey);
-        this._sessionMode.delete(sessionKey);
-        this._scheduleSessFlush();
+        sessDb.clearSessionId(sessionKey);
+        sessDb.updateSessionMode(sessionKey, null);
         // Also clear the underlying provider's conversation context
         const provider = this._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
@@ -606,8 +601,9 @@ export class Remi {
 
         if (!args) {
           // Show current state + available options
-          const curProvider = this._sessionProvider.get(sessionKey) ?? this.config.provider.name;
-          const curMode = this._sessionMode.get(sessionKey) ?? (curProvider === "aiden_cli" ? "agentFull" : "bypass");
+          const switchSessRow = sessDb.getSession(sessionKey);
+          const curProvider = switchSessRow?.provider ?? this.config.provider.name;
+          const curMode = switchSessRow?.mode ?? (curProvider === "aiden_cli" ? "agentFull" : "bypass");
           const curLabel = curProvider === "aiden_cli" ? "Aiden" : "Claude";
           const lines = [
             `当前: **${curLabel} · ${curMode}**`,
@@ -652,7 +648,7 @@ export class Remi {
           return { text: `模式 "${modeArg}" 对 ${providerAlias} 不可用。可选: ${[...validModes].join(", ")}` };
         }
 
-        const curProviderName = this._sessionProvider.get(sessionKey) ?? this.config.provider.name;
+        const curProviderName = sessDb.getSession(sessionKey)?.provider ?? this.config.provider.name;
         const providerChanged = curProviderName !== providerName;
 
         if (providerChanged) {
@@ -661,25 +657,20 @@ export class Remi {
           if (oldProvider && "clearSession" in oldProvider && typeof (oldProvider as any).clearSession === "function") {
             await (oldProvider as any).clearSession(sessionKey);
           }
-          this._sessions.delete(sessionKey);
-          this._sessionProvider.set(sessionKey, providerName);
+          sessDb.clearSessionId(sessionKey);
+          sessDb.updateSessionProvider(sessionKey, providerName);
         } else {
           // Same provider, mode change only — kill process but keep sessionId for resume
           const provider = this._providers.get(providerName);
           if (provider && "clearSession" in provider && typeof (provider as any).clearSession === "function") {
             await (provider as any).clearSession(sessionKey);
           }
-          // Don't delete _sessions — preserve sessionId for --resume
+          // Don't clear session — preserve sessionId for --resume
         }
 
         // Store mode (or clear if default)
         const isDefaultMode = (isClaude && mode === "bypassPermissions") || (!isClaude && mode === "agentFull");
-        if (isDefaultMode) {
-          this._sessionMode.delete(sessionKey);
-        } else {
-          this._sessionMode.set(sessionKey, mode);
-        }
-        this._scheduleSessFlush();
+        sessDb.updateSessionMode(sessionKey, isDefaultMode ? null : mode);
 
         const providerLabel = isClaude ? "Claude" : "Aiden";
         const modeLabel = isDefaultMode ? (isClaude ? "Bypass" : "AgentFull") : mode;
@@ -700,7 +691,7 @@ export class Remi {
 
         if (!arg) {
           // Show current project + list
-          const currentCwd = this._sessionCwd.get(sessionKey);
+          const currentCwd = sessDb.getSession(sessionKey)?.cwd ?? undefined;
           const projects = this.config.projects;
           const aliases = Object.keys(projects);
           const lines = [`📍 当前: ${currentCwd ?? "~ (默认)"}`];
@@ -716,10 +707,40 @@ export class Remi {
           return { text: lines.join("\n") };
         }
 
+        if (arg.startsWith("init ")) {
+          const initSlug = arg.slice(5).trim();
+          if (!initSlug) return { text: "用法: `/project init <slug>` — 例如 `/project init larkparser-ts`" };
+
+          // Check if already registered
+          if (this.config.projects[initSlug]) {
+            const existingPath = typeof this.config.projects[initSlug] === "string"
+              ? this.config.projects[initSlug]
+              : (this.config.projects[initSlug] as any)?.cwd ?? "";
+            return { text: `项目 \`${initSlug}\` 已注册: ${existingPath}\n看板: http://10.37.66.8:8090/board/${initSlug}` };
+          }
+
+          // Use current session cwd or default home
+          const initCwd = sessDb.getSession(sessionKey)?.cwd ?? homedir();
+          // Register in config (runtime only — user should persist to remi.toml)
+          this.config.projects[initSlug] = initCwd;
+
+          const lines = [
+            `✅ 项目 **${initSlug}** 已初始化`,
+            `- 目录: ${initCwd}`,
+            `- 看板: http://10.37.66.8:8090/board/${initSlug}`,
+            "",
+            "请在 remi.toml 中持久化配置:",
+            "```toml",
+            `[projects]`,
+            `${initSlug} = "${initCwd}"`,
+            "```",
+          ];
+          return { text: lines.join("\n") };
+        }
+
         if (arg === "reset") {
-          this._sessionCwd.delete(sessionKey);
-          this._sessions.delete(sessionKey);
-          this._scheduleSessFlush();
+          sessDb.updateSessionCwd(sessionKey, null);
+          sessDb.clearSessionId(sessionKey);
           const provider = this._getProvider();
           if ("clearSession" in provider && typeof provider.clearSession === "function") {
             await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
@@ -742,9 +763,8 @@ export class Remi {
 
         // Kill old process, bind new cwd
         this._symlinkManager?.ensureForCwd(targetPath);
-        this._sessionCwd.set(sessionKey, targetPath);
-        this._sessions.delete(sessionKey);
-        this._scheduleSessFlush();
+        sessDb.updateSessionCwd(sessionKey, targetPath);
+        sessDb.clearSessionId(sessionKey);
         const provider = this._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
           await (provider as Provider & { clearSession: (chatId?: string) => Promise<void> }).clearSession(sessionKey);
@@ -758,26 +778,40 @@ export class Remi {
         // Forward /context to CLI to get detailed context usage breakdown
         const provider = this._getProvider();
         try {
-          const resp = await provider.send("/context", { chatId: sessionKey, sessionId: this._sessions.get(sessionKey) ?? undefined });
+          const resp = await provider.send("/context", { chatId: sessionKey, sessionId: sessDb.getSessionId(sessionKey) ?? undefined });
           return { text: resp.text || "无法获取 context 信息" };
         } catch {
           return { text: "无法获取 context 信息，当前会话可能未启动。" };
         }
       }
+      case "sessions": {
+        const allActive = sessDb.listActiveSessions();
+        if (allActive.length === 0) {
+          return { text: "当前无活跃 session。" };
+        }
+        const lines = [`**活跃 Sessions** (${allActive.length}):`];
+        for (const s of allActive) {
+          const isCurrent = s.session_key === sessionKey;
+          const time = new Date(s.last_active);
+          const hh = String(((time.getUTCHours() + 8) % 24)).padStart(2, "0");
+          const mm = String(time.getUTCMinutes()).padStart(2, "0");
+          lines.push(`  ${s.display_name} | ${hh}:${mm} | ${s.session_id ? s.session_id.slice(0, 8) : "new"}${isCurrent ? " ← 当前" : ""}`);
+        }
+        return { text: lines.join("\n") };
+      }
       case "status": {
-        const hasSession = this._sessions.has(sessionKey);
-        const sessionId = this._sessions.get(sessionKey);
+        const statusRow = sessDb.getSession(sessionKey);
         const providers = [...this._providers.keys()].join(", ");
         const connectors = this._connectors.map((c) => c.name).join(", ");
-        const currentCwd = this._sessionCwd.get(sessionKey);
         const lines = [
           `**Remi Status**`,
-          `- Session: ${hasSession ? sessionId?.slice(0, 12) + "..." : "无"}`,
+          `- Session: ${statusRow?.session_id ? statusRow.session_id.slice(0, 12) + "..." : "无"}`,
+          statusRow?.display_name ? `- Name: ${statusRow.display_name}` : "",
           isThread ? `- Context: Thread (isolated)` : `- Context: Main chat`,
-          currentCwd ? `- Project: ${currentCwd}` : `- Project: ~ (默认)`,
+          statusRow?.cwd ? `- Project: ${statusRow.cwd}` : `- Project: ~ (默认)`,
           `- Providers: ${providers}`,
           `- Connectors: ${connectors}`,
-        ];
+        ].filter(Boolean);
         if (this.authStore) {
           for (const s of this.authStore.status()) {
             const ttl = Math.round((s.expiresAt - Date.now()) / 1000 / 60);
@@ -1028,7 +1062,6 @@ export class Remi {
   }
 
   async stop(): Promise<void> {
-    this.flushSessions();
     flushLogs();
 
     for (const connector of this._connectors) {
@@ -1043,86 +1076,36 @@ export class Remi {
     }
   }
 
-  // ── Session persistence ───────────────────────────────────
+  // ── Session migration (sessions.json → DB) ─────────────────
 
-  /** Load sessions from disk. Discard if older than TTL. */
-  private _loadSessions(): void {
+  /** One-time migration from sessions.json to SQLite. */
+  private _migrateSessionsJson(): void {
     try {
       if (!existsSync(this.config.sessionsFile)) return;
       const raw = readFileSync(this.config.sessionsFile, "utf-8");
-      const data = JSON.parse(raw) as { entries?: [string, string][]; cwdMap?: [string, string][]; providerMap?: [string, string][]; modeMap?: [string, string][]; savedAt?: number };
-      if (!data.entries || !Array.isArray(data.entries)) return;
-      if (data.savedAt && Date.now() - data.savedAt > SESSION_TTL_MS) {
-        log.info("Persisted sessions expired (>7d), discarding");
+      const data = JSON.parse(raw) as sessDb.LegacySessionData;
+      if (!data.entries || !Array.isArray(data.entries) || data.entries.length === 0) return;
+
+      // Check if already migrated (DB has sessions)
+      if (sessDb.listAllSessions().length > 0) {
+        log.info("Sessions already in DB, skipping JSON migration");
         return;
       }
-      for (const [key, id] of data.entries) {
-        this._sessions.set(key, id);
-      }
-      if (Array.isArray(data.cwdMap)) {
-        for (const [key, cwd] of data.cwdMap) {
-          this._sessionCwd.set(key, cwd);
-        }
-      }
-      if (Array.isArray(data.providerMap)) {
-        for (const [key, provider] of data.providerMap) {
-          this._sessionProvider.set(key, provider);
-        }
-      }
-      if (Array.isArray(data.modeMap)) {
-        for (const [key, mode] of data.modeMap) {
-          this._sessionMode.set(key, mode);
-        }
-      }
-      log.info(`Loaded ${data.entries.length} persisted session(s), ${this._sessionCwd.size} cwd mapping(s), ${this._sessionProvider.size} provider override(s), ${this._sessionMode.size} mode override(s)`);
+
+      const count = sessDb.migrateFromJson(data);
+      log.info(`Migrated ${count} session(s) from sessions.json to DB`);
+
+      // Rename old file as backup
+      const { renameSync } = require("node:fs");
+      renameSync(this.config.sessionsFile, this.config.sessionsFile + ".migrated");
+      log.info(`Renamed sessions.json → sessions.json.migrated`);
     } catch (e) {
-      log.warn("Failed to load sessions file:", e);
+      log.warn("Failed to migrate sessions.json:", e);
     }
   }
 
-  /** Schedule a debounced flush (2 s). */
-  private _scheduleSessFlush(): void {
-    this._sessDirty = true;
-    if (this._sessFlushTimer) return;
-    this._sessFlushTimer = setTimeout(() => {
-      this._sessFlushTimer = null;
-      this._flushSessionsSync();
-    }, 2000);
-    if (typeof this._sessFlushTimer.unref === "function") {
-      this._sessFlushTimer.unref();
-    }
-  }
-
-  /** Synchronously write sessions to disk. */
-  private _flushSessionsSync(): void {
-    if (!this._sessDirty) return;
-    this._sessDirty = false;
-    try {
-      const dir = dirname(this.config.sessionsFile);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-      const data = {
-        entries: [...this._sessions.entries()],
-        cwdMap: [...this._sessionCwd.entries()],
-        providerMap: [...this._sessionProvider.entries()],
-        modeMap: [...this._sessionMode.entries()],
-        savedAt: Date.now(),
-      };
-      writeFileSync(this.config.sessionsFile, JSON.stringify(data), "utf-8");
-      log.debug(`Flushed ${data.entries.length} session(s) to disk`);
-    } catch (e) {
-      log.warn("Failed to write sessions file:", e);
-    }
-  }
-
-  /** Flush sessions to disk immediately. Called by stop(). */
-  flushSessions(): void {
-    if (this._sessFlushTimer) {
-      clearTimeout(this._sessFlushTimer);
-      this._sessFlushTimer = null;
-    }
-    this._sessDirty = true;
-    this._flushSessionsSync();
+  /** Get session display name for a session key. */
+  getSessionDisplayName(sessionKey: string): string | null {
+    return sessDb.getDisplayName(sessionKey);
   }
 }

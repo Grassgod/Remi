@@ -7,6 +7,7 @@ import type { IncomingMessage } from "../src/connectors/base.js";
 import type { AgentResponse, Provider, StreamEvent } from "../src/providers/base.js";
 import { createAgentResponse } from "../src/providers/base.js";
 import { Remi } from "../src/core.js";
+import * as sessDb from "../src/db/sessions.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-core-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -163,7 +164,7 @@ describe("RemiCore", () => {
     expect(response.sessionId).toBe("sess-mock");
   });
 
-  it("tracks sessions", async () => {
+  it("tracks sessions in DB", async () => {
     const remi = new Remi(config);
     remi.addProvider(new MockProvider());
     const msg: IncomingMessage = {
@@ -173,7 +174,12 @@ describe("RemiCore", () => {
       connectorName: "cli",
     };
     await remi.handleMessage(msg);
-    expect(remi._sessions.get("test-1")).toBe("sess-mock");
+    expect(sessDb.getSessionId("test-1")).toBe("sess-mock");
+    // display_name should be generated
+    const row = sessDb.getSession("test-1");
+    expect(row).not.toBeNull();
+    expect(row!.display_name).toContain("Remi");
+    expect(row!.display_name).toContain("·"); // has genus separator
   });
 
   it("appends daily note", async () => {
@@ -276,7 +282,7 @@ describe("RemiCore", () => {
       sender: "user",
       connectorName: "feishu",
     });
-    expect(remi._sessions.get("chat-1")).toBe("sess-mock");
+    expect(sessDb.getSessionId("chat-1")).toBe("sess-mock");
 
     // Thread message (has rootId)
     await remi.handleMessage({
@@ -286,11 +292,11 @@ describe("RemiCore", () => {
       connectorName: "feishu",
       metadata: { messageId: "msg-2", rootId: "msg-root-1" },
     });
-    expect(remi._sessions.get("chat-1:thread:msg-root-1")).toBe("sess-mock");
+    expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).toBe("sess-mock");
 
     // Both sessions exist independently
-    expect(remi._sessions.has("chat-1")).toBe(true);
-    expect(remi._sessions.has("chat-1:thread:msg-root-1")).toBe(true);
+    expect(sessDb.getSessionId("chat-1")).not.toBeNull();
+    expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).not.toBeNull();
   });
 
   it("non-thread messages use main session", async () => {
@@ -305,8 +311,7 @@ describe("RemiCore", () => {
       metadata: { messageId: "msg-1" }, // no rootId
     });
 
-    expect(remi._sessions.get("chat-1")).toBe("sess-mock");
-    expect(remi._sessions.size).toBe(1);
+    expect(sessDb.getSessionId("chat-1")).toBe("sess-mock");
   });
 
   it("/clear in thread clears only thread session", async () => {
@@ -330,8 +335,8 @@ describe("RemiCore", () => {
       metadata: { messageId: "msg-2", rootId: "msg-root-1" },
     });
 
-    expect(remi._sessions.has("chat-1")).toBe(true);
-    expect(remi._sessions.has("chat-1:thread:msg-root-1")).toBe(true);
+    expect(sessDb.getSessionId("chat-1")).not.toBeNull();
+    expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).not.toBeNull();
 
     // Clear in thread
     const response = await remi.handleMessage({
@@ -343,9 +348,9 @@ describe("RemiCore", () => {
     });
 
     expect(response.text).toContain("上下文已清除");
-    // Thread session cleared, main session untouched
-    expect(remi._sessions.has("chat-1:thread:msg-root-1")).toBe(false);
-    expect(remi._sessions.has("chat-1")).toBe(true);
+    // Thread session cleared (session_id empty), main session untouched
+    expect(sessDb.getSessionId("chat-1:thread:msg-root-1")).toBeNull();
+    expect(sessDb.getSessionId("chat-1")).not.toBeNull();
   });
 
   it("/status in thread shows thread context", async () => {
@@ -400,15 +405,16 @@ describe("RemiCore", () => {
     });
 
     // Should use the same session key
-    expect(remi._sessions.get("chat-1:thread:root-1")).toBe("sess-mock");
-    // Only 1 thread session created
-    const threadSessions = [...remi._sessions.keys()].filter(k => k.includes(":thread:"));
-    expect(threadSessions.length).toBe(1);
+    expect(sessDb.getSessionId("chat-1:thread:root-1")).toBe("sess-mock");
+    // Display name should be consistent
+    const row = sessDb.getSession("chat-1:thread:root-1");
+    expect(row).not.toBeNull();
+    expect(row!.display_name).toContain("Remi·");
   });
 
-  // ── Session persistence ─────────────────────────────────
+  // ── Session DB persistence ─────────────────────────────
 
-  it("stop flushes sessions to disk", async () => {
+  it("sessions persist in DB after handling message", async () => {
     const remi = new Remi(config);
     remi.addProvider(new MockProvider());
 
@@ -419,20 +425,18 @@ describe("RemiCore", () => {
       connectorName: "cli",
     });
 
-    expect(remi._sessions.get("chat-persist")).toBe("sess-mock");
-    await remi.stop();
-
-    // sessions.json should exist
-    expect(existsSync(config.sessionsFile)).toBe(true);
-    const data = JSON.parse(readFileSync(config.sessionsFile, "utf-8"));
-    expect(data.entries).toBeInstanceOf(Array);
-    const found = data.entries.find((e: [string, string]) => e[0] === "chat-persist");
-    expect(found).toBeTruthy();
-    expect(found[1]).toBe("sess-mock");
+    const row = sessDb.getSession("chat-persist");
+    expect(row).not.toBeNull();
+    expect(row!.session_id).toBe("sess-mock");
+    expect(row!.display_name).toContain("Remi·");
   });
 
-  it("constructor restores sessions from disk", async () => {
-    // Write a sessions file
+  it("migrates sessions.json on first load", async () => {
+    // Clear DB sessions so migration logic triggers
+    const { getDb } = await import("../src/db/index.js");
+    getDb().run("DELETE FROM sessions");
+
+    // Write a legacy sessions file
     const sessData = {
       entries: [["restored-chat", "sess-restored"]],
       savedAt: Date.now(),
@@ -440,22 +444,17 @@ describe("RemiCore", () => {
     writeFileSync(config.sessionsFile, JSON.stringify(sessData), "utf-8");
 
     const remi = new Remi(config);
-    expect(remi._sessions.get("restored-chat")).toBe("sess-restored");
+    const row = sessDb.getSession("restored-chat");
+    expect(row).not.toBeNull();
+    expect(row!.session_id).toBe("sess-restored");
+    expect(row!.display_name).toContain("Remi·");
+
+    // Original file renamed
+    expect(existsSync(config.sessionsFile)).toBe(false);
+    expect(existsSync(config.sessionsFile + ".migrated")).toBe(true);
   });
 
-  it("discards expired sessions file (>7 days)", async () => {
-    const sessData = {
-      entries: [["old-chat", "sess-old"]],
-      savedAt: Date.now() - 8 * 24 * 60 * 60 * 1000, // 8 days ago
-    };
-    writeFileSync(config.sessionsFile, JSON.stringify(sessData), "utf-8");
-
-    const remi = new Remi(config);
-    expect(remi._sessions.has("old-chat")).toBe(false);
-    expect(remi._sessions.size).toBe(0);
-  });
-
-  it("/clear removes session and flushes to disk", async () => {
+  it("/clear clears session_id but keeps display_name", async () => {
     const remi = new Remi(config);
     remi.addProvider(new MockProvider());
 
@@ -466,7 +465,8 @@ describe("RemiCore", () => {
       sender: "user",
       connectorName: "cli",
     });
-    expect(remi._sessions.has("chat-clear")).toBe(true);
+    const nameBefore = sessDb.getDisplayName("chat-clear");
+    expect(nameBefore).not.toBeNull();
 
     // Clear it
     await remi.handleMessage({
@@ -475,12 +475,59 @@ describe("RemiCore", () => {
       sender: "user",
       connectorName: "cli",
     });
-    expect(remi._sessions.has("chat-clear")).toBe(false);
 
-    // Flush and verify
-    await remi.stop();
-    const data = JSON.parse(readFileSync(config.sessionsFile, "utf-8"));
-    const found = data.entries.find((e: [string, string]) => e[0] === "chat-clear");
-    expect(found).toBeUndefined();
+    // session_id cleared but display_name preserved
+    expect(sessDb.getSessionId("chat-clear")).toBeNull();
+    expect(sessDb.getDisplayName("chat-clear")).toBe(nameBefore);
+  });
+
+  // ── Session display name uniqueness ────────────────────
+
+  it("generates unique display names with genus", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    // Create multiple sessions — they should all get unique names
+    for (let i = 0; i < 5; i++) {
+      await remi.handleMessage({
+        text: `Hello ${i}`,
+        chatId: `chat-${i}`,
+        sender: "user",
+        connectorName: "cli",
+      });
+    }
+
+    const names = new Set<string>();
+    for (let i = 0; i < 5; i++) {
+      const name = sessDb.getDisplayName(`chat-${i}`);
+      expect(name).not.toBeNull();
+      expect(names.has(name!)).toBe(false);
+      names.add(name!);
+    }
+  });
+
+  // ── /sessions command ──────────────────────────────────
+
+  it("/sessions lists active sessions", async () => {
+    const remi = new Remi(config);
+    remi.addProvider(new MockProvider());
+
+    await remi.handleMessage({
+      text: "Hello",
+      chatId: "chat-1",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    const response = await remi.handleMessage({
+      text: "/sessions",
+      chatId: "chat-1",
+      sender: "user",
+      connectorName: "cli",
+    });
+
+    expect(response.text).toContain("活跃 Sessions");
+    expect(response.text).toContain("Remi·");
+    expect(response.text).toContain("当前");
   });
 });

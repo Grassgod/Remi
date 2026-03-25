@@ -27,6 +27,8 @@ export type MessageHandler = (msg: IncomingMessage) => Promise<AgentResponse>;
 export interface StreamMeta {
   /** Existing sessionId if resuming, null for brand-new sessions. */
   sessionId?: string | null;
+  /** Display name from session registry (e.g. "好奇的 Remi·Vulpes"). */
+  displayName?: string | null;
 }
 
 export type StreamingHandler = (

@@ -1,14 +1,12 @@
 /**
  * Dynamic session name generator for Feishu card headers.
  *
- * Maps a sessionId to a deterministic Chinese adjective via hash,
- * producing names like "好奇的 Remi", "勇敢的 Remi".
- * Same sessionId always yields the same adjective.
+ * Generates unique names like "好奇的 Remi·Vulpes" by combining
+ * a Chinese adjective with an animal genus name.
+ * Same sessionId always yields the same combination (deterministic hash).
  */
 
 // ── Adjective pool ──────────────────────────────────────────
-// Curated from multiple Chinese adjective sources (funNLP, chinese-dictionary, etc.)
-// All entries are pure text (no emoji) for Feishu card header compatibility.
 
 const ADJECTIVES = [
   // 性格/情感
@@ -46,7 +44,7 @@ const ADJECTIVES = [
 
   // 趣味/网络
   "吃货", "干饭", "贪吃", "嘴馋", "肥宅", "社畜", "打工", "搬砖",
-  "摆烂", "佛系", "躺赢", "欧皇", "非酋", "锦鲤", "幸运", "倒霉",
+  "摆烂", "躺赢", "欧皇", "非酋", "锦鲤", "幸运", "倒霉",
   "倒霉蛋", "幸运星", "小确幸", "暴躁", "炸毛", "抓狂", "崩溃",
   "无语", "震惊", "吃惊", "惊讶", "感动", "泪目", "破防", "emo",
   "丧", "致郁", "治愈", "元气", "满血", "复活", "重生", "觉醒",
@@ -64,7 +62,7 @@ const ADJECTIVES = [
   "山间", "海边", "林中", "云上", "雾里", "雨后", "风中", "日出",
 
   // 食物/味觉
-  "甜甜", "酸酸", "辣辣", "苦涩", "清淡", "浓郁", "香喷喷", "热腾腾",
+  "酸酸", "辣辣", "苦涩", "清淡", "浓郁", "香喷喷", "热腾腾",
   "凉飕飕", "冰凉", "火热", "温热", "滚烫", "冰镇",
 
   // 速度/程度
@@ -75,7 +73,7 @@ const ADJECTIVES = [
   "怕老婆", "妻管严", "耙耳朵", "老好人", "老实人", "铁憨憨", "钢铁直",
   "恋爱脑", "工作狂", "完美主义", "强迫症", "拖延症", "选择困难",
   "路痴", "脸盲", "健忘", "话唠", "毒舌", "嘴硬", "心软", "刀子嘴豆腐心",
-  "外冷内热", "闷骚", "高冷", "反差萌", "腹黑", "傲娇", "病娇",
+  "外冷内热", "闷骚", "反差萌", "腹黑", "病娇",
   "元气满满", "能量爆棚", "战斗力爆表", "满级", "初始化", "待机",
   "充电中", "满电", "低电量", "节能模式", "飞行模式", "静音模式",
 
@@ -98,11 +96,128 @@ const ADJECTIVES = [
 ] as const;
 
 // Deduplicate (some adjectives appear in multiple categories)
-const POOL: readonly string[] = [...new Set(ADJECTIVES)];
+const ADJ_POOL: readonly string[] = [...new Set(ADJECTIVES)];
+
+// ── Animal genus pool ─────────────────────────────────────────
+// ~100 recognizable animal genus/common scientific names.
+// Sorted by charisma. Each name is unique & short for card display.
+
+const GENUS = [
+  // 哺乳类
+  "Vulpes",     // 狐
+  "Felis",      // 猫
+  "Canis",      // 犬
+  "Ursus",      // 熊
+  "Lynx",       // 猞猁
+  "Puma",       // 美洲狮
+  "Lepus",      // 兔
+  "Lutra",      // 水獭
+  "Meles",      // 獾
+  "Cervus",     // 鹿
+  "Equus",      // 马
+  "Capra",      // 山羊
+  "Ovis",       // 绵羊
+  "Ailurus",    // 小熊猫
+  "Mustela",    // 鼬
+  "Martes",     // 貂
+  "Nasua",      // 浣熊
+  "Phoca",      // 海豹
+  "Dugong",     // 儒艮
+  "Koala",      // 考拉 (Phascolarctos 太长)
+  "Panda",      // 大熊猫 (Ailuropoda 太长)
+  "Sorex",      // 鼩鼱
+  "Talpa",      // 鼹鼠
+  "Castor",     // 河狸
+  "Sciurus",    // 松鼠
+  "Marmota",    // 旱獭
+  "Myotis",     // 蝠
+  "Delphi",     // 海豚 (Delphinus 缩写)
+  "Orca",       // 虎鲸
+  "Bison",      // 野牛
+  "Tapirus",    // 貘
+  "Hyena",      // 鬣狗
+  "Lemur",      // 狐猴
+  "Gibbon",     // 长臂猿
+
+  // 鸟类
+  "Corvus",     // 渡鸦
+  "Aquila",     // 鹰
+  "Falco",      // 隼
+  "Pavo",       // 孔雀
+  "Pica",       // 喜鹊
+  "Larus",      // 鸥
+  "Otus",       // 角鸮
+  "Strix",      // 林鸮
+  "Ardea",      // 苍鹭
+  "Parus",      // 山雀
+  "Turdus",     // 鸫
+  "Anas",       // 鸭
+  "Cygnus",     // 天鹅
+  "Grus",       // 鹤
+  "Apus",       // 雨燕
+  "Picus",      // 啄木鸟
+  "Cuculus",    // 杜鹃
+  "Mergus",     // 秋沙鸭
+  "Bubo",       // 雕鸮
+  "Phoeni",     // 火烈鸟 (Phoenicopterus 缩写)
+  "Alcedo",     // 翠鸟
+  "Hirundo",    // 燕
+  "Columba",    // 鸽
+  "Perdix",     // 鹧鸪
+
+  // 爬行/两栖
+  "Gecko",      // 壁虎
+  "Lacerta",    // 蜥蜴
+  "Vipera",     // 蝰蛇
+  "Testudo",    // 陆龟
+  "Rana",       // 蛙
+  "Salamand",   // 蝾螈 (Salamandra 缩写)
+  "Triton",     // 蝾螈属
+  "Iguana",     // 鬣蜥
+  "Draco",      // 飞蜥
+  "Anolis",     // 变色蜥
+
+  // 鱼类
+  "Salmo",      // 鲑鱼
+  "Clupea",     // 鲱鱼
+  "Gadus",      // 鳕鱼
+  "Hippoca",    // 海马 (Hippocampus 缩写)
+  "Beta",       // 斗鱼
+  "Danio",      // 斑马鱼
+  "Syngnath",   // 海龙 (Syngnathus 缩写)
+
+  // 无脊椎
+  "Apis",       // 蜜蜂
+  "Vespa",      // 胡蜂
+  "Bombyx",     // 蚕
+  "Morpho",     // 闪蝶
+  "Papilio",    // 凤蝶
+  "Aranea",     // 蛛
+  "Helix",      // 蜗牛
+  "Sepia",      // 乌贼
+  "Octopus",    // 章鱼
+  "Asteria",    // 海星
+  "Pagurus",    // 寄居蟹
+  "Limulus",    // 鲎
+  "Nautilus",   // 鹦鹉螺
+  "Mantis",     // 螳螂
+  "Gryllus",    // 蟋蟀
+  "Cicada",     // 蝉
+  "Lucanus",    // 锹甲
+  "Dynastes",   // 独角仙
+  "Lampyris",   // 萤火虫
+  "Libella",    // 蜻蜓
+  "Pieris",     // 粉蝶
+  "Vanessa",    // 蛱蝶
+  "Formica",    // 蚂蚁
+  "Scarab",     // 金龟子
+] as const;
+
+const GENUS_POOL: readonly string[] = [...GENUS];
 
 // ── Hash function ───────────────────────────────────────────
 
-/** Simple string hash (FNV-1a inspired, works for any string). */
+/** FNV-1a hash — deterministic for any string. */
 function hashString(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -122,10 +237,36 @@ const NEWBORN = [
 
 // ── Public API ──────────────────────────────────────────────
 
-/** Get a deterministic session name like "好奇的 Remi" from a sessionId. */
+/**
+ * Get a deterministic session name like "好奇的 Remi·Vulpes" from a sessionId.
+ * Uses different bit ranges of the hash for adjective and genus.
+ */
 export function getSessionName(sessionId: string): string {
-  const idx = hashString(sessionId) % POOL.length;
-  return `${POOL[idx]}的 Remi`;
+  const h = hashString(sessionId);
+  const adjIdx = h % ADJ_POOL.length;
+  const genusIdx = Math.floor(h / ADJ_POOL.length) % GENUS_POOL.length;
+  return `${ADJ_POOL[adjIdx]}的 Remi·${GENUS_POOL[genusIdx]}`;
+}
+
+/**
+ * Generate a unique session name. If the default name collides with `existing`,
+ * rehash with increasing salt until unique.
+ */
+export function generateUniqueName(sessionId: string, existing: Set<string>): string {
+  let name = getSessionName(sessionId);
+  if (!existing.has(name)) return name;
+
+  // Collision — rehash with salt
+  for (let salt = 1; salt <= 100; salt++) {
+    const h = hashString(`${sessionId}:${salt}`);
+    const adjIdx = h % ADJ_POOL.length;
+    const genusIdx = Math.floor(h / ADJ_POOL.length) % GENUS_POOL.length;
+    name = `${ADJ_POOL[adjIdx]}的 Remi·${GENUS_POOL[genusIdx]}`;
+    if (!existing.has(name)) return name;
+  }
+
+  // Extremely unlikely fallback — append numeric suffix
+  return `${getSessionName(sessionId)}#${Date.now() % 10000}`;
 }
 
 /** Get a random newborn name for brand-new sessions (no sessionId yet). */
@@ -134,5 +275,7 @@ export function getNewbornName(): string {
   return `${NEWBORN[idx]}的 Remi`;
 }
 
-/** Get the adjective pool size (for debugging/logging). */
-export const POOL_SIZE = POOL.length;
+/** Pool sizes for debugging. */
+export const ADJ_POOL_SIZE = ADJ_POOL.length;
+export const GENUS_POOL_SIZE = GENUS_POOL.length;
+export const COMBO_SIZE = ADJ_POOL.length * GENUS_POOL.length;
