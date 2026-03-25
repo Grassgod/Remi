@@ -67,13 +67,11 @@ export class ClaudeProcessManager {
   private _sessionId: string | null = null;
   private _lock = new AsyncLock();
   private _started = false;
-  private _reader: ReadableStreamDefaultReader<string> | null = null;
+  private _reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  private _decoder: TextDecoder | null = null;
   private _lineBuffer = "";
   /** Dynamic timeout for _readline(), adjusted based on rate limits and tool execution. */
   private _dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
-  /** Count of reader rebuilds in the current sendAndStream() call. */
-  private _readerRebuildCount = 0;
-  private static MAX_READER_REBUILDS = 3;
 
   constructor(options: {
     model?: string | null;
@@ -151,10 +149,9 @@ export class ClaudeProcessManager {
       env,
     });
 
-    // Set up line reader from stdout
-    const decoder = new TextDecoderStream();
-    this._process.stdout.pipeTo(decoder.writable).catch(() => {});
-    this._reader = decoder.readable.getReader();
+    // Read stdout directly — avoids pipeTo(TextDecoderStream) which can break mid-stream
+    this._reader = this._process.stdout.getReader();
+    this._decoder = new TextDecoder();
     this._lineBuffer = "";
 
     // Note: Claude CLI stream-json mode emits the system init message only after
@@ -185,15 +182,23 @@ export class ClaudeProcessManager {
       let builtInToolPending: { toolUseId: string; name: string; t0: number } | null = null;
       // Reset dynamic state for this interaction
       this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
-      this._readerRebuildCount = 0;
+      // Liveness-check retry: allow one extended wait before killing
+      let retriedAfterTimeout = false;
 
       while (true) {
         const line = await this._readline(this._dynamicTimeoutMs);
         if (line === null) {
           // Distinguish timeout/hang from graceful EOF
           if (this._process && !this._process.killed) {
-            log.error("readline returned null while process still alive — possible hang or timeout");
-            // Kill hung process so isAlive returns false and pool will respawn on next message
+            // Liveness check: if process is still alive, give one more chance
+            if (!retriedAfterTimeout && this._process.exitCode === null) {
+              retriedAfterTimeout = true;
+              const extendMs = 5 * 60 * 1000;
+              log.warn(`readline timeout but process alive (pid=${this._process.pid}) — extending ${extendMs / 1000}s`);
+              this._dynamicTimeoutMs = extendMs;
+              continue;
+            }
+            log.error("readline returned null while process still alive — killing hung process");
             this._process.kill();
             yield {
               kind: "error",
@@ -462,6 +467,7 @@ export class ClaudeProcessManager {
     this._process = null;
     this._started = false;
     this._reader = null;
+    this._decoder = null;
   }
 
   // ── Internal I/O helpers ──────────────────────────────────
@@ -476,11 +482,11 @@ export class ClaudeProcessManager {
     }
   }
 
-  /** Default read timeout: 5 minutes. Long enough for big tool calls, short enough to detect hangs. */
-  private static READLINE_TIMEOUT_MS = 5 * 60 * 1000;
+  /** Default read timeout: 10 minutes. Long enough for context compression and big tool calls. */
+  private static READLINE_TIMEOUT_MS = 10 * 60 * 1000;
 
   private async _readline(timeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS): Promise<string | null> {
-    if (!this._reader) return null;
+    if (!this._reader || !this._decoder) return null;
 
     // Check if process died while we're trying to read
     if (this._process && this._process.killed) {
@@ -514,39 +520,23 @@ export class ClaudeProcessManager {
 
         const { value, done } = readResult;
         if (done) {
-          // Stream ended — check if process is actually dead or just a transient pipe issue
-          if (!this._process || this._process.killed || this._process.exitCode !== null) {
-            // Process truly exited — genuine EOF
-            return null;
+          // True EOF — process closed stdout, no pipe rebuild needed
+          // Flush any remaining partial line in buffer
+          if (this._lineBuffer.trim()) {
+            const remaining = this._lineBuffer.trim();
+            this._lineBuffer = "";
+            return remaining;
           }
-          // Process still alive but stdout stream ended — try rebuilding reader
-          if (this._readerRebuildCount < ClaudeProcessManager.MAX_READER_REBUILDS) {
-            this._readerRebuildCount++;
-            log.warn(`stdout stream ended but process alive — rebuilding reader (attempt ${this._readerRebuildCount}/${ClaudeProcessManager.MAX_READER_REBUILDS})`);
-            this._rebuildReader();
-            await Bun.sleep(1000); // Give CLI time to resume output
-            continue; // Retry reading with new reader
-          }
-          log.error(`stdout stream ended ${ClaudeProcessManager.MAX_READER_REBUILDS} times — giving up`);
           return null;
         }
-        this._lineBuffer += value;
-      }
-    } catch {
-      return null;
-    }
-  }
 
-  /** Rebuild the stdout reader after a transient stream break. */
-  private _rebuildReader(): void {
-    if (!this._process) return;
-    try {
-      const decoder = new TextDecoderStream();
-      this._process.stdout.pipeTo(decoder.writable).catch(() => {});
-      this._reader = decoder.readable.getReader();
-      this._lineBuffer = "";
+        // Decode Uint8Array chunk and append to line buffer
+        // { stream: true } handles multi-byte UTF-8 chars split across chunks
+        this._lineBuffer += this._decoder.decode(value, { stream: true });
+      }
     } catch (e) {
-      log.error("Failed to rebuild reader:", e);
+      log.error("readline error:", e);
+      return null;
     }
   }
 

@@ -247,9 +247,10 @@ export class ClaudeCLIProvider implements Provider {
 
     // If stream ended without a result event, synthesize one so downstream always gets a result
     if (!gotResult) {
-      const fullText = textParts.join("") || "[Task ended without result — the CLI process may have crashed or timed out]";
+      const accumulated = textParts.join("");
+      const fullText = accumulated || "[Task ended without result — the CLI process may have crashed or timed out]";
       const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
-      log.warn("Stream ended without result event, synthesizing fallback result");
+      log.warn(`Stream ended without result event, synthesizing fallback (text=${accumulated.length} chars, thinking=${(thinking ?? "").length} chars, tools=${toolCalls.length})`);
       yield {
         kind: "result",
         response: createAgentResponse({ text: fullText, thinking, toolCalls }),
