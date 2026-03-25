@@ -17,8 +17,8 @@ export const AGENTS: Record<string, AgentConfig> = {
     name: "memory-audit",
     model: "opus",
     trigger: "cron",
-    cron: "30 3 * * *",
-    timeoutMs: 600_000,
+    cron: "0 3 * * *",
+    timeoutMs: 7_200_000, // 2 hours — unified maintenance (9 phases)
   },
   "memory-rerank": {
     name: "memory-rerank",
@@ -30,7 +30,7 @@ export const AGENTS: Record<string, AgentConfig> = {
     name: "wiki-curate",
     model: "opus",
     trigger: "cron",
-    cron: "0 3 * * *",
-    timeoutMs: 900_000, // 15 min — wiki curation reads many files
+    cron: "45 3 * * *", // runs after memory-audit finishes
+    timeoutMs: 7_200_000, // 2 hours
   },
 };
