@@ -193,7 +193,7 @@ export class ClaudeProcessManager {
             // Liveness check: if process is still alive, give one more chance
             if (!retriedAfterTimeout && this._process.exitCode === null) {
               retriedAfterTimeout = true;
-              const extendMs = 5 * 60 * 1000;
+              const extendMs = 10 * 60 * 1000;
               log.warn(`readline timeout but process alive (pid=${this._process.pid}) — extending ${extendMs / 1000}s`);
               this._dynamicTimeoutMs = extendMs;
               continue;
@@ -260,7 +260,7 @@ export class ClaudeProcessManager {
         if (msg.kind === "tool_use" && !builtInToolPending) {
           // Will be set to builtInToolPending after toolHandler returns null below;
           // preemptively extend timeout for the upcoming tool execution
-          this._dynamicTimeoutMs = 15 * 60 * 1000; // 15 min for built-in tools
+          this._dynamicTimeoutMs = 30 * 60 * 1000; // 30 min for built-in tools (Agent can run long)
         }
 
         // Reset timeout on normal content (model is actively producing output)

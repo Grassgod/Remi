@@ -140,8 +140,8 @@ export class ClaudeCLIProvider implements Provider {
     });
   }
 
-  /** Max wall-clock time for a single stream interaction (15 min). */
-  private static STREAM_DEADLINE_MS = 15 * 60 * 1000;
+  /** Max wall-clock time for a single stream interaction (2 hours for large automation tasks). */
+  private static STREAM_DEADLINE_MS = 2 * 60 * 60 * 1000;
 
   async *sendStream(
     message: string,
