@@ -25,7 +25,7 @@ describe("AgentRegistry", () => {
   it("memory-audit uses opus with cron", () => {
     expect(AGENTS["memory-audit"].model).toBe("opus");
     expect(AGENTS["memory-audit"].trigger).toBe("cron");
-    expect(AGENTS["memory-audit"].cron).toBe("30 3 * * *");
+    expect(AGENTS["memory-audit"].cron).toBe("0 3 * * *");
   });
 
   it("memory-rerank is on-demand", () => {
@@ -35,7 +35,7 @@ describe("AgentRegistry", () => {
 
   it("wiki-curate uses opus with cron", () => {
     expect(AGENTS["wiki-curate"].model).toBe("opus");
-    expect(AGENTS["wiki-curate"].cron).toBe("0 3 * * *");
+    expect(AGENTS["wiki-curate"].cron).toBe("45 3 * * *");
   });
 });
 

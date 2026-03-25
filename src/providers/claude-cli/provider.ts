@@ -165,12 +165,16 @@ export class ClaudeCLIProvider implements Provider {
     const deadlineMs = options?.deadlineMs ?? ClaudeCLIProvider.STREAM_DEADLINE_MS;
     const deadline = Date.now() + deadlineMs;
     let gotResult = false;
+    const poolKey = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
     for await (const msg of mgr.sendAndStream(
       fullPrompt,
       this._handleToolCall.bind(this),
       options?.media,
     )) {
+      // Keep process alive in idle cleanup while actively streaming
+      this._lastUsed.set(poolKey, Date.now());
+
       // Check wall-clock deadline
       if (Date.now() > deadline) {
         log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
@@ -385,6 +389,7 @@ export class ClaudeCLIProvider implements Provider {
     options?: { systemPrompt?: string | null; chatId?: string | null; media?: import("./protocol.js").MediaAttachment[] },
   ): Promise<AgentResponse> {
     const mgr = await this._ensureProcess(options?.chatId, options?.systemPrompt);
+    const poolKey = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -396,6 +401,9 @@ export class ClaudeCLIProvider implements Provider {
       this._handleToolCall.bind(this),
       options?.media,
     )) {
+      // Keep process alive in idle cleanup while actively streaming
+      this._lastUsed.set(poolKey, Date.now());
+
       if (msg.kind === "thinking_delta") {
         thinkingParts.push((msg as ThinkingDelta).thinking);
       } else if (msg.kind === "content_delta") {
