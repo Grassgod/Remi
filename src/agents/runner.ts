@@ -97,7 +97,6 @@ export class AgentRunner {
       "claude",
       "--dangerously-skip-permissions",
       "--model", config.model,
-      "--add-dir", join(homedir(), ".remi"),
       "--mcp-config", join(homedir(), ".mcp.json"),
       "-p", prompt,
     ];
