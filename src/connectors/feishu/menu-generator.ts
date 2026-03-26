@@ -68,6 +68,7 @@ export function generateP2PMenu(options: MenuGeneratorOptions): BotMenuItemConfi
     children: [
       sendMsg("/clear"),
       sendMsg("/status"),
+      sendMsg("/sessions"),
       sendMsg("/context"),
       sendMsg("/restart"),
       sendMsg("/esc"),
