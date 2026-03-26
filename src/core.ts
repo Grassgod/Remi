@@ -581,8 +581,7 @@ export class Remi {
     switch (name) {
       case "clear":
       case "new": {
-        sessDb.clearSessionId(sessionKey);
-        sessDb.updateSessionMode(sessionKey, null);
+        sessDb.deleteSession(sessionKey);
         // Also clear the underlying provider's conversation context
         const provider = this._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
