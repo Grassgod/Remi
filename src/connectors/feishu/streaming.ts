@@ -130,6 +130,8 @@ export function buildFinalCard(opts: {
   stats?: string | null;
   mentionOpenId?: string;
   sessionId?: string | null;
+  /** Display name from DB registry — takes precedence over sessionId-derived name. */
+  displayName?: string | null;
   /** AskUserQuestion questions from permission_denials — rendered as form in final card. */
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
@@ -997,6 +999,7 @@ export class FeishuStreamingSession {
     let stats: string | null | undefined;
     let mentionOpenId: string | undefined;
     let sessionId: string | null | undefined;
+    let displayName: string | null | undefined;
 
     if (typeof finalTextOrOptions === "string") {
       finalText = finalTextOrOptions;
@@ -1009,6 +1012,7 @@ export class FeishuStreamingSession {
       stats = finalTextOrOptions.stats;
       mentionOpenId = finalTextOrOptions.mentionOpenId;
       sessionId = finalTextOrOptions.sessionId;
+      displayName = finalTextOrOptions.displayName;
     }
 
     // Append abort notice to content if user interrupted
@@ -1079,6 +1083,7 @@ export class FeishuStreamingSession {
         stats,
         mentionOpenId,
         sessionId,
+        displayName,
         askQuestions,
         planReview,
       });
