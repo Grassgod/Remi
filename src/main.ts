@@ -6,6 +6,9 @@
  * See `remi --help` for available commands.
  */
 
+// Must be first import — swaps macOS system SQLite before any Database instance is created
+import "./db/sqlite-custom.js";
+
 import { dispatch } from "./cli/index.js";
 
 dispatch(process.argv.slice(2)).catch((e: Error) => {

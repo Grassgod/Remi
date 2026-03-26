@@ -2,38 +2,14 @@
  * SQLite singleton with sqlite-vec extension.
  * DB file: ~/.remi/remi.db
  *
- * macOS ships a custom SQLite that disables extension loading.
- * We use Database.setCustomSQLite() to load a vanilla build that supports it.
+ * NOTE: macOS SQLite swap (setCustomSQLite) lives in ./sqlite-custom.ts
+ * and MUST be imported at the top of main.ts before any other module.
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-
-// macOS ships a proprietary SQLite build that disables extension loading.
-// Load a vanilla SQLite that supports loadExtension() when on Darwin.
-if (process.platform === "darwin") {
-  const envPath = process.env.SQLITE_LIB_PATH;
-  const candidates = envPath
-    ? [envPath]
-    : [
-        "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
-        "/opt/miniconda3/lib/libsqlite3.dylib",
-        "/usr/local/opt/sqlite/lib/libsqlite3.dylib",
-      ];
-
-  for (const p of candidates) {
-    if (statSync(p, { throwIfNoEntry: false })) {
-      try {
-        Database.setCustomSQLite(p);
-        break;
-      } catch {
-        // incompatible arch or other issue, try next
-      }
-    }
-  }
-}
 
 let sqliteVec: { load: (db: Database) => void } | null = null;
 try {
