@@ -365,6 +365,10 @@ export class FeishuStreamingSession {
   private _lastStatusText = "";
   private _heartbeatRenderer: ((elapsed: number) => string) | null = null;
 
+  // Streaming mode renewal: Feishu auto-closes streaming after 10 minutes
+  private _renewTimer: ReturnType<typeof setTimeout> | null = null;
+  private static STREAMING_RENEW_MS = 9 * 60 * 1000; // renew at 9 min, before 10 min hard limit
+
   // (PROCESS_BUDGET removed — steps are now individual div elements, no markdown accumulation)
 
   // AbortController for signalling upstream when safety timeout fires
@@ -499,6 +503,7 @@ export class FeishuStreamingSession {
     };
     this._resetSafetyTimer();
     this._startHeartbeat();
+    this._startRenewTimer();
     this.log(
       `Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}` +
       (options?.replyToMessageId ? ` (thread reply to ${options.replyToMessageId})` : ` (direct message)`),
@@ -920,6 +925,57 @@ export class FeishuStreamingSession {
     }
   }
 
+  // ── Streaming mode renewal (Feishu 10-min hard limit) ─────
+
+  private _startRenewTimer(): void {
+    this._clearRenewTimer();
+    this._renewTimer = setTimeout(() => {
+      this._renewStreaming();
+    }, FeishuStreamingSession.STREAMING_RENEW_MS);
+  }
+
+  private _clearRenewTimer(): void {
+    if (this._renewTimer) {
+      clearTimeout(this._renewTimer);
+      this._renewTimer = null;
+    }
+  }
+
+  private async _renewStreaming(): Promise<void> {
+    if (!this.state || this.closed) return;
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            settings: JSON.stringify({
+              config: { streaming_mode: true },
+            }),
+            sequence: this.state.sequence,
+            uuid: `r_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+      );
+      if (res.ok) {
+        this.log("Streaming mode renewed");
+      } else {
+        const body = await res.text().catch(() => "");
+        this.log(`Streaming renew failed HTTP ${res.status}: ${body.slice(0, 300)}`);
+      }
+    } catch (e) {
+      this.log(`Streaming renew error: ${String(e)}`);
+    }
+    // Schedule next renewal regardless of success
+    this._startRenewTimer();
+  }
+
   // ── Close streaming card ───────────────────────────────────
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
@@ -927,6 +983,7 @@ export class FeishuStreamingSession {
 
     this._clearSafetyTimer();
     this._clearHeartbeat();
+    this._clearRenewTimer();
 
     // Flush all pending throttled updates first
     await this._flushAll();
