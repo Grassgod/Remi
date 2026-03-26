@@ -195,8 +195,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {!isUser && message.meta && (
           <div className="mt-2 flex flex-wrap gap-2 border-t border-border/50 pt-1.5 text-[9px] text-muted-foreground">
             <span>{message.meta.model?.replace("claude-", "").replace("-2025", "")}</span>
-            <span>{(message.meta.inputTokens + message.meta.outputTokens).toLocaleString()} tok</span>
-            {message.meta.duration > 0 && <span>{(message.meta.duration / 1000).toFixed(1)}s</span>}
+            <span>{((message.meta.inputTokens ?? 0) + (message.meta.outputTokens ?? 0)).toLocaleString()} tok</span>
+            {message.meta.duration != null && message.meta.duration > 0 && <span>{(message.meta.duration / 1000).toFixed(1)}s</span>}
             {message.meta.cost != null && message.meta.cost > 0 && <span>${message.meta.cost.toFixed(3)}</span>}
             {message.meta.toolCount != null && message.meta.toolCount > 0 && <span>{message.meta.toolCount} tools</span>}
           </div>

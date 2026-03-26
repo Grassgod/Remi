@@ -291,6 +291,7 @@ export interface StepItem {
   type: "thinking" | "tool";
   content: string;
   name?: string;
+  thinking?: string;  // merged thinking before tool (if type=tool)
 }
 
 // Missions
