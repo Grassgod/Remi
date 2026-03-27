@@ -1,13 +1,23 @@
 import { useEffect } from "react";
 import { Layout } from "../components/Layout";
-import { HudPanel } from "../components/HudPanel";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
+import {
+  Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
+} from "../components/ui/table";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { FileText, RefreshCw, Search, Filter, ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useLogsStore } from "../stores/logs";
 
-const LEVEL_COLORS: Record<string, string> = {
-  DEBUG: "var(--text-dim, #64748b)",
-  INFO: "var(--glow-primary, #06b6d4)",
-  WARN: "var(--glow-amber, #f59e0b)",
-  ERROR: "var(--glow-red, #ef4444)",
+const LEVEL_BADGE_VARIANT: Record<string, "outline" | "secondary" | "warning" | "destructive"> = {
+  DEBUG: "outline",
+  INFO: "secondary",
+  WARN: "warning",
+  ERROR: "destructive",
 };
 
 export function Logs() {
@@ -24,7 +34,6 @@ export function Logs() {
 
   const handleFilterChange = (key: "date" | "level" | "module" | "traceId", value: string | null) => {
     setFilter(key, value);
-    // Need to refetch after state updates
     setTimeout(() => useLogsStore.getState().fetchLogs(), 0);
     if (key === "date") {
       setTimeout(() => useLogsStore.getState().fetchModules(), 0);
@@ -34,228 +43,184 @@ export function Logs() {
   return (
     <Layout title="Logs" subtitle="STRUCTURED LOGS">
       {/* Filter Bar */}
-      <div style={{
-        display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center",
-      }}>
-        <FilterInput type="date" value={date} onChange={v => handleFilterChange("date", v)} />
+      <Card className="mb-4">
+        <CardContent className="p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Filter className="hidden h-4 w-4 text-muted-foreground sm:block" />
 
-        <FilterSelect
-          value={level ?? ""}
-          onChange={v => handleFilterChange("level", v || null)}
-          options={[
-            { value: "", label: "All Levels" },
-            { value: "DEBUG", label: "DEBUG" },
-            { value: "INFO", label: "INFO" },
-            { value: "WARN", label: "WARN" },
-            { value: "ERROR", label: "ERROR" },
-          ]}
-        />
+            <Input
+              type="date"
+              value={date}
+              onChange={e => handleFilterChange("date", e.target.value)}
+              className="h-8 w-auto font-mono text-xs"
+            />
 
-        <FilterSelect
-          value={module ?? ""}
-          onChange={v => handleFilterChange("module", v || null)}
-          options={[
-            { value: "", label: "All Modules" },
-            ...modules.map(m => ({ value: m, label: m })),
-          ]}
-        />
+            <Select
+              value={level ?? ""}
+              onChange={e => handleFilterChange("level", (e.target as HTMLSelectElement).value || null)}
+              placeholder="All Levels"
+              options={[
+                { value: "DEBUG", label: "DEBUG" },
+                { value: "INFO", label: "INFO" },
+                { value: "WARN", label: "WARN" },
+                { value: "ERROR", label: "ERROR" },
+              ]}
+              className="h-8 w-[130px] font-mono text-xs"
+            />
 
-        <FilterTextInput
-          placeholder="Trace ID..."
-          value={traceId ?? ""}
-          onChange={v => handleFilterChange("traceId", v || null)}
-        />
+            <Select
+              value={module ?? ""}
+              onChange={e => handleFilterChange("module", (e.target as HTMLSelectElement).value || null)}
+              placeholder="All Modules"
+              options={modules.map(m => ({ value: m, label: m }))}
+              className="h-8 w-[150px] font-mono text-xs"
+            />
 
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>
-          {total} entries
-        </span>
-      </div>
-
-      {/* Logs Table */}
-      <HudPanel
-        title="Log Entries"
-        icon={<IconLog />}
-        action={{ label: loading ? "Loading..." : "Refresh", onClick: () => { fetchLogs(); fetchModules(); } }}
-        maxHeight={600}
-      >
-        {error && (
-          <div style={{ padding: "8px 16px", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--glow-red, #ef4444)" }}>
-            {error}
-          </div>
-        )}
-        {entries.length === 0 ? (
-          <div style={{ padding: "32px 16px", textAlign: "center", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
-            {loading ? "LOADING..." : "NO LOG ENTRIES"}
-          </div>
-        ) : (
-          <div>
-            {/* Header */}
-            <div className="l-table-row" style={{
-              display: "grid", padding: "8px 16px", gap: 6,
-              borderBottom: "1px solid var(--border-glow)",
-              fontFamily: "var(--font-mono)", fontSize: 9, letterSpacing: 1,
-              textTransform: "uppercase", color: "var(--text-dim)",
-            }}>
-              <span>Time</span>
-              <span>Level</span>
-              <span>Module</span>
-              <span>Message</span>
-              <span>Trace</span>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Trace ID..."
+                value={traceId ?? ""}
+                onChange={e => handleFilterChange("traceId", e.target.value || null)}
+                className="h-8 w-[140px] pl-7 font-mono text-xs"
+              />
             </div>
 
-            {/* Rows */}
-            {entries.map((entry, i) => (
-              <div
-                key={i}
-                className="l-table-row"
-                style={{
-                  display: "grid", padding: "5px 16px", gap: 6,
-                  transition: "background 0.15s",
-                  borderLeft: `2px solid ${entry.level === "ERROR" ? "rgba(239,68,68,0.3)" : entry.level === "WARN" ? "rgba(245,158,11,0.2)" : "transparent"}`,
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-              >
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
-                  {formatLogTime(entry.ts)}
-                </span>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: 8, letterSpacing: 1, fontWeight: 600,
-                  color: LEVEL_COLORS[entry.level] ?? "var(--text-dim)",
-                }}>
-                  {entry.level}
-                </span>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-muted)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                  {entry.module}
-                </span>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-primary)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }} title={entry.msg}>
-                  {entry.msg}
-                </span>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--glow-primary, #06b6d4)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  cursor: entry.traceId ? "pointer" : "default",
-                  opacity: entry.traceId ? 1 : 0.3,
-                }} title={entry.traceId ?? ""} onClick={() => {
-                  if (entry.traceId) {
-                    window.location.hash = `#/traces?traceId=${entry.traceId}`;
-                  }
-                }}>
-                  {entry.traceId ? entry.traceId.slice(0, 12) : "—"}
-                </span>
-              </div>
-            ))}
-
-            {/* Load More */}
-            {hasMore && (
-              <div
-                onClick={loadMore}
-                style={{
-                  padding: "10px 16px", textAlign: "center", cursor: "pointer",
-                  fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--glow-primary, #06b6d4)",
-                  borderTop: "1px solid var(--border-glow)",
-                  transition: "background 0.15s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(6,182,212,0.04)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-              >
-                LOAD MORE ({total - entries.length} remaining)
-              </div>
-            )}
+            <span className="ml-auto font-mono text-xs text-muted-foreground">
+              {total} entries
+            </span>
           </div>
-        )}
-      </HudPanel>
+        </CardContent>
+      </Card>
 
-      <style>{`
-        .l-table-row { grid-template-columns: 90px 50px 90px 1fr 100px; }
-        @media (max-width: 768px) {
-          .l-table-row { grid-template-columns: 75px 45px 80px 1fr !important; }
-          .l-table-row > :nth-child(5) { display: none; }
-        }
-        @media (max-width: 480px) {
-          .l-table-row { grid-template-columns: 65px 40px 1fr !important; }
-          .l-table-row > :nth-child(3) { display: none; }
-          .l-table-row > :nth-child(5) { display: none; }
-        }
-      `}</style>
+      {/* Logs Table */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            Log Entries
+          </CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            onClick={() => { fetchLogs(); fetchModules(); }}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            {loading ? "Loading..." : "Refresh"}
+          </Button>
+        </CardHeader>
+
+        <CardContent className="p-0">
+          {error && (
+            <div className="px-4 py-2 font-mono text-xs text-destructive">
+              {error}
+            </div>
+          )}
+
+          {entries.length === 0 ? (
+            <div className="px-4 py-12 text-center font-mono text-xs text-muted-foreground">
+              {loading ? "LOADING..." : "NO LOG ENTRIES"}
+            </div>
+          ) : (
+            <ScrollArea className="max-h-[600px]">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[100px] font-mono text-[10px] uppercase tracking-wider">
+                      Time
+                    </TableHead>
+                    <TableHead className="w-[80px] font-mono text-[10px] uppercase tracking-wider">
+                      Level
+                    </TableHead>
+                    <TableHead className="hidden w-[110px] font-mono text-[10px] uppercase tracking-wider sm:table-cell">
+                      Module
+                    </TableHead>
+                    <TableHead className="font-mono text-[10px] uppercase tracking-wider">
+                      Message
+                    </TableHead>
+                    <TableHead className="hidden w-[120px] font-mono text-[10px] uppercase tracking-wider md:table-cell">
+                      Trace
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {entries.map((entry, i) => (
+                    <TableRow
+                      key={i}
+                      className={cn(
+                        entry.level === "ERROR" && "border-l-2 border-l-destructive/40",
+                        entry.level === "WARN" && "border-l-2 border-l-warning/30",
+                      )}
+                    >
+                      <TableCell className="py-1.5 font-mono text-[11px] text-muted-foreground">
+                        {formatLogTime(entry.ts)}
+                      </TableCell>
+                      <TableCell className="py-1.5">
+                        <Badge
+                          variant={LEVEL_BADGE_VARIANT[entry.level] ?? "outline"}
+                          className={cn(
+                            "font-mono text-[10px]",
+                            entry.level === "INFO" && "border-chart-1/30 bg-chart-1/10 text-chart-1",
+                          )}
+                        >
+                          {entry.level}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="hidden truncate py-1.5 font-mono text-[11px] text-muted-foreground sm:table-cell">
+                        {entry.module}
+                      </TableCell>
+                      <TableCell
+                        className="max-w-0 truncate py-1.5 font-mono text-[11px]"
+                        title={entry.msg}
+                      >
+                        {entry.msg}
+                      </TableCell>
+                      <TableCell className="hidden py-1.5 md:table-cell">
+                        {entry.traceId ? (
+                          <button
+                            className="truncate font-mono text-[10px] text-primary hover:underline"
+                            onClick={() => {
+                              window.location.hash = `#/traces?traceId=${entry.traceId}`;
+                            }}
+                          >
+                            {entry.traceId.slice(0, 12)}
+                          </button>
+                        ) : (
+                          <span className="font-mono text-[10px] text-muted-foreground/40">
+                            —
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              {/* Load More */}
+              {hasMore && (
+                <div className="border-t border-border p-0">
+                  <Button
+                    variant="ghost"
+                    className="h-auto w-full rounded-none py-2.5 font-mono text-xs text-primary"
+                    onClick={loadMore}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                    LOAD MORE ({total - entries.length} remaining)
+                  </Button>
+                </div>
+              )}
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
     </Layout>
   );
 }
 
-// ── Sub-components ──
-
-function FilterInput({ type, value, onChange }: { type: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      style={{
-        fontFamily: "var(--font-mono)", fontSize: 11,
-        padding: "4px 8px", borderRadius: 4,
-        border: "1px solid var(--border-glow, rgba(255,255,255,0.1))",
-        background: "var(--bg-card, rgba(0,0,0,0.3))",
-        color: "var(--text-primary, #e2e8f0)",
-        outline: "none",
-      }}
-    />
-  );
-}
-
-function FilterSelect({ value, onChange, options }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      style={{
-        fontFamily: "var(--font-mono)", fontSize: 11,
-        padding: "4px 8px", borderRadius: 4,
-        border: "1px solid var(--border-glow, rgba(255,255,255,0.1))",
-        background: "var(--bg-card, rgba(0,0,0,0.3))",
-        color: "var(--text-primary, #e2e8f0)",
-        outline: "none",
-      }}
-    >
-      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
-  );
-}
-
-function FilterTextInput({ placeholder, value, onChange }: { placeholder: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <input
-      type="text"
-      placeholder={placeholder}
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      style={{
-        fontFamily: "var(--font-mono)", fontSize: 11,
-        padding: "4px 8px", borderRadius: 4, width: 120,
-        border: "1px solid var(--border-glow, rgba(255,255,255,0.1))",
-        background: "var(--bg-card, rgba(0,0,0,0.3))",
-        color: "var(--text-primary, #e2e8f0)",
-        outline: "none",
-      }}
-    />
-  );
-}
-
-function IconLog() {
-  return (
-    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="8" y1="13" x2="16" y2="13" />
-      <line x1="8" y1="17" x2="16" y2="17" />
-    </svg>
-  );
-}
+// ── Helpers ──
 
 function formatLogTime(ts: string): string {
   try {

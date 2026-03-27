@@ -1,57 +1,143 @@
 import { useEffect, useState } from "react";
 import { Layout } from "../components/Layout";
-import { HudPanel } from "../components/HudPanel";
-import { IconTrash } from "../components/icons";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Menu, Plus, Trash2, ChevronDown, ChevronRight, Upload, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useBotMenuStore, type MenuItem, type MenuBehavior } from "../stores/bot-menu";
 
-const inputCls = "w-full rounded-md border border-border bg-card px-3 py-1.5 font-mono text-xs text-foreground outline-none transition-colors focus:border-input";
-const btnCls = "rounded-md border border-border bg-transparent px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer";
-const btnPrimary = "rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-primary transition-colors hover:bg-primary/20 cursor-pointer";
-const selectCls = "rounded-md border border-border bg-card px-2 py-1.5 font-mono text-xs text-foreground outline-none";
-
 const ACTION_TYPES = [
-  { value: "send_message", label: "发送消息" },
-  { value: "target", label: "跳转链接" },
-  { value: "event_key", label: "事件回调" },
+  { value: "send_message", label: "Send Message" },
+  { value: "target", label: "Open Link" },
+  { value: "event_key", label: "Event Callback" },
 ] as const;
 
 function emptyItem(): MenuItem {
   return { name: "", behaviors: [{ type: "send_message" }] };
 }
 
-function BehaviorEditor({ behavior, onChange }: {
-  behavior: MenuBehavior;
-  onChange: (b: MenuBehavior) => void;
-}) {
+export function BotMenu() {
+  const { config, loading, syncing, dirty, error, fetch, sync, setConfig } = useBotMenuStore();
+
+  useEffect(() => { fetch(); }, []);
+
+  const defaultItems = config.default ?? [];
+
+  const handleAddRoot = () => {
+    setConfig({ ...config, default: [...defaultItems, emptyItem()] });
+  };
+
+  const handleUpdateRoot = (idx: number, item: MenuItem) => {
+    const items = [...defaultItems];
+    items[idx] = item;
+    setConfig({ ...config, default: items });
+  };
+
+  const handleRemoveRoot = (idx: number) => {
+    setConfig({ ...config, default: defaultItems.filter((_, i) => i !== idx) });
+  };
+
+  return (
+    <Layout title="Bot Menu" subtitle="Menu Builder">
+      {error && (
+        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Menu className="h-4 w-4 text-muted-foreground" />
+            Default Menu
+            <Badge variant="secondary" className="text-[10px]">{defaultItems.length}/5</Badge>
+            {dirty && <Badge variant="warning" className="text-[9px]">UNSAVED</Badge>}
+            {syncing && <Badge variant="outline" className="text-[9px]">SYNCING</Badge>}
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={handleAddRoot} className="h-7 text-xs">
+            <Plus className="mr-1 h-3 w-3" /> Add
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading && !defaultItems.length ? (
+            <div className="p-10 text-center text-xs text-muted-foreground">Loading...</div>
+          ) : defaultItems.length === 0 ? (
+            <div className="p-10 text-center text-xs text-muted-foreground">No menu items</div>
+          ) : (
+            <div className="space-y-1">
+              {defaultItems.map((item, idx) => (
+                <MenuItemRow
+                  key={idx}
+                  item={item}
+                  onUpdate={(i) => handleUpdateRoot(idx, i)}
+                  onRemove={() => handleRemoveRoot(idx)}
+                />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Actions */}
+      <div className="mt-3 flex items-center gap-3">
+        <Button onClick={sync} disabled={syncing} className="text-xs">
+          <Upload className="mr-1.5 h-3.5 w-3.5" />
+          {syncing ? "Syncing..." : "Save & Sync to Feishu"}
+        </Button>
+        {dirty && <span className="text-xs text-warning">Unsaved changes</span>}
+      </div>
+
+      {/* Limits */}
+      <Card className="mt-3">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Info className="h-4 w-4 text-muted-foreground" />
+            Limits
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 text-xs text-muted-foreground">
+          <div>Level 1: max <span className="text-foreground">5</span> items</div>
+          <div>Level 2: max <span className="text-foreground">30</span> items, Level 3: max <span className="text-foreground">3</span></div>
+          <div>Total items: max <span className="text-foreground">100</span>, size: max 300KB</div>
+          <div><span className="text-foreground">behaviors</span> and <span className="text-foreground">children</span> are mutually exclusive</div>
+        </CardContent>
+      </Card>
+    </Layout>
+  );
+}
+
+function BehaviorEditor({ behavior, onChange }: { behavior: MenuBehavior; onChange: (b: MenuBehavior) => void }) {
   return (
     <div className="flex items-center gap-2">
       <select
-        className={selectCls}
+        className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none"
         value={behavior.type}
-        onChange={(e) => onChange({ ...behavior, type: e.target.value as MenuBehavior["type"] })}
+        onChange={e => onChange({ ...behavior, type: e.target.value as MenuBehavior["type"] })}
       >
-        {ACTION_TYPES.map((t) => (
+        {ACTION_TYPES.map(t => (
           <option key={t.value} value={t.value}>{t.label}</option>
         ))}
       </select>
       {behavior.type === "target" && (
-        <input
-          className={`${inputCls} flex-1`}
+        <Input
           placeholder="URL"
           value={behavior.url ?? ""}
-          onChange={(e) => onChange({ ...behavior, url: e.target.value })}
+          onChange={e => onChange({ ...behavior, url: e.target.value })}
+          className="h-7 flex-1 text-xs"
         />
       )}
       {behavior.type === "event_key" && (
-        <input
-          className={`${inputCls} flex-1`}
+        <Input
           placeholder="event_key"
           value={behavior.event_key ?? ""}
-          onChange={(e) => onChange({ ...behavior, event_key: e.target.value })}
+          onChange={e => onChange({ ...behavior, event_key: e.target.value })}
+          className="h-7 flex-1 text-xs"
         />
       )}
       {behavior.type === "send_message" && (
-        <span className="font-mono text-[10px] text-muted-foreground">点击发送菜单名</span>
+        <span className="text-[10px] text-muted-foreground">Sends menu name on click</span>
       )}
     </div>
   );
@@ -83,64 +169,60 @@ function MenuItemRow({ item, onUpdate, onRemove, depth = 0 }: {
   };
 
   return (
-    <div className={`${depth > 0 ? "ml-6 border-l border-border/50 pl-3" : ""}`}>
-      <div className="flex items-center gap-2 py-2">
-        {/* Expand toggle for items with children */}
+    <div className={cn(depth > 0 && "ml-5 border-l border-border/50 pl-3")}>
+      <div className="flex items-center gap-2 py-1.5">
         <button
-          className="w-5 text-center font-mono text-xs text-muted-foreground"
+          className="w-5 text-center text-xs text-muted-foreground"
           onClick={() => setExpanded(!expanded)}
         >
-          {hasChildren ? (expanded ? "▾" : "▸") : "·"}
+          {hasChildren ? (expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />) : "·"}
         </button>
 
-        {/* Name */}
-        <input
-          className={`${inputCls} !w-auto flex-[0_0_140px]`}
-          placeholder="菜单名"
+        <Input
+          placeholder="Menu name"
           value={item.name}
-          onChange={(e) => onUpdate({ ...item, name: e.target.value })}
+          onChange={e => onUpdate({ ...item, name: e.target.value })}
+          className="h-7 w-[130px] text-xs"
         />
 
-        {/* Icon token */}
-        <input
-          className={`${inputCls} !w-auto flex-[0_0_120px]`}
+        <Input
           placeholder="icon token"
           value={item.icon?.token ?? ""}
-          onChange={(e) => {
+          onChange={e => {
             const token = e.target.value || undefined;
             onUpdate({ ...item, icon: token ? { ...item.icon, token } : undefined });
           }}
+          className="h-7 w-[100px] text-xs"
         />
 
-        {/* Behavior or "has children" indicator */}
         {!hasChildren && item.behaviors?.[0] ? (
           <div className="flex-1">
             <BehaviorEditor
               behavior={item.behaviors[0]}
-              onChange={(b) => onUpdate({ ...item, behaviors: [b] })}
+              onChange={b => onUpdate({ ...item, behaviors: [b] })}
             />
           </div>
         ) : (
-          <span className="flex-1 font-mono text-[10px] text-muted-foreground">
-            {hasChildren ? `${item.children!.length} 个子菜单` : ""}
+          <span className="flex-1 text-[10px] text-muted-foreground">
+            {hasChildren ? `${item.children!.length} sub-items` : ""}
           </span>
         )}
 
-        {/* Actions */}
         {depth < 2 && (
-          <button className={`${btnCls} !px-2 !py-1`} onClick={handleAddChild} title="添加子菜单">
-            +子
-          </button>
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleAddChild}>
+            <Plus className="h-3 w-3" />
+          </Button>
         )}
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-destructive"
           onClick={onRemove}
-          className="flex items-center rounded-md border border-destructive/20 bg-transparent p-1.5 text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive"
         >
-          <IconTrash />
-        </button>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
-      {/* Children */}
       {expanded && hasChildren && (
         <div>
           {item.children!.map((child, idx) => (
@@ -148,121 +230,12 @@ function MenuItemRow({ item, onUpdate, onRemove, depth = 0 }: {
               key={idx}
               item={child}
               depth={depth + 1}
-              onUpdate={(c) => handleUpdateChild(idx, c)}
+              onUpdate={c => handleUpdateChild(idx, c)}
               onRemove={() => handleRemoveChild(idx)}
             />
           ))}
         </div>
       )}
     </div>
-  );
-}
-
-export function BotMenu() {
-  const {
-    config, loading, syncing, dirty, error,
-    fetch, sync,
-    setConfig,
-  } = useBotMenuStore();
-
-  useEffect(() => { fetch(); }, []);
-
-  const defaultItems = config.default ?? [];
-
-  const handleAddRoot = () => {
-    setConfig({
-      ...config,
-      default: [...defaultItems, emptyItem()],
-    });
-  };
-
-  const handleUpdateRoot = (idx: number, item: MenuItem) => {
-    const items = [...defaultItems];
-    items[idx] = item;
-    setConfig({ ...config, default: items });
-  };
-
-  const handleRemoveRoot = (idx: number) => {
-    setConfig({
-      ...config,
-      default: defaultItems.filter((_, i) => i !== idx),
-    });
-  };
-
-  return (
-    <Layout
-      title="Bot Menu"
-      subtitle="千人千面菜单管理"
-      badges={[
-        ...(dirty ? [{ label: "UNSAVED", variant: "warning" as const }] : []),
-        ...(syncing ? [{ label: "SYNCING", variant: "info" as const }] : []),
-      ]}
-    >
-      {error && (
-        <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-4 py-2 font-mono text-xs text-destructive">
-          {error}
-        </div>
-      )}
-
-      <HudPanel
-        title="Default Menu"
-        subtitle={`${defaultItems.length}/5 项 · 适用于所有 trigger_user_ids`}
-        action={{ label: "+ 添加", onClick: handleAddRoot }}
-        maxHeight={500}
-      >
-        {loading && !defaultItems.length ? (
-          <div className="p-10 text-center font-mono text-xs text-muted-foreground">加载中...</div>
-        ) : defaultItems.length === 0 ? (
-          <div className="p-10 text-center font-mono text-xs text-muted-foreground">暂无菜单配置</div>
-        ) : (
-          <div className="px-4 py-2">
-            {/* Header */}
-            <div className="flex items-center gap-2 border-b border-border pb-2 mb-1">
-              <span className="w-5" />
-              <span className="flex-[0_0_140px] font-mono text-[9px] uppercase tracking-widest text-muted-foreground">名称</span>
-              <span className="flex-[0_0_120px] font-mono text-[9px] uppercase tracking-widest text-muted-foreground">图标</span>
-              <span className="flex-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">动作</span>
-              <span className="w-[80px]" />
-            </div>
-
-            {defaultItems.map((item, idx) => (
-              <MenuItemRow
-                key={idx}
-                item={item}
-                onUpdate={(i) => handleUpdateRoot(idx, i)}
-                onRemove={() => handleRemoveRoot(idx)}
-              />
-            ))}
-          </div>
-        )}
-      </HudPanel>
-
-      {/* Action bar */}
-      <div className="mt-4 flex items-center gap-3">
-        <button
-          className={btnPrimary}
-          onClick={sync}
-          disabled={syncing}
-        >
-          {syncing ? "同步中..." : "保存并同步到飞书"}
-        </button>
-        {dirty && (
-          <span className="font-mono text-[10px] text-warning">有未保存的更改</span>
-        )}
-      </div>
-
-      {/* Limits info */}
-      <div className="mt-4">
-        <HudPanel title="限制说明" maxHeight={200}>
-          <div className="p-4 font-mono text-xs leading-relaxed text-muted-foreground">
-            <div>· 第一层菜单最多 <span className="text-foreground">5</span> 项</div>
-            <div>· 第二层最多 <span className="text-foreground">30</span> 项，第三层最多 <span className="text-foreground">3</span> 项</div>
-            <div>· 总菜单项不超过 <span className="text-foreground">100</span> 项，总大小不超过 300KB</div>
-            <div>· <span className="text-foreground">behaviors</span> 和 <span className="text-foreground">children</span> 二选一</div>
-            <div>· 千人千面菜单需先在开放平台后台配好全局默认菜单</div>
-          </div>
-        </HudPanel>
-      </div>
-    </Layout>
   );
 }

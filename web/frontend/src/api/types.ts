@@ -253,3 +253,92 @@ export interface EmbeddingEntry {
   metadata: Record<string, string> | null;
   embedded_at: string;
 }
+
+// Conversations
+export interface ConversationSummary {
+  id: string;
+  chatId: string;
+  threadId: string | null;
+  topic: string;
+  messageCount: number;
+  tokenCount: number;
+  totalCost: number;
+  updatedAt: string;
+  status: "active" | "completed";
+}
+
+export interface ChatMessage {
+  id: string;
+  type: string;
+  content: string;
+  senderType: "user" | "app";
+  senderId: string;
+  createTime: string;
+  steps?: StepItem[];
+  sessionName?: string;
+  meta?: {
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    cost: number | null;
+    duration: number;
+    toolCount?: number;
+    sessionId?: string;
+  };
+}
+
+export interface StepItem {
+  type: "thinking" | "tool";
+  content: string;
+  name?: string;
+}
+
+// Missions
+export interface MissionItem {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  projectId: string;
+  chatId: string;
+  threadId: string | null;
+  currentStep: string;
+  mrUrl: string | null;
+  mrStatus: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  totalTokens: number;
+  totalCost: number;
+  totalDuration: number;
+}
+
+export interface MissionStats {
+  total: number;
+  byStatus: Record<string, number>;
+  totalCost: number;
+  totalTokens: number;
+}
+
+// Wiki
+export interface WikiFileNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: WikiFileNode[];
+}
+
+export interface WikiFileContent {
+  content: string;
+  lastModified?: string;
+  gitInfo?: { hash: string; message: string; author: string; date: string };
+}
+
+export interface WikiGitEntry {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+}

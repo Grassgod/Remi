@@ -1,29 +1,28 @@
 import { useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import {
-  IconDashboardLg, IconMemoryLg, IconSessionsLg, IconAnalyticsLg, IconMoreLg,
-  IconProjects, IconAuth, IconScheduler, IconTools, IconConfig, IconMonitor,
-  IconTraces, IconLogs, IconDatabase, IconSymlinks,
-} from "./icons";
+  LayoutDashboard, MessageSquare, KanbanSquare, Brain,
+  BookOpen, BarChart3, Activity, FileText, Clock, Monitor,
+  FolderOpen, Menu, MoreHorizontal,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const primaryTabs = [
-  { path: "/", label: "Home", icon: IconDashboardLg },
-  { path: "/memory", label: "Memory", icon: IconMemoryLg },
-  { path: "/sessions", label: "Sessions", icon: IconSessionsLg },
-  { path: "/analytics", label: "Analytics", icon: IconAnalyticsLg },
+  { path: "/", label: "Home", icon: LayoutDashboard },
+  { path: "/conversations", label: "Chats", icon: MessageSquare },
+  { path: "/missions", label: "Missions", icon: KanbanSquare },
+  { path: "/memory", label: "Memory", icon: Brain },
 ];
 
 const moreItems = [
-  { path: "/traces", label: "Traces", icon: IconTraces },
-  { path: "/logs", label: "Logs", icon: IconLogs },
-  { path: "/projects", label: "Projects", icon: IconProjects },
-  { path: "/auth", label: "Auth", icon: IconAuth },
-  { path: "/config", label: "Config", icon: IconConfig },
-  { path: "/scheduler", label: "Scheduler", icon: IconScheduler },
-  { path: "/symlinks", label: "Symlinks", icon: IconSymlinks },
-  { path: "/tools", label: "Tools", icon: IconTools },
-  { path: "/monitor", label: "Monitor", icon: IconMonitor },
-  { path: "/database", label: "Database", icon: IconDatabase },
+  { path: "/wiki", label: "Wiki", icon: BookOpen },
+  { path: "/analytics", label: "Analytics", icon: BarChart3 },
+  { path: "/traces", label: "Traces", icon: Activity },
+  { path: "/logs", label: "Logs", icon: FileText },
+  { path: "/scheduler", label: "Scheduler", icon: Clock },
+  { path: "/sessions", label: "Sessions", icon: Monitor },
+  { path: "/projects", label: "Projects", icon: FolderOpen },
+  { path: "/bot-menu", label: "Bot Menu", icon: Menu },
 ];
 
 function isActive(path: string, location: string): boolean {
@@ -47,7 +46,7 @@ export function BottomNav() {
       {/* Backdrop */}
       {sheetOpen && (
         <div
-          className="mobile-only fixed inset-0 z-40 bg-black/40"
+          className="mobile-only fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
           onClick={() => setSheetOpen(false)}
           style={{ animation: "fade-in 0.15s ease-out" }}
         />
@@ -63,20 +62,21 @@ export function BottomNav() {
           }}
         >
           <div className="mx-auto mb-2 mt-2 h-1 w-8 rounded-full bg-muted-foreground/30" />
-          <div className="grid grid-cols-3 gap-1 px-3 pb-3">
+          <div className="grid grid-cols-4 gap-1 px-3 pb-3">
             {moreItems.map(item => {
               const active = isActive(item.path, location);
+              const Icon = item.icon;
               return (
                 <div
                   key={item.path}
                   onClick={() => navigate(item.path)}
-                  className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg px-2 py-3 transition-colors
-                    ${active ? "bg-accent text-foreground" : "text-muted-foreground active:bg-accent/50"}`}
+                  className={cn(
+                    "flex cursor-pointer flex-col items-center gap-1.5 rounded-lg px-2 py-3 transition-colors",
+                    active ? "bg-accent text-foreground" : "text-muted-foreground active:bg-accent/50"
+                  )}
                 >
-                  <item.icon />
-                  <span className="font-mono text-[9px] uppercase tracking-wide">
-                    {item.label}
-                  </span>
+                  <Icon className="h-5 w-5" />
+                  <span className="text-[9px] font-medium">{item.label}</span>
                 </div>
               );
             })}
@@ -86,36 +86,37 @@ export function BottomNav() {
 
       {/* Tab Bar */}
       <div
-        className="mobile-only fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-sidebar"
+        className="mobile-only fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-card/95 backdrop-blur-md"
         style={{ height: "var(--bottom-nav-height)", paddingBottom: "var(--safe-bottom)" }}
       >
         <div className="flex h-full items-center justify-around">
           {primaryTabs.map(tab => {
             const active = isActive(tab.path, location);
+            const Icon = tab.icon;
             return (
               <div
                 key={tab.path}
                 onClick={() => { setSheetOpen(false); setLocation(tab.path); }}
-                className={`flex cursor-pointer flex-col items-center gap-1 px-2.5 py-1.5 transition-colors
-                  ${active ? "text-foreground" : "text-muted-foreground"}`}
+                className={cn(
+                  "flex cursor-pointer flex-col items-center gap-1 px-3 py-1.5 transition-colors",
+                  active ? "text-foreground" : "text-muted-foreground"
+                )}
               >
-                <tab.icon />
-                <span className="font-mono text-[8px] uppercase tracking-wide">
-                  {tab.label}
-                </span>
+                <Icon className={cn("h-5 w-5", active && "text-primary")} />
+                <span className="text-[9px] font-medium">{tab.label}</span>
               </div>
             );
           })}
           {/* More button */}
           <div
             onClick={() => setSheetOpen(prev => !prev)}
-            className={`flex cursor-pointer flex-col items-center gap-1 px-2.5 py-1.5 transition-colors
-              ${moreActive || sheetOpen ? "text-foreground" : "text-muted-foreground"}`}
+            className={cn(
+              "flex cursor-pointer flex-col items-center gap-1 px-3 py-1.5 transition-colors",
+              moreActive || sheetOpen ? "text-foreground" : "text-muted-foreground"
+            )}
           >
-            <IconMoreLg />
-            <span className="font-mono text-[8px] uppercase tracking-wide">
-              More
-            </span>
+            <MoreHorizontal className="h-5 w-5" />
+            <span className="text-[9px] font-medium">More</span>
           </div>
         </div>
       </div>

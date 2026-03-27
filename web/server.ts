@@ -31,6 +31,9 @@ import { registerSchedulerHandlers } from "./handlers/scheduler.js";
 import { registerDbHandlers } from "./handlers/db.js";
 import { registerBotMenuHandlers } from "./handlers/bot-menu.js";
 import { registerSymlinkHandlers } from "./handlers/symlinks.js";
+import { registerConversationsHandlers } from "./handlers/conversations.js";
+import { registerMissionsHandlers } from "./handlers/missions.js";
+import { registerWikiHandlers } from "./handlers/wiki.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -77,6 +80,9 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerDbHandlers(app, data);
   registerBotMenuHandlers(app, data);
   registerSymlinkHandlers(app, data);
+  registerConversationsHandlers(app, data);
+  registerMissionsHandlers(app, data);
+  registerWikiHandlers(app, data);
 
   // Auto-mount all task directories as /tasks/<dir-name>/*
   const tasksDir = "/data00/home/hehuajie/tasks";
