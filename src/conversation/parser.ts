@@ -108,8 +108,10 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
     try {
       const obj = JSON.parse(line);
 
-      if (obj.type === "queue-operation" && obj.operation === "enqueue" && obj.content) {
-        if (currentEnqueue && (currentText || currentSteps.length > 0)) {
+      // User message from BunQueue enqueue (may have empty content for image messages)
+      if (obj.type === "queue-operation" && obj.operation === "enqueue") {
+        // Flush previous pair
+        if (currentEnqueue && currentEnqueue.content && (currentText || currentSteps.length > 0)) {
           pairs.push({
             userText: stripContextTags(currentEnqueue.content),
             remiText: stripContextTags(currentText),
@@ -119,9 +121,20 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
           });
         }
         const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : 0;
-        currentEnqueue = { content: obj.content, timestamp: ts };
+        currentEnqueue = { content: obj.content ?? "", timestamp: ts };
         currentText = "";
         currentSteps = [];
+      }
+
+      // CLI native user entry — backfill content when enqueue had none (e.g. image messages)
+      if (obj.type === "user" && currentEnqueue && !currentEnqueue.content) {
+        const blocks = obj.message?.content ?? [];
+        const textParts = blocks
+          .filter((b: any) => b.type === "text" && b.text)
+          .map((b: any) => b.text);
+        if (textParts.length > 0) {
+          currentEnqueue.content = textParts.join("\n");
+        }
       }
 
       if (obj.type === "assistant" && currentEnqueue) {
