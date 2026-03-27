@@ -90,19 +90,8 @@ export function handleFormSubmission(
         return resolvePendingAction(baseActionId, feedbackText || "User provided empty feedback");
       }
     }
-    // Fallback: find first pending action with questions (AskUserQuestion)
-    for (const [id, a] of pendingActions) {
-      if (a.questions) {
-        actionId = id;
-        action = a;
-        log.info(`Form fallback: matched pending action ${id} for form "${formName}"`);
-        break;
-      }
-    }
-    if (!action) {
-      log.warn(`No pending action for form: ${formName}`);
-      return false;
-    }
+    log.warn(`No pending action for form: ${formName}`);
+    return false;
   }
 
   // Parse form values into answers dict using stored question metadata
@@ -113,13 +102,14 @@ export function handleFormSubmission(
       const customKey = `q${i}_custom`;
       const selectKey = `q${i}`;
       const customValue = String(formValue[customKey] ?? "").trim();
+      const selected = formValue[selectKey];
+      log.info(`form q${i}: select=${JSON.stringify(selected)} custom="${customValue}" type=${typeof selected}`);
 
       if (customValue) {
         // Custom input overrides checker selection
         answers[questions[i].question] = customValue;
       } else {
         // Use checker selection (may be array for multi-select or string)
-        const selected = formValue[selectKey];
         if (Array.isArray(selected)) {
           answers[questions[i].question] = selected.join(", ");
         } else {
@@ -127,6 +117,7 @@ export function handleFormSubmission(
         }
       }
     }
+    log.info(`form answers: ${JSON.stringify(answers)}`);
     return resolvePendingAction(actionId, answers);
   }
 
@@ -161,6 +152,17 @@ export function handleButtonClick(valueJson: string): boolean {
     // Plan review button: { action, decision }
     if (value.action && value.decision) {
       return resolvePendingAction(value.action, value.decision);
+    }
+
+    // Mission approve/reject button: { _action_type, missionId }
+    if (value._action_type?.startsWith("mission_")) {
+      // Handled externally by mission module — emit event via callback
+      if (_missionActionHandler) {
+        _missionActionHandler(value._action_type, value.missionId);
+        return true;
+      }
+      log.warn(`Mission action received but no handler registered: ${value._action_type}`);
+      return false;
     }
 
     return false;
@@ -212,4 +214,14 @@ export function rejectAllPendingActions(reason: string): number {
 /** Get count of pending actions (for diagnostics). */
 export function getPendingActionCount(): number {
   return pendingActions.size;
+}
+
+// ── Mission action handler ──
+
+type MissionActionHandler = (actionType: string, missionId: string) => void;
+let _missionActionHandler: MissionActionHandler | null = null;
+
+/** Register a handler for mission approve/reject card button clicks. */
+export function registerMissionActionHandler(handler: MissionActionHandler): void {
+  _missionActionHandler = handler;
 }
