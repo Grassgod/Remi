@@ -25,6 +25,7 @@ export interface MemoryJobData {
 
 /** remi:cron — 定时任务（Phase 2） */
 export interface CronJobData {
+  jobId: string;
   handler: string;
   handlerConfig?: Record<string, unknown>;
 }
