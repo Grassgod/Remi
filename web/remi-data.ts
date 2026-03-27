@@ -1148,6 +1148,106 @@ export class RemiData {
     return result;
   }
 
+  // ── Skills ─────────────────────────────────────────────
+
+  private get skillsDir(): string {
+    return join(homedir(), ".remi", ".claude", "skills");
+  }
+
+  listSkills(): Array<{
+    name: string; description: string; hasSchedule: boolean;
+    cron?: string; outputDir?: string; reportCount?: number; lastReportDate?: string;
+  }> {
+    const dir = this.skillsDir;
+    if (!existsSync(dir)) return [];
+
+    const cronJobs = this._loadCronJobs();
+    const cronMap = new Map<string, { cron?: string; outputDir?: string }>();
+    for (const job of cronJobs) {
+      if (job.handler === "skill:run" && job.handlerConfig?.skillName) {
+        cronMap.set(job.handlerConfig.skillName as string, {
+          cron: job.cron,
+          outputDir: job.handlerConfig.outputDir as string | undefined,
+        });
+      }
+    }
+
+    const entries = readdirSync(dir, { withFileTypes: true });
+    return entries
+      .filter(e => e.isDirectory() && !e.name.startsWith("."))
+      .map(e => {
+        const name = e.name;
+        const skillMd = join(dir, name, "SKILL.md");
+        let description = "";
+        if (existsSync(skillMd)) {
+          try {
+            const { data } = matter(readFileSync(skillMd, "utf-8"));
+            description = (data.description as string) ?? "";
+          } catch {}
+        }
+
+        const cronInfo = cronMap.get(name);
+        let reportCount = 0;
+        let lastReportDate: string | undefined;
+        if (cronInfo?.outputDir && existsSync(cronInfo.outputDir)) {
+          const reports = readdirSync(cronInfo.outputDir)
+            .filter(f => f.endsWith(".md"))
+            .sort()
+            .reverse();
+          reportCount = reports.length;
+          if (reports[0]) lastReportDate = reports[0].replace(".md", "");
+        }
+
+        return {
+          name,
+          description,
+          hasSchedule: cronMap.has(name),
+          cron: cronInfo?.cron,
+          outputDir: cronInfo?.outputDir,
+          reportCount,
+          lastReportDate,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  readSkillFile(name: string, path = "SKILL.md"): string | null {
+    if (path.includes("..") || path.startsWith("/")) return null;
+    const filePath = join(this.skillsDir, name, path);
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) return null;
+    return readFileSync(filePath, "utf-8");
+  }
+
+  writeSkillFile(name: string, content: string, path = "SKILL.md"): boolean {
+    if (path.includes("..") || path.startsWith("/")) return false;
+    const filePath = join(this.skillsDir, name, path);
+    if (!existsSync(filePath)) return false;
+    this._backup(filePath);
+    writeFileSync(filePath, content, "utf-8");
+    return true;
+  }
+
+  listSkillReports(name: string): string[] {
+    const skills = this.listSkills();
+    const skill = skills.find(s => s.name === name);
+    if (!skill?.outputDir || !existsSync(skill.outputDir)) return [];
+    return readdirSync(skill.outputDir)
+      .filter(f => f.endsWith(".md"))
+      .map(f => f.replace(".md", ""))
+      .sort()
+      .reverse();
+  }
+
+  readSkillReport(name: string, date: string): string | null {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    const skills = this.listSkills();
+    const skill = skills.find(s => s.name === name);
+    if (!skill?.outputDir) return null;
+    const filePath = join(skill.outputDir, `${date}.md`);
+    if (!existsSync(filePath)) return null;
+    return readFileSync(filePath, "utf-8");
+  }
+
   // ── Backup ─────────────────────────────────────────
 
   private _backup(filePath: string): void {
