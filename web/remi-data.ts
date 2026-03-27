@@ -5,7 +5,7 @@
  * Zero dependency on Remi core — completely decoupled.
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, unlinkSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, unlinkSync, statSync, realpathSync } from "node:fs";
 import { join, basename, extname, dirname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
@@ -120,47 +120,180 @@ export class RemiData {
 
   listEntities(): EntitySummary[] {
     const entitiesDir = join(this.memoryDir, "entities");
-    if (!existsSync(entitiesDir)) return [];
-
     const results: EntitySummary[] = [];
-    for (const typeDir of readdirSync(entitiesDir)) {
-      const typePath = join(entitiesDir, typeDir);
-      if (!statSync(typePath).isDirectory()) continue;
 
-      for (const file of readdirSync(typePath)) {
-        if (!file.endsWith(".md")) continue;
-        try {
-          const fullPath = join(typePath, file);
-          const raw = readFileSync(fullPath, "utf-8");
-          const { data } = matter(raw);
-          results.push({
-            type: data.type ?? typeDir,
-            name: data.name ?? basename(file, ".md"),
-            tags: data.tags ?? [],
-            summary: data.summary ?? "",
-            aliases: data.aliases ?? [],
-            related: data.related ?? [],
-            path: `${typeDir}/${file}`,
-            updatedAt: data.updated ?? data.created ?? "",
-          });
-        } catch {
-          // skip malformed files
+    // 1. Scan entities/{type}/*.md
+    if (existsSync(entitiesDir)) {
+      for (const typeDir of readdirSync(entitiesDir)) {
+        const typePath = join(entitiesDir, typeDir);
+        if (!statSync(typePath).isDirectory()) continue;
+
+        for (const file of readdirSync(typePath)) {
+          if (!file.endsWith(".md")) continue;
+          try {
+            const fullPath = join(typePath, file);
+            const raw = readFileSync(fullPath, "utf-8");
+            const { data } = matter(raw);
+            results.push({
+              type: data.type ?? typeDir,
+              name: data.name ?? basename(file, ".md"),
+              tags: data.tags ?? [],
+              summary: data.summary ?? "",
+              aliases: data.aliases ?? [],
+              related: data.related ?? [],
+              path: `${typeDir}/${file}`,
+              updatedAt: data.updated ?? data.created ?? "",
+            });
+          } catch {
+            // skip malformed files
+          }
         }
       }
     }
+
+    // 2. Scan loose *.md files in memory root (feedback_*, from_*, etc.)
+    const SKIP_ROOT = new Set(["MEMORY.md", "claude-bridge.md", ".bridge-snapshot", ".conversation_summary.md"]);
+    for (const file of readdirSync(this.memoryDir)) {
+      if (!file.endsWith(".md") || SKIP_ROOT.has(file) || file.startsWith(".")) continue;
+      const fullPath = join(this.memoryDir, file);
+      if (!statSync(fullPath).isFile()) continue;
+      try {
+        const raw = readFileSync(fullPath, "utf-8");
+        const { data } = matter(raw);
+        if (!data.type && !data.name) continue; // skip files without frontmatter
+        // Override type for loose files: from_* are archives, not projects
+        let looseType = data.type ?? "note";
+        if (file.startsWith("from_")) looseType = "archive";
+        results.push({
+          type: looseType,
+          name: data.name ?? basename(file, ".md"),
+          tags: data.tags ?? [],
+          summary: data.description ?? data.summary ?? "",
+          aliases: data.aliases ?? [],
+          related: data.related ?? [],
+          path: `_root/${file}`,
+          updatedAt: data.updated ?? data.created ?? "",
+        });
+      } catch { /* skip */ }
+    }
+
     return results;
   }
 
+  // ── Memory: Project-level memories ─────────────────
+
+  listProjectMemories(): Array<{
+    projectId: string;
+    projectName: string;
+    projectPath: string;
+    hasMemoryMd: boolean;
+    memoryMdSize: number;
+    files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }>;
+  }> {
+    const projectsDir = join(this.root, "projects");
+    if (!existsSync(projectsDir)) return [];
+
+    const results: Array<{
+      projectId: string;
+      projectName: string;
+      projectPath: string;
+      hasMemoryMd: boolean;
+      memoryMdSize: number;
+      files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }>;
+    }> = [];
+
+    // Resolve global memoryDir real path to detect symlink duplicates
+    const globalMemoryReal = realpathSync(this.memoryDir);
+
+    for (const projectDir of readdirSync(projectsDir)) {
+      const memoryDir = join(projectsDir, projectDir, "memory");
+      if (!existsSync(memoryDir) || !statSync(memoryDir).isDirectory()) continue;
+
+      // Skip directories that are symlinks to the global memory (e.g. -home-hehuajie)
+      try {
+        if (realpathSync(memoryDir) === globalMemoryReal) continue;
+      } catch { /* if realpath fails, include it */ }
+
+      // Derive human-readable project name from path-encoded dir name
+      // e.g. "-data00-home-hehuajie-project-larkparser" → "larkparser"
+      const parts = projectDir.split("-project-");
+      const projectName = parts.length > 1
+        ? parts[parts.length - 1].replace(/-/g, "_")
+        : projectDir;
+
+      // Derive original filesystem path
+      const projectPath = "/" + projectDir.replace(/^-/, "").replace(/-/g, "/");
+
+      // Check for MEMORY.md
+      const memoryMdPath = join(memoryDir, "MEMORY.md");
+      const hasMemoryMd = existsSync(memoryMdPath);
+      const memoryMdSize = hasMemoryMd ? statSync(memoryMdPath).size : 0;
+
+      // Scan all .md files in memory dir (recursively one level)
+      const files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }> = [];
+      const scanDir = (dir: string, prefix: string) => {
+        if (!existsSync(dir)) return;
+        for (const f of readdirSync(dir)) {
+          if (f.startsWith(".")) continue;
+          const fp = join(dir, f);
+          const st = statSync(fp);
+          if (st.isDirectory()) {
+            scanDir(fp, `${prefix}${f}/`);
+          } else if (f.endsWith(".md")) {
+            try {
+              const raw = readFileSync(fp, "utf-8");
+              const { data } = matter(raw);
+              files.push({
+                name: data.name ?? basename(f, ".md"),
+                type: data.type ?? (f === "MEMORY.md" ? "memory" : "note"),
+                summary: data.description ?? data.summary ?? "",
+                path: `${prefix}${f}`,
+                updatedAt: data.updated ?? "",
+              });
+            } catch {
+              files.push({
+                name: basename(f, ".md"),
+                type: f === "MEMORY.md" ? "memory" : "note",
+                summary: "",
+                path: `${prefix}${f}`,
+                updatedAt: "",
+              });
+            }
+          }
+        }
+      };
+      scanDir(memoryDir, "");
+
+      // Only include projects that have actual content
+      if (files.length > 0 || hasMemoryMd) {
+        results.push({ projectId: projectDir, projectName, projectPath, hasMemoryMd, memoryMdSize, files });
+      }
+    }
+
+    return results.sort((a, b) => b.files.length - a.files.length);
+  }
+
+  readProjectMemoryFile(projectId: string, filePath: string): string {
+    const fp = join(this.root, "projects", projectId, "memory", filePath);
+    return existsSync(fp) ? readFileSync(fp, "utf-8") : "";
+  }
+
   readEntity(type: string, name: string): EntityDetail | null {
-    const filePath = this._findEntityFile(type, name);
+    // Try loose root files first (feedback, archive, note types from _root/)
+    const filePath = this._findEntityFile(type, name) ?? this._findLooseFile(name);
     if (!filePath || !existsSync(filePath)) return null;
 
     const raw = readFileSync(filePath, "utf-8");
     const { data, content: body } = matter(raw);
     const entitiesDir = join(this.memoryDir, "entities");
 
+    // Use the requested type (which may have been overridden during listing)
+    // e.g. from_* files have frontmatter type=project but are listed as archive
+    const isLooseFile = filePath.startsWith(this.memoryDir + "/") && !filePath.includes("/entities/");
+    const effectiveType = isLooseFile ? type : (data.type ?? type);
+
     return {
-      type: data.type ?? type,
+      type: effectiveType,
       name: data.name ?? name,
       tags: data.tags ?? [],
       summary: data.summary ?? "",
@@ -247,6 +380,20 @@ export class RemiData {
         const { data } = matter(raw);
         if (data.name === name) return join(typeDir, file);
         if (data.aliases?.includes(name)) return join(typeDir, file);
+      } catch { /* skip */ }
+    }
+    return null;
+  }
+
+  private _findLooseFile(name: string): string | null {
+    // Search loose *.md files in memory root by frontmatter name
+    for (const file of readdirSync(this.memoryDir)) {
+      if (!file.endsWith(".md") || file.startsWith(".")) continue;
+      const fp = join(this.memoryDir, file);
+      if (!statSync(fp).isFile()) continue;
+      try {
+        const { data } = matter(readFileSync(fp, "utf-8"));
+        if (data.name === name) return fp;
       } catch { /* skip */ }
     }
     return null;
@@ -641,7 +788,7 @@ export class RemiData {
     return [...new Set(entries.map(e => e.module))].sort();
   }
 
-  getLogStats(date?: string): {
+  getLogStats(query?: { date?: string; level?: string | null; module?: string | null; search?: string | null; traceId?: string | null }): {
     total: number;
     levels: { DEBUG: number; INFO: number; WARN: number; ERROR: number };
     hourly: Array<{ hour: number; count: number; errors: number }>;
@@ -651,8 +798,25 @@ export class RemiData {
     lastErrorModule: string | null;
   } {
     const logsDir = join(this.root, "logs");
-    const d = date ?? new Date().toISOString().slice(0, 10);
-    const entries = readLogEntries(d, logsDir);
+    const d = query?.date ?? new Date().toISOString().slice(0, 10);
+    let entries = readLogEntries(d, logsDir);
+
+    // Apply same filters as getLogs
+    if (query?.level) {
+      const LEVELS: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+      const minLevel = LEVELS[query.level.toUpperCase()] ?? 0;
+      entries = entries.filter(e => (LEVELS[e.level] ?? 0) >= minLevel);
+    }
+    if (query?.module) {
+      entries = entries.filter(e => e.module === query.module);
+    }
+    if (query?.traceId) {
+      entries = entries.filter(e => e.traceId === query.traceId);
+    }
+    if (query?.search) {
+      const s = query.search.toLowerCase();
+      entries = entries.filter(e => e.msg.toLowerCase().includes(s));
+    }
 
     const levels = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 };
     const hourly: Array<{ hour: number; count: number; errors: number }> = Array.from(

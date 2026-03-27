@@ -84,9 +84,16 @@ export const useLogsStore = create<LogsState>((set, get) => ({
   },
 
   fetchStats: async () => {
+    const { date, level, module, traceId, search } = get();
     set({ statsLoading: true });
     try {
-      const stats = await api.getLogStats(get().date);
+      const stats = await api.getLogStats({
+        date,
+        level: level ?? undefined,
+        module: module ?? undefined,
+        traceId: traceId ?? undefined,
+        search: search ?? undefined,
+      });
       set({ stats, statsLoading: false });
     } catch {
       set({ statsLoading: false });

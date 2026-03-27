@@ -132,8 +132,16 @@ export const getLogs = (params: { date?: string; level?: string; module?: string
   if (params.offset) qs.set("offset", String(params.offset));
   return request<import("./types").LogQueryResult>(`/api/v1/logs?${qs.toString()}`);
 };
-export const getLogStats = (date?: string) =>
-  request<import("./types").LogStats>(`/api/v1/logs/stats${date ? `?date=${date}` : ""}`);
+export const getLogStats = (params?: { date?: string; level?: string; module?: string; search?: string; traceId?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.date) qs.set("date", params.date);
+  if (params?.level) qs.set("level", params.level);
+  if (params?.module) qs.set("module", params.module);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.traceId) qs.set("traceId", params.traceId);
+  const q = qs.toString();
+  return request<import("./types").LogStats>(`/api/v1/logs/stats${q ? `?${q}` : ""}`);
+};
 export const getLogModules = (date?: string) =>
   request<string[]>(`/api/v1/logs/modules${date ? `?date=${date}` : ""}`);
 
