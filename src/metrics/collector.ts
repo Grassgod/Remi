@@ -52,6 +52,7 @@ export interface AnalyticsSummary {
   today: DailySummary;
   week: DailySummary;   // last 7 days
   month: DailySummary;  // last 30 days
+  allTime: DailySummary; // all available history
   dailyHistory: DailySummary[];
   usage: UsageQuota[];  // Claude subscription usage quotas
 }
@@ -198,10 +199,18 @@ export class MetricsCollector {
     const allDailies = this.getSummary(month30, today);
     const todaySummary = allDailies.find(d => d.date === today) ?? _emptySummary(today);
 
+    // All-time: summarize every date file available
+    const allDates = this.listDates();
+    const allTimeDailies = allDates
+      .filter(d => d < month30) // dates not already in allDailies
+      .map(date => this._summarizeDay(date));
+    const allTimeEntries = [...allDailies, ...allTimeDailies];
+
     return {
       today: todaySummary,
       week: _mergeSummaries(allDailies.filter(d => d.date >= week7), "7d"),
       month: _mergeSummaries(allDailies, "30d"),
+      allTime: _mergeSummaries(allTimeEntries, "all"),
       dailyHistory: allDailies,
       usage: this.getUsageQuotas(),
     };

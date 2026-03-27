@@ -48,17 +48,15 @@ export function Analytics() {
 
   const today = summary?.today;
   const week = summary?.week;
+  const allTime = summary?.allTime;
   const dailyHistory = summary?.dailyHistory ?? [];
 
   // Compute values for cards
   const todayTokens = (today?.totalIn ?? 0) + (today?.totalOut ?? 0);
-  const todayCacheRead = today?.totalCacheRead ?? 0;
-  const todayTotalIn = today?.totalIn ?? 0;
-  const cacheHitRate = todayTotalIn + todayCacheRead > 0
-    ? Math.min(100, Math.max(0, (todayCacheRead / (todayTotalIn + todayCacheRead)) * 100))
-    : 0;
+  const allTimeTokens = (allTime?.totalIn ?? 0) + (allTime?.totalOut ?? 0) + (allTime?.totalCacheRead ?? 0) + (allTime?.totalCacheCreate ?? 0);
   const todayRequests = today?.requestCount ?? 0;
   const todayCost = today?.totalCost ?? 0;
+  const allTimeCost = allTime?.totalCost ?? 0;
 
   // Last 14 days for bar chart
   const last14 = dailyHistory
@@ -124,10 +122,9 @@ export function Analytics() {
         />
         <StatCard
           icon={<DatabaseZap className="h-4 w-4" />}
-          label="Cache Hit Rate"
-          value={`${cacheHitRate.toFixed(1)}%`}
-          sub={`CACHE READ ${formatNum(todayCacheRead)}`}
-          variant={cacheHitRate > 50 ? "success" : "warning"}
+          label="All-Time Tokens"
+          value={formatNum(allTimeTokens)}
+          sub={`${allTime?.requestCount ?? 0} REQUESTS`}
         />
         <StatCard
           icon={<Hash className="h-4 w-4" />}
@@ -139,7 +136,7 @@ export function Analytics() {
           icon={<Coins className="h-4 w-4" />}
           label="Est. Cost"
           value={todayCost > 0 ? `$${todayCost.toFixed(2)}` : "\u2014"}
-          sub={`7D: $${(week?.totalCost ?? 0).toFixed(2)}`}
+          sub={`7D: $${(week?.totalCost ?? 0).toFixed(2)} · ALL: $${allTimeCost.toFixed(2)}`}
         />
       </div>
 

@@ -124,6 +124,7 @@ export interface AnalyticsSummary {
   today: DailySummary;
   week: DailySummary;
   month: DailySummary;
+  allTime: DailySummary;
   dailyHistory: DailySummary[];
   usage: UsageQuota[];
 }
