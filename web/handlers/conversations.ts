@@ -21,13 +21,57 @@ function cleanTopic(raw: string): string {
   return t.trim().slice(0, 80) || "Untitled";
 }
 
+/** Get a readable name for a chat_id by peeking at the first user_message */
+function getChatName(db: any, chatId: string): string {
+  const row = db.query(
+    "SELECT user_message FROM conversations WHERE chat_id = ? AND user_message IS NOT NULL AND user_message != '' ORDER BY created_at ASC LIMIT 1"
+  ).get(chatId) as { user_message: string } | null;
+  if (row) {
+    let name = cleanTopic(row.user_message);
+    // Strip markdown noise for chat names
+    name = name.replace(/^#+\s*/gm, "").replace(/!\[.*?\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+    if (name && name !== "Untitled") return name.slice(0, 30);
+  }
+  return chatId.slice(0, 16);
+}
+
 export function registerConversationsHandlers(app: Hono, _data: RemiData) {
+
+  // ── GET /api/v1/chats — List distinct chats with stats ──
+  app.get("/api/v1/chats", (c) => {
+    const db = getDb();
+    const rows = db.query(`
+      SELECT
+        chat_id,
+        COUNT(*) as msg_count,
+        COUNT(DISTINCT CASE WHEN thread_id IS NOT NULL AND thread_id != '' THEN chat_id || ':' || thread_id ELSE chat_id END) as conv_count,
+        MAX(CASE WHEN thread_id IS NULL OR thread_id = '' THEN 1 ELSE 0 END) as has_no_thread
+      FROM conversations
+      GROUP BY chat_id
+      ORDER BY msg_count DESC
+    `).all() as { chat_id: string; msg_count: number; conv_count: number; has_no_thread: number }[];
+
+    const chats = rows.map(r => ({
+      chatId: r.chat_id,
+      name: getChatName(db, r.chat_id),
+      conversationCount: r.conv_count,
+      messageCount: r.msg_count,
+      isP2P: r.has_no_thread === 1 && r.conv_count <= 1,
+    }));
+
+    return c.json(chats);
+  });
+
   // ── GET /api/v1/conversations — List conversations grouped by chat_id + thread_id ──
   app.get("/api/v1/conversations", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 500);
+    const offset = Math.max(parseInt(c.req.query("offset") ?? "0", 10), 0);
+    const filterChatId = c.req.query("chatId") ?? null;
     const db = getDb();
 
-    // Use subquery to get the EARLIEST user_message per group (not MIN which sorts alphabetically)
+    const chatFilter = filterChatId ? "WHERE c.chat_id = ?" : "";
+    const params = filterChatId ? [filterChatId, limit, offset] : [limit, offset];
+
     const rows = db.query(`
       SELECT
         c.chat_id,
@@ -44,10 +88,11 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
          ORDER BY c2.created_at ASC LIMIT 1
         ) as first_message
       FROM conversations c
+      ${chatFilter}
       GROUP BY c.chat_id, COALESCE(c.thread_id, '')
       ORDER BY latest DESC
-      LIMIT ?
-    `).all(limit) as {
+      LIMIT ? OFFSET ?
+    `).all(...params) as {
       chat_id: string;
       thread_id: string | null;
       msg_count: number;

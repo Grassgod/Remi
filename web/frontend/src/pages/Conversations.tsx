@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useLocation } from "wouter";
 import { Layout } from "../components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -97,18 +98,43 @@ function ThinkingIcon({ className }: { className?: string }) {
 export function Conversations() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [query, setQuery] = useState("");
   const [selectedChat, setSelectedChat] = useState<ConversationSummary | null>(null);
+  const [chats, setChats] = useState<import("../api/types").ChatInfo[]>([]);
+  const [filterChatId, setFilterChatId] = useState<string>("");
+  const [location] = useLocation();
 
-  useEffect(() => { fetchConversations(); }, []);
+  const PAGE_SIZE = 50;
 
-  const fetchConversations = async () => {
-    setLoading(true);
+  // Reset detail view when sidebar navigates back to /conversations
+  useEffect(() => {
+    if (location === "/conversations") setSelectedChat(null);
+  }, [location]);
+
+  useEffect(() => { api.getChats().then(setChats).catch(() => {}); }, []);
+  useEffect(() => { fetchConversations(true); }, [filterChatId]);
+
+  const fetchConversations = async (reset = false) => {
+    if (reset) {
+      setLoading(true);
+      setConversations([]);
+    } else {
+      setLoadingMore(true);
+    }
     try {
-      const data = await api.getConversations(100);
-      setConversations(data);
+      const offset = reset ? 0 : conversations.length;
+      const data = await api.getConversations(PAGE_SIZE, offset, filterChatId || undefined);
+      if (reset) {
+        setConversations(data);
+      } else {
+        setConversations(prev => [...prev, ...data]);
+      }
+      setHasMore(data.length >= PAGE_SIZE);
     } catch {}
     setLoading(false);
+    setLoadingMore(false);
   };
 
   const filtered = conversations.filter(c =>
@@ -121,9 +147,24 @@ export function Conversations() {
 
   return (
     <Layout title="Conversations" subtitle="Chat History">
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Search conversations..." value={query} onChange={e => setQuery(e.target.value)} className="pl-9" />
+      {/* Chat filter + search */}
+      <div className="flex gap-2 mb-4">
+        <select
+          value={filterChatId}
+          onChange={e => setFilterChatId(e.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="">All Chats ({chats.reduce((s, c) => s + c.conversationCount, 0)})</option>
+          {chats.map(ch => (
+            <option key={ch.chatId} value={ch.chatId}>
+              {ch.isP2P ? "P2P" : "Group"}: {ch.name} ({ch.conversationCount})
+            </option>
+          ))}
+        </select>
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder="Search conversations..." value={query} onChange={e => setQuery(e.target.value)} className="pl-9" />
+        </div>
       </div>
 
       <Card>
@@ -131,7 +172,7 @@ export function Conversations() {
           <CardTitle className="flex items-center gap-2 text-sm">
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
             Conversations
-            <Badge variant="secondary" className="text-[10px]">{filtered.length}</Badge>
+            <Badge variant="secondary" className="text-[10px]">{filtered.length}{hasMore ? "+" : ""}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -170,6 +211,13 @@ export function Conversations() {
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </div>
               ))}
+              {hasMore && !query && (
+                <div className="p-3 text-center">
+                  <Button variant="ghost" size="sm" className="text-xs" disabled={loadingMore} onClick={() => fetchConversations(false)}>
+                    {loadingMore ? "Loading..." : "Load More"}
+                  </Button>
+                </div>
+              )}
             </ScrollArea>
           )}
         </CardContent>

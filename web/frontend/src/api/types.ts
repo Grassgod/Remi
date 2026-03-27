@@ -41,6 +41,24 @@ export interface SearchResult {
   path: string;
 }
 
+// Recall Debug
+export interface RecallLayerResult {
+  name: string;
+  ran: boolean;
+  durationMs: number;
+  candidateCount: number;
+  exitedEarly?: boolean;
+  reason?: string;
+  matches: Array<{ source: string; name: string; snippet: string }>;
+}
+
+export interface RecallDebugResult {
+  query: string;
+  result: string;
+  totalMs: number;
+  layers: RecallLayerResult[];
+}
+
 // Sessions
 export interface SessionEntry {
   key: string;
@@ -292,6 +310,14 @@ export interface StepItem {
   content: string;
   name?: string;
   thinking?: string;  // merged thinking before tool (if type=tool)
+}
+
+export interface ChatInfo {
+  chatId: string;
+  name: string;
+  conversationCount: number;
+  messageCount: number;
+  isP2P: boolean;
 }
 
 // Missions

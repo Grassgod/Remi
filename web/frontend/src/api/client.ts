@@ -52,6 +52,11 @@ export const deleteEntity = (type: string, name: string) =>
 export const searchMemory = (q: string) =>
   request<import("./types").SearchResult[]>(`/api/v1/memory/search?q=${encodeURIComponent(q)}`);
 
+export const recallDebug = (query: string, cwd?: string) =>
+  request<import("./types").RecallDebugResult>("/api/v1/memory/recall", {
+    method: "POST", body: JSON.stringify({ query, cwd }),
+  });
+
 export const getDailyDates = () => request<import("./types").DailyLogEntry[]>("/api/v1/memory/daily");
 export const getDaily = (date: string) =>
   request<import("./types").DailyEntry>(`/api/v1/memory/daily/${date}`);
@@ -140,12 +145,17 @@ export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv
 export const getDbEmbeddings = () => request<import("./types").EmbeddingEntry[]>("/api/v1/db/embeddings");
 
 // Conversations
-export const getConversations = (limit = 50) =>
-  request<import("./types").ConversationSummary[]>(`/api/v1/conversations?limit=${limit}`);
+export const getConversations = (limit = 50, offset = 0, chatId?: string) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (chatId) params.set("chatId", chatId);
+  return request<import("./types").ConversationSummary[]>(`/api/v1/conversations?${params}`);
+};
 export const getConversationMessages = (chatId: string, threadId?: string) => {
   const params = threadId ? `?threadId=${encodeURIComponent(threadId)}` : "";
   return request<import("./types").ChatMessage[]>(`/api/v1/conversations/${encodeURIComponent(chatId)}/messages${params}`);
 };
+export const getChats = () =>
+  request<import("./types").ChatInfo[]>("/api/v1/chats");
 
 // Missions
 export const getMissions = (projectId?: string, status?: string) => {

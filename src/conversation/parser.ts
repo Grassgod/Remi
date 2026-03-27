@@ -77,6 +77,9 @@ export function stripContextTags(text: string): string {
     }
   }
   t = t.replace(/^贺华杰:\s*/m, "");
+  // Convert <media:image> {"image_key":"img_xxx"} → markdown image
+  t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1)\n");
+  t = t.replace(/\{"image_key"\s*:\s*"([^"]+)"[^}]*\}\s*<media:image>/g, "\n![image](/api/image/$1)\n");
   return t.trim();
 }
 

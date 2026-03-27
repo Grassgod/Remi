@@ -86,6 +86,41 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
 
+  // ── Image proxy (shared cache with Board server) ──
+  const imageCacheDir = join(require("node:os").homedir(), ".remi", "lark_image");
+  try { require("node:fs").mkdirSync(imageCacheDir, { recursive: true }); } catch {}
+
+  app.get("/api/image/:imageKey", async (c) => {
+    const imageKey = c.req.param("imageKey");
+    if (!imageKey?.startsWith("img_")) return c.json({ error: "invalid key" }, 400);
+
+    const { existsSync, readFileSync } = require("node:fs");
+    const cachePath = join(imageCacheDir, imageKey);
+
+    // Serve from shared disk cache
+    if (existsSync(cachePath)) {
+      const buf = readFileSync(cachePath);
+      return new Response(buf, {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
+      });
+    }
+
+    // Proxy to Board server (which has feishuClient for downloads)
+    try {
+      const boardPort = process.env.REMI_BOARD_PORT ?? "8090";
+      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}`);
+      if (!resp.ok) return c.json({ error: "image not found" }, resp.status);
+      const buf = Buffer.from(await resp.arrayBuffer());
+      // Cache locally for next time
+      try { require("node:fs").writeFileSync(cachePath, buf); } catch {}
+      return new Response(buf, {
+        headers: { "Content-Type": resp.headers.get("Content-Type") ?? "image/png", "Cache-Control": "public, max-age=86400" },
+      });
+    } catch {
+      return c.json({ error: "image proxy failed" }, 502);
+    }
+  });
+
   // Auto-mount all task directories as /tasks/<dir-name>/*
   const tasksDir = "/data00/home/hehuajie/tasks";
   try {
