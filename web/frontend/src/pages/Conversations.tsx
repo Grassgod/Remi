@@ -203,7 +203,6 @@ export function Conversations() {
                     <div className="mt-0.5 truncate text-xs text-muted-foreground">
                       {conv.messageCount} messages · {formatTokenCount(conv.tokenCount)} tokens
                       {conv.totalCost > 0 && ` · $${conv.totalCost.toFixed(2)}`}
-                      <span className="ml-1 font-mono text-muted-foreground/40 select-all">{conv.id}</span>
                     </div>
                   </div>
                   <div className="hidden shrink-0 text-right sm:block">
@@ -255,7 +254,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
   return (
     <Layout
       title="Conversation"
-      subtitle={topicClean}
+      subtitle={`${topicClean}  ${conv.id}`}
       actions={
         <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
           <span>{conv.messageCount} msgs</span>
