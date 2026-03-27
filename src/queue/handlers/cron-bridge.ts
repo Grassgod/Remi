@@ -149,32 +149,39 @@ handlers.set("skill:run", async (remi, config) => {
 // ── Dispatcher (BunQueue Worker handler) ─────────────────────────
 
 export async function handleCronJob(job: Job<CronJobData>, remi: Remi): Promise<void> {
-  const { handler, handlerConfig } = job.data;
+  const { jobId, handler, handlerConfig } = job.data;
   const fn = handlers.get(handler);
   if (!fn) {
     throw new Error(`Unknown cron handler: ${handler}`);
   }
-  log.info(`Executing cron job: ${handler}`);
+  log.info(`Executing cron job: ${jobId} (handler=${handler})`);
   const start = Date.now();
   try {
     await fn(remi, handlerConfig);
     const durationMs = Date.now() - start;
-    log.info(`Cron job ${handler} completed in ${durationMs}ms`);
-    appendRunLog(handler, "ok", durationMs);
+    log.info(`Cron job ${jobId} completed in ${durationMs}ms`);
+    appendRunLog(jobId, handler, "ok", durationMs);
   } catch (e) {
     const durationMs = Date.now() - start;
-    log.error(`Cron job ${handler} failed after ${durationMs}ms:`, e);
-    appendRunLog(handler, "error", durationMs, String(e));
+    log.error(`Cron job ${jobId} failed after ${durationMs}ms:`, e);
+    appendRunLog(jobId, handler, "error", durationMs, String(e));
     throw e; // re-throw so BunQueue records failure + retries
   }
 }
 
-function appendRunLog(handler: string, status: "ok" | "error", durationMs: number, error?: string): void {
+function appendRunLog(jobId: string, handler: string, status: "ok" | "error", durationMs: number, error?: string): void {
   try {
     const runsDir = join(homedir(), ".remi", "cron", "runs");
     if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
-    const safeId = handler.replace(/[:/]/g, "_");
-    const entry = JSON.stringify({ ts: new Date().toISOString(), status, durationMs, ...(error && { error: error.slice(0, 500) }) });
+    const safeId = jobId.replace(/[:/]/g, "_");
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      jobId,
+      handler,
+      status,
+      durationMs,
+      ...(error && { error: error.slice(0, 500) }),
+    });
     appendFileSync(join(runsDir, `${safeId}.jsonl`), entry + "\n", "utf-8");
   } catch {
     // non-critical, don't let logging failure break cron
