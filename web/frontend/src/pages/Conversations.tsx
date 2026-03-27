@@ -187,7 +187,7 @@ export function Conversations() {
               {filtered.map(conv => (
                 <div
                   key={conv.id}
-                  className="flex cursor-pointer items-center gap-3 border-b border-border/30 px-4 py-3 transition-colors hover:bg-accent/30"
+                  className="flex cursor-pointer items-center gap-3 border-b border-border/40 dark:border-white/5 px-4 py-3 transition-colors hover:bg-accent/30"
                   onClick={() => setSelectedChat(conv)}
                 >
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
