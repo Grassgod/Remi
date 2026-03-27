@@ -759,9 +759,8 @@ export class RemiData {
 
     // Apply filters
     if (query.level) {
-      const LEVELS: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
-      const minLevel = LEVELS[query.level.toUpperCase()] ?? 0;
-      entries = entries.filter(e => (LEVELS[e.level] ?? 0) >= minLevel);
+      const lvl = query.level.toUpperCase();
+      entries = entries.filter(e => e.level === lvl);
     }
     if (query.module) {
       entries = entries.filter(e => e.module === query.module);
@@ -803,9 +802,8 @@ export class RemiData {
 
     // Apply same filters as getLogs
     if (query?.level) {
-      const LEVELS: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
-      const minLevel = LEVELS[query.level.toUpperCase()] ?? 0;
-      entries = entries.filter(e => (LEVELS[e.level] ?? 0) >= minLevel);
+      const lvl = query.level.toUpperCase();
+      entries = entries.filter(e => e.level === lvl);
     }
     if (query?.module) {
       entries = entries.filter(e => e.module === query.module);

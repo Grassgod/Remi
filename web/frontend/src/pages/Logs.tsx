@@ -133,7 +133,7 @@ export function Logs() {
             <Select
               value={level ?? ""}
               onChange={e => handleFilterChange("level", (e.target as HTMLSelectElement).value || null)}
-              placeholder="All Levels (≥)"
+              placeholder="All Levels"
               options={[
                 { value: "DEBUG", label: "DEBUG" },
                 { value: "INFO", label: "INFO" },
