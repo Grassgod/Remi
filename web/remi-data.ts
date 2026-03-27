@@ -33,6 +33,7 @@ export interface EntityDetail extends EntitySummary {
   content: string;     // full markdown including frontmatter
   body: string;        // markdown body only
   createdAt: string;
+  metadata: Record<string, unknown>;  // complete YAML frontmatter
 }
 
 export interface SessionEntry {
@@ -168,6 +169,7 @@ export class RemiData {
       createdAt: data.created ?? "",
       content: raw,
       body: body.trim(),
+      metadata: data,
     };
   }
 
@@ -617,7 +619,11 @@ export class RemiData {
 
   getTrace(traceId: string): TraceData | null {
     const db = getDb();
-    const row = db.query("SELECT * FROM conversations WHERE id = ?").get(Number(traceId)) as any | null;
+    // Try by message_id first (traceId = feishu messageId), fall back to conversations.id
+    const row = (
+      db.query("SELECT * FROM conversations WHERE message_id = ?").get(traceId) ??
+      db.query("SELECT * FROM conversations WHERE id = ?").get(Number(traceId))
+    ) as any | null;
     return row ? rowToTraceData(row) : null;
   }
 

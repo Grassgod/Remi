@@ -10,8 +10,7 @@ import {
   GitCommit, Clock, File,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { FrontmatterDocument } from "../components/FrontmatterDocument";
 import * as api from "../api/client";
 import type { WikiFileNode, WikiFileContent, WikiGitEntry } from "../api/types";
 
@@ -128,11 +127,7 @@ export function Wiki() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="prose prose-sm prose-invert max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {fileContent.content}
-                      </ReactMarkdown>
-                    </div>
+                    <FrontmatterDocument body={fileContent.content} />
                   </CardContent>
                 </Card>
 

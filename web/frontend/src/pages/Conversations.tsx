@@ -9,8 +9,7 @@ import { MessageSquare, Search, Clock, Coins, ArrowLeft, User, Bot, ChevronDown,
 import { cn } from "@/lib/utils";
 import * as api from "../api/client";
 import type { ConversationSummary, ChatMessage, StepItem } from "../api/types";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { FrontmatterDocument } from "../components/FrontmatterDocument";
 
 export function Conversations() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -187,8 +186,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         )}
 
         {/* Content */}
-        <div className="prose prose-sm prose-invert max-w-none text-sm">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        <div className="text-sm">
+          <FrontmatterDocument body={message.content} />
         </div>
 
         {/* Meta footer */}

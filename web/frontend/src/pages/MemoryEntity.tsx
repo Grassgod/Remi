@@ -3,6 +3,7 @@ import { useLocation, useParams } from "wouter";
 import { Layout } from "../components/Layout";
 import { HudPanel } from "../components/HudPanel";
 import { useMemoryStore } from "../stores/memory";
+import { FrontmatterDocument } from "../components/FrontmatterDocument";
 
 export function MemoryEntity() {
   const params = useParams<{ type: string; name: string }>();
@@ -49,14 +50,21 @@ export function MemoryEntity() {
             {currentEntity.tags?.length > 0 && metaRow("TAGS", currentEntity.tags.join(", "))}
             {currentEntity.summary && metaRow("SUMMARY", currentEntity.summary)}
           </div>
+          {/* Auto-render remaining frontmatter fields */}
+          <div className="mt-3">
+            <FrontmatterDocument
+              metadata={currentEntity.metadata}
+              knownFields={["type", "name", "created", "updated", "aliases", "tags", "summary"]}
+            />
+          </div>
         </div>
       </HudPanel>
 
       <div className="mt-3.5">
         <HudPanel title="Content" maxHeight={600}>
-          <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground">
-            {currentEntity.content || "(empty)"}
-          </pre>
+          <div className="p-4">
+            <FrontmatterDocument body={currentEntity.body || currentEntity.content || "(empty)"} />
+          </div>
         </HudPanel>
       </div>
     </Layout>

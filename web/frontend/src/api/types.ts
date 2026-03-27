@@ -22,6 +22,7 @@ export interface EntityDetail extends EntitySummary {
   content: string;
   body: string;
   createdAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DailyLogEntry {

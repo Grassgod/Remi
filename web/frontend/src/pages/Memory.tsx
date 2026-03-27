@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useMemoryStore } from "../stores/memory";
 import * as api from "../api/client";
 import type { EntityDetail } from "../api/types";
+import { FrontmatterDocument } from "../components/FrontmatterDocument";
 
 export function Memory() {
   const {
@@ -256,15 +257,12 @@ export function Memory() {
                   )}
                 </div>
 
-                {/* Content */}
-                <div>
-                  <div className="mb-2 text-xs font-medium text-muted-foreground">Content</div>
-                  <div className="rounded-md border border-border bg-muted/30 p-3">
-                    <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">
-                      {sheetEntity.body || sheetEntity.content}
-                    </pre>
-                  </div>
-                </div>
+                {/* Extra metadata + Content */}
+                <FrontmatterDocument
+                  metadata={sheetEntity.metadata}
+                  body={sheetEntity.body || sheetEntity.content}
+                  knownFields={["type", "name", "created", "updated", "aliases", "tags", "summary"]}
+                />
 
                 {/* Delete button */}
                 <Button
