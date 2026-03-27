@@ -116,6 +116,12 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
 
       // User message from BunQueue enqueue (may have empty content for image messages)
       if (obj.type === "queue-operation" && obj.operation === "enqueue") {
+        // Skip system-only enqueues — they are not real user messages
+        // and should not split a conversation pair
+        const rawContent = obj.content ?? "";
+        if (rawContent.startsWith("<task-notification") || rawContent.startsWith("<system-reminder")) {
+          continue;
+        }
         // Flush previous pair
         if (currentEnqueue && currentEnqueue.content && (currentText || currentSteps.length > 0)) {
           pairs.push({
