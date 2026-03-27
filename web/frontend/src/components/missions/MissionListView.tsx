@@ -53,9 +53,9 @@ export function MissionListView({ missions }: MissionListViewProps) {
             >
               {cfg.label}
             </span>
-            <span className="text-[10px] text-zinc-600">{items.length}</span>
-            <span className="ml-1 flex-1 border-t border-zinc-800" />
-            <span className="text-[10px] text-zinc-600">
+            <span className="text-[10px] text-muted-foreground">{items.length}</span>
+            <span className="ml-1 flex-1 border-t border-border" />
+            <span className="text-[10px] text-muted-foreground">
               {collapsed[cfg.key] ? "▸" : "▾"}
             </span>
           </button>
@@ -66,15 +66,15 @@ export function MissionListView({ missions }: MissionListViewProps) {
                 <div
                   key={mission.id}
                   onClick={() => navigate(`/missions/${mission.id}`)}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg border border-zinc-800/80 bg-zinc-900/60 px-4 py-3 transition-all hover:border-zinc-700 hover:bg-zinc-800/60"
+                  className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-all hover:border-primary/30 hover:bg-accent/30"
                   style={{ borderLeftWidth: "3px", borderLeftColor: cfg.color }}
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-medium text-zinc-100">
+                    <div className="text-[13px] font-medium text-foreground">
                       {mission.title}
                     </div>
-                    <div className="mt-1 flex items-center gap-1.5 text-[10px] text-zinc-500">
-                      <span className="text-zinc-400">{mission.projectId}</span>
+                    <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                      <span className="text-muted-foreground">{mission.projectId}</span>
                       <span>·</span>
                       <span>{STEP_LABELS[mission.currentStep] ?? mission.currentStep}</span>
                       {mission.createdByName && (
@@ -100,16 +100,16 @@ export function MissionListView({ missions }: MissionListViewProps) {
                   )}
 
                   {mission.totalCost > 0 && (
-                    <span className="text-[11px] tabular-nums text-zinc-500">
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
                       {formatCost(mission.totalCost)}
                     </span>
                   )}
 
-                  <span className="text-[11px] text-zinc-600">
+                  <span className="text-[11px] text-muted-foreground">
                     {formatRelative(mission.updatedAt)}
                   </span>
 
-                  <ChevronRight className="h-3.5 w-3.5 text-zinc-700" />
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                 </div>
               ))}
             </div>
@@ -118,7 +118,7 @@ export function MissionListView({ missions }: MissionListViewProps) {
       ))}
 
       {groups.length === 0 && (
-        <div className="py-20 text-center text-sm text-zinc-500">
+        <div className="py-20 text-center text-sm text-muted-foreground">
           No missions yet
         </div>
       )}

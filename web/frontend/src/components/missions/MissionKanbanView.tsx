@@ -33,8 +33,8 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
     <div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
         {columns.map(col => (
-          <div key={col.key} className="rounded-lg border border-zinc-800 bg-zinc-900/40">
-            <div className="flex items-center gap-2 border-b border-zinc-800/50 px-3 py-2.5">
+          <div key={col.key} className="rounded-lg border border-border bg-card">
+            <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
               <span
                 className="h-[7px] w-[7px] rounded-full"
                 style={{ background: col.color }}
@@ -42,7 +42,7 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
               <span className="text-[12px] font-medium" style={{ color: col.color }}>
                 {col.label}
               </span>
-              <span className="ml-auto rounded-md bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+              <span className="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {col.items.length}
               </span>
             </div>
@@ -50,24 +50,24 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
             <ScrollArea className="max-h-[500px]">
               <div className="space-y-1.5 p-2">
                 {col.items.length === 0 ? (
-                  <div className="py-8 text-center text-[10px] text-zinc-600">Empty</div>
+                  <div className="py-8 text-center text-[10px] text-muted-foreground">Empty</div>
                 ) : (
                   col.items.map(mission => (
                     <div
                       key={mission.id}
                       onClick={() => navigate(`/missions/${mission.id}`)}
-                      className="cursor-pointer rounded-md border border-zinc-800/60 bg-zinc-900 p-3 transition-all hover:border-zinc-700 hover:bg-zinc-800/60"
+                      className="cursor-pointer rounded-md border border-border bg-card p-3 transition-all hover:border-primary/30 hover:bg-accent/30"
                     >
-                      <div className="line-clamp-2 text-[13px] font-medium text-zinc-100">
+                      <div className="line-clamp-2 text-[13px] font-medium text-foreground">
                         {mission.title}
                       </div>
                       {mission.description && (
-                        <div className="mt-1 line-clamp-2 text-[11px] text-zinc-500">
+                        <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                           {mission.description}
                         </div>
                       )}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400 border border-zinc-700/50">
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground border border-border/50">
                           {STEP_LABELS[mission.currentStep] ?? mission.currentStep}
                         </span>
                         {mission.mrUrl && (
@@ -83,7 +83,7 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
                           </span>
                         )}
                       </div>
-                      <div className="mt-2 flex items-center gap-2 text-[9px] text-zinc-600">
+                      <div className="mt-2 flex items-center gap-2 text-[9px] text-muted-foreground">
                         {mission.createdByName && (
                           <span className="flex items-center gap-0.5">
                             <User className="h-2.5 w-2.5" /> {mission.createdByName}
@@ -110,8 +110,8 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
       </div>
 
       {otherItems.length > 0 && (
-        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-          <div className="mb-2 text-[12px] font-medium text-zinc-400">
+        <div className="mt-3 rounded-lg border border-border bg-card p-3">
+          <div className="mb-2 text-[12px] font-medium text-muted-foreground">
             Other ({otherItems.length})
           </div>
           <div className="space-y-1.5">
@@ -119,13 +119,13 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
               <div
                 key={mission.id}
                 onClick={() => navigate(`/missions/${mission.id}`)}
-                className="flex cursor-pointer items-center gap-3 rounded-md border border-zinc-800/60 bg-zinc-900 px-3 py-2.5 transition-all hover:border-zinc-700 hover:bg-zinc-800/60"
+                className="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5 transition-all hover:border-primary/30 hover:bg-accent/30"
               >
                 <span
                   className="h-2 w-2 rounded-full"
                   style={{ background: getStatusConfig(mission.status).color }}
                 />
-                <span className="flex-1 text-[13px] font-medium text-zinc-100">{mission.title}</span>
+                <span className="flex-1 text-[13px] font-medium text-foreground">{mission.title}</span>
                 <span
                   className="rounded px-2 py-0.5 text-[9px] font-medium"
                   style={{
