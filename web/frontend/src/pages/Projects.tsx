@@ -6,8 +6,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
-import { FolderOpen, Plus, Trash2, Pencil, AlertTriangle, Check, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { FolderOpen, Plus, Trash2, AlertTriangle, Check, X } from "lucide-react";
 import * as api from "../api/client";
 import type { ProjectMap } from "../api/types";
 
@@ -19,9 +18,15 @@ export function Projects() {
   const [editing, setEditing] = useState<string | null>(null);
   const [editPath, setEditPath] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchProjects = async () => {
-    try { setProjects(await api.getProjects()); } catch {}
+    try {
+      setProjects(await api.getProjects());
+      setError(null);
+    } catch {
+      setError("Failed to load projects");
+    }
   };
 
   useEffect(() => { fetchProjects(); }, []);
@@ -30,24 +35,43 @@ export function Projects() {
 
   const handleAdd = async () => {
     if (!newAlias.trim() || !newPath.trim()) return;
-    await api.createProject(newAlias.trim(), newPath.trim());
-    setNewAlias(""); setNewPath(""); setAdding(false);
-    fetchProjects();
+    const alias = newAlias.trim();
+    if (alias in projects) {
+      if (!confirm(`Alias "${alias}" already exists. Overwrite?`)) return;
+    }
+    try {
+      await api.createProject(alias, newPath.trim());
+      setNewAlias(""); setNewPath(""); setAdding(false);
+      fetchProjects();
+    } catch {
+      setError(`Failed to create project "${alias}"`);
+    }
   };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    await api.deleteProject(deleteTarget);
-    setDeleteTarget(null);
-    fetchProjects();
+    try {
+      await api.deleteProject(deleteTarget);
+      setDeleteTarget(null);
+      fetchProjects();
+    } catch {
+      setError(`Failed to delete project "${deleteTarget}"`);
+      setDeleteTarget(null);
+    }
   };
 
   const handleEdit = async (alias: string) => {
     if (!editPath.trim()) return;
-    await api.updateProject(alias, editPath.trim());
-    setEditing(null); setEditPath("");
-    fetchProjects();
+    try {
+      await api.updateProject(alias, editPath.trim());
+      setEditing(null); setEditPath("");
+      fetchProjects();
+    } catch {
+      setError(`Failed to update project "${alias}"`);
+    }
   };
+
+  const cancelAdd = () => { setAdding(false); setNewAlias(""); setNewPath(""); };
 
   return (
     <Layout title="Projects" subtitle="Workspace Management">
@@ -63,6 +87,16 @@ export function Projects() {
           </Button>
         </CardHeader>
         <CardContent className="p-0">
+          {/* Error banner */}
+          {error && (
+            <div className="flex items-center justify-between border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+              <span>{error}</span>
+              <button onClick={() => setError(null)} className="ml-2 opacity-70 hover:opacity-100">
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
+
           {/* Add form */}
           {adding && (
             <div className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -70,7 +104,7 @@ export function Projects() {
                 placeholder="Alias (e.g. remi)"
                 value={newAlias}
                 onChange={e => setNewAlias(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleAdd()}
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); if (e.key === "Escape") cancelAdd(); }}
                 className="h-8 w-[120px] text-xs"
                 autoFocus
               />
@@ -78,13 +112,13 @@ export function Projects() {
                 placeholder="Path (e.g. /data00/home/...)"
                 value={newPath}
                 onChange={e => setNewPath(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleAdd()}
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); if (e.key === "Escape") cancelAdd(); }}
                 className="h-8 flex-1 text-xs"
               />
               <Button variant="default" size="sm" onClick={handleAdd} className="h-8 text-xs">
                 <Check className="mr-1 h-3 w-3" /> Save
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => { setAdding(false); setNewAlias(""); setNewPath(""); }} className="h-8 text-xs">
+              <Button variant="ghost" size="sm" onClick={cancelAdd} className="h-8 text-xs">
                 <X className="h-3 w-3" />
               </Button>
             </div>
