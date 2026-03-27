@@ -124,7 +124,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
           SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
           SUM(COALESCE(c.cost_usd, 0)) as total_cost,
           MAX(c.created_at) as latest,
-          MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
+          MAX(CASE WHEN c.status = 'processing' AND c.created_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) as has_active,
           (SELECT c2.user_message FROM conversations c2
            WHERE c2.cli_session_id = c.cli_session_id
              AND c2.user_message IS NOT NULL AND c2.user_message != ''
@@ -151,7 +151,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
           SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
           SUM(COALESCE(c.cost_usd, 0)) as total_cost,
           MAX(c.created_at) as latest,
-          MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
+          MAX(CASE WHEN c.status = 'processing' AND c.created_at > datetime('now', '-1 hour') THEN 1 ELSE 0 END) as has_active,
           (SELECT c2.user_message FROM conversations c2
            WHERE c2.chat_id = c.chat_id
              AND COALESCE(c2.thread_id, '') = COALESCE(c.thread_id, '')
