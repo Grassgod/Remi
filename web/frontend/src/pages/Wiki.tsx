@@ -128,7 +128,7 @@ export function Wiki() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="prose prose-sm prose-invert max-w-none">
+                    <div className="prose prose-sm dark:prose-invert max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {fileContent.content}
                       </ReactMarkdown>

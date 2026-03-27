@@ -32,7 +32,9 @@ import { registerDbHandlers } from "./handlers/db.js";
 import { registerBotMenuHandlers } from "./handlers/bot-menu.js";
 import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
-import { registerMissionsHandlers } from "./handlers/missions.js";
+// Dynamic import — mission module may not exist in worktree
+let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
+try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
 
 // ── Exported start/stop ────────────────────────────────
@@ -81,7 +83,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerBotMenuHandlers(app, data);
   registerSymlinkHandlers(app, data);
   registerConversationsHandlers(app, data);
-  registerMissionsHandlers(app, data);
+  registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
 
   // Auto-mount all task directories as /tasks/<dir-name>/*
