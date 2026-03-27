@@ -15,7 +15,7 @@ export function SvgDonut({ segments, centerLabel, centerValue, size = 160 }: Svg
   const total = segments.reduce((s, seg) => s + seg.value, 0);
   if (total === 0) {
     return (
-      <div style={{ height: size, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--text-dim)" }}>
+      <div style={{ height: size, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted-foreground)" }}>
         NO DATA
       </div>
     );
@@ -33,7 +33,7 @@ export function SvgDonut({ segments, centerLabel, centerValue, size = 160 }: Svg
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {/* Background ring */}
-        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth={strokeWidth} />
+        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="var(--muted)" strokeWidth={strokeWidth} />
 
         {/* Segments */}
         {segments.map((seg, i) => {
@@ -61,20 +61,20 @@ export function SvgDonut({ segments, centerLabel, centerValue, size = 160 }: Svg
         })}
 
         {/* Center text */}
-        <text x={cx} y={cy - 6} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize={8} fontFamily="var(--font-mono)" letterSpacing={1}>
+        <text x={cx} y={cy - 6} textAnchor="middle" fill="var(--muted-foreground)" fontSize={8} fontFamily="var(--font-mono)" letterSpacing={1}>
           {centerLabel}
         </text>
-        <text x={cx} y={cy + 10} textAnchor="middle" fill="var(--text-bright)" fontSize={16} fontFamily="var(--font-display)" fontWeight={700}>
+        <text x={cx} y={cy + 10} textAnchor="middle" fill="var(--foreground)" fontSize={16} fontFamily="var(--font-display)" fontWeight={700}>
           {centerValue}
         </text>
       </svg>
 
       {/* Legend */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", justifyContent: "center" }}>
+      <div className="donut-legend" style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", justifyContent: "center" }}>
         {segments.filter(s => s.value > 0).map((seg, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text-muted)" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted-foreground)" }}>
               {seg.label}
             </span>
           </div>
