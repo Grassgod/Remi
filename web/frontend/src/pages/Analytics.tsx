@@ -51,9 +51,11 @@ export function Analytics() {
   const allTime = summary?.allTime;
   const dailyHistory = summary?.dailyHistory ?? [];
 
-  // Compute values for cards
-  const todayTokens = (today?.totalIn ?? 0) + (today?.totalOut ?? 0);
-  const allTimeTokens = (allTime?.totalIn ?? 0) + (allTime?.totalOut ?? 0) + (allTime?.totalCacheRead ?? 0) + (allTime?.totalCacheCreate ?? 0);
+  // Compute values for cards (all token types including cache)
+  const sumTokens = (s: typeof today) => (s?.totalIn ?? 0) + (s?.totalOut ?? 0) + (s?.totalCacheRead ?? 0) + (s?.totalCacheCreate ?? 0);
+  const todayTokens = sumTokens(today);
+  const weekTokens = sumTokens(week);
+  const allTimeTokens = sumTokens(allTime);
   const todayRequests = today?.requestCount ?? 0;
   const todayCost = today?.totalCost ?? 0;
   const allTimeCost = allTime?.totalCost ?? 0;
@@ -124,7 +126,7 @@ export function Analytics() {
           icon={<DatabaseZap className="h-4 w-4" />}
           label="All-Time Tokens"
           value={formatNum(allTimeTokens)}
-          sub={`${allTime?.requestCount ?? 0} REQUESTS`}
+          sub={`TODAY: ${formatNum(todayTokens)} · 7D: ${formatNum(weekTokens)}`}
         />
         <StatCard
           icon={<Hash className="h-4 w-4" />}
