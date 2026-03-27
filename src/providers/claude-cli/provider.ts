@@ -145,6 +145,9 @@ export class ClaudeCLIProvider implements Provider {
     message: string,
     options?: SendOptions,
   ): AsyncGenerator<StreamEvent> {
+    // Request-scoped logger with traceId for log correlation
+    const _log = options?.traceId ? log.child({ traceId: options.traceId }) : log;
+
     const mgr = await this._ensureProcess(
       options?.chatId, options?.systemPrompt, options?.sessionId, options?.cwd,
       { allowedTools: options?.allowedTools, addDirs: options?.addDirs, permissionMode: options?.permissionMode },
@@ -172,7 +175,7 @@ export class ClaudeCLIProvider implements Provider {
 
       // Check wall-clock deadline
       if (Date.now() > deadline) {
-        log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
+        _log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
         yield { kind: "error", error: `Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).` } as StreamEvent;
         break;
       }
@@ -184,36 +187,36 @@ export class ClaudeCLIProvider implements Provider {
       } else if (msg.kind === "thinking_delta") {
         const text = (msg as ThinkingDelta).thinking;
         thinkingParts.push(text);
-        log.debug(`yield thinking_delta (${text.length} chars)`);
+        _log.debug(`yield thinking_delta (${text.length} chars)`);
         yield { kind: "thinking_delta", text } as StreamEvent;
       } else if (msg.kind === "content_delta") {
         const text = (msg as ContentDelta).text;
         textParts.push(text);
-        log.debug(`yield content_delta (${text.length} chars)`);
+        _log.debug(`yield content_delta (${text.length} chars)`);
         yield { kind: "content_delta", text } as StreamEvent;
       } else if (msg.kind === "tool_use") {
         const tu = msg as ToolUseRequest;
         toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
-        log.debug(`yield tool_use: ${tu.name}`);
+        _log.debug(`yield tool_use: ${tu.name}`);
 
         yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input } as StreamEvent;
       } else if (msg.kind === "tool_result") {
         const tr = msg as ToolResultMessage;
-        log.debug(`yield tool_result: ${tr.name} (${tr.durationMs}ms)`);
+        _log.debug(`yield tool_result: ${tr.name} (${tr.durationMs}ms)`);
         yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs } as StreamEvent;
       } else if (msg.kind === "rate_limit") {
         const rl = msg as RateLimitEvent;
-        log.debug(`yield rate_limit: ${rl.retryAfterMs}ms type=${rl.rateLimitType} status=${rl.status}`);
+        _log.debug(`yield rate_limit: ${rl.retryAfterMs}ms type=${rl.rateLimitType} status=${rl.status}`);
         yield { kind: "rate_limit", retryAfterMs: rl.retryAfterMs, rateLimitType: rl.rateLimitType, resetsAt: rl.resetsAt, status: rl.status } as StreamEvent;
       } else if (msg.kind === "error") {
         const err = msg as ErrorEvent;
-        log.debug(`yield error: ${err.error}`);
+        _log.debug(`yield error: ${err.error}`);
         // Remove hung process from pool to ensure respawn on next message
         if (err.code === "process_hang") {
           const key = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
           this._pool.delete(key);
           this._lastUsed.delete(key);
-          log.warn(`Evicted hung process from pool: chatId="${key}"`);
+          _log.warn(`Evicted hung process from pool: chatId="${key}"`);
         }
         yield { kind: "error", error: err.error, code: err.code } as StreamEvent;
       } else if (msg.kind === "result") {
@@ -249,7 +252,7 @@ export class ClaudeCLIProvider implements Provider {
       const accumulated = textParts.join("");
       const fullText = accumulated || "[Task ended without result — the CLI process may have crashed or timed out]";
       const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
-      log.warn(`Stream ended without result event, synthesizing fallback (text=${accumulated.length} chars, thinking=${(thinking ?? "").length} chars, tools=${toolCalls.length})`);
+      _log.warn(`Stream ended without result event, synthesizing fallback (text=${accumulated.length} chars, thinking=${(thinking ?? "").length} chars, tools=${toolCalls.length})`);
       yield {
         kind: "result",
         response: createAgentResponse({ text: fullText, thinking, toolCalls }),

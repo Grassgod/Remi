@@ -68,6 +68,8 @@ export interface SendOptions {
   permissionMode?: string | null;
   /** Override stream deadline in ms (default: 15 minutes). Useful for long-running skills/jobs. */
   deadlineMs?: number;
+  /** Trace ID for request-scoped log correlation (conversations.id). */
+  traceId?: string;
 }
 
 /** Protocol that all provider backends must implement. */

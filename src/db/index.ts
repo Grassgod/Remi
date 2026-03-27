@@ -21,6 +21,18 @@ try {
 const DB_PATH = join(homedir(), ".remi", "remi.db");
 
 let _db: Database | null = null;
+let _dbPath: string = DB_PATH;
+
+/**
+ * Override DB file path (call before first getDb()). Used by tests for isolation.
+ */
+export function setDbPath(path: string): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
+  _dbPath = path;
+}
 
 /**
  * Get or create the singleton SQLite database with sqlite-vec loaded.
@@ -28,10 +40,10 @@ let _db: Database | null = null;
 export function getDb(): Database {
   if (_db) return _db;
 
-  const dir = dirname(DB_PATH);
+  const dir = dirname(_dbPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  const db = new Database(DB_PATH);
+  const db = new Database(_dbPath);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
 
@@ -177,6 +189,16 @@ export function getDb(): Database {
   if (!colNames.has("cache_read_tokens")) {
     db.exec("ALTER TABLE conversations ADD COLUMN cache_read_tokens INTEGER");
   }
+  if (!colNames.has("thread_id")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN thread_id TEXT");
+  }
+  if (!colNames.has("user_message")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN user_message TEXT");
+  }
+  if (!colNames.has("session_key")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN session_key TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
+  }
 
   _db = db;
   return db;
@@ -223,13 +245,16 @@ export interface ConversationInsert {
   messageId?: string;
   cliSessionId?: string;
   cliCwd?: string;
+  threadId?: string;
+  userMessage?: string;
+  sessionKey?: string;
 }
 
 export function insertConversationProcessing(row: ConversationInsert & { cliRoundStart?: string }): number {
   const db = getDb();
   const result = db.run(
-    `INSERT INTO conversations (status, chat_id, sender_id, connector, message_id, cli_session_id, cli_cwd, cli_round_start)
-     VALUES ('processing', ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO conversations (status, chat_id, sender_id, connector, message_id, cli_session_id, cli_cwd, cli_round_start, thread_id, user_message, session_key)
+     VALUES ('processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.chatId,
       row.senderId ?? null,
@@ -238,6 +263,9 @@ export function insertConversationProcessing(row: ConversationInsert & { cliRoun
       row.cliSessionId ?? null,
       row.cliCwd ?? null,
       row.cliRoundStart ?? new Date().toISOString(),
+      row.threadId ?? null,
+      row.userMessage ?? null,
+      row.sessionKey ?? null,
     ],
   );
   return Number(result.lastInsertRowid);

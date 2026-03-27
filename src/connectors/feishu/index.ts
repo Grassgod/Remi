@@ -243,6 +243,9 @@ export class FeishuConnector implements Connector {
       return;
     }
 
+    // Request-scoped logger with traceId = feishu messageId
+    const _log = log.child({ traceId: msg.messageId });
+
     // Convert Feishu media to protocol MediaAttachment
     const media: MediaAttachment[] = msg.media.map((m) => ({
       buffer: m.buffer,
@@ -272,7 +275,7 @@ export class FeishuConnector implements Connector {
           m.mediaType === "file" ? "<media:document>" : `<media:${m.mediaType}>`,
           `[文件已保存: ${filePath}]`,
         );
-        log.info(`saved ${m.mediaType} to ${filePath} (${m.buffer.length} bytes)`);
+        _log.info(`saved ${m.mediaType} to ${filePath} (${m.buffer.length} bytes)`);
       }
     }
 
@@ -295,7 +298,7 @@ export class FeishuConnector implements Connector {
       },
     };
 
-    log.info(`received message ${msg.messageId} from ${msg.senderName ?? msg.senderOpenId}: ${text.slice(0, 80)}${media.length > 0 ? ` [+${media.length} media]` : ""}`);
+    _log.info(`received message from ${msg.senderName ?? msg.senderOpenId}: ${text.slice(0, 80)}${media.length > 0 ? ` [+${media.length} media]` : ""}`);
 
     const client = createFeishuClient({
       appId: this._config.appId,
@@ -321,7 +324,7 @@ export class FeishuConnector implements Connector {
       if (existingSession && existingSession.isActive()) {
         const rejected = rejectPendingActionsForChat(msg.chatId, "New message received, cancelling pending interaction");
         if (rejected > 0) {
-          log.info(`Cancelled ${rejected} pending action(s) for session "${sessionKey}" — new message takes priority`);
+          _log.info(`Cancelled ${rejected} pending action(s) for session "${sessionKey}" — new message takes priority`);
         }
       }
 
@@ -332,14 +335,14 @@ export class FeishuConnector implements Connector {
 
       // Use real streaming if streamHandler is available
       if (this._streamHandler) {
-        await this._handleStreaming(incoming, msg.chatId, sessionKey, replyToId);
+        await this._handleStreaming(incoming, msg.chatId, sessionKey, replyToId, _log);
       } else {
         // Fallback: blocking handler → static card
         const response = await this._handler(incoming);
         await this._sendStaticReply(msg.chatId, response, replyToId);
       }
     } catch (err) {
-      log.error(`failed to process message ${msg.messageId}: ${String(err)}`);
+      _log.error(`failed to process message: ${String(err)}`);
       try {
         await sendMarkdownCardFeishu(client, msg.chatId, `**Error:** ${String(err)}`);
       } catch {
@@ -367,7 +370,9 @@ export class FeishuConnector implements Connector {
     chatId: string,
     sessionKey: string,
     replyToMessageId?: string,
+    _log?: import("../../logger.js").Logger,
   ): Promise<void> {
+    const slog = _log ?? log; // streaming-scoped logger
     const creds = {
       appId: this._config.appId,
       appSecret: this._config.appSecret,
@@ -413,7 +418,7 @@ export class FeishuConnector implements Connector {
       try {
         await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName });
       } catch (err) {
-        log.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
+        slog.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
         if (this._handler) {
           const response = await this._handler(incoming);
           await this._sendStaticReply(chatId, response, replyToMessageId);
@@ -425,10 +430,10 @@ export class FeishuConnector implements Connector {
         for await (const event of stream) {
           // If safety timeout fired, stop consuming events
           if (session.abortSignal.aborted) {
-            log.warn("Safety timeout aborted stream consumption");
+            slog.warn("Safety timeout aborted stream consumption");
             break;
           }
-          log.debug(`received event: ${event.kind}`);
+          slog.debug(`received event: ${event.kind}`);
           switch (event.kind) {
             case "thinking_delta":
               thinkingText += event.text;
@@ -588,21 +593,22 @@ export class FeishuConnector implements Connector {
                   const answerMap = answers as Record<string, string>;
                   const lines = Object.entries(answerMap).map(([q, a], i) => `${i + 1}. ${q}: ${a}`);
                   const answerText = `用户回答了之前的问题:\n${lines.join("\n")}`;
-                  log.info(`AskUserQuestion answered, sending as new streaming message`);
+                  slog.info(`AskUserQuestion answered, sending as new streaming message`);
                   // Use full _handleStreaming to render the CLI response in a new card
                   this._handleStreaming(
                     { ...incoming, text: answerText },
                     chatId,
                     capturedSessionKey,
                     capturedReplyTo,
-                  ).catch((e) => log.error(`Failed to relay AskUserQuestion answer: ${e}`));
+                    _log,
+                  ).catch((e) => slog.error(`Failed to relay AskUserQuestion answer: ${e}`));
                 },
                 () => {},
                 questions,
                 chatId,
               );
               askQuestions = { actionId, questions };
-              log.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
+              slog.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
             } else if (denial.toolName === "ExitPlanMode") {
               const capturedReplyTo = replyToMessageId;
               const capturedSessionKey = sessionKey;
@@ -624,20 +630,21 @@ export class FeishuConnector implements Connector {
                   } else {
                     decisionText = "Plan rejected. Please stop.";
                   }
-                  log.info(`ExitPlanMode answered: ${d}, feedback=${feedback.slice(0, 100)}`);
+                  slog.info(`ExitPlanMode answered: ${d}, feedback=${feedback.slice(0, 100)}`);
                   this._handleStreaming(
                     { ...incoming, text: decisionText },
                     chatId,
                     capturedSessionKey,
                     capturedReplyTo,
-                  ).catch((e) => log.error(`Failed to relay ExitPlanMode decision: ${e}`));
+                    _log,
+                  ).catch((e) => slog.error(`Failed to relay ExitPlanMode decision: ${e}`));
                 },
                 () => {},
                 undefined,
                 chatId,
               );
               planReviewAction = { actionId };
-              log.info(`Embedded ExitPlanMode buttons: actionId=${actionId}`);
+              slog.info(`Embedded ExitPlanMode buttons: actionId=${actionId}`);
             }
           }
         }
@@ -657,7 +664,7 @@ export class FeishuConnector implements Connector {
         });
 
       } catch (err) {
-        log.error(`streaming error: ${String(err)}`);
+        slog.error(`streaming error: ${String(err)}`);
         // Always close the streaming card to prevent it from being stuck
         if (session.isActive()) {
           await session.close({

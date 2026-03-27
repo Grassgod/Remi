@@ -227,14 +227,19 @@ export class Remi {
         cliRoundStart: new Date().toISOString(),
         threadId,
         userMessage: msg.text,
+        sessionKey,
       });
     } catch (e) {
       log.warn("insert conversation (processing) failed:", e);
     }
 
+    // Create request-scoped logger with traceId = feishu messageId (available from the start)
+    const traceId = (msg.metadata?.messageId as string) ?? undefined;
+    const rlog = traceId ? log.child({ traceId }) : log;
+
     try {
       const existingDisplayName = sessDb.getDisplayName(sessionKey);
-      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs), { sessionId: existingSessionId, displayName: existingDisplayName });
+      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), { sessionId: existingSessionId, displayName: existingDisplayName });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));
@@ -251,7 +256,9 @@ export class Remi {
     }
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number): AsyncGenerator<StreamEvent> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<StreamEvent> {
+    const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
+
     // Handle slash commands — use rawContent (without speaker prefix) for detection
     const rawContent = (msg.metadata?.rawContent as string) ?? msg.text;
     const cmdResponse = await this._tryCommand(rawContent, msg);
@@ -273,7 +280,8 @@ export class Remi {
 
     const sessRow = sessDb.getSession(sessionKey);
     const existingSessionId = sessRow?.session_id || undefined;
-    log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
+    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
+    const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
     const streamOptions = {
       systemPrompt: botProfile?.systemPrompt,
       chatId: this._resolveSessionKey(msg),
@@ -283,6 +291,7 @@ export class Remi {
       allowedTools: botProfile?.allowedTools?.length ? botProfile.allowedTools : undefined,
       addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
       permissionMode: sessRow?.mode ?? undefined,
+      traceId: msgTraceId,
     };
 
     // Provider selection:
@@ -305,7 +314,7 @@ export class Remi {
       "session.id": existingSessionId ?? "new",
     });
 
-    log.debug("starting provider.sendStream iteration");
+    _log.debug("starting provider.sendStream iteration");
     let resultResponse: AgentResponse | null = null;
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
     let promptTooLong = false;
@@ -314,7 +323,7 @@ export class Remi {
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
 
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
-      log.debug(`received event: ${event.kind}`);
+      _log.debug(`received event: ${event.kind}`);
 
       // Detect prompt-too-long: suppress and mark for auto-retry
       if (
@@ -376,7 +385,7 @@ export class Remi {
 
     // ── Auto-recovery: prompt too long → reset session + retry ──
     if (promptTooLong) {
-      log.warn(`Prompt too long for "${sessionKey}", auto-resetting session and retrying`);
+      _log.warn(`Prompt too long for "${sessionKey}", auto-resetting session and retrying`);
       providerSpan?.endWithError("prompt_too_long");
 
       // Clear session mapping (keep display_name)
@@ -404,7 +413,7 @@ export class Remi {
 
     // ── Auto-recovery: stale session → clear session + retry ──
     if (staleSession) {
-      log.warn(`Stale session for "${sessionKey}" (sessionId=${existingSessionId}), auto-resetting and retrying`);
+      _log.warn(`Stale session for "${sessionKey}" (sessionId=${existingSessionId}), auto-resetting and retrying`);
       providerSpan?.endWithError("stale_session");
 
       sessDb.clearSessionId(sessionKey);
@@ -450,7 +459,7 @@ export class Remi {
 
         const fallbackName = this.config.provider.fallback;
         if (fallbackName && this._providers.has(fallbackName)) {
-          log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
+          _log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
           const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
             "provider.name": fallbackName,
           });
@@ -475,7 +484,7 @@ export class Remi {
     if (resultResponse) {
       if (resultResponse.sessionId) {
         const displayName = sessDb.upsertSession(sessionKey, resultResponse.sessionId);
-        log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..." (${displayName})`);
+        _log.debug(`session stored: key="${sessionKey}" → "${resultResponse.sessionId.slice(0, 12)}..." (${displayName})`);
       }
       this.memory.appendDaily(
         `[${msg.connectorName ?? ""}] ${msg.sender ?? ""}: ${msg.text.slice(0, 100)}`,
@@ -544,7 +553,7 @@ export class Remi {
           chatId: msg.chatId,
         }).catch((e) => log.warn("enqueue conversation trigger failed:", e));
       } catch (e) {
-        log.warn("insert conversation failed:", e);
+        _log.warn("insert conversation failed:", e);
       }
     }
   }
