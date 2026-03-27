@@ -195,6 +195,10 @@ export const getWikiHistory = (path: string, limit = 20) =>
   request<import("./types").WikiGitEntry[]>(`/api/v1/wiki/history?path=${encodeURIComponent(path)}&limit=${limit}`);
 export const getWikiDiff = (path: string, commit: string) =>
   request<{ diff: string }>(`/api/v1/wiki/diff?path=${encodeURIComponent(path)}&commit=${commit}`);
+export const putWikiFile = (path: string, content: string) =>
+  request(`/api/v1/wiki/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
 
 // Filesystem browse
 export const browseDirs = (path?: string) =>

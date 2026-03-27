@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, basename, relative } from "node:path";
 import { homedir } from "node:os";
 import type { Hono } from "hono";
@@ -231,6 +231,30 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
     }
 
     return c.json({ content, lastModified, gitInfo });
+  });
+
+  // PUT /api/v1/wiki/file — write file content
+  app.put("/api/v1/wiki/file", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "Missing path parameter" }, 400);
+
+    const body = await c.req.json();
+    if (!body.content || typeof body.content !== "string") {
+      return c.json({ error: "content required" }, 400);
+    }
+
+    const fsPath = resolveFilePath(path);
+    if (!fsPath) return c.json({ error: "Invalid path" }, 400);
+    if (!existsSync(fsPath) || !statSync(fsPath).isFile()) {
+      return c.json({ error: "File not found" }, 404);
+    }
+
+    try {
+      writeFileSync(fsPath, body.content, "utf-8");
+      return c.json({ ok: true });
+    } catch {
+      return c.json({ error: "Write failed" }, 500);
+    }
   });
 
   // GET /api/v1/wiki/history?path=<path>&limit=20
