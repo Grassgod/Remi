@@ -137,6 +137,57 @@ export interface TraceData {
   status: "OK" | "ERROR" | "UNSET";
 }
 
+// Traces — list item (flat, from DB)
+export interface TraceListItem {
+  id: number;
+  status: string;
+  durationMs: number;
+  model: string | null;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  connector: string | null;
+  createdAt: string;
+}
+
+// Traces — stats (server-side aggregation)
+export interface TraceStats {
+  total: number;
+  processing: number;
+  errors: number;
+  errorRate: number;
+  avgDurationMs: number;
+  p95DurationMs: number;
+}
+
+// Traces — tool call from JSONL
+export interface ToolCallData {
+  name: string;
+  input: Record<string, unknown>;
+  output: string;
+  durationMs: number;
+  status: "ok" | "error";
+}
+
+// Traces — detail (DB meta + JSONL tool calls)
+export interface TraceDetail {
+  meta: {
+    status: string;
+    durationMs: number;
+    model: string | null;
+    costUsd: number | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    connector: string | null;
+    chatId: string;
+    senderName: string | null;
+  };
+  userMessage: string | null;
+  toolCalls: ToolCallData[];
+  jsonlAvailable: boolean;
+  remiSpans: Array<{ op: string; ms: number }>;
+}
+
 // Logs
 export interface LogEntry {
   ts: string;
