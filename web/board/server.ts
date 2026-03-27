@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { MissionStore } from "../../src/mission/store.js";
 import type { RemiConfig } from "../../src/config.js";
 import type { ProjectConfig } from "../../src/mission/model.js";
-import { getSessionName } from "../../src/connectors/feishu/session-name.js";
 
 export interface BoardDeps {
   config: RemiConfig;
@@ -128,7 +127,7 @@ export function createBoardApp(deps: BoardDeps): Hono {
     return c.json({ ok: true });
   });
 
-  // ── Messages API — pure JSONL-based conversation reconstruction ──
+  // ── Messages API — conversation reconstruction via shared parser ──
 
   app.get("/api/missions/:id/messages", async (c) => {
     const mission = missionStore.getById(c.req.param("id"));
@@ -137,14 +136,10 @@ export function createBoardApp(deps: BoardDeps): Hono {
 
     try {
       const { getDb } = await import("../../src/db/index.js");
-      const { readFileSync, readdirSync, existsSync: fsExists } = await import("node:fs");
-      const { join: pathJoin } = await import("node:path");
-      const { homedir: getHome } = await import("node:os");
-
+      const { buildChatMessages } = await import("../../src/conversation/parser.js");
       const db = getDb();
-      const claudeProjectsDir = pathJoin(getHome(), ".claude", "projects");
 
-      // ── Step 1: Get all session IDs for this thread from conversations table ──
+      // Get session IDs for this mission's chat thread
       const queryParams = mission.threadId
         ? { sql: "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC", params: [mission.chatId, mission.threadId] }
         : { sql: "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC", params: [mission.chatId] };
@@ -152,212 +147,16 @@ export function createBoardApp(deps: BoardDeps): Hono {
       const sessionRows = db.query(queryParams.sql).all(...queryParams.params) as any[];
       const sessionIds = sessionRows.map((r: any) => r.cli_session_id as string);
 
-      // Also get conversation metadata keyed by created_at order
+      // Get metadata
       const metaSql = mission.threadId
         ? "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND thread_id = ? AND status = 'completed' ORDER BY created_at ASC"
         : "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND status = 'completed' ORDER BY created_at ASC";
-      const metaRows = (mission.threadId
-        ? db.query(metaSql).all(mission.chatId, mission.threadId)
-        : db.query(metaSql).all(mission.chatId)) as any[];
 
-      // ── Step 2: Read JSONL files, extract enqueue→assistant pairs ──
-      // Each step in the process panel — interleaved thinking + tool_use (like Feishu card)
-      interface StepItem {
-        type: "thinking" | "tool";
-        content: string;        // thinking text or tool description
-        name?: string;          // tool name (if type=tool)
-        thinking?: string;      // merged thinking before tool (if type=tool)
-      }
+      const metaRows = mission.threadId
+        ? db.query(metaSql).all(mission.chatId, mission.threadId) as any[]
+        : db.query(metaSql).all(mission.chatId) as any[];
 
-      interface ConvPair {
-        userText: string;       // cleaned user message
-        remiText: string;       // assistant response
-        steps: StepItem[];      // interleaved thinking + tool_use (Feishu card order)
-        timestamp: number;      // from enqueue entry
-        sessionId: string;
-      }
-
-      function stripContextTags(text: string): string {
-        let t = text;
-        // Remove XML context/system blocks
-        t = t.replace(/<context>[\s\S]*?<\/context>/g, "");
-        t = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
-        t = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "");
-        // Remove [Replying to: "..."] — find the pattern start and cut until closing "]"
-        const replyIdx = t.indexOf('[Replying to: "');
-        if (replyIdx !== -1) {
-          // Find the closing "]\n or "] at end
-          const closeIdx = t.indexOf('"]', replyIdx + 15);
-          if (closeIdx !== -1) {
-            t = t.slice(0, replyIdx) + t.slice(closeIdx + 2);
-          }
-        }
-        t = t.replace(/^贺华杰:\s*/m, "");
-        return t.trim();
-      }
-
-      const allPairs: ConvPair[] = [];
-
-      for (const sessionId of sessionIds) {
-        // Find JSONL file
-        let jsonlPath: string | null = null;
-        try {
-          for (const dir of readdirSync(claudeProjectsDir)) {
-            const p = pathJoin(claudeProjectsDir, dir, sessionId + ".jsonl");
-            if (fsExists(p)) { jsonlPath = p; break; }
-          }
-        } catch {}
-        if (!jsonlPath) continue;
-
-        const lines = readFileSync(jsonlPath, "utf-8").trim().split("\n");
-
-        // Parse: enqueue → collect assistant blocks until next enqueue
-        let currentEnqueue: { content: string; timestamp: number /* unix ms */ } | null = null;
-        let currentText = "";
-        let currentSteps: StepItem[] = [];
-
-        for (const line of lines) {
-          try {
-            const obj = JSON.parse(line);
-
-            // User message = queue-operation enqueue
-            if (obj.type === "queue-operation" && obj.operation === "enqueue" && obj.content) {
-              // Flush previous pair
-              if (currentEnqueue && (currentText || currentSteps.length > 0)) {
-                allPairs.push({
-                  userText: stripContextTags(currentEnqueue.content),
-                  remiText: stripContextTags(currentText),
-                  steps: currentSteps,
-                  timestamp: currentEnqueue.timestamp,
-                  sessionId,
-                });
-              }
-              // Convert ISO timestamp to Unix ms for sorting/display
-              const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : 0;
-              currentEnqueue = { content: obj.content, timestamp: ts };
-              currentText = "";
-              currentSteps = [];
-            }
-
-            // Remi response = assistant entries — interleave thinking + tool_use
-            if (obj.type === "assistant" && currentEnqueue) {
-              for (const b of (obj.message?.content ?? [])) {
-                if (b.type === "text" && b.text) {
-                  // Concatenate all text blocks (Claude emits multiple text blocks between tool calls)
-                  currentText += (currentText ? "\n\n" : "") + b.text;
-                } else if (b.type === "thinking" && b.thinking) {
-                  currentSteps.push({ type: "thinking", content: b.thinking.trim() });
-                } else if (b.type === "tool_use") {
-                  // Merge preceding thinking into tool step (matches Feishu card behavior)
-                  const lastStep = currentSteps[currentSteps.length - 1];
-                  if (lastStep?.type === "thinking") {
-                    // Replace standalone thinking with merged tool step
-                    currentSteps[currentSteps.length - 1] = {
-                      type: "tool",
-                      name: b.name ?? "unknown",
-                      content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-                      thinking: lastStep.content,
-                    };
-                  } else {
-                    currentSteps.push({
-                      type: "tool",
-                      name: b.name ?? "unknown",
-                      content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-                    });
-                  }
-                }
-              }
-            }
-          } catch {}
-        }
-        // Flush last pair
-        if (currentEnqueue && (currentText || currentSteps.length > 0)) {
-          allPairs.push({
-            userText: stripContextTags(currentEnqueue.content),
-            remiText: stripContextTags(currentText),
-            steps: currentSteps,
-            timestamp: currentEnqueue.timestamp,
-            sessionId,
-          });
-        }
-      }
-
-      // Sort by timestamp
-      allPairs.sort((a, b) => a.timestamp - b.timestamp);
-
-      // ── Step 3: Filter to complete pairs (user text + remi text) ──
-      // Only emit pairs where Remi produced a final text response
-      // (tools-only rounds are intermediate steps, not complete responses)
-      const completePairs = allPairs.filter(p => p.remiText);
-
-      const messages: any[] = [];
-
-      // Build metadata lookup by timestamp for closest-match
-      const metaByTime = metaRows.map((m: any) => ({
-        ...m,
-        _ts: new Date(m.created_at + "Z").getTime(), // DB stores UTC without Z
-      }));
-
-      function findClosestMeta(pairTs: number): any {
-        let best: any = null;
-        let bestDist = Infinity;
-        for (const m of metaByTime) {
-          const dist = Math.abs(m._ts - pairTs);
-          if (dist < bestDist) { bestDist = dist; best = m; }
-        }
-        // Only match if within 30 seconds
-        return best && bestDist < 30_000 ? best : null;
-      }
-
-      for (let i = 0; i < completePairs.length; i++) {
-        const pair = completePairs[i];
-        const meta = findClosestMeta(pair.timestamp);
-        const createTimeMs = String(pair.timestamp);
-
-        // User message
-        if (pair.userText) {
-          messages.push({
-            id: `user_${i}`,
-            type: "text",
-            content: pair.userText,
-            senderType: "user",
-            senderId: meta?.sender_id ?? "",
-            createTime: createTimeMs,
-          });
-        }
-
-        // Remi response
-        const toolSteps = pair.steps.filter(s => s.type === "tool");
-        let toolCount = toolSteps.length;
-        if (meta?.spans) {
-          try {
-            const spans = JSON.parse(meta.spans);
-            const ps = spans.find((s: any) => s.op === "provider.chat");
-            if (ps?.tool_count > toolCount) toolCount = ps.tool_count;
-          } catch {}
-        }
-
-        messages.push({
-          id: `remi_${i}`,
-          type: "assistant",
-          content: pair.remiText,
-          senderType: "app",
-          senderId: "remi",
-          createTime: String(pair.timestamp + 1), // +1ms to keep user→remi order within pair
-          steps: pair.steps.length > 0 ? pair.steps : undefined,
-          sessionName: getSessionName(pair.sessionId),
-          meta: meta ? {
-            model: meta.model,
-            inputTokens: meta.input_tokens,
-            outputTokens: meta.output_tokens,
-            cost: meta.cost_usd,
-            duration: meta.duration_ms,
-            toolCount,
-            sessionId: pair.sessionId,
-          } : undefined,
-        });
-      }
-
+      const messages = buildChatMessages(sessionIds, metaRows);
       return c.json(messages);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);

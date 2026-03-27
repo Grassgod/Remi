@@ -138,3 +138,36 @@ export const ensureSymlink = (cwd: string) =>
 export const getDbStats = () => request<import("./types").DbStats>("/api/v1/db/stats");
 export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv");
 export const getDbEmbeddings = () => request<import("./types").EmbeddingEntry[]>("/api/v1/db/embeddings");
+
+// Conversations
+export const getConversations = (limit = 50) =>
+  request<import("./types").ConversationSummary[]>(`/api/v1/conversations?limit=${limit}`);
+export const getConversationMessages = (chatId: string, threadId?: string) => {
+  const params = threadId ? `?threadId=${encodeURIComponent(threadId)}` : "";
+  return request<import("./types").ChatMessage[]>(`/api/v1/conversations/${encodeURIComponent(chatId)}/messages${params}`);
+};
+
+// Missions
+export const getMissions = (projectId?: string, status?: string) => {
+  const params = new URLSearchParams();
+  if (projectId) params.set("projectId", projectId);
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request<import("./types").MissionItem[]>(`/api/v1/missions${qs ? `?${qs}` : ""}`);
+};
+export const getMission = (id: string) =>
+  request<import("./types").MissionItem>(`/api/v1/missions/${id}`);
+export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
+  request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+export const getMissionStats = (projectId: string) =>
+  request<import("./types").MissionStats>(`/api/v1/missions/stats?projectId=${encodeURIComponent(projectId)}`);
+
+// Wiki
+export const getWikiTree = () =>
+  request<import("./types").WikiFileNode[]>("/api/v1/wiki/tree");
+export const getWikiFile = (path: string) =>
+  request<import("./types").WikiFileContent>(`/api/v1/wiki/file?path=${encodeURIComponent(path)}`);
+export const getWikiHistory = (path: string, limit = 20) =>
+  request<import("./types").WikiGitEntry[]>(`/api/v1/wiki/history?path=${encodeURIComponent(path)}&limit=${limit}`);
+export const getWikiDiff = (path: string, commit: string) =>
+  request<{ diff: string }>(`/api/v1/wiki/diff?path=${encodeURIComponent(path)}&commit=${commit}`);

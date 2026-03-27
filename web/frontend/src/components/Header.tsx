@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { Sun, Moon } from "lucide-react";
+import { useTheme } from "@/hooks/useTheme";
+import { Button } from "./ui/button";
+import { cn } from "@/lib/utils";
 
 interface HeaderProps {
   title: string;
@@ -9,47 +12,42 @@ interface HeaderProps {
 }
 
 export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal }: HeaderProps) {
-  const [clock, setClock] = useState("");
-
-  useEffect(() => {
-    const tick = () => {
-      const now = new Date();
-      const p = (n: number) => String(n).padStart(2, "0");
-      setClock(
-        `${now.getFullYear()}.${p(now.getMonth() + 1)}.${p(now.getDate())} — ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`
-      );
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
+  const { theme, toggleTheme } = useTheme();
 
   return (
-    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-2 border-b border-border bg-sidebar px-3 sm:gap-4 sm:px-6">
-      <span className="text-sm font-semibold tracking-wide text-foreground">
+    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-2 border-b border-border bg-card/50 px-4 sm:gap-4 sm:px-6">
+      <span className="text-sm font-semibold text-foreground">
         {title}
       </span>
       {subtitle && (
-        <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
-          / {subtitle}
+        <span className="hidden text-xs text-muted-foreground sm:inline">
+          {subtitle}
         </span>
       )}
       <div className="flex-1" />
-      <span className="hidden font-mono text-xs tracking-wider text-muted-foreground sm:inline">
-        {clock}
-      </span>
-      <div className="flex items-center gap-1.5">
-        <div
-          className={`h-2 w-2 rounded-full ${daemonAlive ? "bg-success" : "bg-destructive"}`}
-          title="Daemon"
-        />
-        {tokensTotal !== undefined && Array.from({ length: tokensTotal }).map((_, i) => (
+
+      {/* Status indicators */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1">
           <div
-            key={i}
-            className={`h-2 w-2 rounded-full ${i < (tokensValid ?? 0) ? "bg-success" : "bg-warning"}`}
-            title={`Token ${i + 1}`}
+            className={cn("h-2 w-2 rounded-full", daemonAlive ? "bg-success" : "bg-destructive")}
+            title="Daemon"
           />
-        ))}
+          {tokensTotal !== undefined && (
+            <span className="text-[10px] text-muted-foreground">
+              {tokensValid ?? 0}/{tokensTotal} tokens
+            </span>
+          )}
+        </div>
+
+        {/* Theme toggle */}
+        <Button variant="ghost" size="icon" onClick={toggleTheme} className="h-8 w-8">
+          {theme === "dark" ? (
+            <Sun className="h-4 w-4" />
+          ) : (
+            <Moon className="h-4 w-4" />
+          )}
+        </Button>
       </div>
     </header>
   );

@@ -14,6 +14,8 @@
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0.003 285);
   --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0.003 285);
+  --popover-foreground: oklch(0.145 0 0);
   --muted: oklch(0.97 0.003 285);
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.94 0.003 285);
@@ -34,8 +36,15 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0.003 285);
 
+  /* Chart colors */
+  --chart-1: oklch(0.65 0.18 250);
+  --chart-2: oklch(0.65 0.18 145);
+  --chart-3: oklch(0.7 0.15 55);
+  --chart-4: oklch(0.65 0.15 300);
+  --chart-5: oklch(0.65 0.2 25);
+
   /* Layout dimensions */
-  --sidebar-width: 200px;
+  --sidebar-width: 220px;
   --header-height: 52px;
   --bottom-nav-height: 60px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -46,6 +55,8 @@
   --foreground: oklch(0.98 0 0);
   --card: oklch(0.18 0.004 285);
   --card-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.18 0.004 285);
+  --popover-foreground: oklch(0.98 0 0);
   --muted: oklch(0.22 0.004 285);
   --muted-foreground: oklch(0.6 0 0);
   --accent: oklch(0.26 0.004 285);
@@ -65,6 +76,13 @@
   --sidebar-accent: oklch(0.22 0.004 285);
   --sidebar-accent-foreground: oklch(0.98 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
+
+  /* Chart colors (dark) */
+  --chart-1: oklch(0.7 0.18 250);
+  --chart-2: oklch(0.7 0.18 145);
+  --chart-3: oklch(0.75 0.15 55);
+  --chart-4: oklch(0.7 0.15 300);
+  --chart-5: oklch(0.7 0.2 25);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -97,6 +115,11 @@ body {
 @keyframes sheet-up {
   from { opacity: 0; transform: translateY(100%); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 /* ═══ Entity type badges ═══ */

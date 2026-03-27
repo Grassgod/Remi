@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { Layout } from "../components/Layout";
-import { HudPanel } from "../components/HudPanel";
-import { IconTrash } from "../components/icons";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
+import { FolderOpen, Plus, Trash2, AlertTriangle, Check, X } from "lucide-react";
 import * as api from "../api/client";
 import type { ProjectMap } from "../api/types";
-
-const inputCls = "w-full rounded-md border border-border bg-card px-3 py-1.5 font-mono text-xs text-foreground outline-none transition-colors focus:border-input";
-const btnCls = "rounded-md border border-border bg-transparent px-3 py-1.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground cursor-pointer";
 
 export function Projects() {
   const [projects, setProjects] = useState<ProjectMap>({});
@@ -15,12 +17,16 @@ export function Projects() {
   const [newPath, setNewPath] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [editPath, setEditPath] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchProjects = async () => {
     try {
-      const data = await api.getProjects();
-      setProjects(data);
-    } catch { /* ignore */ }
+      setProjects(await api.getProjects());
+      setError(null);
+    } catch {
+      setError("Failed to load projects");
+    }
   };
 
   useEffect(() => { fetchProjects(); }, []);
@@ -29,117 +35,182 @@ export function Projects() {
 
   const handleAdd = async () => {
     if (!newAlias.trim() || !newPath.trim()) return;
-    await api.createProject(newAlias.trim(), newPath.trim());
-    setNewAlias(""); setNewPath(""); setAdding(false);
-    fetchProjects();
+    const alias = newAlias.trim();
+    if (alias in projects) {
+      if (!confirm(`Alias "${alias}" already exists. Overwrite?`)) return;
+    }
+    try {
+      await api.createProject(alias, newPath.trim());
+      setNewAlias(""); setNewPath(""); setAdding(false);
+      fetchProjects();
+    } catch {
+      setError(`Failed to create project "${alias}"`);
+    }
   };
 
-  const handleDelete = async (alias: string) => {
-    if (!confirm(`删除项目 "${alias}"？`)) return;
-    await api.deleteProject(alias);
-    fetchProjects();
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await api.deleteProject(deleteTarget);
+      setDeleteTarget(null);
+      fetchProjects();
+    } catch {
+      setError(`Failed to delete project "${deleteTarget}"`);
+      setDeleteTarget(null);
+    }
   };
 
   const handleEdit = async (alias: string) => {
     if (!editPath.trim()) return;
-    await api.updateProject(alias, editPath.trim());
-    setEditing(null); setEditPath("");
-    fetchProjects();
+    try {
+      await api.updateProject(alias, editPath.trim());
+      setEditing(null); setEditPath("");
+      fetchProjects();
+    } catch {
+      setError(`Failed to update project "${alias}"`);
+    }
   };
 
+  const cancelAdd = () => { setAdding(false); setNewAlias(""); setNewPath(""); };
+
   return (
-    <Layout title="Projects" subtitle="WORKSPACE MANAGEMENT">
-      <HudPanel
-        title="Registered Projects"
-        action={{ label: "+ Add", onClick: () => setAdding(true) }}
-        maxHeight={600}
-      >
-        {adding && (
-          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-            <input
-              className={`${inputCls} !w-auto flex-[0_0_120px]`}
-              placeholder="别名 (如 remi)"
-              value={newAlias}
-              onChange={e => setNewAlias(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && handleAdd()}
-              autoFocus
-            />
-            <input
-              className={`${inputCls} flex-1`}
-              placeholder="路径 (如 /data00/home/hehuajie/project/remi)"
-              value={newPath}
-              onChange={e => setNewPath(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && handleAdd()}
-            />
-            <button className={btnCls} onClick={handleAdd}>Save</button>
-            <button className={btnCls} onClick={() => { setAdding(false); setNewAlias(""); setNewPath(""); }}>Cancel</button>
-          </div>
-        )}
-
-        {entries.length === 0 && !adding ? (
-          <div className="p-10 text-center font-mono text-xs text-muted-foreground">NO PROJECTS REGISTERED</div>
-        ) : (
-          <div>
-            <div className="grid grid-cols-[120px_1fr_auto] gap-2.5 border-b border-border px-4 py-2">
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">ALIAS</span>
-              <span className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">PATH</span>
-              <span className="w-[60px]" />
+    <Layout title="Projects" subtitle="Workspace Management">
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <FolderOpen className="h-4 w-4 text-muted-foreground" />
+            Registered Projects
+            <Badge variant="secondary" className="text-[10px]">{entries.length}</Badge>
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={() => setAdding(true)} className="h-7 text-xs">
+            <Plus className="mr-1 h-3 w-3" /> Add
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          {/* Error banner */}
+          {error && (
+            <div className="flex items-center justify-between border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+              <span>{error}</span>
+              <button onClick={() => setError(null)} className="ml-2 opacity-70 hover:opacity-100">
+                <X className="h-3 w-3" />
+              </button>
             </div>
-            {entries.map(([alias, path]) => (
-              <div key={alias} className="grid grid-cols-[120px_1fr_auto] items-center gap-2.5 px-4 py-2.5 transition-colors hover:bg-accent/30">
-                <span className="font-mono text-xs font-semibold text-foreground">{alias}</span>
-                {editing === alias ? (
-                  <div className="flex gap-1.5">
-                    <input
-                      className={`${inputCls} flex-1`}
-                      value={editPath}
-                      onChange={e => setEditPath(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") handleEdit(alias);
-                        if (e.key === "Escape") { setEditing(null); setEditPath(""); }
-                      }}
-                      autoFocus
-                    />
-                    <button className={`${btnCls} !px-2 !py-1 !text-[8px]`} onClick={() => handleEdit(alias)}>OK</button>
-                  </div>
-                ) : (
-                  <span
-                    className="cursor-pointer break-all font-mono text-xs text-muted-foreground"
-                    onClick={() => { setEditing(alias); setEditPath(path); }}
-                    title="点击编辑路径"
-                  >{path}</span>
-                )}
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => handleDelete(alias)}
-                    className="flex items-center rounded-md border border-destructive/20 bg-transparent p-1.5 text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive"
-                  ><IconTrash /></button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </HudPanel>
+          )}
 
-      <div className="mt-4">
-        <HudPanel title="Usage" maxHeight={200}>
-          <div className="p-4 font-mono text-xs leading-relaxed text-muted-foreground">
-            <div>在飞书中使用：</div>
-            <div className="text-foreground">/p &lt;alias&gt;</div>
-            <div className="pl-4">切换到已注册的项目目录</div>
-            <div className="mt-1 text-foreground">/p</div>
-            <div className="pl-4">查看当前项目和可用列表</div>
-            <div className="mt-1 text-foreground">/p reset</div>
-            <div className="pl-4">清除项目绑定，回到默认目录</div>
-          </div>
-        </HudPanel>
-      </div>
+          {/* Add form */}
+          {adding && (
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <Input
+                placeholder="Alias (e.g. remi)"
+                value={newAlias}
+                onChange={e => setNewAlias(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); if (e.key === "Escape") cancelAdd(); }}
+                className="h-8 w-[120px] text-xs"
+                autoFocus
+              />
+              <Input
+                placeholder="Path (e.g. /data00/home/...)"
+                value={newPath}
+                onChange={e => setNewPath(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAdd(); if (e.key === "Escape") cancelAdd(); }}
+                className="h-8 flex-1 text-xs"
+              />
+              <Button variant="default" size="sm" onClick={handleAdd} className="h-8 text-xs">
+                <Check className="mr-1 h-3 w-3" /> Save
+              </Button>
+              <Button variant="ghost" size="sm" onClick={cancelAdd} className="h-8 text-xs">
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
 
-      <style>{`
-        @media (max-width: 768px) {
-          .main-content { padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 14px) !important; }
-        }
-      `}</style>
+          {entries.length === 0 && !adding ? (
+            <div className="p-10 text-center text-xs text-muted-foreground">No projects registered</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[120px]">Alias</TableHead>
+                  <TableHead>Path</TableHead>
+                  <TableHead className="w-[60px]" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {entries.map(([alias, path]) => (
+                  <TableRow key={alias}>
+                    <TableCell className="font-mono text-xs font-semibold">{alias}</TableCell>
+                    <TableCell>
+                      {editing === alias ? (
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            value={editPath}
+                            onChange={e => setEditPath(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") handleEdit(alias);
+                              if (e.key === "Escape") { setEditing(null); setEditPath(""); }
+                            }}
+                            className="h-7 flex-1 text-xs"
+                            autoFocus
+                          />
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleEdit(alias)}>
+                            <Check className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <span
+                          className="cursor-pointer break-all font-mono text-xs text-muted-foreground hover:text-foreground"
+                          onClick={() => { setEditing(alias); setEditPath(path); }}
+                          title="Click to edit"
+                        >{path}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() => setDeleteTarget(alias)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Usage hint */}
+      <Card className="mt-3">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Usage</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1 font-mono text-xs text-muted-foreground">
+          <div><span className="text-foreground">/p &lt;alias&gt;</span> — switch to project directory</div>
+          <div><span className="text-foreground">/p</span> — show current project and list</div>
+          <div><span className="text-foreground">/p reset</span> — reset to default directory</div>
+        </CardContent>
+      </Card>
+
+      {/* Delete dialog */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent onClose={() => setDeleteTarget(null)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-warning" /> Delete Project
+            </DialogTitle>
+            <DialogDescription>
+              Delete project "{deleteTarget}"? This only removes the alias, not the actual directory.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
