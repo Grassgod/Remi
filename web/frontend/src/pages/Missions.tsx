@@ -18,6 +18,12 @@ export function Missions() {
   const [projects, setProjects] = useState<string[]>([]);
 
   useEffect(() => {
+    api.getProjects().then(map => {
+      setProjects(Object.keys(map).sort());
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     fetchMissions();
   }, [projectId]);
 
@@ -26,10 +32,6 @@ export function Missions() {
     try {
       const data = await api.getMissions(projectId || undefined);
       setMissions(data);
-      if (projects.length === 0 && data.length > 0) {
-        const ids = [...new Set(data.map(m => m.projectId))].sort();
-        setProjects(ids);
-      }
     } catch {}
     setLoading(false);
   };
@@ -65,7 +67,7 @@ export function Missions() {
         </div>
 
         {/* Project filter */}
-        {projects.length > 1 && (
+        {projects.length > 0 && (
           <Select
             value={projectId}
             onChange={e => setProjectId(e.target.value)}
