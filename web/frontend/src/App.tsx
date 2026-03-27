@@ -3,6 +3,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { Dashboard } from "./pages/Dashboard";
 import { Conversations } from "./pages/Conversations";
 import { Missions } from "./pages/Missions";
+import { MissionDetail } from "./pages/MissionDetail";
 import { Memory } from "./pages/Memory";
 import { MemoryEntity } from "./pages/MemoryEntity";
 import { MemoryDaily } from "./pages/MemoryDaily";
@@ -38,6 +39,7 @@ export function App() {
 
         {/* Workspace */}
         <Route path="/conversations" component={Conversations} />
+        <Route path="/missions/:id" component={MissionDetail} />
         <Route path="/missions" component={Missions} />
         <Route path="/memory" component={Memory} />
         <Route path="/memory/entity/:type/:name" component={MemoryEntity} />
