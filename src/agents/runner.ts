@@ -93,13 +93,16 @@ export class AgentRunner {
   }
 
   private _buildCommand(config: AgentConfig, prompt: string): string[] {
-    return [
+    const cmd = [
       "claude",
       "--dangerously-skip-permissions",
       "--model", config.model,
-      "--mcp-config", join(homedir(), ".mcp.json"),
-      "-p", prompt,
     ];
+    if (config.mcp !== false) {
+      cmd.push("--mcp-config", join(homedir(), ".mcp.json"));
+    }
+    cmd.push("-p", prompt);
+    return cmd;
   }
 
   private _appendLog(agentName: string, result: AgentRunResult): void {

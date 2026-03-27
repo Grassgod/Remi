@@ -24,7 +24,8 @@ export const AGENTS: Record<string, AgentConfig> = {
     name: "memory-rerank",
     model: "haiku",
     trigger: "on-demand",
-    timeoutMs: 30_000,
+    timeoutMs: 120_000,
+    mcp: false,
   },
   "wiki-curate": {
     name: "wiki-curate",

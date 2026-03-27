@@ -50,10 +50,9 @@ export interface RecallLayerResult {
   ran: boolean;
   durationMs: number;
   candidateCount: number;
-  resultCount: number;
   exitedEarly?: boolean;
   reason?: string;
-  matches?: Array<{ source: string; name: string; snippet: string }>;
+  matches: Array<{ source: string; name: string; snippet: string }>;
 }
 
 export interface RecallDebugResult {
@@ -280,23 +279,29 @@ export class MemoryStore {
 
   // ── 2.5 Hot Path tools ────────────────────────────────────
 
+  async recall(query: string, options?: { type?: string | null; tags?: string[] | null; cwd?: string | null; debug?: false }): Promise<string>;
+  async recall(query: string, options: { type?: string | null; tags?: string[] | null; cwd?: string | null; debug: true }): Promise<RecallDebugResult>;
   async recall(
     query: string,
     options?: {
       type?: string | null;
       tags?: string[] | null;
       cwd?: string | null;
+      debug?: boolean;
     },
-  ): Promise<string> {
+  ): Promise<string | RecallDebugResult> {
     const type = options?.type ?? null;
     const tags = options?.tags ?? null;
     const cwd = options?.cwd ?? null;
+    const debug = options?.debug ?? false;
 
-    const results: Array<{
-      source: string;
-      path: string;
-      meta: IndexEntry | Record<string, never>;
-    }> = [];
+    const t0 = debug ? performance.now() : 0;
+    const layers: RecallLayerResult[] = [];
+
+    type Candidate = { source: string; path: string; meta: IndexEntry | Record<string, never> };
+    const results: Candidate[] = [];
+    const l1Start = debug ? performance.now() : 0;
+    const l1Matches: Array<{ source: string; name: string; snippet: string }> = [];
 
     // 1. Search entities (index first, then body)
     for (const [pathStr, meta] of this._index) {
@@ -307,6 +312,7 @@ export class MemoryStore {
       }
       if (this._matches(pathStr, query, meta)) {
         results.push({ source: "entity", path: pathStr, meta });
+        if (debug) l1Matches.push({ source: "entity", name: meta.name, snippet: meta.summary || meta.type });
       }
     }
 
@@ -327,6 +333,7 @@ export class MemoryStore {
               path: `## ${sec.heading}`,
               meta: {} as Record<string, never>,
             });
+            if (debug) l1Matches.push({ source: "memory-section", name: sec.heading, snippet: sec.body.slice(0, 100) });
           }
         }
       }
@@ -343,6 +350,7 @@ export class MemoryStore {
         const fullPath = join(dailyDir, file);
         if (this._matchesText(fullPath, query)) {
           results.push({ source: "daily", path: fullPath, meta: {} });
+          if (debug) l1Matches.push({ source: "daily", name: basename(file, ".md"), snippet: "" });
         }
       }
     }
@@ -353,169 +361,53 @@ export class MemoryStore {
       this._findRemiMemoryFiles(projectRoot, (mdFile) => {
         if (this._matchesText(mdFile, query)) {
           results.push({ source: "project", path: mdFile, meta: {} });
+          if (debug) l1Matches.push({ source: "project", name: basename(mdFile), snippet: "" });
         }
       });
     }
 
     // L1 check: if exact name match found, return immediately
     const q = query.toLowerCase();
+    let exactMatch = false;
+    let exactResult = "";
     for (const r of results) {
       if (r.source === "entity" && "name" in r.meta && (r.meta as IndexEntry).name.toLowerCase() === q) {
         this._updateAccessStats(r.path);
         log.info(`recall "${query}" → L1 exact match: ${(r.meta as IndexEntry).name}`);
-        return readFileSync(r.path, "utf-8");
+        exactResult = readFileSync(r.path, "utf-8");
+        exactMatch = true;
+        break;
       }
     }
 
     // Check L1 result quality — if only low-quality matches (short daily refs), continue to L2
     const formatted = results.length > 0 ? this._formatResults(results, query) : "";
     const l1Quality = formatted.length >= 50 && results.some(r => r.source === "entity");
+    const l1Early = exactMatch || (l1Quality && results.length <= 5);
 
-    if (l1Quality && results.length <= 5) {
-      log.info(`recall "${query}" → L1 substring: ${results.length} results (${formatted.length} chars)`);
-      return formatted;
+    if (l1Early && !debug) {
+      return exactMatch ? exactResult : formatted;
     }
 
-    // L2: Vector search (if available and L1 quality is insufficient)
-    if (this._vectorStore && !l1Quality) {
-      try {
-        const vecResults = await this._vectorStore.search(query, 10);
-        for (const vr of vecResults) {
-          if (existsSync(vr.id)) {
-            const meta = this._index.get(vr.id);
-            if (meta) {
-              results.push({ source: "vector", path: vr.id, meta });
-            }
-          }
-        }
-        log.info(`recall "${query}" → L2 vector: ${results.length} candidates`);
-      } catch (e) {
-        log.warn("Vector search failed:", e);
-      }
-    }
-
-    if (results.length === 0) {
-      log.info(`recall "${query}" → no results at any level`);
-      return "";
-    }
-
-    // L3: Rerank if too many candidates
-    if (results.length > 3) {
-      try {
-        log.info(`recall "${query}" → L3 rerank: ${results.length} candidates → top 3`);
-        const reranked = await this._rerank(results, query);
-        return this._formatResults(reranked, query);
-      } catch (e) {
-        log.warn("Rerank failed, returning unranked:", e);
-      }
-    }
-
-    return this._formatResults(results, query);
-  }
-
-  async recallDebug(
-    query: string,
-    options?: { type?: string | null; tags?: string[] | null; cwd?: string | null },
-  ): Promise<RecallDebugResult> {
-    const t0 = performance.now();
-    const type = options?.type ?? null;
-    const tags = options?.tags ?? null;
-    const cwd = options?.cwd ?? null;
-    const layers: RecallLayerResult[] = [];
-
-    // ── L1: Index + substring search ──
-    const t1 = performance.now();
-    const results: Array<{ source: string; path: string; meta: IndexEntry | Record<string, never> }> = [];
-
-    for (const [pathStr, meta] of this._index) {
-      if (type && meta.type !== type) continue;
-      if (tags && tags.length > 0) {
-        const metaTags = new Set(meta.tags);
-        if (!tags.some((t) => metaTags.has(t))) continue;
-      }
-      if (this._matches(pathStr, query, meta)) {
-        results.push({ source: "entity", path: pathStr, meta });
-      }
-    }
-
-    const globalMemory = join(this.root, "MEMORY.md");
-    if (existsSync(globalMemory)) {
-      const content = readFileSync(globalMemory, "utf-8");
-      if (content.trim()) {
-        const { extended } = this._splitMemorySections(content);
-        const lq = query.toLowerCase();
-        for (const sec of extended) {
-          if (sec.heading.toLowerCase().includes(lq) || sec.body.toLowerCase().includes(lq)) {
-            results.push({ source: "memory-section", path: `## ${sec.heading}`, meta: {} as Record<string, never> });
-          }
-        }
-      }
-    }
-
-    const dailyDir = join(this.root, "daily");
-    if (existsSync(dailyDir)) {
-      for (const file of readdirSync(dailyDir).filter(f => f.endsWith(".md")).sort().reverse()) {
-        if (this._matchesText(join(dailyDir, file), query)) {
-          results.push({ source: "daily", path: join(dailyDir, file), meta: {} as Record<string, never> });
-        }
-      }
-    }
-
-    const projectRoot = cwd ? this._projectRoot(cwd) : null;
-    if (projectRoot) {
-      this._findRemiMemoryFiles(projectRoot, (mdFile) => {
-        if (this._matchesText(mdFile, query)) {
-          results.push({ source: "project", path: mdFile, meta: {} as Record<string, never> });
-        }
+    if (debug) {
+      layers.push({
+        name: "L1: Index + Substring Search", ran: true,
+        durationMs: Math.round((performance.now() - l1Start) * 10) / 10,
+        candidateCount: results.length, exitedEarly: l1Early, matches: l1Matches,
       });
     }
 
-    const l1Duration = performance.now() - t1;
-
-    // Check for exact name match
-    const q = query.toLowerCase();
-    let exactMatch = false;
-    let resultText = "";
-    for (const r of results) {
-      if (r.source === "entity" && "name" in r.meta && (r.meta as IndexEntry).name.toLowerCase() === q) {
-        this._updateAccessStats(r.path);
-        resultText = readFileSync(r.path, "utf-8");
-        exactMatch = true;
-        break;
-      }
+    if (l1Early && debug) {
+      layers.push({ name: "L2: Vector Search", ran: false, durationMs: 0, candidateCount: 0, reason: "L1 quality sufficient", matches: [] });
+      layers.push({ name: "L3: LLM Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "Skipped", matches: [] });
+      return { query, result: exactMatch ? exactResult : formatted, totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
     }
 
-    const formatted = results.length > 0 ? this._formatResults(results, query) : "";
-    const l1Quality = formatted.length >= 50 && results.some(r => r.source === "entity");
-
-    const l1Matches = results.map(r => ({
-      source: r.source,
-      name: "name" in r.meta && (r.meta as IndexEntry).name ? (r.meta as IndexEntry).name : basename(r.path, ".md"),
-      snippet: "summary" in r.meta ? (r.meta as IndexEntry).summary : "",
-    }));
-
-    layers.push({
-      name: "L1: Index Search",
-      ran: true,
-      durationMs: Math.round(l1Duration * 100) / 100,
-      candidateCount: results.length,
-      resultCount: results.filter(r => r.source === "entity").length,
-      exitedEarly: exactMatch || (l1Quality && results.length <= 5),
-      matches: l1Matches,
-    });
-
-    if (exactMatch) {
-      return { query, result: resultText, totalMs: Math.round((performance.now() - t0) * 100) / 100, layers };
-    }
-
-    if (l1Quality && results.length <= 5) {
-      return { query, result: formatted, totalMs: Math.round((performance.now() - t0) * 100) / 100, layers };
-    }
-
-    // ── L2: Vector search ──
-    const t2 = performance.now();
+    // L2: Vector search (if available and L1 quality is insufficient)
+    const l2Start = debug ? performance.now() : 0;
+    const l2Matches: Array<{ source: string; name: string; snippet: string }> = [];
     let l2Ran = false;
-    let l2Count = 0;
+
     if (this._vectorStore && !l1Quality) {
       l2Ran = true;
       try {
@@ -525,52 +417,75 @@ export class MemoryStore {
             const meta = this._index.get(vr.id);
             if (meta) {
               results.push({ source: "vector", path: vr.id, meta });
-              l2Count++;
+              if (debug) l2Matches.push({ source: "vector", name: meta.name, snippet: meta.summary || "" });
             }
           }
         }
-      } catch { /* skip */ }
+        log.info(`recall "${query}" → L2 vector: ${results.length} candidates`);
+      } catch (e) {
+        log.warn("Vector search failed:", e);
+      }
     }
-    const l2Duration = performance.now() - t2;
 
-    layers.push({
-      name: "L2: Vector Search",
-      ran: l2Ran,
-      durationMs: Math.round(l2Duration * 100) / 100,
-      candidateCount: l2Count,
-      resultCount: l2Count,
-      reason: !l2Ran ? (this._vectorStore ? "L1 quality sufficient" : "Vector store not configured") : undefined,
-    });
+    if (debug) {
+      layers.push({
+        name: "L2: Vector Search", ran: l2Ran,
+        durationMs: Math.round((performance.now() - l2Start) * 10) / 10,
+        candidateCount: l2Matches.length,
+        reason: l2Ran ? undefined : (this._vectorStore ? "L1 quality sufficient" : "No vector store configured"),
+        matches: l2Matches,
+      });
+    }
 
     if (results.length === 0) {
-      return { query, result: "", totalMs: Math.round((performance.now() - t0) * 100) / 100, layers };
+      log.info(`recall "${query}" → no results at any level`);
+      if (debug) {
+        layers.push({ name: "L3: LLM Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "No candidates", matches: [] });
+        return { query, result: "", totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+      }
+      return "";
     }
 
-    // ── L3: Rerank ──
-    const t3 = performance.now();
+    // L3: Rerank if too many candidates
+    const l3Start = debug ? performance.now() : 0;
     let l3Ran = false;
-    let finalResults = results;
+    const l3Matches: Array<{ source: string; name: string; snippet: string }> = [];
+
     if (results.length > 3) {
       l3Ran = true;
       try {
-        finalResults = await this._rerank(results, query);
-      } catch {
-        finalResults = results.slice(0, 3);
+        log.info(`recall "${query}" → L3 rerank: ${results.length} candidates → top 3`);
+        const reranked = await this._rerank(results, query);
+        if (debug) {
+          for (const r of reranked) {
+            const name = "name" in r.meta ? (r.meta as IndexEntry).name : basename(r.path, ".md");
+            l3Matches.push({ source: r.source, name, snippet: "" });
+          }
+          layers.push({
+            name: "L3: LLM Rerank", ran: true,
+            durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
+            candidateCount: l3Matches.length, matches: l3Matches,
+          });
+          return { query, result: this._formatResults(reranked, query), totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+        }
+        return this._formatResults(reranked, query);
+      } catch (e) {
+        log.warn("Rerank failed, returning unranked:", e);
       }
     }
-    const l3Duration = performance.now() - t3;
 
-    layers.push({
-      name: "L3: LLM Rerank",
-      ran: l3Ran,
-      durationMs: Math.round(l3Duration * 100) / 100,
-      candidateCount: results.length,
-      resultCount: finalResults.length,
-      reason: !l3Ran ? "≤3 candidates, no rerank needed" : undefined,
-    });
-
-    resultText = this._formatResults(finalResults, query);
-    return { query, result: resultText, totalMs: Math.round((performance.now() - t0) * 100) / 100, layers };
+    const resultText = this._formatResults(results, query);
+    if (debug) {
+      layers.push({
+        name: "L3: LLM Rerank", ran: l3Ran,
+        durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
+        candidateCount: l3Ran ? 0 : 0,
+        reason: l3Ran ? "Rerank failed, returning unranked" : `Only ${results.length} candidates (<=3)`,
+        matches: l3Matches,
+      });
+      return { query, result: resultText, totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+    }
+    return resultText;
   }
 
   private async _rerank(

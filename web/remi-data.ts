@@ -35,12 +35,6 @@ export interface EntityDetail extends EntitySummary {
   createdAt: string;
 }
 
-export interface SessionEntry {
-  key: string;
-  sessionId: string;
-  isThread: boolean;
-}
-
 export interface TokenStatus {
   service: string;
   type: string;
@@ -432,14 +426,35 @@ export class RemiData {
       }
     }
 
+    // Search project-level memories
+    for (const pm of this.listProjectMemories()) {
+      for (const f of pm.files) {
+        const content = this.readProjectMemoryFile(pm.projectId, f.path);
+        if (content.toLowerCase().includes(q)) {
+          const lines = content.split("\n");
+          const matchLine = lines.find(l => l.toLowerCase().includes(q)) ?? "";
+          results.push({ source: "project", name: `${pm.projectName}/${f.name}`, snippet: matchLine.trim().slice(0, 200), path: `${pm.projectId}:${f.path}` });
+        }
+      }
+    }
+
     return results;
   }
 
   async recallDebug(query: string, cwd?: string): Promise<RecallDebugResult> {
     if (!this._memoryStore) {
-      this._memoryStore = new MemoryStore(this.memoryDir);
+      let vectorStore = null;
+      try {
+        const config = this._readRawConfig();
+        const apiKey = (config?.embedding as Record<string, unknown>)?.api_key as string | undefined;
+        if (apiKey) {
+          const { VectorStore } = require("../src/db/vector-store.js");
+          vectorStore = new VectorStore({ provider: "voyage", apiKey });
+        }
+      } catch { /* VectorStore unavailable */ }
+      this._memoryStore = new MemoryStore(this.memoryDir, vectorStore);
     }
-    return this._memoryStore.recallDebug(query, { cwd });
+    return this._memoryStore.recall(query, { cwd, debug: true });
   }
 
   // ── Memory: Daily Logs ─────────────────────────────
@@ -460,59 +475,6 @@ export class RemiData {
   readDaily(date: string): string {
     const p = join(this.memoryDir, "daily", `${date}.md`);
     return existsSync(p) ? readFileSync(p, "utf-8") : "";
-  }
-
-  // ── Sessions ───────────────────────────────────────
-
-  readSessions(): SessionEntry[] {
-    const p = join(this.root, "sessions.json");
-    if (!existsSync(p)) return [];
-
-    try {
-      const data = JSON.parse(readFileSync(p, "utf-8"));
-      const entries: [string, string][] = data.entries ?? [];
-      return entries.map(([key, sessionId]) => ({
-        key,
-        sessionId,
-        isThread: key.includes(":thread:"),
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  clearSession(key: string): boolean {
-    const p = join(this.root, "sessions.json");
-    if (!existsSync(p)) return false;
-
-    try {
-      const data = JSON.parse(readFileSync(p, "utf-8"));
-      const entries: [string, string][] = data.entries ?? [];
-      const filtered = entries.filter(([k]) => k !== key);
-      if (filtered.length === entries.length) return false;
-      data.entries = filtered;
-      data.savedAt = Date.now();
-      writeFileSync(p, JSON.stringify(data, null, 2), "utf-8");
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  clearAllSessions(): number {
-    const p = join(this.root, "sessions.json");
-    if (!existsSync(p)) return 0;
-
-    try {
-      const data = JSON.parse(readFileSync(p, "utf-8"));
-      const count = (data.entries ?? []).length;
-      data.entries = [];
-      data.savedAt = Date.now();
-      writeFileSync(p, JSON.stringify(data, null, 2), "utf-8");
-      return count;
-    } catch {
-      return 0;
-    }
   }
 
   // ── Auth Tokens ────────────────────────────────────
@@ -673,17 +635,26 @@ export class RemiData {
   getStatus() {
     const pid = this.getDaemonPid();
     const alive = this.isDaemonAlive();
-    const sessions = this.readSessions();
     const tokens = this.readTokenStatus();
     const entities = this.listEntities();
     const dailyLogs = this.listDailyDates();
 
+    // Session counts from DB
+    let sessionTotal = 0, sessionMain = 0, sessionThreads = 0;
+    try {
+      const db = getDb();
+      const rows = db.query("SELECT session_key FROM sessions").all() as { session_key: string }[];
+      sessionTotal = rows.length;
+      sessionThreads = rows.filter(r => r.session_key.includes(":thread:")).length;
+      sessionMain = sessionTotal - sessionThreads;
+    } catch {}
+
     return {
       daemon: { pid, alive },
       sessions: {
-        total: sessions.length,
-        main: sessions.filter(s => !s.isThread).length,
-        threads: sessions.filter(s => s.isThread).length,
+        total: sessionTotal,
+        main: sessionMain,
+        threads: sessionThreads,
       },
       tokens: {
         total: tokens.length,
