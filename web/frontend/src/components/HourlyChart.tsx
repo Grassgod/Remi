@@ -1,5 +1,4 @@
 import { Card, CardContent } from "./ui/card";
-import { cn } from "@/lib/utils";
 
 interface HourlyChartProps {
   data: Array<{ hour: number; count: number; errors: number }>;
@@ -23,37 +22,42 @@ export function HourlyChart({ data, currentHour }: HourlyChartProps) {
           </span>
         </div>
 
-        {/* Bars */}
-        <div className="flex items-end gap-[2px]" style={{ height: 48 }}>
+        {/* Bars — use inline styles for reliable rendering */}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 48 }}>
           {data.map((d) => {
-            const heightPct = (d.count / maxCount) * 100;
-            const errorPct = d.count > 0 ? (d.errors / d.count) * 100 : 0;
+            const heightPx = Math.round((d.count / maxCount) * 48);
+            const errorPx = d.count > 0 ? Math.round((d.errors / d.count) * heightPx) : 0;
+            const normalPx = heightPx - errorPx;
             const isFuture = currentHour !== undefined && d.hour > currentHour;
 
             return (
               <div
                 key={d.hour}
-                className="group relative flex-1"
-                style={{ height: "100%" }}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "flex-end",
+                  height: 48,
+                }}
                 title={`${String(d.hour).padStart(2, "0")}:00 — ${d.count} entries${d.errors > 0 ? `, ${d.errors} errors` : ""}`}
               >
-                <div className="absolute bottom-0 left-0 right-0 overflow-hidden rounded-t-[2px]"
-                  style={{ height: `${heightPct}%` }}
-                >
-                  <div
-                    className={cn(
-                      "absolute bottom-0 left-0 right-0",
-                      isFuture ? "bg-muted/30" : "bg-primary/60",
-                    )}
-                    style={{ height: "100%" }}
-                  />
-                  {errorPct > 0 && !isFuture && (
-                    <div
-                      className="absolute left-0 right-0 top-0 bg-destructive/80"
-                      style={{ height: `${errorPct}%` }}
-                    />
-                  )}
-                </div>
+                {/* Error portion (top of bar) */}
+                {errorPx > 0 && !isFuture && (
+                  <div style={{
+                    height: errorPx,
+                    background: "hsl(0 84% 60%)",
+                    borderRadius: heightPx === errorPx ? "2px 2px 0 0" : 0,
+                  }} />
+                )}
+                {/* Normal portion (bottom of bar) */}
+                {normalPx > 0 && (
+                  <div style={{
+                    height: normalPx,
+                    background: isFuture ? "hsl(215 20% 25%)" : "hsl(217 91% 50% / 0.6)",
+                    borderRadius: errorPx > 0 ? 0 : "2px 2px 0 0",
+                  }} />
+                )}
               </div>
             );
           })}
