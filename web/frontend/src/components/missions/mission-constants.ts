@@ -10,12 +10,12 @@ export interface StatusConfig {
 }
 
 export const STATUS_ORDER: StatusConfig[] = [
-  { key: "blocked",     label: "Blocked",     color: "#f87171", bgColor: "#450a0a", textColor: "#f87171", defaultCollapsed: false },
-  { key: "in_progress", label: "In Progress", color: "#fb923c", bgColor: "#422006", textColor: "#fb923c", defaultCollapsed: false },
   { key: "inbox",       label: "Inbox",       color: "#a1a1aa", bgColor: "#27272a", textColor: "#a1a1aa", defaultCollapsed: false },
-  { key: "in_review",   label: "In Review",   color: "#a78bfa", bgColor: "#1e1b4b", textColor: "#a78bfa", defaultCollapsed: false },
   { key: "approved",    label: "Approved",    color: "#60a5fa", bgColor: "#172554", textColor: "#60a5fa", defaultCollapsed: false },
+  { key: "in_progress", label: "In Progress", color: "#fb923c", bgColor: "#422006", textColor: "#fb923c", defaultCollapsed: false },
+  { key: "in_review",   label: "In Review",   color: "#a78bfa", bgColor: "#1e1b4b", textColor: "#a78bfa", defaultCollapsed: false },
   { key: "done",        label: "Done",        color: "#4ade80", bgColor: "#052e16", textColor: "#4ade80", defaultCollapsed: true },
+  { key: "blocked",     label: "Blocked",     color: "#f87171", bgColor: "#450a0a", textColor: "#f87171", defaultCollapsed: false },
   { key: "rejected",    label: "Rejected",    color: "#f87171", bgColor: "#450a0a", textColor: "#f87171", defaultCollapsed: true },
 ];
 
