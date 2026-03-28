@@ -66,23 +66,27 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
         chat_id,
         COUNT(*) as msg_count,
         COUNT(DISTINCT CASE WHEN thread_id IS NOT NULL AND thread_id != '' THEN chat_id || ':' || thread_id ELSE chat_id END) as conv_count,
+        COUNT(DISTINCT cli_session_id) as session_count,
         MAX(CASE WHEN thread_id IS NULL OR thread_id = '' THEN 1 ELSE 0 END) as has_no_thread
       FROM conversations
       GROUP BY chat_id
       ORDER BY msg_count DESC
-    `).all() as { chat_id: string; msg_count: number; conv_count: number; has_no_thread: number }[];
+    `).all() as { chat_id: string; msg_count: number; conv_count: number; session_count: number; has_no_thread: number }[];
 
     // Fetch group chat names from Feishu API (async, cached)
     const groupChatIds = rows.filter(r => !(r.has_no_thread === 1 && r.conv_count <= 1)).map(r => r.chat_id);
     await fetchChatNames(groupChatIds);
 
-    const chats = rows.map(r => ({
-      chatId: r.chat_id,
-      name: getChatName(db, r.chat_id, r.has_no_thread === 1 && r.conv_count <= 1),
-      conversationCount: r.conv_count,
-      messageCount: r.msg_count,
-      isP2P: r.has_no_thread === 1 && r.conv_count <= 1,
-    }));
+    const chats = rows.map(r => {
+      const isP2P = r.has_no_thread === 1 && r.conv_count <= 1;
+      return {
+        chatId: r.chat_id,
+        name: getChatName(db, r.chat_id, isP2P),
+        conversationCount: isP2P ? r.session_count : r.conv_count,
+        messageCount: r.msg_count,
+        isP2P,
+      };
+    });
 
     return c.json(chats);
   });
