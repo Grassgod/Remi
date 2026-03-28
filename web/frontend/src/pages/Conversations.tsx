@@ -232,6 +232,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -271,20 +272,24 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
             <button
               className="font-mono text-muted-foreground/30 hover:text-primary transition-colors"
               onClick={() => {
-                try { navigator.clipboard.writeText(conv.id); } catch {
-                  // HTTP fallback
-                  const ta = document.createElement("textarea");
-                  ta.value = conv.id;
-                  ta.style.position = "fixed";
-                  ta.style.opacity = "0";
-                  document.body.appendChild(ta);
-                  ta.select();
-                  document.execCommand("copy");
-                  document.body.removeChild(ta);
-                }
+                const doCopy = () => {
+                  try { navigator.clipboard.writeText(conv.id); } catch {
+                    const ta = document.createElement("textarea");
+                    ta.value = conv.id;
+                    ta.style.position = "fixed";
+                    ta.style.opacity = "0";
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(ta);
+                  }
+                };
+                doCopy();
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
               }}
               title="Copy ID"
-            >{conv.id}</button>
+            >{copied ? "Copied!" : conv.id}</button>
           </div>
         </div>
       }
