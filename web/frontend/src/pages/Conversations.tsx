@@ -354,9 +354,9 @@ function RemiCard({ message, date, time }: { message: ChatMessage; date: string;
   const sessionName = message.sessionName ?? "Remi";
 
   return (
-    <div className="max-w-[90%] rounded-lg border border-border bg-card shadow-sm overflow-hidden">
+    <div className="max-w-[90%] rounded-lg border border-border/40 dark:border-white/10 bg-card shadow-sm overflow-hidden">
       {/* Card header — session name */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/50 bg-muted/30">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/30 dark:border-white/5 bg-muted/30">
         <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0">
           R
         </div>
@@ -412,7 +412,7 @@ function RemiCard({ message, date, time }: { message: ChatMessage; date: string;
 
       {/* Stats footer */}
       {meta && (
-        <div className="flex items-center gap-4 px-4 py-2 border-t border-border/50 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-4 px-4 py-2 border-t border-border/30 dark:border-white/5 text-[11px] text-muted-foreground">
           {meta.duration != null && meta.duration > 0 && (
             <span className="flex items-center gap-1">
               <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
