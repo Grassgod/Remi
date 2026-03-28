@@ -8,11 +8,11 @@ import { Memory } from "./pages/Memory";
 import { MemoryEntity } from "./pages/MemoryEntity";
 import { MemoryDaily } from "./pages/MemoryDaily";
 import { Wiki } from "./pages/Wiki";
+import { Skills } from "./pages/Skills";
 import { Analytics } from "./pages/Analytics";
 import { Traces } from "./pages/Traces";
 import { Logs } from "./pages/Logs";
 import { Scheduler } from "./pages/Scheduler";
-import { Sessions } from "./pages/Sessions";
 import { Projects } from "./pages/Projects";
 import { BotMenu } from "./pages/BotMenu";
 import { Layout } from "./components/Layout";
@@ -45,6 +45,7 @@ export function App() {
         <Route path="/memory/entity/:type/:name" component={MemoryEntity} />
         <Route path="/memory/daily/:date" component={MemoryDaily} />
         <Route path="/wiki" component={Wiki} />
+        <Route path="/skills" component={Skills} />
 
         {/* Observability */}
         <Route path="/analytics" component={Analytics} />
@@ -53,11 +54,11 @@ export function App() {
         <Route path="/scheduler" component={Scheduler} />
 
         {/* System */}
-        <Route path="/sessions" component={Sessions} />
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 
         {/* Redirects for old routes */}
+        <Route path="/sessions">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/auth">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/monitor">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/database">{() => { window.location.hash = "#/"; return null; }}</Route>

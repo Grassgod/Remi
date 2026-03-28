@@ -1,7 +1,7 @@
 import { useLocation } from "wouter";
 import {
   LayoutDashboard, MessageSquare, KanbanSquare, Brain, BookOpen,
-  BarChart3, Activity, FileText, Clock, Monitor, FolderOpen, Menu,
+  BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "./ui/scroll-area";
@@ -15,6 +15,7 @@ const navItems = [
     { path: "/missions", label: "Missions", icon: KanbanSquare },
     { path: "/memory", label: "Memory", icon: Brain },
     { path: "/wiki", label: "Wiki", icon: BookOpen },
+    { path: "/skills", label: "Skills", icon: Zap },
   ]},
   { group: "Observability", items: [
     { path: "/analytics", label: "Analytics", icon: BarChart3 },
@@ -23,7 +24,6 @@ const navItems = [
     { path: "/scheduler", label: "Scheduler", icon: Clock },
   ]},
   { group: "System", items: [
-    { path: "/sessions", label: "Sessions", icon: Monitor },
     { path: "/projects", label: "Projects", icon: FolderOpen },
     { path: "/bot-menu", label: "Bot Menu", icon: Menu },
   ]},
