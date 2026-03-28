@@ -430,7 +430,7 @@ function LogDetail({ entry }: { entry: LogEntry }) {
             variant="outline"
             size="sm"
             className="h-7 gap-1 text-[10px]"
-            onClick={() => copyToClipboard(JSON.stringify(entry.data, null, 2))}
+            onClick={e => copyToClipboard(JSON.stringify(entry.data, null, 2), e.currentTarget)}
           >
             <Copy className="h-3 w-3" /> Copy JSON
           </Button>
@@ -439,7 +439,7 @@ function LogDetail({ entry }: { entry: LogEntry }) {
           variant="outline"
           size="sm"
           className="h-7 gap-1 text-[10px]"
-          onClick={() => copyToClipboard(JSON.stringify(entry, null, 2))}
+          onClick={e => copyToClipboard(JSON.stringify(entry, null, 2), e.currentTarget)}
         >
           <Copy className="h-3 w-3" /> Copy Full Entry
         </Button>
@@ -530,8 +530,7 @@ function highlightJson(data: Record<string, unknown>): string {
     .replace(/:\s*(true|false|null)/g, ': <span class="text-purple-400">$1</span>');
 }
 
-function copyToClipboard(text: string) {
-  // Use textarea fallback first — works on HTTP
+function copyToClipboard(text: string, btn?: HTMLElement | null) {
   const el = document.createElement("textarea");
   el.value = text;
   el.style.position = "fixed";
@@ -540,4 +539,11 @@ function copyToClipboard(text: string) {
   el.select();
   document.execCommand("copy");
   document.body.removeChild(el);
+
+  // Show "Copied!" feedback on the button
+  if (btn) {
+    const orig = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  }
 }
