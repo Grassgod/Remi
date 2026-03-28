@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { getDb } from "../../src/db/index.js";
-import { buildChatMessages, stripContextTags } from "../../src/conversation/parser.js";
+import { buildChatMessages, stripContextTags, findSessionJsonl, parseSessionPairs } from "../../src/conversation/parser.js";
 import type { MetaRow } from "../../src/conversation/parser.js";
 
 // ── Handler Registration ──────────────────────────────
@@ -58,17 +58,42 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       first_message: string | null;
     }[];
 
-    const conversations = rows.map((row) => ({
-      id: row.thread_id ? `${row.chat_id}:${row.thread_id}` : row.chat_id,
-      chatId: row.chat_id,
-      threadId: row.thread_id ?? null,
-      topic: row.first_message ? cleanTopic(row.first_message) : "Untitled",
-      messageCount: row.msg_count,
-      tokenCount: row.total_tokens ?? 0,
-      totalCost: row.total_cost ?? 0,
-      updatedAt: row.latest,
-      status: row.has_active ? "active" as const : "completed" as const,
-    }));
+    const conversations = rows.map((row) => {
+      let topic = row.first_message ? cleanTopic(row.first_message) : "Untitled";
+
+      // Fallback: when DB has no user_message, peek at JSONL for the first enqueue
+      if (topic === "Untitled") {
+        try {
+          const sessionSql = row.thread_id
+            ? "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1"
+            : "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND (thread_id IS NULL OR thread_id = '') AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1";
+          const sessionRow = (row.thread_id
+            ? db.query(sessionSql).get(row.chat_id, row.thread_id)
+            : db.query(sessionSql).get(row.chat_id)) as { cli_session_id: string } | null;
+
+          if (sessionRow) {
+            const jsonlPath = findSessionJsonl(sessionRow.cli_session_id);
+            if (jsonlPath) {
+              const pairs = parseSessionPairs(jsonlPath, sessionRow.cli_session_id);
+              const firstUser = pairs.find(p => p.userText);
+              if (firstUser) topic = cleanTopic(firstUser.userText);
+            }
+          }
+        } catch {}
+      }
+
+      return {
+        id: row.thread_id ? `${row.chat_id}:${row.thread_id}` : row.chat_id,
+        chatId: row.chat_id,
+        threadId: row.thread_id ?? null,
+        topic,
+        messageCount: row.msg_count,
+        tokenCount: row.total_tokens ?? 0,
+        totalCost: row.total_cost ?? 0,
+        updatedAt: row.latest,
+        status: row.has_active ? "active" as const : "completed" as const,
+      };
+    });
 
     return c.json(conversations);
   });
