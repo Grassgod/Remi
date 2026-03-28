@@ -1105,6 +1105,7 @@ export class RemiData {
   private _loadAllRuns(): Array<{
     ts: string; jobId: string; handler: string;
     status: "ok" | "error" | "skipped"; durationMs: number; error?: string;
+    runId?: string; phase?: string;
   }> {
     const runsDir = join(this.root, "cron", "runs");
     if (!existsSync(runsDir)) return [];
@@ -1115,6 +1116,7 @@ export class RemiData {
     const entries: Array<{
       ts: string; jobId: string; handler: string;
       status: "ok" | "error" | "skipped"; durationMs: number; error?: string;
+      runId?: string; phase?: string;
     }> = [];
 
     for (const file of readdirSync(runsDir).filter(f => f.endsWith(".jsonl"))) {
@@ -1133,6 +1135,8 @@ export class RemiData {
             status: raw.status,
             durationMs: raw.durationMs,
             error: raw.error,
+            runId: raw.runId,
+            phase: raw.phase,
           });
         } catch { /* skip malformed lines */ }
       }
@@ -1232,12 +1236,13 @@ export class RemiData {
         } : null,
         nextRunAt,
         consecutiveErrors,
+        config: job.handlerConfig ?? null,
       };
     });
     return { jobs };
   }
 
-  getSchedulerHistory(jobId?: string, limit = 50): Array<{ ts: string; status: string; durationMs: number; error?: string; jobId: string }> {
+  getSchedulerHistory(jobId?: string, limit = 50): Array<{ ts: string; status: string; durationMs: number; error?: string; jobId: string; runId?: string; phase?: string }> {
     let runs = this._loadAllRuns();
     if (jobId) runs = runs.filter(r => r.jobId === jobId);
     return runs.slice(0, Math.min(limit, 200)).map(r => ({
@@ -1246,6 +1251,8 @@ export class RemiData {
       status: r.status,
       durationMs: r.durationMs,
       error: r.error,
+      runId: r.runId,
+      phase: r.phase,
     }));
   }
 

@@ -86,6 +86,25 @@ export function Scheduler() {
         </CardContent>
       </Card>
 
+      {/* ── Job Config (shown when a job is selected) ── */}
+      {selectedJobId && (() => {
+        const selectedJob = enabledJobs.find(j => j.jobId === selectedJobId);
+        if (!selectedJob?.config) return null;
+        return (
+          <Card className="mb-3">
+            <CardHeader className="space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                Config — {selectedJob.jobName}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ConfigDetail config={selectedJob.config} />
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* ── 7-Day Trend ── */}
       <Card className="mb-3">
         <CardHeader className="space-y-0 pb-2">
@@ -177,6 +196,59 @@ function JobTable({ jobs, selectedJobId, onSelectJob }: {
     );
   }
 
+  const systemJobs = jobs.filter(j => j.handler.startsWith("builtin:") || j.handler.startsWith("agent:"));
+  const skillJobs = jobs.filter(j => !j.handler.startsWith("builtin:") && !j.handler.startsWith("agent:"));
+
+  const renderJobRow = (job: SchedulerJobStatus) => {
+    const last = job.lastRun;
+    const isSelected = selectedJobId === job.jobId;
+    return (
+      <TableRow
+        key={job.jobId}
+        className={cn(
+          "cursor-pointer border-l-2",
+          isSelected
+            ? "border-l-success/50 bg-accent/30"
+            : "border-l-transparent"
+        )}
+        onClick={() => onSelectJob(isSelected ? undefined : job.jobId)}
+      >
+        <TableCell>
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "h-2 w-2 shrink-0 rounded-full",
+              !last ? "bg-muted-foreground" :
+              last.status === "ok" ? "bg-success" : "bg-destructive"
+            )} />
+            <span className="truncate font-mono text-xs" title={job.jobId}>
+              {job.jobName}
+            </span>
+          </div>
+        </TableCell>
+        <TableCell className="font-mono text-xs text-muted-foreground">
+          {formatSchedule(job.schedule)}
+        </TableCell>
+        <TableCell className="text-center">
+          <Badge
+            variant={
+              !last ? "outline" :
+              last.status === "ok" ? "success" : "destructive"
+            }
+            className="text-[9px]"
+          >
+            {!last ? "\u2014" : last.status === "ok" ? "OK" : last.status === "error" ? "ERR" : "SKIP"}
+          </Badge>
+        </TableCell>
+        <TableCell className="hidden text-right font-mono text-xs text-muted-foreground sm:table-cell">
+          {last ? formatAgo(last.finishedAt) : "\u2014"}
+        </TableCell>
+        <TableCell className="hidden text-right font-mono text-xs text-muted-foreground sm:table-cell">
+          {job.nextRunAt ? formatAgo(job.nextRunAt, true) : "\u2014"}
+        </TableCell>
+      </TableRow>
+    );
+  };
+
   return (
     <Table>
       <TableHeader>
@@ -189,55 +261,26 @@ function JobTable({ jobs, selectedJobId, onSelectJob }: {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {jobs.map((job) => {
-          const last = job.lastRun;
-          const isSelected = selectedJobId === job.jobId;
-          return (
-            <TableRow
-              key={job.jobId}
-              className={cn(
-                "cursor-pointer border-l-2",
-                isSelected
-                  ? "border-l-success/50 bg-accent/30"
-                  : "border-l-transparent"
-              )}
-              onClick={() => onSelectJob(isSelected ? undefined : job.jobId)}
-            >
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <div className={cn(
-                    "h-2 w-2 shrink-0 rounded-full",
-                    !last ? "bg-muted-foreground" :
-                    last.status === "ok" ? "bg-success" : "bg-destructive"
-                  )} />
-                  <span className="truncate font-mono text-xs" title={job.jobId}>
-                    {job.jobName}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {formatSchedule(job.schedule)}
-              </TableCell>
-              <TableCell className="text-center">
-                <Badge
-                  variant={
-                    !last ? "outline" :
-                    last.status === "ok" ? "success" : "destructive"
-                  }
-                  className="text-[9px]"
-                >
-                  {!last ? "\u2014" : last.status === "ok" ? "OK" : last.status === "error" ? "ERR" : "SKIP"}
-                </Badge>
-              </TableCell>
-              <TableCell className="hidden text-right font-mono text-xs text-muted-foreground sm:table-cell">
-                {last ? formatAgo(last.finishedAt) : "\u2014"}
-              </TableCell>
-              <TableCell className="hidden text-right font-mono text-xs text-muted-foreground sm:table-cell">
-                {job.nextRunAt ? formatAgo(job.nextRunAt, true) : "\u2014"}
+        {systemJobs.length > 0 && (
+          <>
+            <TableRow>
+              <TableCell colSpan={5} className="bg-muted/50 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                System Tasks
               </TableCell>
             </TableRow>
-          );
-        })}
+            {systemJobs.map(renderJobRow)}
+          </>
+        )}
+        {skillJobs.length > 0 && (
+          <>
+            <TableRow>
+              <TableCell colSpan={5} className="bg-muted/50 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Skill Tasks
+              </TableCell>
+            </TableRow>
+            {skillJobs.map(renderJobRow)}
+          </>
+        )}
       </TableBody>
     </Table>
   );
@@ -281,16 +324,23 @@ function RunHistoryTable({ runs }: { runs: CronRunEntry[] }) {
               {run.jobId ?? "\u2014"}
             </TableCell>
             <TableCell className="text-center">
-              <Badge
-                variant={run.status === "ok" ? "success" : "destructive"}
-                className="text-[9px]"
-              >
-                {run.status === "ok" ? (
-                  <><Check className="mr-0.5 h-2.5 w-2.5" />{run.status}</>
-                ) : (
-                  <><XCircle className="mr-0.5 h-2.5 w-2.5" />{run.status}</>
+              <div className="flex items-center justify-center gap-1">
+                <Badge
+                  variant={run.status === "ok" ? "success" : "destructive"}
+                  className="text-[9px]"
+                >
+                  {run.status === "ok" ? (
+                    <><Check className="mr-0.5 h-2.5 w-2.5" />{run.status}</>
+                  ) : (
+                    <><XCircle className="mr-0.5 h-2.5 w-2.5" />{run.status}</>
+                  )}
+                </Badge>
+                {run.phase && (
+                  <span className="rounded bg-muted px-1 py-0.5 text-[8px] font-medium uppercase text-muted-foreground">
+                    {run.phase === "generate" ? "GEN" : run.phase === "push" ? "PUSH" : run.phase}
+                  </span>
                 )}
-              </Badge>
+              </div>
             </TableCell>
             <TableCell className="text-right font-mono text-xs text-muted-foreground">
               {formatDuration(run.durationMs)}
@@ -409,6 +459,47 @@ function TrendChart({ summary }: { summary: DailySchedulerSummary[] }) {
         <text x={102} y={1} className="fill-muted-foreground text-[8px]" fontFamily="var(--font-mono)">Skipped</text>
       </g>
     </svg>
+  );
+}
+
+// ── Config Detail ────────────────────────────────────
+
+function ConfigDetail({ config }: { config: Record<string, unknown> }) {
+  const renderValue = (val: unknown, depth = 0): React.ReactNode => {
+    if (val === null || val === undefined) return <span className="text-muted-foreground">—</span>;
+    if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+      return <span className="font-mono text-xs">{String(val)}</span>;
+    }
+    if (Array.isArray(val)) {
+      return <span className="font-mono text-xs">[{val.join(", ")}]</span>;
+    }
+    if (typeof val === "object") {
+      return (
+        <div className={cn(depth > 0 && "ml-3 border-l border-border pl-2")}>
+          {Object.entries(val as Record<string, unknown>).map(([k, v]) => (
+            <div key={k} className="flex gap-2 py-0.5">
+              <span className="shrink-0 text-xs text-muted-foreground">{k}:</span>
+              {renderValue(v, depth + 1)}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return <span className="font-mono text-xs">{String(val)}</span>;
+  };
+
+  // Filter out internal fields
+  const visible = Object.entries(config).filter(([k]) => !k.startsWith("_"));
+
+  return (
+    <div className="space-y-0.5">
+      {visible.map(([key, val]) => (
+        <div key={key} className="flex gap-2 py-0.5">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">{key}:</span>
+          {renderValue(val)}
+        </div>
+      ))}
+    </div>
   );
 }
 

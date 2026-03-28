@@ -286,6 +286,7 @@ export interface SchedulerJobStatus {
   lastRun: CronJobLastRun | null;
   nextRunAt: string | null;
   consecutiveErrors: number;
+  config: Record<string, unknown> | null;
 }
 
 export interface SchedulerStatus {
@@ -298,6 +299,8 @@ export interface CronRunEntry {
   durationMs: number;
   error?: string;
   jobId?: string;
+  runId?: string;
+  phase?: string;
 }
 
 export interface DailySchedulerSummary {

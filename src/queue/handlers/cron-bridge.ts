@@ -105,11 +105,14 @@ handlers.set("skill:run", async (remi, config) => {
   if (!config?.skillName) throw new Error("Missing handlerConfig.skillName");
 
   const skillName = config.skillName as string;
+  const jobId = config._jobId as string;
   const today = localDateStr(new Date());
   const outputDir = (config.outputDir as string) ?? join(homedir(), ".remi", "skill-reports", skillName);
+  const runId = `${jobId}-${today}`;
 
   // ── Phase 1: Generate ──
   log.info(`[skill:run] Generating: ${skillName} for ${today}`);
+  const genStart = Date.now();
 
   const skillPath = resolveSkillPath(skillName, config.cwd as string | undefined);
 
@@ -123,21 +126,30 @@ handlers.set("skill:run", async (remi, config) => {
   const text = response.text.trim();
 
   if (!text || text.startsWith("[Provider error") || text.startsWith("[Provider timeout")) {
+    const genMs = Date.now() - genStart;
+    appendRunLog(jobId, "skill:run", "error", genMs, `Generation failed: ${text.slice(0, 100)}`, runId, "generate");
     throw new Error(`Generation failed: ${text.slice(0, 100)}`);
   }
 
   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
   writeFileSync(join(outputDir, `${today}.md`), text, "utf-8");
-  log.info(`[skill:run] Report saved: ${skillName} → ${outputDir}/${today}.md`);
+  const genMs = Date.now() - genStart;
+  appendRunLog(jobId, "skill:run", "ok", genMs, undefined, runId, "generate");
+  log.info(`[skill:run] Report saved: ${skillName} → ${outputDir}/${today}.md (${genMs}ms)`);
 
   // ── Phase 2: Deliver (optional) ──
   const delivery = config.delivery as Record<string, any> | undefined;
   if (!delivery) return;
 
+  const pushStart = Date.now();
   const connectorName = (delivery.connectorName as string) ?? "feishu";
   const connectors = remi["_connectors"] as Connector[];
   const connector = connectors.find((c) => c.name === connectorName);
-  if (!connector) throw new Error(`Connector "${connectorName}" not found`);
+  if (!connector) {
+    const pushMs = Date.now() - pushStart;
+    appendRunLog(jobId, "skill:run", "error", pushMs, `Connector "${connectorName}" not found`, runId, "push");
+    throw new Error(`Connector "${connectorName}" not found`);
+  }
 
   const maxLen = (delivery.maxPushLength as number) ?? 4000;
   let pushContent = text;
@@ -154,6 +166,8 @@ handlers.set("skill:run", async (remi, config) => {
     await connector.reply(target, { text: pushContent });
     log.info(`[skill:run] Pushed: ${skillName} → ${target}`);
   }
+  const pushMs = Date.now() - pushStart;
+  appendRunLog(jobId, "skill:run", "ok", pushMs, undefined, runId, "push");
 });
 
 // ── skill:gen — generate only (no delivery) ───────────────────────
@@ -303,21 +317,23 @@ export async function handleCronJob(job: Job<CronJobData>, remi: Remi): Promise<
     throw new Error(`Unknown cron handler: ${handler}`);
   }
   log.info(`Executing cron job: ${jobId} (handler=${handler})`);
+  const selfLogged = handler === "skill:run"; // skill:run logs its own phases
+  const config = selfLogged ? { ...handlerConfig, _jobId: jobId } : handlerConfig;
   const start = Date.now();
   try {
-    await fn(remi, handlerConfig);
+    await fn(remi, config);
     const durationMs = Date.now() - start;
     log.info(`Cron job ${jobId} completed in ${durationMs}ms`);
-    appendRunLog(jobId, handler, "ok", durationMs);
+    if (!selfLogged) appendRunLog(jobId, handler, "ok", durationMs);
   } catch (e) {
     const durationMs = Date.now() - start;
     log.error(`Cron job ${jobId} failed after ${durationMs}ms:`, e);
-    appendRunLog(jobId, handler, "error", durationMs, String(e));
+    if (!selfLogged) appendRunLog(jobId, handler, "error", durationMs, String(e));
     throw e; // re-throw so BunQueue records failure + retries
   }
 }
 
-function appendRunLog(jobId: string, handler: string, status: "ok" | "error", durationMs: number, error?: string): void {
+function appendRunLog(jobId: string, handler: string, status: "ok" | "error", durationMs: number, error?: string, runId?: string, phase?: string): void {
   try {
     const runsDir = join(homedir(), ".remi", "cron", "runs");
     if (!existsSync(runsDir)) mkdirSync(runsDir, { recursive: true });
@@ -329,6 +345,8 @@ function appendRunLog(jobId: string, handler: string, status: "ok" | "error", du
       status,
       durationMs,
       ...(error && { error: error.slice(0, 500) }),
+      ...(runId && { runId }),
+      ...(phase && { phase }),
     });
     appendFileSync(join(runsDir, `${safeId}.jsonl`), entry + "\n", "utf-8");
   } catch {
