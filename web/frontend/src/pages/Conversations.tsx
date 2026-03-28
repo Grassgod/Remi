@@ -239,7 +239,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
       setLoading(true);
       setError(null);
       try {
-        const data = await api.getConversationMessages(conv.chatId, conv.threadId ?? undefined);
+        const data = await api.getConversationMessages(conv.chatId, conv.threadId ?? undefined, conv.sessionId ?? undefined);
         setMessages(data);
         setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "instant" }), 100);
       } catch (e) {
@@ -247,7 +247,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
       }
       setLoading(false);
     })();
-  }, [conv.chatId, conv.threadId]);
+  }, [conv.chatId, conv.threadId, conv.sessionId]);
 
   const topicClean = cleanUserMessage(conv.topic);
 

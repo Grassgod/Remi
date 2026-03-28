@@ -41,6 +41,24 @@ export interface SearchResult {
   path: string;
 }
 
+// Project Memory
+export interface ProjectMemoryFile {
+  name: string;
+  type: string;
+  summary: string;
+  path: string;
+  updatedAt: string;
+}
+
+export interface ProjectMemory {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  hasMemoryMd: boolean;
+  memoryMdSize: number;
+  files: ProjectMemoryFile[];
+}
+
 // Recall Debug
 export interface RecallLayerResult {
   name: string;
@@ -278,6 +296,7 @@ export interface ConversationSummary {
   id: string;
   chatId: string;
   threadId: string | null;
+  sessionId?: string | null;
   topic: string;
   messageCount: number;
   tokenCount: number;

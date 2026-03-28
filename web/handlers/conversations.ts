@@ -18,6 +18,8 @@ function cleanTopic(raw: string): string {
   t = t.replace(/^Base directory for this skill:\s*\S+\.?\s*/m, "");
   // Remove "Continue from where you left off." (auto-resume)
   t = t.replace(/^Continue from where you left off\.?\s*/m, "");
+  // Replace markdown images with [image] marker
+  t = t.replace(/!\[image\]\([^)]*\)/g, "[image]");
   return t.trim().slice(0, 80) || "Untitled";
 }
 
@@ -85,46 +87,80 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
     return c.json(chats);
   });
 
-  // ── GET /api/v1/conversations — List conversations grouped by chat_id + thread_id ──
+  // ── GET /api/v1/conversations — List conversations ──
+  // Group chats: group by thread_id (each topic = one conversation)
+  // P2P chats: group by cli_session_id (each session = one conversation)
   app.get("/api/v1/conversations", (c) => {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 500);
     const offset = Math.max(parseInt(c.req.query("offset") ?? "0", 10), 0);
     const filterChatId = c.req.query("chatId") ?? null;
     const db = getDb();
 
-    const chatFilter = filterChatId ? "WHERE c.chat_id = ?" : "";
-    const params = filterChatId ? [filterChatId, limit, offset] : [limit, offset];
+    // Identify P2P chat_ids (no thread_id in any row)
+    const p2pChatIds = new Set(
+      (db.query(
+        "SELECT chat_id FROM conversations GROUP BY chat_id HAVING MAX(CASE WHEN thread_id IS NOT NULL AND thread_id != '' THEN 1 ELSE 0 END) = 0"
+      ).all() as { chat_id: string }[]).map(r => r.chat_id)
+    );
 
-    const rows = db.query(`
-      SELECT
-        c.chat_id,
-        c.thread_id,
-        COUNT(*) as msg_count,
-        SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
-        SUM(COALESCE(c.cost_usd, 0)) as total_cost,
-        MAX(c.created_at) as latest,
-        MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
-        (SELECT c2.user_message FROM conversations c2
-         WHERE c2.chat_id = c.chat_id
-           AND COALESCE(c2.thread_id, '') = COALESCE(c.thread_id, '')
-           AND c2.user_message IS NOT NULL AND c2.user_message != ''
-         ORDER BY c2.created_at ASC LIMIT 1
-        ) as first_message
-      FROM conversations c
-      ${chatFilter}
-      GROUP BY c.chat_id, COALESCE(c.thread_id, '')
-      ORDER BY latest DESC
-      LIMIT ? OFFSET ?
-    `).all(...params) as {
-      chat_id: string;
-      thread_id: string | null;
-      msg_count: number;
-      total_tokens: number;
-      total_cost: number;
-      latest: string;
-      has_active: number;
-      first_message: string | null;
-    }[];
+    const isFilterP2P = filterChatId ? p2pChatIds.has(filterChatId) : false;
+
+    // For P2P: group by cli_session_id
+    // For Group: group by thread_id (existing logic)
+    let rows: { chat_id: string; thread_id: string | null; cli_session_id: string | null; msg_count: number; total_tokens: number; total_cost: number; latest: string; has_active: number; first_message: string | null }[];
+
+    if (filterChatId && isFilterP2P) {
+      // P2P: group by session
+      rows = db.query(`
+        SELECT
+          c.chat_id,
+          NULL as thread_id,
+          c.cli_session_id,
+          COUNT(*) as msg_count,
+          SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
+          SUM(COALESCE(c.cost_usd, 0)) as total_cost,
+          MAX(c.created_at) as latest,
+          MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
+          (SELECT c2.user_message FROM conversations c2
+           WHERE c2.cli_session_id = c.cli_session_id
+             AND c2.user_message IS NOT NULL AND c2.user_message != ''
+           ORDER BY c2.created_at ASC LIMIT 1
+          ) as first_message
+        FROM conversations c
+        WHERE c.chat_id = ? AND c.cli_session_id IS NOT NULL
+        GROUP BY c.cli_session_id
+        ORDER BY latest DESC
+        LIMIT ? OFFSET ?
+      `).all(filterChatId, limit, offset) as any[];
+    } else {
+      // Group chats (or All): group by thread_id
+      const chatFilter = filterChatId ? "WHERE c.chat_id = ?" : "";
+      // Exclude P2P from "All" view or include them grouped by session
+      const params = filterChatId ? [filterChatId, limit, offset] : [limit, offset];
+
+      rows = db.query(`
+        SELECT
+          c.chat_id,
+          c.thread_id,
+          NULL as cli_session_id,
+          COUNT(*) as msg_count,
+          SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
+          SUM(COALESCE(c.cost_usd, 0)) as total_cost,
+          MAX(c.created_at) as latest,
+          MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
+          (SELECT c2.user_message FROM conversations c2
+           WHERE c2.chat_id = c.chat_id
+             AND COALESCE(c2.thread_id, '') = COALESCE(c.thread_id, '')
+             AND c2.user_message IS NOT NULL AND c2.user_message != ''
+           ORDER BY c2.created_at ASC LIMIT 1
+          ) as first_message
+        FROM conversations c
+        ${chatFilter}
+        GROUP BY c.chat_id, COALESCE(c.thread_id, '')
+        ORDER BY latest DESC
+        LIMIT ? OFFSET ?
+      `).all(...params) as any[];
+    }
 
     const conversations = rows.map((row) => {
       let topic = row.first_message ? cleanTopic(row.first_message) : "Untitled";
@@ -132,17 +168,22 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       // Fallback: when DB has no user_message, peek at JSONL for the first enqueue
       if (topic === "Untitled") {
         try {
-          const sessionSql = row.thread_id
-            ? "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1"
-            : "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND (thread_id IS NULL OR thread_id = '') AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1";
-          const sessionRow = (row.thread_id
-            ? db.query(sessionSql).get(row.chat_id, row.thread_id)
-            : db.query(sessionSql).get(row.chat_id)) as { cli_session_id: string } | null;
+          const sid = row.cli_session_id;
+          const sessionSql = sid
+            ? null // Already have session ID for P2P
+            : row.thread_id
+              ? "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1"
+              : "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND (thread_id IS NULL OR thread_id = '') AND cli_session_id IS NOT NULL ORDER BY created_at ASC LIMIT 1";
+          const resolvedSid = sid ?? ((sessionSql
+            ? (row.thread_id
+              ? db.query(sessionSql).get(row.chat_id, row.thread_id)
+              : db.query(sessionSql).get(row.chat_id)) as { cli_session_id: string } | null
+            : null)?.cli_session_id ?? null);
 
-          if (sessionRow) {
-            const jsonlPath = findSessionJsonl(sessionRow.cli_session_id);
+          if (resolvedSid) {
+            const jsonlPath = findSessionJsonl(resolvedSid);
             if (jsonlPath) {
-              const pairs = parseSessionPairs(jsonlPath, sessionRow.cli_session_id);
+              const pairs = parseSessionPairs(jsonlPath, resolvedSid);
               const firstUser = pairs.find(p => p.userText);
               if (firstUser) topic = cleanTopic(firstUser.userText);
             }
@@ -150,10 +191,18 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
         } catch {}
       }
 
+      // For P2P sessions, use session ID in the composite key
+      const id = row.cli_session_id
+        ? `${row.chat_id}:session:${row.cli_session_id}`
+        : row.thread_id
+          ? `${row.chat_id}:${row.thread_id}`
+          : row.chat_id;
+
       return {
-        id: row.thread_id ? `${row.chat_id}:${row.thread_id}` : row.chat_id,
+        id,
         chatId: row.chat_id,
         threadId: row.thread_id ?? null,
+        sessionId: row.cli_session_id ?? null,
         topic,
         messageCount: row.msg_count,
         tokenCount: row.total_tokens ?? 0,
@@ -170,32 +219,38 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
   app.get("/api/v1/conversations/:chatId/messages", (c) => {
     const chatId = c.req.param("chatId");
     const threadId = c.req.query("threadId") ?? null;
+    const sessionId = c.req.query("sessionId") ?? null;
     const db = getDb();
 
     try {
-      // Step 1: Get session IDs
-      const sessionSql = threadId
-        ? "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC"
-        : "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC";
+      let sessionIds: string[];
+      let metaRows: MetaRow[];
 
-      const sessionRows = (threadId
-        ? db.query(sessionSql).all(chatId, threadId)
-        : db.query(sessionSql).all(chatId)) as { cli_session_id: string }[];
+      if (sessionId) {
+        // P2P: single session
+        sessionIds = [sessionId];
+        metaRows = db.query(
+          "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE cli_session_id = ? AND status = 'completed' ORDER BY created_at ASC"
+        ).all(sessionId) as MetaRow[];
+      } else {
+        // Group: by thread_id
+        const sessionSql = threadId
+          ? "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND thread_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC"
+          : "SELECT DISTINCT cli_session_id FROM conversations WHERE chat_id = ? AND cli_session_id IS NOT NULL ORDER BY created_at ASC";
+        const sessionRows = (threadId
+          ? db.query(sessionSql).all(chatId, threadId)
+          : db.query(sessionSql).all(chatId)) as { cli_session_id: string }[];
+        sessionIds = sessionRows.map(r => r.cli_session_id);
 
-      const sessionIds = sessionRows.map(r => r.cli_session_id);
+        const metaSql = threadId
+          ? "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND thread_id = ? AND status = 'completed' ORDER BY created_at ASC"
+          : "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND status = 'completed' ORDER BY created_at ASC";
+        metaRows = (threadId
+          ? db.query(metaSql).all(chatId, threadId)
+          : db.query(metaSql).all(chatId)) as MetaRow[];
+      }
 
-      // Step 2: Get conversation metadata
-      const metaSql = threadId
-        ? "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND thread_id = ? AND status = 'completed' ORDER BY created_at ASC"
-        : "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND status = 'completed' ORDER BY created_at ASC";
-
-      const metaRows = (threadId
-        ? db.query(metaSql).all(chatId, threadId)
-        : db.query(metaSql).all(chatId)) as MetaRow[];
-
-      // Step 3: Use shared parser
       const messages = buildChatMessages(sessionIds, metaRows);
-
       return c.json(messages);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
