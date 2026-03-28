@@ -637,6 +637,61 @@ export class RemiData {
     return [...new Set(entries.map(e => e.module))].sort();
   }
 
+  getLogStats(date?: string): {
+    total: number;
+    levels: { DEBUG: number; INFO: number; WARN: number; ERROR: number };
+    hourly: Array<{ hour: number; count: number; errors: number }>;
+    moduleCount: number;
+    topModules: string[];
+    lastError: string | null;
+    lastErrorModule: string | null;
+  } {
+    const logsDir = join(this.root, "logs");
+    const d = date ?? new Date().toISOString().slice(0, 10);
+    const entries = readLogEntries(d, logsDir);
+
+    const levels = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 };
+    const hourly: Array<{ hour: number; count: number; errors: number }> = Array.from(
+      { length: 24 }, (_, i) => ({ hour: i, count: 0, errors: 0 })
+    );
+    const moduleCounts: Record<string, number> = {};
+    let lastError: string | null = null;
+    let lastErrorModule: string | null = null;
+
+    for (const e of entries) {
+      if (e.level in levels) levels[e.level as keyof typeof levels]++;
+      try {
+        const hour = new Date(e.ts).getHours();
+        if (hour >= 0 && hour < 24) {
+          hourly[hour].count++;
+          if (e.level === "ERROR") hourly[hour].errors++;
+        }
+      } catch { /* skip entries with unparseable timestamps */ }
+      moduleCounts[e.module] = (moduleCounts[e.module] ?? 0) + 1;
+      if (e.level === "ERROR") {
+        if (!lastError || e.ts > lastError) {
+          lastError = e.ts;
+          lastErrorModule = e.module;
+        }
+      }
+    }
+
+    const topModules = Object.entries(moduleCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name]) => name);
+
+    return {
+      total: entries.length,
+      levels,
+      hourly,
+      moduleCount: Object.keys(moduleCounts).length,
+      topModules,
+      lastError,
+      lastErrorModule,
+    };
+  }
+
   // ── Monitor ───────────────────────────────────────
 
   getMonitorStats(): Record<string, unknown> {
