@@ -253,7 +253,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
 
   return (
     <Layout
-      title="Conversation"
+      title=""
       actions={
         <div>
           <div className="flex items-center gap-3">
@@ -270,7 +270,19 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
             <span className="text-muted-foreground/30">·</span>
             <button
               className="font-mono text-muted-foreground/30 hover:text-primary transition-colors"
-              onClick={() => { navigator.clipboard.writeText(conv.id).catch(() => {}); }}
+              onClick={() => {
+                try { navigator.clipboard.writeText(conv.id); } catch {
+                  // HTTP fallback
+                  const ta = document.createElement("textarea");
+                  ta.value = conv.id;
+                  ta.style.position = "fixed";
+                  ta.style.opacity = "0";
+                  document.body.appendChild(ta);
+                  ta.select();
+                  document.execCommand("copy");
+                  document.body.removeChild(ta);
+                }
+              }}
               title="Copy ID"
             >{conv.id}</button>
           </div>
