@@ -63,7 +63,15 @@ export function Sidebar({ daemonPid }: { daemonPid: number | null }) {
               return (
                 <div
                   key={item.path}
-                  onClick={() => setLocation(item.path)}
+                  onClick={() => {
+                    if (active) {
+                      // Force re-navigation to reset page state (e.g. detail → list)
+                      setLocation("/");
+                      setTimeout(() => setLocation(item.path), 0);
+                    } else {
+                      setLocation(item.path);
+                    }
+                  }}
                   className={cn(
                     "relative flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
                     active

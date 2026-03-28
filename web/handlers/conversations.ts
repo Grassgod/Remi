@@ -21,14 +21,21 @@ function cleanTopic(raw: string): string {
   return t.trim().slice(0, 80) || "Untitled";
 }
 
-/** Get a readable name for a chat_id by peeking at the first user_message */
-function getChatName(db: any, chatId: string): string {
+/** Get a readable name for a chat_id */
+function getChatName(db: any, chatId: string, isP2P: boolean): string {
+  if (isP2P) {
+    // For P2P, show the sender name (who the user is chatting with)
+    const sender = db.query(
+      "SELECT sender_id FROM conversations WHERE chat_id = ? AND sender_id IS NOT NULL AND sender_id != '' ORDER BY created_at ASC LIMIT 1"
+    ).get(chatId) as { sender_id: string } | null;
+    if (sender?.sender_id) return sender.sender_id;
+  }
+  // For groups, use the first user_message as a short label
   const row = db.query(
     "SELECT user_message FROM conversations WHERE chat_id = ? AND user_message IS NOT NULL AND user_message != '' ORDER BY created_at ASC LIMIT 1"
   ).get(chatId) as { user_message: string } | null;
   if (row) {
     let name = cleanTopic(row.user_message);
-    // Strip markdown noise for chat names
     name = name.replace(/^#+\s*/gm, "").replace(/!\[.*?\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
     if (name && name !== "Untitled") return name.slice(0, 30);
   }
@@ -53,7 +60,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
 
     const chats = rows.map(r => ({
       chatId: r.chat_id,
-      name: getChatName(db, r.chat_id),
+      name: getChatName(db, r.chat_id, r.has_no_thread === 1 && r.conv_count <= 1),
       conversationCount: r.conv_count,
       messageCount: r.msg_count,
       isP2P: r.has_no_thread === 1 && r.conv_count <= 1,

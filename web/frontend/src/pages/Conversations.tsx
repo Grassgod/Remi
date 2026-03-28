@@ -252,17 +252,22 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
   const topicClean = cleanUserMessage(conv.topic);
 
   return (
-    <Layout title="Conversation" subtitle={topicClean}>
-      <div className="mb-4 flex items-center justify-between">
-        <Button variant="ghost" size="sm" onClick={onBack} className="h-8 text-xs">
-          <ArrowLeft className="mr-1 h-3 w-3" /> Back
-        </Button>
-        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-          <span>{conv.messageCount} msgs</span>
-          <span>{formatTokenCount(conv.tokenCount)} tokens</span>
-          {conv.totalCost > 0 && <span>${conv.totalCost.toFixed(2)}</span>}
+    <Layout
+      title="Conversation"
+      subtitle={topicClean}
+      actions={
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+            <span>{conv.messageCount} msgs</span>
+            <span>{formatTokenCount(conv.tokenCount)} tokens</span>
+            {conv.totalCost > 0 && <span>${conv.totalCost.toFixed(2)}</span>}
+          </div>
+          <Button variant="ghost" size="sm" onClick={onBack} className="h-8 text-xs">
+            <ArrowLeft className="mr-1 h-3 w-3" /> Back
+          </Button>
         </div>
-      </div>
+      }
+    >
 
       {loading ? (
         <div className="p-10 text-center text-xs text-muted-foreground animate-pulse">Loading messages...</div>
