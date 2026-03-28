@@ -77,9 +77,12 @@ export function stripContextTags(text: string): string {
     }
   }
   t = t.replace(/^贺华杰:\s*/m, "");
-  // Convert <media:image> {"image_key":"img_xxx"} → markdown image
+  // Convert <media:image> {"image_key":"img_xxx","message_id":"om_xxx"} → markdown image with msgId
+  t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1?msgId=$2)\n");
+  t = t.replace(/<media:image>\s*\{[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$2?msgId=$1)\n");
+  // Fallback: image_key only (no message_id)
   t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1)\n");
-  t = t.replace(/\{"image_key"\s*:\s*"([^"]+)"[^}]*\}\s*<media:image>/g, "\n![image](/api/image/$1)\n");
+  t = t.replace(/\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}\s*<media:image>/g, "\n![image](/api/image/$1)\n");
   return t.trim();
 }
 

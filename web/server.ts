@@ -108,7 +108,9 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     // Proxy to Board server (which has feishuClient for downloads)
     try {
       const boardPort = process.env.REMI_BOARD_PORT ?? "8090";
-      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}`);
+      const msgId = c.req.query("msgId") ?? "";
+      const qs = msgId ? `?msgId=${encodeURIComponent(msgId)}` : "";
+      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}${qs}`);
       if (!resp.ok) return c.json({ error: "image not found" }, resp.status);
       const buf = Buffer.from(await resp.arrayBuffer());
       // Cache locally for next time

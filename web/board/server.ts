@@ -186,8 +186,17 @@ export function createBoardApp(deps: BoardDeps): Hono {
     // Download from Feishu and cache
     if (!deps.feishuClient) return c.json({ error: "no feishu client" }, 503);
     try {
-      const { downloadImageFeishu } = await import("../../src/connectors/feishu/media.js");
-      const { buffer } = await downloadImageFeishu(deps.feishuClient, imageKey);
+      const { downloadImageFeishu, downloadMessageResourceFeishu } = await import("../../src/connectors/feishu/media.js");
+      let buffer: Buffer;
+      try {
+        // Try standalone image API first
+        ({ buffer } = await downloadImageFeishu(deps.feishuClient, imageKey));
+      } catch {
+        // Fallback: message-embedded image (needs message_id)
+        const msgId = c.req.query("msgId");
+        if (!msgId) throw new Error("image download failed and no msgId for fallback");
+        ({ buffer } = await downloadMessageResourceFeishu(deps.feishuClient, msgId, imageKey, "image"));
+      }
       writeFileSync(cachePath, buffer);
       return new Response(buffer, {
         headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
