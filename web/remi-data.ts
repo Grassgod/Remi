@@ -606,7 +606,7 @@ export class RemiData {
 
   // ── Logs ──────────────────────────────────────────
 
-  getLogs(query: { date: string; level?: string | null; module?: string | null; traceId?: string | null; limit: number; offset: number }): { entries: LogEntry[]; total: number; hasMore: boolean } {
+  getLogs(query: { date: string; level?: string | null; module?: string | null; traceId?: string | null; search?: string | null; limit: number; offset: number }): { entries: LogEntry[]; total: number; hasMore: boolean } {
     const logsDir = join(this.root, "logs");
     let entries = readLogEntries(query.date, logsDir);
 
@@ -621,6 +621,10 @@ export class RemiData {
     }
     if (query.traceId) {
       entries = entries.filter(e => e.traceId === query.traceId);
+    }
+    if (query.search) {
+      const s = query.search.toLowerCase();
+      entries = entries.filter(e => e.msg.toLowerCase().includes(s));
     }
 
     const total = entries.length;
