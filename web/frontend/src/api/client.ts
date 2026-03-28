@@ -250,5 +250,9 @@ export const updateAgentSkill = (name: string, skillName: string, content: strin
   request(`/api/v1/agents/${encodeURIComponent(name)}/skills/${encodeURIComponent(skillName)}`, {
     method: "PUT", body: JSON.stringify({ content }),
   });
+export const getAgentSkillTree = (agentName: string, skillName: string) =>
+  request<import("./types").SkillFileNode[]>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/tree`);
+export const getAgentSkillFile = (agentName: string, skillName: string, path = "SKILL.md") =>
+  request<{ content: string }>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/file?path=${encodeURIComponent(path)}`);
 export const getMcpServers = () =>
   request<import("./types").McpServerInfo[]>("/api/v1/mcp");

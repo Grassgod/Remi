@@ -53,6 +53,25 @@ export function registerAgentsHandlers(app: Hono, data: RemiData) {
     return c.json({ ok: true });
   });
 
+  // Agent skill file tree
+  app.get("/api/v1/agents/:name/skills/:skill/tree", (c) => {
+    const name = decodeURIComponent(c.req.param("name"));
+    const skill = decodeURIComponent(c.req.param("skill"));
+    const tree = data.getAgentSkillTree(name, skill);
+    if (!tree) return c.json({ error: "skill not found" }, 404);
+    return c.json(tree);
+  });
+
+  // Agent skill file content
+  app.get("/api/v1/agents/:name/skills/:skill/file", (c) => {
+    const name = decodeURIComponent(c.req.param("name"));
+    const skill = decodeURIComponent(c.req.param("skill"));
+    const path = c.req.query("path") || "SKILL.md";
+    const content = data.readAgentSkillFile(name, skill, path);
+    if (content === null) return c.json({ error: "file not found" }, 404);
+    return c.json({ content });
+  });
+
   // List MCP servers
   app.get("/api/v1/mcp", (c) => {
     return c.json(data.listMcpServers());

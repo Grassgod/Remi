@@ -1606,6 +1606,19 @@ export class RemiData {
     return { claudeMd, settingsJson, skills };
   }
 
+  getAgentSkillTree(agentName: string, skillName: string): { name: string; path: string; type: "file" | "directory"; children?: any[] }[] | null {
+    const dir = join(this.agentsDir, agentName, ".claude", "skills", skillName);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
+    return this._scanSkillDir(dir, "");
+  }
+
+  readAgentSkillFile(agentName: string, skillName: string, path = "SKILL.md"): string | null {
+    if (path.includes("..") || path.startsWith("/")) return null;
+    const filePath = join(this.agentsDir, agentName, ".claude", "skills", skillName, path);
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) return null;
+    return readFileSync(filePath, "utf-8");
+  }
+
   getAgentRuns(name: string, limit = 50): Array<{
     ts: string; agent: string; model: string; exit: number;
     duration_ms: number; stdout_len: number; stderr_len: number;

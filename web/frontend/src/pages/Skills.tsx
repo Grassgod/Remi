@@ -4,9 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen, File } from "lucide-react";
+import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
+import { SkillTreeNode } from "../components/SkillTreeNode";
 import * as api from "../api/client";
 import type { SkillInfo, SkillFileNode } from "../api/types";
 
@@ -275,47 +276,3 @@ export function Skills() {
   );
 }
 
-function SkillTreeNode({ node, skillName, selectedFile, onSelect, depth }: {
-  node: SkillFileNode;
-  skillName: string;
-  selectedFile: string;
-  onSelect: (skillName: string, filePath: string) => void;
-  depth: number;
-}) {
-  const [expanded, setExpanded] = useState(depth < 1);
-  const isDir = node.type === "directory";
-  const isSelected = !isDir && selectedFile === node.path;
-
-  return (
-    <div>
-      <div
-        className={cn(
-          "flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors",
-          isSelected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-        )}
-        style={{ paddingLeft: `${depth * 10 + 8}px` }}
-        onClick={() => {
-          if (isDir) setExpanded(!expanded);
-          else onSelect(skillName, node.path);
-        }}
-      >
-        {isDir ? (
-          expanded ? <ChevronDown className="h-2.5 w-2.5 shrink-0" /> : <ChevronRight className="h-2.5 w-2.5 shrink-0" />
-        ) : (
-          <File className="h-2.5 w-2.5 shrink-0" />
-        )}
-        <span className="truncate">{node.name}</span>
-      </div>
-      {isDir && expanded && node.children?.map(child => (
-        <SkillTreeNode
-          key={child.path}
-          node={child}
-          skillName={skillName}
-          selectedFile={selectedFile}
-          onSelect={onSelect}
-          depth={depth + 1}
-        />
-      ))}
-    </div>
-  );
-}

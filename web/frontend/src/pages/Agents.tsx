@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
+import { SkillTreeNode } from "../components/SkillTreeNode";
 import {
   Bot, RefreshCw, ChevronLeft, Play, Timer,
   AlertTriangle, Activity, Check, XCircle,
@@ -13,7 +14,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAgentsStore } from "../stores/agents";
-import type { AgentInfo, AgentRunEntry, McpServerInfo } from "../api/types";
+import * as api from "../api/client";
+import type { AgentInfo, AgentRunEntry, McpServerInfo, SkillFileNode } from "../api/types";
 
 export function Agents() {
   const {
@@ -301,20 +303,12 @@ function AgentDetailView({ agent, detail, runs, mcpServers, loading, onBack, onS
 
       {/* Skills */}
       {detail.skills.map(skill => (
-        <Card key={skill.name} className="mb-3">
-          <CardHeader className="space-y-0 pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Zap className="h-4 w-4 text-muted-foreground" />
-              Skill: {skill.name}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <MarkdownFileViewer
-              content={skill.content}
-              onSave={(content) => onSaveSkill(skill.name, content)}
-            />
-          </CardContent>
-        </Card>
+        <AgentSkillCard
+          key={skill.name}
+          agentName={agent.name}
+          skill={skill}
+          onSave={(content) => onSaveSkill(skill.name, content)}
+        />
       ))}
 
       {/* Run History */}
@@ -333,6 +327,82 @@ function AgentDetailView({ agent, detail, runs, mcpServers, loading, onBack, onS
         </CardContent>
       </Card>
     </>
+  );
+}
+
+// ── Run History Table ─────────────────────────────────
+
+// ── Agent Skill Card with file tree ──────────────────
+
+function AgentSkillCard({ agentName, skill, onSave }: {
+  agentName: string;
+  skill: { name: string; content: string };
+  onSave: (content: string) => Promise<void>;
+}) {
+  const [tree, setTree] = useState<SkillFileNode[]>([]);
+  const [selectedFile, setSelectedFile] = useState("SKILL.md");
+  const [fileContent, setFileContent] = useState(skill.content);
+
+  useEffect(() => {
+    api.getAgentSkillTree(agentName, skill.name).then(setTree).catch(() => setTree([]));
+  }, [agentName, skill.name]);
+
+  useEffect(() => {
+    if (selectedFile === "SKILL.md") {
+      setFileContent(skill.content);
+      return;
+    }
+    api.getAgentSkillFile(agentName, skill.name, selectedFile)
+      .then(d => setFileContent(d.content))
+      .catch(() => setFileContent("(failed to load)"));
+  }, [selectedFile, agentName, skill.name]);
+
+  const handleSelect = (_skillName: string, filePath: string) => {
+    setSelectedFile(filePath);
+  };
+
+  return (
+    <Card className="mb-3">
+      <CardHeader className="space-y-0 pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Zap className="h-4 w-4 text-muted-foreground" />
+          Skill: {skill.name}
+          {selectedFile !== "SKILL.md" && (
+            <span className="font-mono text-xs font-normal text-muted-foreground">/ {selectedFile}</span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {tree.length > 1 ? (
+          <div className="grid grid-cols-[180px_1fr] gap-3">
+            {/* File tree */}
+            <ScrollArea className="max-h-[400px] rounded-md border border-border bg-muted/20 py-1">
+              {tree.map(node => (
+                <SkillTreeNode
+                  key={node.path}
+                  node={node}
+                  skillName={skill.name}
+                  selectedFile={selectedFile}
+                  onSelect={handleSelect}
+                  depth={0}
+                />
+              ))}
+            </ScrollArea>
+            {/* File content */}
+            <MarkdownFileViewer
+              content={fileContent}
+              onSave={selectedFile === "SKILL.md" ? onSave : undefined}
+              readOnly={selectedFile !== "SKILL.md" || !selectedFile.endsWith(".md")}
+            />
+          </div>
+        ) : (
+          <MarkdownFileViewer
+            content={fileContent}
+            onSave={onSave}
+          />
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
