@@ -254,7 +254,7 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
   return (
     <Layout
       title="Conversation"
-      subtitle={`${topicClean}  ${conv.id}`}
+      subtitle={conv.id}
       actions={
         <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
           <span>{conv.messageCount} msgs</span>
@@ -264,10 +264,11 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
       }
     >
 
-      <div className="mb-3">
-        <Button variant="ghost" size="sm" onClick={onBack} className="h-8 text-xs">
+      <div className="mb-4">
+        <Button variant="ghost" size="sm" onClick={onBack} className="h-8 text-xs mb-2">
           <ArrowLeft className="mr-1 h-3 w-3" /> Back to list
         </Button>
+        <h1 className="text-lg font-semibold text-foreground">{topicClean}</h1>
       </div>
 
       {loading ? (
