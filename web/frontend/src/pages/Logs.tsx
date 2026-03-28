@@ -117,11 +117,6 @@ export function Logs() {
         />
       </div>
 
-      {/* ─── Hourly Chart ─── */}
-      {stats && (
-        <HourlyChart data={stats.hourly} currentHour={currentHour} />
-      )}
-
       {/* ─── Filter Bar ─── */}
       <Card className="mb-4">
         <CardContent className="p-3">
@@ -212,6 +207,11 @@ export function Logs() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ─── Hourly Chart ─── */}
+      {stats && (
+        <HourlyChart data={stats.hourly} currentHour={currentHour} />
+      )}
 
       {/* ─── Logs Table ─── */}
       <Card>
