@@ -152,7 +152,7 @@ export function Conversations() {
         <select
           value={filterChatId}
           onChange={e => setFilterChatId(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+          className="h-9 min-w-[200px] rounded-md border border-input bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
         >
           <option value="">All Chats ({chats.reduce((s, c) => s + c.conversationCount, 0)})</option>
           {chats.map(ch => (

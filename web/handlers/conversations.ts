@@ -88,6 +88,12 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       };
     });
 
+    // Sort: Groups first (by msg count), then P2P (by msg count)
+    chats.sort((a, b) => {
+      if (a.isP2P !== b.isP2P) return a.isP2P ? 1 : -1;
+      return b.messageCount - a.messageCount;
+    });
+
     return c.json(chats);
   });
 
