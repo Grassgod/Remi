@@ -66,13 +66,6 @@ export const getDailyDates = () => request<import("./types").DailyLogEntry[]>("/
 export const getDaily = (date: string) =>
   request<import("./types").DailyEntry>(`/api/v1/memory/daily/${date}`);
 
-// Sessions
-export const getSessions = () => request<import("./types").SessionEntry[]>("/api/v1/sessions");
-export const clearSession = (key: string) =>
-  request(`/api/v1/sessions/${encodeURIComponent(key)}`, { method: "DELETE" });
-export const clearAllSessions = () =>
-  request("/api/v1/sessions", { method: "DELETE" });
-
 // Auth
 export const getTokenStatus = () => request<import("./types").TokenStatus[]>("/api/v1/auth/status");
 
@@ -202,3 +195,21 @@ export const getWikiHistory = (path: string, limit = 20) =>
   request<import("./types").WikiGitEntry[]>(`/api/v1/wiki/history?path=${encodeURIComponent(path)}&limit=${limit}`);
 export const getWikiDiff = (path: string, commit: string) =>
   request<{ diff: string }>(`/api/v1/wiki/diff?path=${encodeURIComponent(path)}&commit=${commit}`);
+
+// Filesystem browse
+export const browseDirs = (path?: string) =>
+  request<{ path: string; dirs: { name: string; path: string }[] }>(`/api/v1/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+
+// Skills
+export const getSkills = () =>
+  request<import("./types").SkillInfo[]>("/api/v1/skills");
+export const getSkillFile = (name: string, path = "SKILL.md") =>
+  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`);
+export const putSkillFile = (name: string, content: string, path = "SKILL.md") =>
+  request(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const getSkillReports = (name: string) =>
+  request<string[]>(`/api/v1/skills/${encodeURIComponent(name)}/reports`);
+export const getSkillReport = (name: string, date: string) =>
+  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/reports/${date}`);

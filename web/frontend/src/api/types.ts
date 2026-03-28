@@ -77,13 +77,6 @@ export interface RecallDebugResult {
   layers: RecallLayerResult[];
 }
 
-// Sessions
-export interface SessionEntry {
-  key: string;
-  sessionId: string;
-  isThread: boolean;
-}
-
 // Auth
 export interface TokenStatus {
   service: string;
@@ -417,4 +410,15 @@ export interface WikiGitEntry {
   message: string;
   author: string;
   date: string;
+}
+
+// Skills
+export interface SkillInfo {
+  name: string;
+  description: string;
+  hasSchedule: boolean;
+  cron?: string;
+  outputDir?: string;
+  reportCount?: number;
+  lastReportDate?: string;
 }
