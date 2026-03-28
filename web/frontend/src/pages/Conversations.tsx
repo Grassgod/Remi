@@ -203,6 +203,7 @@ export function Conversations() {
                     <div className="mt-0.5 truncate text-xs text-muted-foreground">
                       {conv.messageCount} messages · {formatTokenCount(conv.tokenCount)} tokens
                       {conv.totalCost > 0 && ` · $${conv.totalCost.toFixed(2)}`}
+                      <span className="ml-1 font-mono text-muted-foreground/40 select-all">{conv.id}</span>
                     </div>
                   </div>
                   <div className="hidden shrink-0 text-right sm:block">
