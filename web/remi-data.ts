@@ -13,6 +13,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
 import { type TraceData, type SpanData, rowToTraceData } from "../src/tracing.js";
 import { extractToolCalls, type ToolCallData } from "../src/conversation/tool-calls.js";
+import { stripContextTags } from "../src/conversation/parser.js";
 import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
 import { MemoryStore, type RecallDebugResult } from "../src/memory/store.js";
@@ -703,7 +704,13 @@ export class RemiData {
 
   // ── Traces ─────────────────────────────────────────
 
-  getTraces(date: string, limit: number, status?: string): Array<{
+  getTraces(opts: {
+    date: string;
+    limit: number;
+    offset?: number;
+    status?: string;
+    search?: string;
+  }): { items: Array<{
     id: number;
     status: string;
     durationMs: number;
@@ -712,27 +719,42 @@ export class RemiData {
     inputTokens: number | null;
     outputTokens: number | null;
     connector: string | null;
+    chatId: string | null;
+    messageId: string | null;
+    userMessage: string | null;
     createdAt: string;
-  }> {
+  }>; hasMore: boolean } {
     const db = getDb();
-    let sql = `
-      SELECT id, status, duration_ms, model, cost_usd,
-             input_tokens, output_tokens, connector, created_at
-      FROM conversations
-      WHERE DATE(created_at) = ?
-    `;
-    const params: any[] = [date];
+    let where = `WHERE DATE(created_at) = ?`;
+    const params: any[] = [opts.date];
 
-    if (status) {
-      sql += ` AND status = ?`;
-      params.push(status);
+    if (opts.status) {
+      where += ` AND status = ?`;
+      params.push(opts.status);
+    }
+    if (opts.search) {
+      where += ` AND (user_message LIKE ? OR chat_id LIKE ? OR message_id LIKE ? OR CAST(id AS TEXT) = ?)`;
+      const like = `%${opts.search}%`;
+      params.push(like, like, like, opts.search);
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT ?`;
-    params.push(limit);
+    const countRow = db.query(`SELECT COUNT(*) as cnt FROM conversations ${where}`).get(...params) as any;
+    const total = countRow?.cnt ?? 0;
 
-    const rows = db.query(sql).all(...params) as any[];
-    return rows.map(r => ({
+    const offset = opts.offset ?? 0;
+    const fetchLimit = opts.limit + 1; // fetch one extra to detect hasMore
+    const rows = db.query(`
+      SELECT id, status, duration_ms, model, cost_usd,
+             input_tokens, output_tokens, connector, chat_id, message_id,
+             user_message, created_at
+      FROM conversations
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, fetchLimit, offset) as any[];
+
+    const hasMore = rows.length > opts.limit;
+    const items = rows.slice(0, opts.limit).map(r => ({
       id: r.id,
       status: r.status,
       durationMs: r.duration_ms ?? 0,
@@ -741,8 +763,13 @@ export class RemiData {
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
       connector: r.connector,
+      chatId: r.chat_id,
+      messageId: r.message_id,
+      userMessage: r.user_message ? stripContextTags(r.user_message as string).slice(0, 100) : null,
       createdAt: r.created_at,
     }));
+
+    return { items, hasMore };
   }
 
   getTrace(traceId: string): TraceData | null {
@@ -833,6 +860,29 @@ export class RemiData {
       jsonlAvailable = result.jsonlAvailable;
     }
 
+    // Build unified timeline: remiSpans (sequential) + link tool calls by index
+    const timeline: Array<{
+      name: string;
+      startMs: number;
+      durationMs: number;
+      depth: number;
+      toolIndex?: number;
+    }> = [];
+    let elapsed = 0;
+    let toolIdx = 0;
+    for (const s of remiSpans) {
+      const ms = s.ms ?? 0;
+      const isToolSpan = s.op.startsWith("tool.");
+      timeline.push({
+        name: s.op,
+        startMs: elapsed,
+        durationMs: ms,
+        depth: isToolSpan ? 1 : 0,
+        toolIndex: isToolSpan && toolIdx < toolCalls.length ? toolIdx++ : undefined,
+      });
+      elapsed += ms;
+    }
+
     return {
       meta: {
         status: row.status,
@@ -844,11 +894,13 @@ export class RemiData {
         connector: row.connector,
         chatId: row.chat_id,
         senderName: row.sender_id,
+        sessionId: row.cli_session_id,
       },
-      userMessage: row.user_message,
+      userMessage: row.user_message ? stripContextTags(row.user_message) : null,
       toolCalls,
       jsonlAvailable,
       remiSpans,
+      timeline,
     };
   }
 
@@ -1244,7 +1296,9 @@ export class RemiData {
 
   getSchedulerHistory(jobId?: string, limit = 50): Array<{ ts: string; status: string; durationMs: number; error?: string; jobId: string; runId?: string; phase?: string }> {
     let runs = this._loadAllRuns();
-    if (jobId) runs = runs.filter(r => r.jobId === jobId);
+    // Filter out heartbeat noise unless explicitly requested
+    if (!jobId) runs = runs.filter(r => r.jobId !== "builtin:heartbeat");
+    else runs = runs.filter(r => r.jobId === jobId);
     return runs.slice(0, Math.min(limit, 200)).map(r => ({
       ts: r.ts,
       jobId: r.jobId,
@@ -1259,7 +1313,8 @@ export class RemiData {
   getSchedulerSummary(days: number) {
     const allRuns = this._loadAllRuns();
     const cutoff = new Date(Date.now() - days * 86400000).toISOString();
-    const recentRuns = allRuns.filter(r => r.ts >= cutoff);
+    // Exclude heartbeat from trend data (288/day noise)
+    const recentRuns = allRuns.filter(r => r.ts >= cutoff && r.jobId !== "builtin:heartbeat");
 
     // Aggregate by date
     const byDate = new Map<string, { total: number; ok: number; error: number; skipped: number }>();
