@@ -14,6 +14,7 @@ import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenM
 import { type TraceData, type SpanData, rowToTraceData } from "../src/tracing.js";
 import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
+import { MemoryStore, type RecallDebugResult } from "../src/memory/store.js";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ export interface SearchResult {
   path: string;
 }
 
+export type { RecallDebugResult } from "../src/memory/store.js";
+
 // ── Helpers ────────────────────────────────────────────
 
 function pluralize(type: string): string {
@@ -92,6 +95,7 @@ export class RemiData {
   private _metrics: MetricsCollector;
   private _analyticsCache: { data: AnalyticsSummary; ts: number } | null = null;
   private readonly _cacheTTL = 60_000; // 60s
+  private _memoryStore: MemoryStore | null = null;
 
   constructor(remiDir?: string) {
     this.root = remiDir ?? join(homedir(), ".remi");
@@ -282,6 +286,13 @@ export class RemiData {
     }
 
     return results;
+  }
+
+  async recallDebug(query: string, cwd?: string): Promise<RecallDebugResult> {
+    if (!this._memoryStore) {
+      this._memoryStore = new MemoryStore(this.memoryDir);
+    }
+    return this._memoryStore.recallDebug(query, { cwd });
   }
 
   // ── Memory: Daily Logs ─────────────────────────────

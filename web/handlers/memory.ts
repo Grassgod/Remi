@@ -70,4 +70,15 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     if (!content) return c.json({ error: "not found" }, 404);
     return c.json({ date, content });
   });
+
+  // Recall debug
+  app.post("/api/v1/memory/recall", async (c) => {
+    const body = await c.req.json();
+    const query = body.query;
+    if (!query || typeof query !== "string") {
+      return c.json({ error: "query required" }, 400);
+    }
+    const result = await data.recallDebug(query, body.cwd);
+    return c.json(result);
+  });
 }

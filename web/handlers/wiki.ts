@@ -8,11 +8,32 @@ import type { RemiData } from "../remi-data.js";
 
 const HOME = homedir();
 const REMI_DATA = join(HOME, ".remi");
-const WIKI_DIR = join(REMI_DATA, "projects", "-data00-home-hehuajie-project-remi", "wiki");
+const PROJECTS_DIR = join(REMI_DATA, "projects");
+const PERSONAL_WIKI_DIR = join(PROJECTS_DIR, "-data00-home-hehuajie", "wiki");
 const SOUL_FILE = join(REMI_DATA, "soul.md");
 const REMI_REPO = "/data00/home/hehuajie/project/remi";
 const AGENTS_DIR = join(REMI_REPO, "agents");
 const PROJECT_CONFIG = join(REMI_REPO, "CLAUDE.md");
+
+/** Convert project hash to readable name: "-data00-home-hehuajie-project-remi" → "remi" */
+function projectDisplayName(hash: string): string {
+  const m = hash.match(/-project-(.+)$/);
+  return m ? m[1] : hash;
+}
+
+/** Discover all project wikis (excluding personal wiki) */
+function discoverProjectWikis(): { name: string; hash: string; wikiDir: string }[] {
+  if (!existsSync(PROJECTS_DIR)) return [];
+  const results: { name: string; hash: string; wikiDir: string }[] = [];
+  for (const entry of readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === "-data00-home-hehuajie") continue;
+    const wikiDir = join(PROJECTS_DIR, entry.name, "wiki");
+    if (existsSync(wikiDir)) {
+      results.push({ name: projectDisplayName(entry.name), hash: entry.name, wikiDir });
+    }
+  }
+  return results.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 // ── Types ───────────────────────────────────────────────
 
@@ -54,8 +75,18 @@ function scanDir(dir: string, pathPrefix: string): TreeNode[] {
 }
 
 function resolveFilePath(path: string): string | null {
-  if (path.startsWith("wiki/")) {
-    return join(WIKI_DIR, path.slice("wiki/".length));
+  // Personal wiki: personal/...
+  if (path.startsWith("personal/")) {
+    return join(PERSONAL_WIKI_DIR, path.slice("personal/".length));
+  }
+  // Project wiki: projects/<hash>/...
+  if (path.startsWith("projects/")) {
+    const rest = path.slice("projects/".length);
+    const slashIdx = rest.indexOf("/");
+    if (slashIdx === -1) return null;
+    const hash = rest.slice(0, slashIdx);
+    const filePath = rest.slice(slashIdx + 1);
+    return join(PROJECTS_DIR, hash, "wiki", filePath);
   }
   if (path === "soul" || path === "soul.md" || path.startsWith("soul/")) {
     return SOUL_FILE;
@@ -100,13 +131,30 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
   app.get("/api/v1/wiki/tree", (c) => {
     const tree: TreeNode[] = [];
 
-    // Wiki
-    if (existsSync(WIKI_DIR)) {
+    // Personal Wiki
+    if (existsSync(PERSONAL_WIKI_DIR)) {
       tree.push({
-        name: "Wiki",
-        path: "wiki",
+        name: "Personal",
+        path: "personal",
         type: "directory",
-        children: scanDir(WIKI_DIR, "wiki"),
+        children: scanDir(PERSONAL_WIKI_DIR, "personal"),
+      });
+    }
+
+    // Project Wikis
+    const projects = discoverProjectWikis();
+    if (projects.length > 0) {
+      const projectChildren: TreeNode[] = projects.map(p => ({
+        name: p.name,
+        path: `projects/${p.hash}`,
+        type: "directory" as const,
+        children: scanDir(p.wikiDir, `projects/${p.hash}`),
+      }));
+      tree.push({
+        name: "Projects",
+        path: "projects",
+        type: "directory",
+        children: projectChildren,
       });
     }
 

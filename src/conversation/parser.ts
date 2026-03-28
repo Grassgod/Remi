@@ -131,21 +131,18 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
           } else if (b.type === "thinking" && b.thinking) {
             currentSteps.push({ type: "thinking", content: b.thinking.trim() });
           } else if (b.type === "tool_use") {
-            const lastStep = currentSteps[currentSteps.length - 1];
-            if (lastStep?.type === "thinking") {
-              currentSteps[currentSteps.length - 1] = {
-                type: "tool",
-                name: b.name ?? "unknown",
-                content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-                thinking: lastStep.content,
-              };
-            } else {
-              currentSteps.push({
-                type: "tool",
-                name: b.name ?? "unknown",
-                content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-              });
-            }
+            const toolContent = b.input?.description
+              ?? b.input?.query            // WebSearch
+              ?? b.input?.url              // WebFetch
+              ?? b.input?.command?.slice(0, 80)  // Bash
+              ?? b.input?.file_path        // Read/Write/Edit
+              ?? b.input?.pattern          // Glob/Grep
+              ?? "";
+            currentSteps.push({
+              type: "tool",
+              name: b.name ?? "unknown",
+              content: toolContent,
+            });
           }
         }
       }

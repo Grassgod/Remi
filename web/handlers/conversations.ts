@@ -1,10 +1,18 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { getDb } from "../../src/db/index.js";
-import { buildChatMessages } from "../../src/conversation/parser.js";
+import { buildChatMessages, stripContextTags } from "../../src/conversation/parser.js";
 import type { MetaRow } from "../../src/conversation/parser.js";
 
 // ── Handler Registration ──────────────────────────────
+
+/** Clean topic text: strip AskUserQuestion reply prefix + context tags */
+function cleanTopic(raw: string): string {
+  let t = stripContextTags(raw);
+  // Remove "用户回答了之前的问题:\n1. ..." prefix (AskUserQuestion answers)
+  t = t.replace(/^用户回答了之前的问题:\s*[\s\S]*?:\s*/m, "");
+  return t.trim().slice(0, 80) || raw.slice(0, 40);
+}
 
 export function registerConversationsHandlers(app: Hono, _data: RemiData) {
   // ── GET /api/v1/conversations — List conversations grouped by chat_id + thread_id ──
@@ -12,18 +20,24 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 500);
     const db = getDb();
 
+    // Use subquery to get the EARLIEST user_message per group (not MIN which sorts alphabetically)
     const rows = db.query(`
       SELECT
-        chat_id,
-        thread_id,
+        c.chat_id,
+        c.thread_id,
         COUNT(*) as msg_count,
-        SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) as total_tokens,
-        SUM(COALESCE(cost_usd, 0)) as total_cost,
-        MAX(created_at) as latest,
-        MAX(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as has_active,
-        MIN(user_message) as first_message
-      FROM conversations
-      GROUP BY chat_id, COALESCE(thread_id, '')
+        SUM(COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)) as total_tokens,
+        SUM(COALESCE(c.cost_usd, 0)) as total_cost,
+        MAX(c.created_at) as latest,
+        MAX(CASE WHEN c.status = 'processing' THEN 1 ELSE 0 END) as has_active,
+        (SELECT c2.user_message FROM conversations c2
+         WHERE c2.chat_id = c.chat_id
+           AND COALESCE(c2.thread_id, '') = COALESCE(c.thread_id, '')
+           AND c2.user_message IS NOT NULL AND c2.user_message != ''
+         ORDER BY c2.created_at ASC LIMIT 1
+        ) as first_message
+      FROM conversations c
+      GROUP BY c.chat_id, COALESCE(c.thread_id, '')
       ORDER BY latest DESC
       LIMIT ?
     `).all(limit) as {
@@ -41,7 +55,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       id: row.thread_id ? `${row.chat_id}:${row.thread_id}` : row.chat_id,
       chatId: row.chat_id,
       threadId: row.thread_id ?? null,
-      topic: row.first_message?.slice(0, 60) || row.chat_id.slice(0, 12),
+      topic: row.first_message ? cleanTopic(row.first_message) : row.chat_id.slice(0, 12),
       messageCount: row.msg_count,
       tokenCount: row.total_tokens ?? 0,
       totalCost: row.total_cost ?? 0,
