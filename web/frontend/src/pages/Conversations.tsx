@@ -254,18 +254,24 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
   return (
     <Layout
       title="Conversation"
-      subtitle={topicClean}
       actions={
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+        <div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={onBack} className="h-7 text-xs shrink-0 -ml-2">
+              <ArrowLeft className="mr-1 h-3 w-3" /> Back
+            </Button>
+            <span className="text-sm font-semibold text-foreground">{topicClean}</span>
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
             <span>{conv.messageCount} msgs</span>
             <span>{formatTokenCount(conv.tokenCount)} tokens</span>
             {conv.totalCost > 0 && <span>${conv.totalCost.toFixed(2)}</span>}
-            <span className="font-mono text-muted-foreground/30 select-all">{conv.id}</span>
+            <span
+              className="font-mono text-muted-foreground/30 cursor-pointer hover:text-muted-foreground/60"
+              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
+              title="Click to copy"
+            >{conv.id}</span>
           </div>
-          <Button variant="ghost" size="sm" onClick={onBack} className="h-8 text-xs shrink-0">
-            <ArrowLeft className="mr-1 h-3 w-3" /> Back
-          </Button>
         </div>
       }
     >
