@@ -19,7 +19,6 @@ import { authMiddleware } from "./auth.js";
 import { RemiData } from "./remi-data.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
-import { registerSessionHandlers } from "./handlers/sessions.js";
 import { registerAuthHandlers } from "./handlers/auth.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
@@ -36,6 +35,7 @@ import { registerConversationsHandlers } from "./handlers/conversations.js";
 let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
 try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
+import { registerSkillsHandlers } from "./handlers/skills.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -70,7 +70,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   // Register all handler modules
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
-  registerSessionHandlers(app, data);
   registerAuthHandlers(app, data);
   registerConfigHandlers(app, data);
   registerProjectHandlers(app, data);
@@ -85,6 +84,24 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerConversationsHandlers(app, data);
   registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
+  registerSkillsHandlers(app, data);
+
+  // ── Filesystem browse (for directory picker) ──
+  app.get("/api/v1/fs/browse", (c) => {
+    const { readdirSync, statSync } = require("node:fs");
+    const { join } = require("node:path");
+    const target = c.req.query("path") || "/data00/home/hehuajie/project";
+    try {
+      const entries = readdirSync(target, { withFileTypes: true });
+      const dirs = entries
+        .filter((e: any) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e: any) => ({ name: e.name, path: join(target, e.name) }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+      return c.json({ path: target, dirs });
+    } catch {
+      return c.json({ error: "Cannot read directory" }, 400);
+    }
+  });
 
   // ── Image proxy (shared cache with Board server) ──
   const imageCacheDir = join(require("node:os").homedir(), ".remi", "lark_image");
