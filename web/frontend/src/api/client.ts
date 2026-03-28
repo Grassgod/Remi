@@ -157,6 +157,8 @@ export const getMissions = (projectId?: string, status?: string) => {
 };
 export const getMission = (id: string) =>
   request<import("./types").MissionItem>(`/api/v1/missions/${id}`);
+export const getMissionDetail = (id: string) =>
+  request<import("./types").MissionDetailItem>(`/api/v1/missions/${id}`);
 export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
   request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 export const getMissionStats = (projectId: string) =>

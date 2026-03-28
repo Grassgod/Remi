@@ -316,6 +316,25 @@ export interface MissionItem {
   totalDuration: number;
 }
 
+export interface MissionDetailItem extends MissionItem {
+  contract: {
+    cases: Array<{
+      id: string;
+      description: string;
+      input: string;
+      expectedOutput: string;
+      type: "unit" | "integration" | "e2e";
+    }>;
+    acceptanceCriteria: string[];
+    verificationResults?: {
+      caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;
+      overallPassed: boolean;
+      verifiedAt: string;
+    };
+  } | null;
+  outputDir: string | null;
+}
+
 export interface MissionStats {
   total: number;
   byStatus: Record<string, number>;
