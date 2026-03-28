@@ -417,7 +417,7 @@ function TrendChart({ summary }: { summary: DailySchedulerSummary[] }) {
               <rect
                 x={x} y={chartH - skipH}
                 width={barW} height={Math.max(0, skipH)}
-                className="fill-warning/70" rx={1}
+                style={{ fill: "var(--warning)", opacity: 0.7 }} rx={1}
               >
                 <title>{tooltip}</title>
               </rect>
@@ -425,7 +425,7 @@ function TrendChart({ summary }: { summary: DailySchedulerSummary[] }) {
               <rect
                 x={x} y={chartH - skipH - errH}
                 width={barW} height={Math.max(0, errH)}
-                className="fill-destructive/70" rx={1}
+                style={{ fill: "var(--destructive)", opacity: 0.7 }} rx={1}
               >
                 <title>{tooltip}</title>
               </rect>
@@ -433,7 +433,7 @@ function TrendChart({ summary }: { summary: DailySchedulerSummary[] }) {
               <rect
                 x={x} y={chartH - skipH - errH - okH}
                 width={barW} height={Math.max(0, okH)}
-                className="fill-success/70" rx={1}
+                style={{ fill: "var(--success)", opacity: 0.7 }} rx={1}
               >
                 <title>{tooltip}</title>
               </rect>
@@ -451,11 +451,11 @@ function TrendChart({ summary }: { summary: DailySchedulerSummary[] }) {
 
       {/* Legend */}
       <g transform={`translate(${margin.left}, ${h - 6})`}>
-        <rect x={0} y={-6} width={8} height={8} className="fill-success/70" rx={1} />
+        <rect x={0} y={-6} width={8} height={8} style={{ fill: "var(--success)", opacity: 0.7 }} rx={1} />
         <text x={12} y={1} className="fill-muted-foreground text-[8px]" fontFamily="var(--font-mono)">OK</text>
-        <rect x={40} y={-6} width={8} height={8} className="fill-destructive/70" rx={1} />
+        <rect x={40} y={-6} width={8} height={8} style={{ fill: "var(--destructive)", opacity: 0.7 }} rx={1} />
         <text x={52} y={1} className="fill-muted-foreground text-[8px]" fontFamily="var(--font-mono)">Error</text>
-        <rect x={90} y={-6} width={8} height={8} className="fill-warning/70" rx={1} />
+        <rect x={90} y={-6} width={8} height={8} style={{ fill: "var(--warning)", opacity: 0.7 }} rx={1} />
         <text x={102} y={1} className="fill-muted-foreground text-[8px]" fontFamily="var(--font-mono)">Skipped</text>
       </g>
     </svg>
