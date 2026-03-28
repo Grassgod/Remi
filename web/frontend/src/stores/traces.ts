@@ -12,14 +12,14 @@ interface TracesState {
   date: string; // YYYY-MM-DD
   statusFilter: string; // "" = all, "completed", "failed", "processing"
   // Detail
-  selectedId: number | null;
+  selectedId: number | string | null;
   detail: TraceDetail | null;
   detailLoading: boolean;
   // Actions
   setDate: (date: string) => void;
   setStatusFilter: (status: string) => void;
   fetchTraces: () => Promise<void>;
-  fetchDetail: (id: number) => Promise<void>;
+  fetchDetail: (id: number | string) => Promise<void>;
   clearSelection: () => void;
 }
 

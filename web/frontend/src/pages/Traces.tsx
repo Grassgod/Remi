@@ -59,7 +59,16 @@ export function Traces() {
     setDate, setStatusFilter, fetchTraces, fetchDetail, clearSelection,
   } = useTracesStore();
 
-  useEffect(() => { fetchTraces(); }, []);
+  useEffect(() => {
+    fetchTraces();
+    // Auto-load detail if traceId is in URL hash (from Logs page TRACE click)
+    const hash = window.location.hash;
+    const match = hash.match(/[?&]traceId=([^&]+)/);
+    if (match) {
+      const traceId = decodeURIComponent(match[1]);
+      fetchDetail(traceId);
+    }
+  }, []);
 
   return (
     <Layout title="Traces" subtitle="DEBUG ANALYSIS">

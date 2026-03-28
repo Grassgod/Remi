@@ -728,6 +728,13 @@ export class RemiData {
     };
   }
 
+  getTraceDetailByMessageId(messageId: string): ReturnType<RemiData["getTraceDetail"]> {
+    const db = getDb();
+    const row = db.query("SELECT id FROM conversations WHERE message_id = ? LIMIT 1").get(messageId) as { id: number } | null;
+    if (!row) return null;
+    return this.getTraceDetail(row.id);
+  }
+
   // ── Logs ──────────────────────────────────────────
 
   getLogs(query: { date: string; level?: string | null; module?: string | null; traceId?: string | null; limit: number; offset: number }): { entries: LogEntry[]; total: number; hasMore: boolean } {

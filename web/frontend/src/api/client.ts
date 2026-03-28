@@ -114,7 +114,7 @@ export const getTraces = (date?: string, limit = 50, status?: string) => {
   if (status) params.set("status", status);
   return request<import("./types").TraceListItem[]>(`/api/v1/traces?${params}`);
 };
-export const getTraceDetail = (id: number) =>
+export const getTraceDetail = (id: number | string) =>
   request<import("./types").TraceDetail>(`/api/v1/traces/${id}/detail`);
 
 // Logs

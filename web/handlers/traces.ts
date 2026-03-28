@@ -18,9 +18,12 @@ export function registerTracesHandlers(app: Hono, data: RemiData) {
 
   // Detail (DB meta + JSONL tool calls)
   app.get("/api/v1/traces/:id/detail", (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
-    const detail = data.getTraceDetail(id);
+    const idParam = c.req.param("id");
+    // Support both numeric conversations.id and string message_id (om_xxx)
+    const numId = parseInt(idParam, 10);
+    const detail = isNaN(numId)
+      ? data.getTraceDetailByMessageId(idParam)
+      : data.getTraceDetail(numId);
     if (!detail) return c.json({ error: "Trace not found" }, 404);
     return c.json(detail);
   });
