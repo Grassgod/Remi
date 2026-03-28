@@ -4,36 +4,51 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Zap, FileText, Clock } from "lucide-react";
+import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen, File } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import * as api from "../api/client";
-import type { SkillInfo } from "../api/types";
+import type { SkillInfo, SkillFileNode } from "../api/types";
 
-type Tab = "skill" | "reports";
+type Tab = "file" | "reports";
 
 export function Skills() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [basePath, setBasePath] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("skill");
-  const [skillContent, setSkillContent] = useState("");
+  const [selectedFile, setSelectedFile] = useState("SKILL.md");
+  const [skillTree, setSkillTree] = useState<SkillFileNode[]>([]);
+  const [tab, setTab] = useState<Tab>("file");
+  const [fileContent, setFileContent] = useState("");
   const [reportDates, setReportDates] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [reportContent, setReportContent] = useState("");
   const [loading, setLoading] = useState(true);
+  const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    api.getSkills().then(data => {
-      setSkills(data);
-      if (data.length > 0) setSelected(data[0].name);
+    Promise.all([
+      api.getSkills(),
+      api.getSkillsBasePath(),
+    ]).then(([skillsData, baseData]) => {
+      setSkills(skillsData);
+      setBasePath(baseData.basePath);
+      if (skillsData.length > 0) {
+        const first = skillsData[0].name;
+        setSelected(first);
+        setExpandedSkills(new Set([first]));
+      }
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
 
+  // Load tree + file when skill selected
   useEffect(() => {
     if (!selected) return;
-    setTab("skill");
-    api.getSkillFile(selected).then(d => setSkillContent(d.content)).catch(() => setSkillContent(""));
+    setTab("file");
+    setSelectedFile("SKILL.md");
+    api.getSkillTree(selected).then(setSkillTree).catch(() => setSkillTree([]));
+    api.getSkillFile(selected).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
     const skill = skills.find(s => s.name === selected);
     if (skill?.hasSchedule) {
       api.getSkillReports(selected).then(setReportDates).catch(() => setReportDates([]));
@@ -44,18 +59,45 @@ export function Skills() {
     setReportContent("");
   }, [selected]);
 
+  // Load file content when file path changes
+  useEffect(() => {
+    if (!selected || !selectedFile) return;
+    setTab("file");
+    api.getSkillFile(selected, selectedFile).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
+  }, [selectedFile]);
+
   useEffect(() => {
     if (!selected || !selectedDate) return;
     api.getSkillReport(selected, selectedDate).then(d => setReportContent(d.content)).catch(() => setReportContent(""));
   }, [selectedDate]);
 
-  const handleSaveSkill = async (content: string) => {
+  const handleSaveFile = async (content: string) => {
     if (!selected) return;
-    await api.putSkillFile(selected, content);
-    setSkillContent(content);
+    await api.putSkillFile(selected, content, selectedFile);
+    setFileContent(content);
+  };
+
+  const toggleSkillExpand = (name: string) => {
+    setExpandedSkills(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const selectSkillFile = (skillName: string, filePath: string) => {
+    if (selected !== skillName) {
+      setSelected(skillName);
+      setExpandedSkills(prev => new Set(prev).add(skillName));
+    }
+    setSelectedFile(filePath);
   };
 
   const currentSkill = skills.find(s => s.name === selected);
+  const fullPath = selected && basePath ? `${basePath}/${selected}/${selectedFile}` : "";
+  // Shorten for display: replace /home/hehuajie with ~
+  const displayPath = fullPath.replace(/^\/home\/[^/]+/, "~");
 
   return (
     <Layout title="Skills" subtitle="Skill Definitions & Reports">
@@ -72,8 +114,8 @@ export function Skills() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[220px_1fr]">
-          {/* Skill List */}
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[240px_1fr]">
+          {/* Skill Tree Sidebar */}
           <Card className="lg:sticky lg:top-0">
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm">
@@ -84,24 +126,54 @@ export function Skills() {
             </CardHeader>
             <CardContent className="p-0">
               <ScrollArea className="max-h-[600px] px-2 pb-2">
-                {skills.map(skill => (
-                  <div
-                    key={skill.name}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs transition-colors",
-                      selected === skill.name
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                    )}
-                    onClick={() => setSelected(skill.name)}
-                  >
-                    <FileText className="h-3 w-3 shrink-0" />
-                    <span className="min-w-0 flex-1 truncate">{skill.name}</span>
-                    {skill.hasSchedule && (
-                      <Clock className="h-3 w-3 shrink-0 text-green-500" />
-                    )}
-                  </div>
-                ))}
+                {skills.map(skill => {
+                  const isExpanded = expandedSkills.has(skill.name);
+                  const isSelected = selected === skill.name;
+                  return (
+                    <div key={skill.name}>
+                      {/* Skill root */}
+                      <div
+                        className={cn(
+                          "flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors",
+                          isSelected && !isExpanded
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                          isSelected && isExpanded && "text-foreground"
+                        )}
+                        onClick={() => {
+                          toggleSkillExpand(skill.name);
+                          if (selected !== skill.name) {
+                            setSelected(skill.name);
+                          }
+                        }}
+                      >
+                        {isExpanded
+                          ? <ChevronDown className="h-3 w-3 shrink-0" />
+                          : <ChevronRight className="h-3 w-3 shrink-0" />}
+                        <FolderOpen className="h-3 w-3 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{skill.name}</span>
+                        {skill.hasSchedule && (
+                          <Clock className="h-3 w-3 shrink-0 text-green-500" />
+                        )}
+                      </div>
+                      {/* File tree */}
+                      {isExpanded && isSelected && skillTree.length > 0 && (
+                        <div className="ml-3 border-l border-border pl-1">
+                          {skillTree.map(node => (
+                            <SkillTreeNode
+                              key={node.path}
+                              node={node}
+                              skillName={skill.name}
+                              selectedFile={selectedFile}
+                              onSelect={selectSkillFile}
+                              depth={0}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </ScrollArea>
             </CardContent>
           </Card>
@@ -113,8 +185,8 @@ export function Skills() {
                 {/* Header */}
                 <Card>
                   <CardHeader className="pb-2">
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                      Skills / <span className="text-foreground font-medium">{currentSkill.name}</span>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1 font-mono">
+                      {displayPath}
                     </div>
                     <div className="flex items-center gap-3">
                       <CardTitle className="text-base">{currentSkill.name}</CardTitle>
@@ -136,12 +208,12 @@ export function Skills() {
                 {/* Tabs */}
                 <div className="flex gap-1">
                   <Button
-                    variant={tab === "skill" ? "default" : "outline"}
+                    variant={tab === "file" ? "default" : "outline"}
                     size="sm"
                     className="h-7 text-xs"
-                    onClick={() => setTab("skill")}
+                    onClick={() => setTab("file")}
                   >
-                    SKILL.md
+                    {selectedFile}
                   </Button>
                   {reportDates.length > 0 && (
                     <Button
@@ -158,11 +230,15 @@ export function Skills() {
                   )}
                 </div>
 
-                {/* SKILL.md Tab */}
-                {tab === "skill" && (
+                {/* File Tab */}
+                {tab === "file" && (
                   <Card>
                     <CardContent className="pt-4">
-                      <MarkdownFileViewer content={skillContent} onSave={handleSaveSkill} />
+                      <MarkdownFileViewer
+                        content={fileContent}
+                        onSave={selectedFile.endsWith(".md") ? handleSaveFile : undefined}
+                        readOnly={!selectedFile.endsWith(".md")}
+                      />
                     </CardContent>
                   </Card>
                 )}
@@ -196,5 +272,50 @@ export function Skills() {
         </div>
       )}
     </Layout>
+  );
+}
+
+function SkillTreeNode({ node, skillName, selectedFile, onSelect, depth }: {
+  node: SkillFileNode;
+  skillName: string;
+  selectedFile: string;
+  onSelect: (skillName: string, filePath: string) => void;
+  depth: number;
+}) {
+  const [expanded, setExpanded] = useState(depth < 1);
+  const isDir = node.type === "directory";
+  const isSelected = !isDir && selectedFile === node.path;
+
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors",
+          isSelected ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+        )}
+        style={{ paddingLeft: `${depth * 10 + 8}px` }}
+        onClick={() => {
+          if (isDir) setExpanded(!expanded);
+          else onSelect(skillName, node.path);
+        }}
+      >
+        {isDir ? (
+          expanded ? <ChevronDown className="h-2.5 w-2.5 shrink-0" /> : <ChevronRight className="h-2.5 w-2.5 shrink-0" />
+        ) : (
+          <File className="h-2.5 w-2.5 shrink-0" />
+        )}
+        <span className="truncate">{node.name}</span>
+      </div>
+      {isDir && expanded && node.children?.map(child => (
+        <SkillTreeNode
+          key={child.path}
+          node={child}
+          skillName={skillName}
+          selectedFile={selectedFile}
+          onSelect={onSelect}
+          depth={depth + 1}
+        />
+      ))}
+    </div>
   );
 }

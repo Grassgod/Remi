@@ -476,3 +476,10 @@ export interface SkillInfo {
   reportCount?: number;
   lastReportDate?: string;
 }
+
+export interface SkillFileNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: SkillFileNode[];
+}

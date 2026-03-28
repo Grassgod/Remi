@@ -6,6 +6,19 @@ export function registerSkillsHandlers(app: Hono, data: RemiData) {
     return c.json(data.listSkills());
   });
 
+  // Get skills base path
+  app.get("/api/v1/skills/base-path", (c) => {
+    return c.json({ basePath: data.skillsBasePath });
+  });
+
+  // Get file tree for a specific skill
+  app.get("/api/v1/skills/:name/tree", (c) => {
+    const name = decodeURIComponent(c.req.param("name"));
+    const tree = data.getSkillTree(name);
+    if (!tree) return c.json({ error: "Skill not found" }, 404);
+    return c.json(tree);
+  });
+
   app.get("/api/v1/skills/:name/file", (c) => {
     const name = decodeURIComponent(c.req.param("name"));
     const path = c.req.query("path") ?? "SKILL.md";

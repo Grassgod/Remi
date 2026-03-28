@@ -224,3 +224,7 @@ export const getSkillReports = (name: string) =>
   request<string[]>(`/api/v1/skills/${encodeURIComponent(name)}/reports`);
 export const getSkillReport = (name: string, date: string) =>
   request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/reports/${date}`);
+export const getSkillsBasePath = () =>
+  request<{ basePath: string }>("/api/v1/skills/base-path");
+export const getSkillTree = (name: string) =>
+  request<import("./types").SkillFileNode[]>(`/api/v1/skills/${encodeURIComponent(name)}/tree`);

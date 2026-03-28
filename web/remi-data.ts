@@ -1344,7 +1344,46 @@ export class RemiData {
           lastReportDate,
         };
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        if (a.hasSchedule !== b.hasSchedule) return a.hasSchedule ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  getSkillTree(name: string): { name: string; path: string; type: "file" | "directory"; children?: any[] }[] | null {
+    const dir = join(this.skillsDir, name);
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
+    return this._scanSkillDir(dir, "");
+  }
+
+  private _scanSkillDir(dir: string, prefix: string): { name: string; path: string; type: "file" | "directory"; children?: any[] }[] {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    const result: { name: string; path: string; type: "file" | "directory"; children?: any[] }[] = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const entryPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        result.push({
+          name: entry.name,
+          path: entryPath,
+          type: "directory",
+          children: this._scanSkillDir(join(dir, entry.name), entryPath),
+        });
+      } else {
+        result.push({ name: entry.name, path: entryPath, type: "file" });
+      }
+    }
+    // Sort: directories first, then files; SKILL.md always first among files
+    return result.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      if (a.name === "SKILL.md") return -1;
+      if (b.name === "SKILL.md") return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  get skillsBasePath(): string {
+    return this.skillsDir;
   }
 
   readSkillFile(name: string, path = "SKILL.md"): string | null {
@@ -1382,6 +1421,233 @@ export class RemiData {
     const filePath = join(skill.outputDir, `${date}.md`);
     if (!existsSync(filePath)) return null;
     return readFileSync(filePath, "utf-8");
+  }
+
+  // ── Agents ─────────────────────────────────────────────
+
+  private get agentsDir(): string {
+    // project root agents/ directory (relative to remi-data.ts → ../agents/)
+    return join(dirname(new URL(import.meta.url).pathname), "..", "agents");
+  }
+
+  private get agentRunsDir(): string {
+    return join(this.root, "agents");
+  }
+
+  listAgents(): Array<{
+    name: string;
+    cwd: string;
+    model: string;
+    trigger: string;
+    cron?: string;
+    debounce_ms?: number;
+    timeoutMs: number;
+    mcp: boolean;
+    description: string;
+    permissions: { mcpTools: string[]; cliTools: string[] };
+    skills: string[];
+    lastRun: { ts: string; agent: string; model: string; exit: number; duration_ms: number; stdout_len: number; stderr_len: number } | null;
+    runsToday: number;
+    successRate7d: number;
+  }> {
+    const { AGENTS } = require("../src/agents/registry.js");
+    const agentsDir = this.agentsDir;
+    const result: ReturnType<RemiData["listAgents"]> = [];
+
+    for (const [name, config] of Object.entries(AGENTS) as [string, any][]) {
+      const agentCwd = join(agentsDir, name);
+
+      // Read CLAUDE.md description (first non-empty non-heading line)
+      let description = "";
+      const claudeMdPath = join(agentCwd, ".claude", "CLAUDE.md");
+      if (existsSync(claudeMdPath)) {
+        const lines = readFileSync(claudeMdPath, "utf-8").split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith("#")) { description = trimmed; break; }
+        }
+      }
+
+      // Read permissions
+      const mcpTools: string[] = [];
+      const cliTools: string[] = [];
+      const settingsPath = join(agentCwd, ".claude", "settings.local.json");
+      if (existsSync(settingsPath)) {
+        try {
+          const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+          for (const perm of settings.permissions?.allow ?? []) {
+            if (perm.startsWith("mcp__")) mcpTools.push(perm);
+            else cliTools.push(perm);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Read skills
+      const skills: string[] = [];
+      const skillsPath = join(agentCwd, ".claude", "skills");
+      if (existsSync(skillsPath)) {
+        try {
+          for (const entry of readdirSync(skillsPath, { withFileTypes: true })) {
+            if (entry.isDirectory() && !entry.name.startsWith(".")) skills.push(entry.name);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Read recent runs
+      const { lastRun, runsToday, successRate7d } = this._getAgentRunStats(name);
+
+      result.push({
+        name,
+        cwd: `agents/${name}/`,
+        model: config.model ?? "haiku",
+        trigger: config.trigger ?? "on-demand",
+        cron: config.cron,
+        debounce_ms: config.debounce_ms,
+        timeoutMs: config.timeoutMs ?? 600_000,
+        mcp: config.mcp !== false,
+        description,
+        permissions: { mcpTools, cliTools },
+        skills,
+        lastRun,
+        runsToday,
+        successRate7d,
+      });
+    }
+
+    return result;
+  }
+
+  getAgentDetail(name: string): {
+    claudeMd: string;
+    settingsJson: string;
+    skills: Array<{ name: string; content: string }>;
+  } | null {
+    const agentCwd = join(this.agentsDir, name);
+    if (!existsSync(agentCwd)) return null;
+
+    const claudeMdPath = join(agentCwd, ".claude", "CLAUDE.md");
+    const claudeMd = existsSync(claudeMdPath) ? readFileSync(claudeMdPath, "utf-8") : "";
+
+    const settingsPath = join(agentCwd, ".claude", "settings.local.json");
+    const settingsJson = existsSync(settingsPath) ? readFileSync(settingsPath, "utf-8") : "{}";
+
+    const skills: Array<{ name: string; content: string }> = [];
+    const skillsDir = join(agentCwd, ".claude", "skills");
+    if (existsSync(skillsDir)) {
+      for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const skillMd = join(skillsDir, entry.name, "SKILL.md");
+        skills.push({
+          name: entry.name,
+          content: existsSync(skillMd) ? readFileSync(skillMd, "utf-8") : "",
+        });
+      }
+    }
+
+    return { claudeMd, settingsJson, skills };
+  }
+
+  getAgentRuns(name: string, limit = 50): Array<{
+    ts: string; agent: string; model: string; exit: number;
+    duration_ms: number; stdout_len: number; stderr_len: number;
+  }> {
+    const runsDir = join(this.agentRunsDir, name, "runs");
+    if (!existsSync(runsDir)) return [];
+
+    const files = readdirSync(runsDir)
+      .filter(f => f.endsWith(".jsonl"))
+      .sort()
+      .reverse();
+
+    const result: ReturnType<RemiData["getAgentRuns"]> = [];
+    for (const file of files) {
+      if (result.length >= limit) break;
+      const lines = readFileSync(join(runsDir, file), "utf-8").split("\n").filter(Boolean);
+      for (let i = lines.length - 1; i >= 0 && result.length < limit; i--) {
+        try { result.push(JSON.parse(lines[i])); } catch { /* skip */ }
+      }
+    }
+    return result;
+  }
+
+  updateAgentClaudeMd(name: string, content: string): boolean {
+    const p = join(this.agentsDir, name, ".claude", "CLAUDE.md");
+    if (!existsSync(p)) return false;
+    this._backup(p);
+    writeFileSync(p, content, "utf-8");
+    return true;
+  }
+
+  updateAgentSettings(name: string, content: string): boolean {
+    const p = join(this.agentsDir, name, ".claude", "settings.local.json");
+    if (!existsSync(p)) return false;
+    // Validate JSON
+    try { JSON.parse(content); } catch { return false; }
+    this._backup(p);
+    writeFileSync(p, content, "utf-8");
+    return true;
+  }
+
+  updateAgentSkill(name: string, skillName: string, content: string): boolean {
+    const p = join(this.agentsDir, name, ".claude", "skills", skillName, "SKILL.md");
+    if (!existsSync(p)) return false;
+    this._backup(p);
+    writeFileSync(p, content, "utf-8");
+    return true;
+  }
+
+  listMcpServers(): Array<{ name: string; command: string; args: string[] }> {
+    const mcpPath = join(homedir(), ".mcp.json");
+    if (!existsSync(mcpPath)) return [];
+    try {
+      const config = JSON.parse(readFileSync(mcpPath, "utf-8"));
+      return Object.entries(config.mcpServers ?? {}).map(([name, cfg]: [string, any]) => ({
+        name,
+        command: cfg.command ?? "",
+        args: cfg.args ?? [],
+        // Intentionally omit env to avoid leaking secrets
+      }));
+    } catch { return []; }
+  }
+
+  private _getAgentRunStats(name: string): {
+    lastRun: ReturnType<RemiData["listAgents"]>[0]["lastRun"];
+    runsToday: number;
+    successRate7d: number;
+  } {
+    const runsDir = join(this.agentRunsDir, name, "runs");
+    if (!existsSync(runsDir)) return { lastRun: null, runsToday: 0, successRate7d: 0 };
+
+    const today = new Date().toISOString().slice(0, 10);
+    const files = readdirSync(runsDir).filter(f => f.endsWith(".jsonl")).sort().reverse();
+
+    let lastRun: ReturnType<RemiData["listAgents"]>[0]["lastRun"] = null;
+    let runsToday = 0;
+    let total7d = 0;
+    let success7d = 0;
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+
+    for (const file of files) {
+      const date = file.replace(".jsonl", "");
+      if (date < sevenDaysAgo) break;
+
+      const lines = readFileSync(join(runsDir, file), "utf-8").split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (!lastRun) lastRun = entry;
+          if (date === today) runsToday++;
+          total7d++;
+          if (entry.exit === 0) success7d++;
+        } catch { /* skip */ }
+      }
+    }
+
+    return {
+      lastRun,
+      runsToday,
+      successRate7d: total7d > 0 ? Math.round((success7d / total7d) * 100) : 0,
+    };
   }
 
   // ── Backup ─────────────────────────────────────────
