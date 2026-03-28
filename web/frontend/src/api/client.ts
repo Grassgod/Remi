@@ -121,16 +121,19 @@ export const getTrace = (traceId: string) =>
   request<import("./types").TraceData>(`/api/v1/traces/${traceId}`);
 
 // Logs
-export const getLogs = (params: { date?: string; level?: string; module?: string; traceId?: string; limit?: number; offset?: number }) => {
+export const getLogs = (params: { date?: string; level?: string; module?: string; traceId?: string; search?: string; limit?: number; offset?: number }) => {
   const qs = new URLSearchParams();
   if (params.date) qs.set("date", params.date);
   if (params.level) qs.set("level", params.level);
   if (params.module) qs.set("module", params.module);
   if (params.traceId) qs.set("traceId", params.traceId);
+  if (params.search) qs.set("search", params.search);
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.offset) qs.set("offset", String(params.offset));
   return request<import("./types").LogQueryResult>(`/api/v1/logs?${qs.toString()}`);
 };
+export const getLogStats = (date?: string) =>
+  request<import("./types").LogStats>(`/api/v1/logs/stats${date ? `?date=${date}` : ""}`);
 export const getLogModules = (date?: string) =>
   request<string[]>(`/api/v1/logs/modules${date ? `?date=${date}` : ""}`);
 

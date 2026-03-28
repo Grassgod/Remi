@@ -191,6 +191,16 @@ export interface LogQueryResult {
   hasMore: boolean;
 }
 
+export interface LogStats {
+  total: number;
+  levels: { DEBUG: number; INFO: number; WARN: number; ERROR: number };
+  hourly: Array<{ hour: number; count: number; errors: number }>;
+  moduleCount: number;
+  topModules: string[];
+  lastError: string | null;
+  lastErrorModule: string | null;
+}
+
 // Monitor
 export interface MonitorStats {
   uptime: number;
