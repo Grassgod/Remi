@@ -210,7 +210,7 @@ export function Logs() {
 
       {/* ─── Hourly Chart ─── */}
       {stats && (
-        <HourlyChart data={stats.hourly} currentHour={currentHour} />
+        <HourlyChart data={stats.hourly} currentHour={currentHour} level={level} />
       )}
 
       {/* ─── Logs Table ─── */}
