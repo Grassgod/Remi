@@ -144,3 +144,10 @@ body {
   .mobile-only { display: none !important; }
   .desktop-only { display: flex !important; }
 }
+
+/* Donut legend responsive gap */
+@media (max-width: 639px) {
+  .donut-legend {
+    gap: 4px 10px !important;
+  }
+}
