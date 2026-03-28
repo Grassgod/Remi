@@ -256,21 +256,23 @@ function ConversationDetail({ conv, onBack }: { conv: ConversationSummary; onBac
       title="Conversation"
       actions={
         <div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={onBack} className="h-7 text-xs shrink-0 -ml-2">
-              <ArrowLeft className="mr-1 h-3 w-3" /> Back
-            </Button>
-            <span className="text-sm font-semibold text-foreground">{topicClean}</span>
+          <div className="flex items-center gap-3">
+            <button onClick={onBack} className="shrink-0 text-muted-foreground hover:text-foreground transition-colors">
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <h2 className="text-sm font-semibold text-foreground leading-tight">{topicClean}</h2>
           </div>
-          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-2 mt-1 ml-7 text-[10px] text-muted-foreground">
             <span>{conv.messageCount} msgs</span>
+            <span className="text-muted-foreground/30">·</span>
             <span>{formatTokenCount(conv.tokenCount)} tokens</span>
-            {conv.totalCost > 0 && <span>${conv.totalCost.toFixed(2)}</span>}
-            <span
-              className="font-mono text-muted-foreground/30 cursor-pointer hover:text-muted-foreground/60"
-              onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(conv.id); }}
-              title="Click to copy"
-            >{conv.id}</span>
+            {conv.totalCost > 0 && <><span className="text-muted-foreground/30">·</span><span>${conv.totalCost.toFixed(2)}</span></>}
+            <span className="text-muted-foreground/30">·</span>
+            <button
+              className="font-mono text-muted-foreground/30 hover:text-primary transition-colors"
+              onClick={() => { navigator.clipboard.writeText(conv.id).catch(() => {}); }}
+              title="Copy ID"
+            >{conv.id}</button>
           </div>
         </div>
       }
