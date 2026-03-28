@@ -6,12 +6,19 @@ import type { MetaRow } from "../../src/conversation/parser.js";
 
 // ── Handler Registration ──────────────────────────────
 
-/** Clean topic text: strip AskUserQuestion reply prefix + context tags */
+/** Clean topic text: strip noise from raw user_message to get a readable title */
 function cleanTopic(raw: string): string {
   let t = stripContextTags(raw);
-  // Remove "用户回答了之前的问题:\n1. ..." prefix (AskUserQuestion answers)
+  // Remove AskUserQuestion reply prefix
   t = t.replace(/^用户回答了之前的问题:\s*[\s\S]*?:\s*/m, "");
-  return t.trim().slice(0, 80) || raw.slice(0, 40);
+  // Remove <media:image> tags and their JSON payload (either order)
+  t = t.replace(/<media:image>\s*(\{[^}]*\})?/g, "");
+  t = t.replace(/\{"image_key":[^}]*\}/g, "");
+  // Remove skill activation prefix
+  t = t.replace(/^Base directory for this skill:\s*\S+\.?\s*/m, "");
+  // Remove "Continue from where you left off." (auto-resume)
+  t = t.replace(/^Continue from where you left off\.?\s*/m, "");
+  return t.trim().slice(0, 80) || "Untitled";
 }
 
 export function registerConversationsHandlers(app: Hono, _data: RemiData) {
@@ -55,7 +62,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       id: row.thread_id ? `${row.chat_id}:${row.thread_id}` : row.chat_id,
       chatId: row.chat_id,
       threadId: row.thread_id ?? null,
-      topic: row.first_message ? cleanTopic(row.first_message) : row.chat_id.slice(0, 12),
+      topic: row.first_message ? cleanTopic(row.first_message) : "Untitled",
       messageCount: row.msg_count,
       tokenCount: row.total_tokens ?? 0,
       totalCost: row.total_cost ?? 0,
