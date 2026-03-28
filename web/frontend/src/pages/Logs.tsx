@@ -242,7 +242,6 @@ export function Logs() {
                     <TableHead className="w-[80px] font-mono text-[10px] uppercase tracking-wider">Level</TableHead>
                     <TableHead className="hidden w-[110px] font-mono text-[10px] uppercase tracking-wider sm:table-cell">Module</TableHead>
                     <TableHead className="font-mono text-[10px] uppercase tracking-wider">Message</TableHead>
-                    <TableHead className="hidden w-[120px] font-mono text-[10px] uppercase tracking-wider md:table-cell">Trace</TableHead>
                     <TableHead className="w-[50px]" />
                   </TableRow>
                 </TableHeader>
@@ -317,21 +316,6 @@ function LogRow({ entry, index, expanded, onToggle }: {
         <TableCell className="max-w-0 truncate py-1.5 font-mono text-[11px]" title={entry.msg}>
           {entry.msg}
         </TableCell>
-        <TableCell className="hidden py-1.5 md:table-cell">
-          {entry.traceId ? (
-            <button
-              className="truncate font-mono text-[10px] text-primary hover:underline"
-              onClick={(e) => {
-                e.stopPropagation();
-                window.location.hash = `#/traces?traceId=${entry.traceId}`;
-              }}
-            >
-              {entry.traceId.slice(0, 12)}
-            </button>
-          ) : (
-            <span className="font-mono text-[10px] text-muted-foreground/40">—</span>
-          )}
-        </TableCell>
         <TableCell className="py-1.5">
           <Button
             variant="ghost"
@@ -352,7 +336,7 @@ function LogRow({ entry, index, expanded, onToggle }: {
       {expanded && (
         <TableRow className="hover:bg-transparent">
           <TableCell
-            colSpan={6}
+            colSpan={5}
             className={cn(
               "bg-accent/10 p-0",
               entry.level === "ERROR" && "border-l-2 border-l-destructive/40",
