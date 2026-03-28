@@ -30,13 +30,13 @@ export function Missions() {
   return (
     <Layout title="Missions" subtitle="Project Board">
       {/* View toggle */}
-      <div className="mb-5 flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-1 w-fit">
+      <div className="mb-5 flex items-center gap-1 rounded-lg border border-border bg-card p-1 w-fit">
         <button
           onClick={() => setView("list")}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] transition-all ${
             view === "list"
-              ? "bg-zinc-800 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           <List className="h-3.5 w-3.5" />
@@ -46,8 +46,8 @@ export function Missions() {
           onClick={() => setView("kanban")}
           className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] transition-all ${
             view === "kanban"
-              ? "bg-zinc-800 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300"
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground"
           }`}
         >
           <KanbanSquare className="h-3.5 w-3.5" />
@@ -57,7 +57,7 @@ export function Missions() {
 
       {/* Content */}
       {loading ? (
-        <div className="py-20 text-center text-sm text-zinc-500 animate-pulse">
+        <div className="py-20 text-center text-sm text-muted-foreground animate-pulse">
           Loading...
         </div>
       ) : view === "list" ? (

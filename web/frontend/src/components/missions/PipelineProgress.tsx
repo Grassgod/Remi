@@ -23,7 +23,7 @@ export function PipelineProgress({ currentStep }: PipelineProgressProps) {
                       ? "border-emerald-500 bg-emerald-500"
                       : isCurrent
                         ? "border-amber-400 bg-amber-400/20"
-                        : "border-zinc-700 bg-transparent"
+                        : "border-border bg-transparent"
                   }`}
                 />
                 {isCurrent && (
@@ -36,7 +36,7 @@ export function PipelineProgress({ currentStep }: PipelineProgressProps) {
                     ? "text-emerald-500"
                     : isCurrent
                       ? "text-amber-400"
-                      : "text-zinc-600"
+                      : "text-muted-foreground"
                 }`}
               >
                 {STEP_LABELS[step]}
@@ -46,7 +46,7 @@ export function PipelineProgress({ currentStep }: PipelineProgressProps) {
             {i < PIPELINE_STEPS.length - 1 && (
               <div
                 className={`mx-1 h-[2px] w-8 sm:w-12 ${
-                  i < currentIndex ? "bg-emerald-500" : "bg-zinc-800"
+                  i < currentIndex ? "bg-emerald-500" : "bg-border"
                 }`}
               />
             )}

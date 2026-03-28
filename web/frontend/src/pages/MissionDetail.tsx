@@ -71,7 +71,7 @@ export function MissionDetail() {
   if (loading) {
     return (
       <Layout title="Mission" subtitle="Loading...">
-        <div className="py-20 text-center text-sm text-zinc-500 animate-pulse">
+        <div className="py-20 text-center text-sm text-muted-foreground animate-pulse">
           Loading mission...
         </div>
       </Layout>
@@ -82,7 +82,7 @@ export function MissionDetail() {
     return (
       <Layout title="Mission" subtitle="Not Found">
         <div className="py-20 text-center">
-          <div className="text-sm text-zinc-500">Mission not found</div>
+          <div className="text-sm text-muted-foreground">Mission not found</div>
           <Button
             variant="ghost"
             size="sm"
@@ -104,7 +104,7 @@ export function MissionDetail() {
         variant="ghost"
         size="sm"
         onClick={() => navigate("/missions")}
-        className="mb-4 h-7 text-xs text-zinc-400 hover:text-zinc-200"
+        className="mb-4 h-7 text-xs text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="mr-1 h-3 w-3" /> Missions
       </Button>
@@ -113,29 +113,29 @@ export function MissionDetail() {
         {/* Left Column */}
         <div className="min-w-0 flex-1 space-y-6">
           <div>
-            <h2 className="text-xl font-semibold text-zinc-100">{mission.title}</h2>
+            <h2 className="text-xl font-semibold text-foreground">{mission.title}</h2>
             {mission.description && (
-              <p className="mt-2 text-sm text-zinc-400">{mission.description}</p>
+              <p className="mt-2 text-sm text-muted-foreground">{mission.description}</p>
             )}
           </div>
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-            <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+          <div className="rounded-lg border border-border bg-card p-4">
+            <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Pipeline
             </div>
             <PipelineProgress currentStep={mission.currentStep} />
           </div>
 
           <div>
-            <div className="mb-3 text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+            <div className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Conversation
             </div>
             {msgLoading ? (
-              <div className="py-10 text-center text-sm text-zinc-600 animate-pulse">
+              <div className="py-10 text-center text-sm text-muted-foreground animate-pulse">
                 Loading messages...
               </div>
             ) : messages.length === 0 ? (
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 py-10 text-center text-sm text-zinc-600">
+              <div className="rounded-lg border border-border bg-card py-10 text-center text-sm text-muted-foreground">
                 No conversation found
               </div>
             ) : (
@@ -153,15 +153,15 @@ export function MissionDetail() {
                       <div
                         className={`max-w-[85%] rounded-lg px-4 py-2.5 text-sm ${
                           isBot
-                            ? "border border-zinc-800 bg-zinc-900/60 text-zinc-200"
-                            : "bg-zinc-800 text-zinc-200"
+                            ? "border border-border bg-card text-foreground"
+                            : "bg-accent text-foreground"
                         }`}
                       >
                         <div className="mb-1 flex items-center gap-2">
-                          <span className="text-[10px] font-medium text-zinc-500">
+                          <span className="text-[10px] font-medium text-muted-foreground">
                             {isBot ? "Remi" : "Jack"}
                           </span>
-                          <span className="text-[10px] text-zinc-600">
+                          <span className="text-[10px] text-muted-foreground/60">
                             {formatTime(msg.createTime)}
                           </span>
                         </div>
@@ -195,18 +195,18 @@ export function MissionDetail() {
           </SidebarSection>
 
           <SidebarSection label="Current Step">
-            <span className="text-sm text-zinc-300">
+            <span className="text-sm text-foreground">
               {STEP_LABELS[mission.currentStep] ?? mission.currentStep}
             </span>
           </SidebarSection>
 
           <SidebarSection label="Project">
-            <span className="text-sm text-zinc-300">{mission.projectId}</span>
+            <span className="text-sm text-foreground">{mission.projectId}</span>
           </SidebarSection>
 
           {mission.createdByName && (
             <SidebarSection label="Created by">
-              <span className="text-sm text-zinc-300">{mission.createdByName}</span>
+              <span className="text-sm text-foreground">{mission.createdByName}</span>
             </SidebarSection>
           )}
 
@@ -229,24 +229,24 @@ export function MissionDetail() {
             <div className="space-y-1.5 text-sm">
               {mission.totalTokens > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-zinc-500">Tokens</span>
-                  <span className="tabular-nums text-zinc-300">
+                  <span className="text-muted-foreground">Tokens</span>
+                  <span className="tabular-nums text-foreground">
                     {formatNum(mission.totalTokens)}
                   </span>
                 </div>
               )}
               {mission.totalCost > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-zinc-500">Cost</span>
-                  <span className="tabular-nums text-zinc-300">
+                  <span className="text-muted-foreground">Cost</span>
+                  <span className="tabular-nums text-foreground">
                     {formatCost(mission.totalCost)}
                   </span>
                 </div>
               )}
               {mission.totalDuration > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-zinc-500">Duration</span>
-                  <span className="tabular-nums text-zinc-300">
+                  <span className="text-muted-foreground">Duration</span>
+                  <span className="tabular-nums text-foreground">
                     {formatDuration(mission.totalDuration)}
                   </span>
                 </div>
@@ -259,8 +259,8 @@ export function MissionDetail() {
               {mission.contract.acceptanceCriteria.length > 0 && (
                 <div className="space-y-1">
                   {mission.contract.acceptanceCriteria.map((c, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-[11px] text-zinc-400">
-                      <span className="mt-0.5 text-zinc-600">•</span>
+                    <div key={i} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="mt-0.5 text-muted-foreground">•</span>
                       {c}
                     </div>
                   ))}
@@ -278,7 +278,7 @@ export function MissionDetail() {
                       ) : (
                         <X className="h-3 w-3 text-red-400" />
                       )}
-                      <span className={cr.passed ? "text-zinc-400" : "text-red-400"}>
+                      <span className={cr.passed ? "text-muted-foreground" : "text-red-400"}>
                         {cr.detail.slice(0, 60)}
                       </span>
                     </div>
@@ -291,17 +291,17 @@ export function MissionDetail() {
           <SidebarSection label="Timestamps">
             <div className="space-y-1 text-[11px]">
               <div className="flex justify-between">
-                <span className="text-zinc-600">Created</span>
-                <span className="text-zinc-400">{formatRelative(mission.createdAt)}</span>
+                <span className="text-muted-foreground">Created</span>
+                <span className="text-muted-foreground">{formatRelative(mission.createdAt)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-600">Updated</span>
-                <span className="text-zinc-400">{formatRelative(mission.updatedAt)}</span>
+                <span className="text-muted-foreground">Updated</span>
+                <span className="text-muted-foreground">{formatRelative(mission.updatedAt)}</span>
               </div>
               {mission.completedAt && (
                 <div className="flex justify-between">
-                  <span className="text-zinc-600">Completed</span>
-                  <span className="text-zinc-400">{formatRelative(mission.completedAt)}</span>
+                  <span className="text-muted-foreground">Completed</span>
+                  <span className="text-muted-foreground">{formatRelative(mission.completedAt)}</span>
                 </div>
               )}
             </div>
@@ -314,8 +314,8 @@ export function MissionDetail() {
 
 function SidebarSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+    <div className="rounded-lg border border-border bg-card p-3">
+      <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       {children}
