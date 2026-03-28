@@ -12,6 +12,7 @@ import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../src/metrics/collector.js";
 import { type TraceData, type SpanData, rowToTraceData } from "../src/tracing.js";
+import { extractToolCalls, type ToolCallData } from "../src/conversation/tool-calls.js";
 import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
 import { MemoryStore, type RecallDebugResult } from "../src/memory/store.js";
@@ -702,25 +703,153 @@ export class RemiData {
 
   // ── Traces ─────────────────────────────────────────
 
-  getTraces(date: string, limit: number): TraceData[] {
+  getTraces(date: string, limit: number, status?: string): Array<{
+    id: number;
+    status: string;
+    durationMs: number;
+    model: string | null;
+    costUsd: number | null;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    connector: string | null;
+    createdAt: string;
+  }> {
     const db = getDb();
-    const rows = db.query(`
-      SELECT id, status, error, chat_id, sender_id, connector,
-             cli_session_id, cost_usd, duration_ms, model,
-             input_tokens, output_tokens, spans,
-             created_at, cli_round_start, cli_round_end
+    let sql = `
+      SELECT id, status, duration_ms, model, cost_usd,
+             input_tokens, output_tokens, connector, created_at
       FROM conversations
       WHERE DATE(created_at) = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(date, limit) as any[];
-    return rows.map(rowToTraceData);
+    `;
+    const params: any[] = [date];
+
+    if (status) {
+      sql += ` AND status = ?`;
+      params.push(status);
+    }
+
+    sql += ` ORDER BY created_at DESC LIMIT ?`;
+    params.push(limit);
+
+    const rows = db.query(sql).all(...params) as any[];
+    return rows.map(r => ({
+      id: r.id,
+      status: r.status,
+      durationMs: r.duration_ms ?? 0,
+      model: r.model,
+      costUsd: r.cost_usd,
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+      connector: r.connector,
+      createdAt: r.created_at,
+    }));
   }
 
   getTrace(traceId: string): TraceData | null {
     const db = getDb();
     const row = db.query("SELECT * FROM conversations WHERE id = ?").get(Number(traceId)) as any | null;
     return row ? rowToTraceData(row) : null;
+  }
+
+  getTraceStats(date: string): {
+    total: number;
+    processing: number;
+    errors: number;
+    errorRate: number;
+    avgDurationMs: number;
+    p95DurationMs: number;
+  } {
+    const db = getDb();
+    const row = db.query(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as errors,
+        AVG(CASE WHEN status = 'completed' THEN duration_ms END) as avg_duration
+      FROM conversations
+      WHERE DATE(created_at) = ?
+    `).get(date) as any;
+
+    const completedCount = (row.total ?? 0) - (row.processing ?? 0) - (row.errors ?? 0);
+    let p95 = 0;
+    if (completedCount > 0) {
+      const offset = Math.max(0, Math.ceil(completedCount * 0.95) - 1);
+      const p95Row = db.query(`
+        SELECT duration_ms FROM conversations
+        WHERE DATE(created_at) = ? AND status = 'completed' AND duration_ms IS NOT NULL
+        ORDER BY duration_ms ASC
+        LIMIT 1 OFFSET ?
+      `).get(date, offset) as any;
+      p95 = p95Row?.duration_ms ?? 0;
+    }
+
+    const total = row.total ?? 0;
+    const errors = row.errors ?? 0;
+    return {
+      total,
+      processing: row.processing ?? 0,
+      errors,
+      errorRate: total > 0 ? Math.round((errors / total) * 10000) / 100 : 0,
+      avgDurationMs: Math.round(row.avg_duration ?? 0),
+      p95DurationMs: p95,
+    };
+  }
+
+  getTraceDetail(id: number): {
+    meta: {
+      status: string;
+      durationMs: number;
+      model: string | null;
+      costUsd: number | null;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      connector: string | null;
+      chatId: string;
+      senderName: string | null;
+    };
+    userMessage: string | null;
+    toolCalls: ToolCallData[];
+    jsonlAvailable: boolean;
+    remiSpans: Array<{ op: string; ms: number }>;
+  } | null {
+    const db = getDb();
+    const row = db.query(`
+      SELECT id, status, error, chat_id, sender_id, connector,
+             cli_session_id, cost_usd, duration_ms, model,
+             input_tokens, output_tokens, spans, user_message,
+             created_at, cli_round_start, cli_round_end
+      FROM conversations WHERE id = ?
+    `).get(id) as any | null;
+    if (!row) return null;
+
+    let remiSpans: Array<{ op: string; ms: number }> = [];
+    try { remiSpans = JSON.parse(row.spans ?? "[]"); } catch {}
+
+    let toolCalls: ToolCallData[] = [];
+    let jsonlAvailable = false;
+    if (row.cli_session_id) {
+      const result = extractToolCalls(row.cli_session_id, row.cli_round_start, row.cli_round_end);
+      toolCalls = result.toolCalls;
+      jsonlAvailable = result.jsonlAvailable;
+    }
+
+    return {
+      meta: {
+        status: row.status,
+        durationMs: row.duration_ms ?? 0,
+        model: row.model,
+        costUsd: row.cost_usd,
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        connector: row.connector,
+        chatId: row.chat_id,
+        senderName: row.sender_id,
+      },
+      userMessage: row.user_message,
+      toolCalls,
+      jsonlAvailable,
+      remiSpans,
+    };
   }
 
   // ── Logs ──────────────────────────────────────────

@@ -108,10 +108,17 @@ export const getAnalyticsDaily = (start: string, end: string) =>
 export const getRecentMetrics = (limit = 50) =>
   request<import("./types").TokenMetricEntry[]>(`/api/v1/analytics/recent?limit=${limit}`);
 // Traces
-export const getTraces = (date?: string, limit = 50) =>
-  request<import("./types").TraceData[]>(`/api/v1/traces?${date ? `date=${date}&` : ""}limit=${limit}`);
-export const getTrace = (traceId: string) =>
-  request<import("./types").TraceData>(`/api/v1/traces/${traceId}`);
+export const getTraceStats = (date?: string) =>
+  request<import("./types").TraceStats>(`/api/v1/traces/stats${date ? `?date=${date}` : ""}`);
+export const getTraces = (date?: string, limit = 50, status?: string) => {
+  const params = new URLSearchParams();
+  if (date) params.set("date", date);
+  params.set("limit", String(limit));
+  if (status) params.set("status", status);
+  return request<import("./types").TraceListItem[]>(`/api/v1/traces?${params}`);
+};
+export const getTraceDetail = (id: number) =>
+  request<import("./types").TraceDetail>(`/api/v1/traces/${id}/detail`);
 
 // Logs
 export const getLogs = (params: { date?: string; level?: string; module?: string; traceId?: string; search?: string; limit?: number; offset?: number }) => {
