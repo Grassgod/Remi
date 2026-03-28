@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Sun, Moon } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { Button } from "./ui/button";
@@ -6,12 +7,13 @@ import { cn } from "@/lib/utils";
 interface HeaderProps {
   title: string;
   subtitle?: string;
+  actions?: ReactNode;
   daemonAlive?: boolean;
   tokensValid?: number;
   tokensTotal?: number;
 }
 
-export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal }: HeaderProps) {
+export function Header({ title, subtitle, actions, daemonAlive, tokensValid, tokensTotal }: HeaderProps) {
   const { theme, toggleTheme } = useTheme();
 
   return (
@@ -25,6 +27,9 @@ export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal 
         </span>
       )}
       <div className="flex-1" />
+
+      {/* Page-specific actions */}
+      {actions}
 
       {/* Status indicators */}
       <div className="flex items-center gap-2">
