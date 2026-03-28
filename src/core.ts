@@ -564,7 +564,7 @@ export class Remi {
 
   // ── Slash commands ───────────────────────────────────────
 
-  private static COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "switch", "sessions"]);
+  private static COMMANDS = new Set(["clear", "new", "status", "restart", "project", "p", "context", "compact", "switch", "sessions"]);
 
   private async _tryCommand(text: string, msg: IncomingMessage): Promise<AgentResponse | null> {
     const trimmed = text.trim();
@@ -779,6 +779,16 @@ export class Remi {
           return { text: resp.text || "无法获取 context 信息" };
         } catch {
           return { text: "无法获取 context 信息，当前会话可能未启动。" };
+        }
+      }
+      case "compact": {
+        // Forward /compact to CLI to compress conversation context
+        const provider = this._getProvider();
+        try {
+          const resp = await provider.send("/compact", { chatId: sessionKey, sessionId: sessDb.getSessionId(sessionKey) ?? undefined });
+          return { text: resp.text || "Compact 完成" };
+        } catch {
+          return { text: "Compact 失败，当前会话可能未启动。" };
         }
       }
       case "sessions": {
@@ -1083,16 +1093,10 @@ export class Remi {
       const data = JSON.parse(raw) as sessDb.LegacySessionData;
       if (!data.entries || !Array.isArray(data.entries) || data.entries.length === 0) return;
 
-      // Check if already migrated (DB has sessions)
-      if (sessDb.listAllSessions().length > 0) {
-        log.info("Sessions already in DB, skipping JSON migration");
-        return;
-      }
-
       const count = sessDb.migrateFromJson(data);
       log.info(`Migrated ${count} session(s) from sessions.json to DB`);
 
-      // Rename old file as backup
+      // Rename old file as backup (presence of .migrated = migration done)
       const { renameSync } = require("node:fs");
       renameSync(this.config.sessionsFile, this.config.sessionsFile + ".migrated");
       log.info(`Renamed sessions.json → sessions.json.migrated`);
