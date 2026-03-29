@@ -287,7 +287,8 @@ export class Remi {
 
     const sessionKey = this._resolveSessionKey(msg);
     const groupConfig = this._getGroupConfig(msg.chatId);
-    const cwd = groupConfig?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
+    // CWD priority: group-level override > project cwd > session > message metadata
+    const cwd = groupConfig?.cwd || groupConfig?.projectCwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     const sessRow = sessDb.getSession(sessionKey);
     const existingSessionId = sessRow?.session_id || undefined;

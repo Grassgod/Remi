@@ -121,11 +121,14 @@ export interface GroupConfig {
   replyMode: "thread" | "direct";
   systemPrompt: string;
   allowedTools: string[];
+  allowedMcps: string[];
   addDirs: string[];
   provider?: string;
+  cwd?: string;
+  launchCommand?: string;
   createdAt: string;
   updatedAt: string;
-  cwd?: string;
+  projectCwd?: string;
   projectName?: string;
 }
 
@@ -137,8 +140,11 @@ export interface GroupConfigInput {
   replyMode?: "thread" | "direct";
   systemPrompt?: string;
   allowedTools?: string[];
+  allowedMcps?: string[];
   addDirs?: string[];
   provider?: string;
+  cwd?: string;
+  launchCommand?: string;
 }
 
 // Analytics

@@ -234,6 +234,17 @@ export function getDb(): Database {
     db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
   }
 
+  // group_configs migrations — add new columns
+  try {
+    const gcCols = db.query("PRAGMA table_info(group_configs)").all() as Array<{ name: string }>;
+    const gcColNames = new Set(gcCols.map((c) => c.name));
+    if (gcColNames.size > 0) {
+      if (!gcColNames.has("allowed_mcps")) db.exec("ALTER TABLE group_configs ADD COLUMN allowed_mcps TEXT DEFAULT '[]'");
+      if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
+      if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
+    }
+  } catch {}
+
   // Projects table migration — add deleted column
   try {
     const projCols = db.query("PRAGMA table_info(projects)").all() as Array<{ name: string }>;

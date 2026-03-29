@@ -11,12 +11,15 @@ export interface GroupConfig {
   replyMode: "thread" | "direct";
   systemPrompt: string;
   allowedTools: string[];
+  allowedMcps: string[];
   addDirs: string[];
   provider?: string;
+  cwd?: string;
+  launchCommand?: string;
   createdAt: string;
   updatedAt: string;
   /** Joined from projects table — not stored in group_configs */
-  cwd?: string;
+  projectCwd?: string;
 }
 
 export interface GroupConfigInput {
@@ -27,6 +30,9 @@ export interface GroupConfigInput {
   replyMode?: "thread" | "direct";
   systemPrompt?: string;
   allowedTools?: string[];
+  allowedMcps?: string[];
   addDirs?: string[];
   provider?: string;
+  cwd?: string;
+  launchCommand?: string;
 }

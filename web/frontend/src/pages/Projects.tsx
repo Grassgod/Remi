@@ -429,7 +429,10 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
   const [provider, setProvider] = useState(initial?.provider ?? "");
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
   const [allowedTools, setAllowedTools] = useState(initial?.allowedTools?.join(", ") ?? "");
+  const [allowedMcps, setAllowedMcps] = useState(initial?.allowedMcps?.join(", ") ?? "");
   const [addDirs, setAddDirs] = useState(initial?.addDirs?.join(", ") ?? "");
+  const [cwd, setCwd] = useState(initial?.cwd ?? "");
+  const [launchCommand, setLaunchCommand] = useState(initial?.launchCommand ?? "");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   return (
@@ -489,6 +492,18 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
       {showAdvanced && (
         <div className="space-y-3 border-t border-zinc-800 pt-3">
           <div>
+            <label className="text-sm text-zinc-400 block mb-1">CWD (override project path)</label>
+            <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/workspace" />
+          </div>
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1">Launch Command</label>
+            <Input value={launchCommand} onChange={(e) => setLaunchCommand(e.target.value)} placeholder="claude --model opus --dangerously-skip-permissions" />
+          </div>
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1">Allowed MCPs (comma-separated)</label>
+            <Input value={allowedMcps} onChange={(e) => setAllowedMcps(e.target.value)} placeholder="context7, remi-memory" />
+          </div>
+          <div>
             <label className="text-sm text-zinc-400 block mb-1">System Prompt</label>
             <textarea
               className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 min-h-[80px]"
@@ -518,7 +533,10 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
           provider: provider || undefined,
           systemPrompt,
           allowedTools: allowedTools ? allowedTools.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          allowedMcps: allowedMcps ? allowedMcps.split(",").map((s) => s.trim()).filter(Boolean) : [],
           addDirs: addDirs ? addDirs.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          cwd: cwd || undefined,
+          launchCommand: launchCommand || undefined,
         })}>
           {initial ? "Save" : "Create"}
         </Button>

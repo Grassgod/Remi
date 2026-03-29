@@ -77,8 +77,8 @@ export class GroupConfigStore {
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO group_configs
-        (chat_id, project_id, name, monitor, reply_mode, system_prompt, allowed_tools, add_dirs, provider, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (chat_id, project_id, name, monitor, reply_mode, system_prompt, allowed_tools, allowed_mcps, add_dirs, provider, cwd, launch_command, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(chat_id) DO UPDATE SET
         project_id = excluded.project_id,
         name = excluded.name,
@@ -86,8 +86,11 @@ export class GroupConfigStore {
         reply_mode = excluded.reply_mode,
         system_prompt = excluded.system_prompt,
         allowed_tools = excluded.allowed_tools,
+        allowed_mcps = excluded.allowed_mcps,
         add_dirs = excluded.add_dirs,
         provider = excluded.provider,
+        cwd = excluded.cwd,
+        launch_command = excluded.launch_command,
         updated_at = excluded.updated_at`,
       [
         input.chatId,
@@ -97,8 +100,11 @@ export class GroupConfigStore {
         input.replyMode ?? "thread",
         input.systemPrompt ?? "",
         JSON.stringify(input.allowedTools ?? []),
+        JSON.stringify(input.allowedMcps ?? []),
         JSON.stringify(input.addDirs ?? []),
         input.provider ?? null,
+        input.cwd ?? null,
+        input.launchCommand ?? null,
         now,
         now,
       ],
@@ -119,8 +125,11 @@ export class GroupConfigStore {
     if (fields.replyMode !== undefined) { sets.push("reply_mode = ?"); vals.push(fields.replyMode); }
     if (fields.systemPrompt !== undefined) { sets.push("system_prompt = ?"); vals.push(fields.systemPrompt); }
     if (fields.allowedTools !== undefined) { sets.push("allowed_tools = ?"); vals.push(JSON.stringify(fields.allowedTools)); }
+    if (fields.allowedMcps !== undefined) { sets.push("allowed_mcps = ?"); vals.push(JSON.stringify(fields.allowedMcps)); }
     if (fields.addDirs !== undefined) { sets.push("add_dirs = ?"); vals.push(JSON.stringify(fields.addDirs)); }
     if (fields.provider !== undefined) { sets.push("provider = ?"); vals.push(fields.provider || null); }
+    if (fields.cwd !== undefined) { sets.push("cwd = ?"); vals.push(fields.cwd || null); }
+    if (fields.launchCommand !== undefined) { sets.push("launch_command = ?"); vals.push(fields.launchCommand || null); }
 
     if (sets.length === 0) return true;
     sets.push("updated_at = datetime('now')");
@@ -163,11 +172,14 @@ export class GroupConfigStore {
       replyMode: (row.reply_mode as "thread" | "direct") ?? "thread",
       systemPrompt: (row.system_prompt as string) ?? "",
       allowedTools: JSON.parse((row.allowed_tools as string) || "[]"),
+      allowedMcps: JSON.parse((row.allowed_mcps as string) || "[]"),
       addDirs: JSON.parse((row.add_dirs as string) || "[]"),
       provider: (row.provider as string) || undefined,
+      cwd: (row.cwd as string) || undefined,
+      launchCommand: (row.launch_command as string) || undefined,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
-      cwd: (row.project_cwd as string) || undefined,
+      projectCwd: (row.project_cwd as string) || undefined,
     };
   }
 }
