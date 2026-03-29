@@ -93,15 +93,15 @@ export async function runProjectInit(
   // Step 1: Create Feishu group + whitelist it
   const step1 = await runStep(store, projectId, "create_chat", async () => {
     const existing = store.getById(projectId);
-    if (existing?.chatId) return existing.chatId;
+    let chatId = existing?.chatId;
 
-    const chatId = await createProjectChat(input.name, OWNER_OPEN_ID);
-    store.updateField(projectId, "chat_id", chatId);
+    if (!chatId) {
+      chatId = await createProjectChat(input.name, OWNER_OPEN_ID);
+      store.updateField(projectId, "chat_id", chatId);
+    }
 
-    // Add to allowed_groups + monitor_groups so Remi responds in this group
+    // Always ensure whitelist (idempotent — runs even if group already existed)
     remiData.addGroupToWhitelist(chatId);
-
-    // Hot-reload: update live WS listener so it accepts messages immediately
     getActiveFeishuConnector()?.addGroups([chatId]);
 
     return chatId;
