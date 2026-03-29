@@ -145,43 +145,6 @@ export function Dashboard() {
             </CardContent>
           </Card>
 
-          {/* Auth Tokens */}
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Shield className="h-4 w-4 text-muted-foreground" />
-                Auth Tokens
-              </CardTitle>
-              <Button
-                variant="ghost" size="sm"
-                onClick={fetchTokens}
-                className="h-7 text-xs text-muted-foreground"
-              >
-                <RefreshCw className="h-3 w-3" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <ScrollArea className="max-h-[280px]">
-                {tokens.length === 0 ? (
-                  <EmptyState text="No tokens" />
-                ) : (
-                  tokens.map((t, i) => (
-                    <div key={i} className="flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-accent/30">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-xs font-medium">{t.service}</div>
-                        <div className="truncate text-[10px] text-muted-foreground">{t.type}</div>
-                      </div>
-                      <span className="hidden text-[10px] text-muted-foreground sm:inline">{t.expiresIn}</span>
-                      <Badge variant={t.valid ? "success" : "destructive"} className="text-[9px]">
-                        {t.valid ? "VALID" : "EXPIRED"}
-                      </Badge>
-                    </div>
-                  ))
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
-
           {/* Memory Entities */}
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
@@ -358,10 +321,43 @@ export function Dashboard() {
             </Collapsible>
           </Card>
 
-        </div>
+          {/* Auth Tokens */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                Auth Tokens
+              </CardTitle>
+              <Button
+                variant="ghost" size="sm"
+                onClick={fetchTokens}
+                className="h-7 text-xs text-muted-foreground"
+              >
+                <RefreshCw className="h-3 w-3" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="max-h-[280px]">
+                {tokens.length === 0 ? (
+                  <EmptyState text="No tokens" />
+                ) : (
+                  tokens.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-accent/30">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{t.service}</div>
+                        <div className="truncate text-[10px] text-muted-foreground">{t.type}</div>
+                      </div>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">{t.expiresIn}</span>
+                      <Badge variant={t.valid ? "success" : "destructive"} className="text-[9px]">
+                        {t.valid ? "VALID" : "EXPIRED"}
+                      </Badge>
+                    </div>
+                  ))
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
 
-        {/* ─── Right Column (Data) ─── */}
-        <div className="flex flex-col gap-3">
           {/* Scheduler Quick Status */}
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
