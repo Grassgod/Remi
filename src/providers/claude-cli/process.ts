@@ -171,6 +171,7 @@ export class ClaudeProcessManager {
     text: string,
     toolHandler?: ToolHandler | null,
     media?: MediaAttachment[],
+    signal?: AbortSignal,
   ): AsyncGenerator<ParsedMessage> {
     await this._lock.acquire();
     try {
@@ -197,7 +198,7 @@ export class ClaudeProcessManager {
       const CONTENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 min without content = stuck
 
       while (true) {
-        const line = await this._readline(this._dynamicTimeoutMs);
+        const line = await this._readline(this._dynamicTimeoutMs, signal);
         if (line === null) {
           if (this._process && !this._process.killed) {
             // EOF detected — process closed stdout (crash/exit), don't retry
@@ -569,12 +570,18 @@ export class ClaudeProcessManager {
   /** Default read timeout: 10 minutes. Long enough for context compression and big tool calls. */
   private static READLINE_TIMEOUT_MS = 10 * 60 * 1000;
 
-  private async _readline(timeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS): Promise<string | null> {
+  private async _readline(timeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS, signal?: AbortSignal): Promise<string | null> {
     if (!this._reader || !this._decoder) return null;
 
     // Check if process died while we're trying to read
     if (this._process && this._process.killed) {
       log.warn("Process already killed, aborting readline");
+      return null;
+    }
+
+    // Check if already aborted
+    if (signal?.aborted) {
+      log.info("readline: signal already aborted");
       return null;
     }
 
@@ -590,12 +597,24 @@ export class ClaudeProcessManager {
         }
 
         // Read more data with timeout to prevent permanent hangs
-        const readResult = await Promise.race([
+        // Also race against abort signal for immediate /esc response
+        const races: Promise<any>[] = [
           this._reader.read(),
           new Promise<{ value: undefined; done: true; timedOut: true }>((resolve) =>
             setTimeout(() => resolve({ value: undefined, done: true, timedOut: true }), timeoutMs),
           ),
-        ]);
+        ];
+        if (signal && !signal.aborted) {
+          races.push(new Promise<{ value: undefined; done: true; aborted: true }>((resolve) =>
+            signal.addEventListener("abort", () => resolve({ value: undefined, done: true, aborted: true }), { once: true }),
+          ));
+        }
+        const readResult = await Promise.race(races);
+
+        if ("aborted" in readResult) {
+          log.info("readline aborted by signal (/esc)");
+          return null;
+        }
 
         if ("timedOut" in readResult) {
           log.error(`readline timed out after ${timeoutMs}ms — process likely hung`);

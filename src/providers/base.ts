@@ -70,6 +70,8 @@ export interface SendOptions {
   deadlineMs?: number;
   /** Trace ID for request-scoped log correlation (conversations.id). */
   traceId?: string;
+  /** AbortSignal for cancelling the request (e.g. /esc). */
+  signal?: AbortSignal;
 }
 
 /** Protocol that all provider backends must implement. */

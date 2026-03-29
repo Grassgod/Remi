@@ -82,6 +82,7 @@ export class Remi {
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
   private _laneLocks = new Map<string, AsyncLock>();
+  private _activeAborts = new Map<string, AbortController>();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
 
   constructor(config: RemiConfig) {
@@ -127,6 +128,15 @@ export class Remi {
   /** Register a callback that fires when /restart is invoked. */
   onRestart(cb: (info: { chatId: string; connectorName?: string }) => void): void {
     this._onRestart = cb;
+  }
+
+  /** Abort active processing for a session (called by /esc). */
+  abortSession(sessionKey: string): void {
+    const ac = this._activeAborts.get(sessionKey);
+    if (ac) {
+      ac.abort();
+      log.info(`abortSession: aborted "${sessionKey}"`);
+    }
   }
 
   // ── Lane Queue (per-chat serialization) ──────────────────
@@ -264,6 +274,7 @@ export class Remi {
     } finally {
       // Guarantee span is always recorded — SpanImpl._ended prevents double-write
       rootSpan.end();
+      this._activeAborts.delete(sessionKey);
       lock.release();
       if (lock.isIdle) this._laneLocks.delete(sessionKey);
     }
@@ -297,6 +308,11 @@ export class Remi {
     const existingSessionId = sessRow?.session_id || undefined;
     _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
     const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
+
+    // AbortController for /esc — allows immediate readline interruption
+    const abortController = new AbortController();
+    this._activeAborts.set(sessionKey, abortController);
+
     const streamOptions = {
       systemPrompt: botProfile?.systemPrompt,
       chatId: this._resolveSessionKey(msg),
@@ -307,6 +323,7 @@ export class Remi {
       addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
       permissionMode: sessRow?.mode ?? undefined,
       traceId: msgTraceId,
+      signal: abortController.signal,
     };
 
     // Provider selection:
@@ -949,8 +966,9 @@ export class Remi {
       const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       feishu.setBotProfiles(config.bots);
-      // Wire /esc abort to kill CLI process
+      // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
+        remi.abortSession(chatId);  // Immediately unblock _readline via AbortSignal
         const provider = remi._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
           await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(chatId);

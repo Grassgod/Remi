@@ -169,6 +169,7 @@ export class ClaudeCLIProvider implements Provider {
       message,
       this._handleToolCall.bind(this),
       options?.media,
+      options?.signal,
     )) {
       // Keep process alive in idle cleanup while actively streaming
       this._lastUsed.set(poolKey, Date.now());
