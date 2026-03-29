@@ -29,29 +29,23 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "existingPath required for existing mode" }, 400);
     }
 
-    // Check duplicate — preserve chatId from previous attempt for reuse
-    const existing = store.getById(input.alias);
-    if (existing && existing.initStatus === "completed") {
+    // Check active (non-deleted) project
+    const active = store.getById(input.alias);
+    if (active && active.initStatus === "completed") {
       return c.json({ error: `Project "${input.alias}" already exists` }, 409);
     }
 
-    // Look for chatId: current record → kv (from deleted project)
-    const { kvGet, kvDelete } = require("../../src/db/index.js");
-    const previousChatId = existing?.chatId
-      ?? kvGet(`deleted_project_chat:${input.alias}`)
-      ?? null;
+    // Grab chatId from any previous record (active or soft-deleted) for reuse
+    const any = store.getByIdIncludeDeleted(input.alias);
+    const previousChatId = any?.chatId ?? null;
 
-    // If there's a previous attempt, delete it first
-    if (existing) {
-      store.delete(input.alias);
-    }
-
+    // Hard-delete any leftover record, then create fresh
+    store.hardDelete(input.alias);
     const project = store.create(input);
 
-    // Restore previous chatId so step 1 skips group creation
+    // Restore previous chatId so step 1 reuses the Feishu group
     if (previousChatId) {
       store.updateField(input.alias, "chat_id", previousChatId);
-      kvDelete(`deleted_project_chat:${input.alias}`);
     }
 
     // Run async — don't await

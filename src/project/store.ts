@@ -48,6 +48,14 @@ export class ProjectStore {
 
   getById(id: string): Project | null {
     const row = this.db
+      .query("SELECT * FROM projects WHERE id = ? AND (deleted = 0 OR deleted IS NULL)")
+      .get(id) as Record<string, unknown> | null;
+    return row ? this._toProject(row) : null;
+  }
+
+  /** Get by id including soft-deleted (for chatId reuse). */
+  getByIdIncludeDeleted(id: string): Project | null {
+    const row = this.db
       .query("SELECT * FROM projects WHERE id = ?")
       .get(id) as Record<string, unknown> | null;
     return row ? this._toProject(row) : null;
@@ -55,7 +63,7 @@ export class ProjectStore {
 
   list(): Project[] {
     const rows = this.db
-      .query("SELECT * FROM projects ORDER BY created_at DESC")
+      .query("SELECT * FROM projects WHERE deleted = 0 OR deleted IS NULL ORDER BY created_at DESC")
       .all() as Record<string, unknown>[];
     return rows.map((r) => this._toProject(r));
   }
@@ -104,11 +112,27 @@ export class ProjectStore {
     );
   }
 
-  // ── Delete ──
+  // ── Delete (soft) ──
 
   delete(id: string): boolean {
-    const result = this.db.run("DELETE FROM projects WHERE id = ?", [id]);
+    const result = this.db.run(
+      "UPDATE projects SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+      [id],
+    );
     return result.changes > 0;
+  }
+
+  /** Restore a soft-deleted project for re-init. */
+  restore(id: string): void {
+    this.db.run(
+      "UPDATE projects SET deleted = 0, init_status = 'pending', updated_at = datetime('now') WHERE id = ?",
+      [id],
+    );
+  }
+
+  /** Hard-delete (for cleanup before re-creating). */
+  hardDelete(id: string): void {
+    this.db.run("DELETE FROM projects WHERE id = ?", [id]);
   }
 
   // ── Migration ──

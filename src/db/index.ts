@@ -144,6 +144,7 @@ export function getDb(): Database {
       pipeline_config TEXT,
       init_status TEXT DEFAULT 'pending',
       init_steps TEXT,
+      deleted INTEGER DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -215,6 +216,15 @@ export function getDb(): Database {
     db.exec("ALTER TABLE conversations ADD COLUMN session_key TEXT");
     db.exec("CREATE INDEX IF NOT EXISTS idx_conv_session_key ON conversations(session_key)");
   }
+
+  // Projects table migration — add deleted column
+  try {
+    const projCols = db.query("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+    const projColNames = new Set(projCols.map((c) => c.name));
+    if (projColNames.size > 0 && !projColNames.has("deleted")) {
+      db.exec("ALTER TABLE projects ADD COLUMN deleted INTEGER DEFAULT 0");
+    }
+  } catch {}
 
   _db = db;
   return db;
