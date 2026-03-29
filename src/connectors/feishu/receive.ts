@@ -13,18 +13,12 @@ import { createLogger } from "../../logger.js";
 const log = createLogger("feishu");
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeFeishu } from "./client.js";
-import { getDb } from "../../db/index.js";
+import { GroupConfigStore } from "../../group/store.js";
 
-/** Check if a chatId belongs to a registered project (DB query, fast). */
-function _isProjectChat(chatId: string): boolean {
-  try {
-    const row = getDb()
-      .query("SELECT 1 FROM projects WHERE chat_id = ? AND (deleted = 0 OR deleted IS NULL) LIMIT 1")
-      .get(chatId);
-    return !!row;
-  } catch {
-    return false;
-  }
+/** Cached store instance (created lazily). */
+let _gcStore: GroupConfigStore | undefined;
+function gcStore(): GroupConfigStore {
+  return (_gcStore ??= new GroupConfigStore());
 }
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
@@ -422,7 +416,7 @@ export async function processFeishuMessageEvent(
   client: Lark.Client,
   event: FeishuMessageEvent,
   botOpenId?: string,
-  opts?: { allowedGroups?: string[]; monitorGroups?: string[]; triggerUserIds?: string[] },
+  opts?: { triggerUserIds?: string[] },
 ): Promise<ParsedFeishuMessage | null> {
   const messageId = event.message.message_id;
 
@@ -439,40 +433,34 @@ export async function processFeishuMessageEvent(
   // 4) monitorGroups auto-reply for messages without explicit @mentions
   let monitored = false;
   if (ctx.chatType === "group") {
-    // Check allowedGroups (config) + projects table (DB) for dynamic project groups
-    const inConfig = !opts?.allowedGroups?.length || opts.allowedGroups.includes(ctx.chatId);
-    const inProjects = !inConfig ? _isProjectChat(ctx.chatId) : false;
-    if (!inConfig && !inProjects) {
-      log.info(`blocked group message ${messageId} (chatId=${ctx.chatId}, not in allowedGroups)`);
+    // DB-based group filtering — group must exist in group_configs
+    const groupConfig = gcStore().getByChatId(ctx.chatId);
+    if (!groupConfig) {
+      log.info(`blocked group message ${messageId} (chatId=${ctx.chatId}, not in group_configs)`);
       return null;
     }
-    // Project groups are auto-monitored (no @mention needed)
-    const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) || inProjects;
+
+    const isMonitor = groupConfig.monitor;
     const mentions = event.message.mentions ?? [];
     const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
     const isInThread = !!event.message.root_id;
     const mentionedTriggerUser = opts?.triggerUserIds?.length
       ? mentions.some((m) => opts.triggerUserIds!.includes(m.id.open_id ?? ""))
       : false;
-    // Allow /esc and other slash commands without @mention
     const isSlashCommand = /^\/\w+/i.test(ctx.content.trim());
 
     if (ctx.mentionedBot || isSlashCommand) {
       // Always respond when bot is @mentioned or slash command
     } else if (directedAtOthers && !mentionedTriggerUser) {
-      // Message @mentions other users (not trigger users) — skip
       log.info(`skipped group message ${messageId} (directed at other users, not bot)`);
       return null;
     } else if (mentionedTriggerUser && isInThread) {
-      // Trigger user @mentioned inside a thread — skip (only top-level triggers)
       log.info(`skipped group message ${messageId} (triggerUser mentioned in thread, not top-level)`);
       return null;
     } else if (!isMonitor && !mentionedTriggerUser) {
-      // Not monitor group, not mentioned, not trigger — skip
       log.info(`skipped group message ${messageId} (chatId=${ctx.chatId}, not mentioned, not monitored)`);
       return null;
     } else if (isMonitor && directedAtOthers) {
-      // Monitor group but message directed at specific people — skip
       log.info(`skipped group message ${messageId} (monitor group but directed at other users)`);
       return null;
     }
@@ -568,24 +556,7 @@ export function startWebSocketListener(
   let botOpenId: string | undefined;
   let stopped = false;
 
-  // Live-reload: re-read from config on each message so runtime changes (e.g. project init) take effect
-  let allowedGroups = config.allowedGroups ?? [];
-  let monitorGroups = config.monitorGroups ?? [];
   const triggerUserIds = config.triggerUserIds ?? [];
-
-  // Allow runtime updates (called by project init after creating a new group)
-  const _updateGroupLists = (added: { allowed?: string[]; monitor?: string[] }) => {
-    if (added.allowed) {
-      for (const g of added.allowed) {
-        if (!allowedGroups.includes(g)) allowedGroups = [...allowedGroups, g];
-      }
-    }
-    if (added.monitor) {
-      for (const g of added.monitor) {
-        if (!monitorGroups.includes(g)) monitorGroups = [...monitorGroups, g];
-      }
-    }
-  };
 
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
@@ -610,7 +581,7 @@ export function startWebSocketListener(
       if (stopped) return;
       try {
         const event = data as unknown as FeishuMessageEvent;
-        const msg = await processFeishuMessageEvent(client, event, botOpenId, { allowedGroups, monitorGroups, triggerUserIds });
+        const msg = await processFeishuMessageEvent(client, event, botOpenId, { triggerUserIds });
         if (msg) {
           await onMessage(msg);
         }
@@ -685,8 +656,8 @@ export function startWebSocketListener(
       stopped = true;
       // WSClient doesn't expose a close method; setting flag prevents further processing
     },
-    addGroups(chatIds: string[]) {
-      _updateGroupLists({ allowed: chatIds, monitor: chatIds });
+    addGroups(_chatIds: string[]) {
+      // No-op: group management is now DB-based
     },
   };
 }
