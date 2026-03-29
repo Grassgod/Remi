@@ -15,6 +15,8 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import type { BotProfile, RemiConfig } from "./config.js";
+import { GroupConfigStore } from "./group/store.js";
+import type { GroupConfig } from "./group/model.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
@@ -172,28 +174,13 @@ export class Remi {
     return msg.chatId;
   }
 
-  // ── Bot profile resolution ──────────────────────────────
+  // ── Group config resolution ──────────────────────────────
 
-  /**
-   * Find a bot profile that matches the message's chatId.
-   * Returns null if no profile matches (uses default Remi behavior).
-   */
-  _resolveBotProfile(msg: IncomingMessage): BotProfile | null {
-    for (const bot of this.config.bots) {
-      if (bot.groups.includes(msg.chatId)) {
-        return bot;
-      }
-    }
-    return null;
-  }
-
-  /** Look up project cwd from DB by chatId. */
-  private _getProjectCwd(chatId: string): string | null {
+  /** Look up group config from DB by chatId. Returns all routing info in one query. */
+  private _getGroupConfig(chatId: string): GroupConfig | null {
     try {
-      const row = getDb()
-        .query("SELECT cwd FROM projects WHERE chat_id = ? AND (deleted = 0 OR deleted IS NULL) LIMIT 1")
-        .get(chatId) as { cwd: string } | null;
-      return row?.cwd ?? null;
+      const store = new GroupConfigStore();
+      return store.getByChatId(chatId);
     } catch {
       return null;
     }
@@ -299,14 +286,12 @@ export class Remi {
     }
 
     const sessionKey = this._resolveSessionKey(msg);
-    const botProfile = this._resolveBotProfile(msg);
-    // Project cwd from DB (shared with remi-web, no restart needed)
-    const projectCwd = this._getProjectCwd(msg.chatId);
-    const cwd = projectCwd || botProfile?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
+    const groupConfig = this._getGroupConfig(msg.chatId);
+    const cwd = groupConfig?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     const sessRow = sessDb.getSession(sessionKey);
     const existingSessionId = sessRow?.session_id || undefined;
-    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${botProfile ? ` [bot: ${botProfile.id}]` : ""}`);
+    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
     const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
 
     // AbortController for /esc — allows immediate readline interruption
@@ -314,26 +299,26 @@ export class Remi {
     this._activeAborts.set(sessionKey, abortController);
 
     const streamOptions = {
-      systemPrompt: botProfile?.systemPrompt,
+      systemPrompt: groupConfig?.systemPrompt || undefined,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,
       media: msg.media,
-      allowedTools: botProfile?.allowedTools?.length ? botProfile.allowedTools : undefined,
-      addDirs: botProfile?.addDirs?.length ? botProfile.addDirs : undefined,
+      allowedTools: groupConfig?.allowedTools?.length ? groupConfig.allowedTools : undefined,
+      addDirs: groupConfig?.addDirs?.length ? groupConfig.addDirs : undefined,
       permissionMode: sessRow?.mode ?? undefined,
       traceId: msgTraceId,
       signal: abortController.signal,
     };
 
     // Provider selection:
-    // 1. Group → BotProfile.provider (static config)
+    // 1. Group → GroupConfig.provider (DB)
     // 2. P2P → DB session provider (user switched via /switch or bot menu)
     // 3. Default → config.provider.name
     const providerName =
-      botProfile?.provider                             // group-level config
-      ?? sessRow?.provider                             // P2P user choice
-      ?? null;                                         // fall through to default
+      groupConfig?.provider                              // group-level config (DB)
+      ?? sessRow?.provider                               // P2P user choice
+      ?? null;                                           // fall through to default
     const provider = this._getProvider(providerName);
 
     if (typeof provider.sendStream !== "function") {
@@ -955,13 +940,8 @@ export class Remi {
     // 3. Feishu connector
     if (hasFeishuCreds) {
       const feishuConfig = { ...config.feishu };
-      for (const bot of config.bots) {
-        for (const g of bot.groups) {
-          if (!feishuConfig.allowedGroups.includes(g)) {
-            feishuConfig.allowedGroups = [...feishuConfig.allowedGroups, g];
-          }
-        }
-      }
+      // Group filtering is now DB-based via group_configs table.
+      // No need to merge bot profile groups into allowedGroups.
 
       const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
