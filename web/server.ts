@@ -11,6 +11,7 @@
  */
 
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { readdirSync, statSync } from "node:fs";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -94,7 +95,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   app.get("/api/v1/fs/browse", (c) => {
     const { readdirSync, statSync } = require("node:fs");
     const { join } = require("node:path");
-    const target = c.req.query("path") || "/data00/home/hehuajie/project";
+    const target = c.req.query("path") || join(homedir(), "project");
     try {
       const entries = readdirSync(target, { withFileTypes: true });
       const dirs = entries
@@ -145,7 +146,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   });
 
   // Auto-mount all task directories as /tasks/<dir-name>/*
-  const tasksDir = "/data00/home/hehuajie/tasks";
+  const tasksDir = join(homedir(), "tasks");
   try {
     for (const entry of readdirSync(tasksDir)) {
       const fullPath = join(tasksDir, entry);

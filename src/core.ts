@@ -952,12 +952,14 @@ export class Remi {
       });
     }
 
-    // 4. SymlinkManager — redirect CC knowledge output to ~/.remi/
+    // 4. SymlinkManager — 3-layer centralization
     const { symlinkManager } = require("./infra/symlink-manager");
     remi._symlinkManager = symlinkManager;
+    symlinkManager.setProjects(config.projects);
     symlinkManager.ensureAllProjects();
     symlinkManager.ensureGlobals();
-    symlinkManager.ensureWikiLinks(config.projects);
+    symlinkManager.ensureProjectMemoryLinks();
+    symlinkManager.ensureWikiCentralization();
 
     // 5. Restart handler
     remi.onRestart((info) => remi._handleRestart(info));

@@ -17,7 +17,10 @@ import { Scheduler } from "./pages/Scheduler";
 import { Agents } from "./pages/Agents";
 import { Projects } from "./pages/Projects";
 import { BotMenu } from "./pages/BotMenu";
+import { Config } from "./pages/Config";
 import { Auth } from "./pages/Auth";
+import { Database } from "./pages/Database";
+import { Symlinks } from "./pages/Symlinks";
 import { Layout } from "./components/Layout";
 
 function NotFound() {
@@ -63,13 +66,13 @@ export function App() {
         <Route path="/bot-menu" component={BotMenu} />
 
         <Route path="/auth" component={Auth} />
+        <Route path="/database" component={Database} />
 
         {/* Redirects for old routes */}
         <Route path="/sessions">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/monitor">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/database">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/config">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/symlinks">{() => { window.location.hash = "#/"; return null; }}</Route>
+        <Route path="/config" component={Config} />
+        <Route path="/symlinks" component={Symlinks} />
 
         <Route component={NotFound} />
       </Switch>

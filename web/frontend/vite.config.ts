@@ -14,6 +14,11 @@ export default defineConfig({
       "/api": "http://localhost:6120",
     },
   },
+  preview: {
+    proxy: {
+      "/api": "http://localhost:6120",
+    },
+  },
   build: {
     outDir: "dist",
   },

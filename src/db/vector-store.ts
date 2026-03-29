@@ -14,6 +14,11 @@ export class VectorStore {
     this.config = config;
   }
 
+  /** Expose API key for reuse by sibling services (e.g. rerank). */
+  get apiKey(): string {
+    return this.config.apiKey;
+  }
+
   /** Check if content is already embedded with the same hash. */
   has(id: string, contentHash: string): boolean {
     const db = getDb();

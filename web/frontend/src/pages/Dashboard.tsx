@@ -10,7 +10,7 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import {
   MessageSquare, Coins, KanbanSquare, Shield, ChevronRight,
   ChevronDown, ChevronUp, Brain, Clock, Activity, Database,
-  Link2, Settings, AlertTriangle, Check, RefreshCw,
+  Link2, Settings, AlertTriangle, Check, RefreshCw, MemoryStick,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "../stores/app";
@@ -21,7 +21,7 @@ import type { MonitorStats, DbStats, SymlinksStatus, AnalyticsSummary } from "..
 
 export function Dashboard() {
   const { status, tokens, fetchStatus, fetchTokens } = useAppStore();
-  const { entities, dailyDates, dailyContent, fetchEntities, fetchDailyDates, fetchDaily } = useMemoryStore();
+  const { entities, fetchEntities } = useMemoryStore();
   const { status: schedulerStatus, fetchStatus: fetchSchedulerStatus } = useSchedulerStore();
   const [, setLocation] = useLocation();
 
@@ -36,7 +36,6 @@ export function Dashboard() {
     fetchStatus();
     fetchTokens();
     fetchEntities();
-    fetchDailyDates();
     fetchSchedulerStatus();
     api.getMonitorStats().then(setMonitorStats).catch(() => {});
     api.getDbStats().then(setDbStats).catch(() => {});
@@ -44,20 +43,16 @@ export function Dashboard() {
     api.getAnalyticsSummary().then(setAnalyticsSummary).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (dailyDates.length > 0) fetchDaily(dailyDates[0].date);
-  }, [dailyDates]);
-
   // Auto-refresh system data
   useEffect(() => {
     const interval = setInterval(() => {
       fetchStatus();
+      fetchSchedulerStatus();
       api.getMonitorStats().then(setMonitorStats).catch(() => {});
     }, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  const feedItems = parseDailyFeed(dailyContent);
   const todayTokens = analyticsSummary?.today;
   const hasIssues = !status?.daemon.alive ||
     (status?.tokens.valid ?? 0) < (status?.tokens.total ?? 0) ||
@@ -100,96 +95,8 @@ export function Dashboard() {
       </div>
 
       {/* ─── Two Column Layout ─── */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* ─── Left Column ─── */}
-        <div className="flex flex-col gap-3">
-          {/* Activity Feed */}
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Activity className="h-4 w-4 text-muted-foreground" />
-                Activity Stream
-              </CardTitle>
-              <Button
-                variant="ghost" size="sm"
-                onClick={() => setLocation("/memory")}
-                className="h-7 text-xs text-muted-foreground"
-              >
-                View All <ChevronRight className="h-3 w-3" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <ScrollArea className="max-h-[320px]">
-                {feedItems.length === 0 ? (
-                  <EmptyState text="No activity data" />
-                ) : (
-                  feedItems.map((item, i) => (
-                    <div
-                      key={i}
-                      className="flex items-baseline gap-2 border-l-2 border-transparent px-4 py-2 transition-colors hover:border-l-primary/30 hover:bg-accent/30"
-                    >
-                      <span className="min-w-[36px] shrink-0 font-mono text-[10px] text-muted-foreground">
-                        {item.time}
-                      </span>
-                      <Badge variant="outline" className="hidden shrink-0 px-1.5 py-0 text-[8px] font-normal uppercase tracking-wider sm:inline-flex">
-                        {item.tag}
-                      </Badge>
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                        {item.msg}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
-
-          {/* Memory Entities */}
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Brain className="h-4 w-4 text-muted-foreground" />
-                Memory Entities
-                <Badge variant="secondary" className="ml-1 text-[10px]">{entities.length}</Badge>
-              </CardTitle>
-              <Button
-                variant="ghost" size="sm"
-                onClick={() => setLocation("/memory")}
-                className="h-7 text-xs text-muted-foreground"
-              >
-                Manage <ChevronRight className="h-3 w-3" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <ScrollArea className="max-h-[240px]">
-                {entities.length === 0 ? (
-                  <EmptyState text="No entities" />
-                ) : (
-                  entities.slice(0, 10).map((e, i) => (
-                    <div
-                      key={i}
-                      className="flex cursor-pointer items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/30"
-                      onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
-                    >
-                      <Badge
-                        variant="outline"
-                        className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}
-                      >
-                        {e.type}
-                      </Badge>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
-                      <span className="hidden text-[10px] text-muted-foreground sm:inline">
-                        {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ─── Right Column ─── */}
         <div className="flex flex-col gap-3">
           {/* Token Budget */}
           <Card>
@@ -254,25 +161,75 @@ export function Dashboard() {
               </Button>
             </CardHeader>
             <CardContent className="p-0">
-              {tokens.length === 0 ? (
-                <EmptyState text="No tokens" />
-              ) : (
-                tokens.map((t, i) => (
-                  <div key={i} className="flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-accent/30">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium">{t.service}</div>
-                      <div className="truncate text-[10px] text-muted-foreground">{t.type}</div>
+              <ScrollArea className="max-h-[280px]">
+                {tokens.length === 0 ? (
+                  <EmptyState text="No tokens" />
+                ) : (
+                  tokens.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-accent/30">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{t.service}</div>
+                        <div className="truncate text-[10px] text-muted-foreground">{t.type}</div>
+                      </div>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">{t.expiresIn}</span>
+                      <Badge variant={t.valid ? "success" : "destructive"} className="text-[9px]">
+                        {t.valid ? "VALID" : "EXPIRED"}
+                      </Badge>
                     </div>
-                    <span className="hidden text-[10px] text-muted-foreground sm:inline">{t.expiresIn}</span>
-                    <Badge variant={t.valid ? "success" : "destructive"} className="text-[9px]">
-                      {t.valid ? "VALID" : "EXPIRED"}
-                    </Badge>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </ScrollArea>
             </CardContent>
           </Card>
 
+          {/* Memory Entities */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Brain className="h-4 w-4 text-muted-foreground" />
+                Memory Entities
+                <Badge variant="secondary" className="ml-1 text-[10px]">{entities.length}</Badge>
+              </CardTitle>
+              <Button
+                variant="ghost" size="sm"
+                onClick={() => setLocation("/memory")}
+                className="h-7 text-xs text-muted-foreground"
+              >
+                Manage <ChevronRight className="h-3 w-3" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="max-h-[480px]">
+                {entities.length === 0 ? (
+                  <EmptyState text="No entities" />
+                ) : (
+                  entities.slice(0, 20).map((e, i) => (
+                    <div
+                      key={i}
+                      className="flex cursor-pointer items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/30"
+                      onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
+                    >
+                      <Badge
+                        variant="outline"
+                        className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}
+                      >
+                        {e.type}
+                      </Badge>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">
+                        {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+        </div>
+
+        {/* ─── Right Column (System) ─── */}
+        <div className="flex flex-col gap-3">
           {/* System Health — Collapsible */}
           <Card>
             <Collapsible open={healthOpen} onOpenChange={setHealthOpen}>
@@ -326,6 +283,22 @@ export function Dashboard() {
                         value={`${(monitorStats.errorRate * 100).toFixed(1)}% (${monitorStats.errorsToday} today)`}
                         ok={monitorStats.errorRate < 0.05}
                       />
+                      {monitorStats.pm2Memory != null && (
+                        <HealthRow
+                          icon={<MemoryStick className="h-3.5 w-3.5" />}
+                          label="Memory"
+                          value={`${(monitorStats.pm2Memory / 1024 / 1024).toFixed(0)}MB`}
+                          ok={(monitorStats.pm2Memory / 1024 / 1024) < 512}
+                        />
+                      )}
+                      {monitorStats.pm2Restarts != null && monitorStats.pm2Restarts > 0 && (
+                        <HealthRow
+                          icon={<RefreshCw className="h-3.5 w-3.5" />}
+                          label="Restarts"
+                          value={`${monitorStats.pm2Restarts} total`}
+                          ok={monitorStats.pm2Restarts < 10}
+                        />
+                      )}
                     </>
                   )}
                   <HealthRow
@@ -346,7 +319,7 @@ export function Dashboard() {
                     <HealthRow
                       icon={<Database className="h-3.5 w-3.5" />}
                       label="Database"
-                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${dbStats.tables.kv.count} KV · ${dbStats.tables.embeddings.count} embeds`}
+                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "kv")?.rowCount : dbStats.tables?.kv?.count) ?? 0} KV · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "embeddings")?.rowCount : dbStats.tables?.embeddings?.count) ?? 0} embeds`}
                       ok
                     />
                   )}
@@ -496,16 +469,6 @@ function EmptyState({ text }: { text: string }) {
 }
 
 // ─── Helpers ────────────────────────────────
-
-function parseDailyFeed(content: string): { time: string; tag: string; msg: string }[] {
-  if (!content) return [];
-  const items: { time: string; tag: string; msg: string }[] = [];
-  for (const line of content.split("\n")) {
-    const m = line.match(/^- \[(\d{2}:\d{2})\]\s*\[(\w+)\]\s*(.+)/);
-    if (m) items.push({ time: m[1], tag: m[2], msg: m[3] });
-  }
-  return items.slice(0, 15);
-}
 
 function formatTokens(input: number, output: number): string {
   const total = input + output;

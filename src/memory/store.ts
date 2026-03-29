@@ -399,7 +399,7 @@ export class MemoryStore {
 
     if (l1Early && debug) {
       layers.push({ name: "L2: Vector Search", ran: false, durationMs: 0, candidateCount: 0, reason: "L1 quality sufficient", matches: [] });
-      layers.push({ name: "L3: LLM Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "Skipped", matches: [] });
+      layers.push({ name: "L3: Voyage Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "Skipped", matches: [] });
       return { query, result: exactMatch ? exactResult : formatted, totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
     }
 
@@ -440,7 +440,7 @@ export class MemoryStore {
     if (results.length === 0) {
       log.info(`recall "${query}" → no results at any level`);
       if (debug) {
-        layers.push({ name: "L3: LLM Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "No candidates", matches: [] });
+        layers.push({ name: "L3: Voyage Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "No candidates", matches: [] });
         return { query, result: "", totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
       }
       return "";
@@ -462,7 +462,7 @@ export class MemoryStore {
             l3Matches.push({ source: r.source, name, snippet: "" });
           }
           layers.push({
-            name: "L3: LLM Rerank", ran: true,
+            name: "L3: Voyage Rerank", ran: true,
             durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
             candidateCount: l3Matches.length, matches: l3Matches,
           });
@@ -477,7 +477,7 @@ export class MemoryStore {
     const resultText = this._formatResults(results, query);
     if (debug) {
       layers.push({
-        name: "L3: LLM Rerank", ran: l3Ran,
+        name: "L3: Voyage Rerank", ran: l3Ran,
         durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
         candidateCount: l3Ran ? 0 : 0,
         reason: l3Ran ? "Rerank failed, returning unranked" : `Only ${results.length} candidates (<=3)`,
@@ -492,55 +492,58 @@ export class MemoryStore {
     candidates: Array<{ source: string; path: string; meta: IndexEntry | Record<string, never> }>,
     query: string,
   ): Promise<Array<{ source: string; path: string; meta: IndexEntry | Record<string, never> }>> {
-    const { AgentRunner } = await import("../agents/index.js");
-    const runner = new AgentRunner();
+    const apiKey = this._vectorStore?.apiKey;
+    if (!apiKey) {
+      log.warn("rerank skipped: no Voyage API key available");
+      return candidates.slice(0, 3);
+    }
 
-    const candidateTexts = candidates.map((c, i) => {
+    // Build document texts for reranking
+    const documents = candidates.map((c) => {
       const name = "name" in c.meta ? (c.meta as IndexEntry).name : basename(c.path, ".md");
       const type = "type" in c.meta ? (c.meta as IndexEntry).type : c.source;
       const preview = existsSync(c.path) ? readFileSync(c.path, "utf-8").slice(0, 500) : "";
-      return `[${i + 1}] ${name} (${type})\n${preview}`;
-    }).join("\n\n");
+      return `${name} (${type})\n${preview}`;
+    });
 
-    const result = await runner.run("memory-rerank", `从以下候选中选出与查询最相关的 top 3。
-输出 JSON 数组：[{ "index": 1, "reason": "..." }, ...]
+    const res = await fetch("https://api.voyageai.com/v1/rerank", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        query,
+        documents,
+        model: "rerank-2-lite",
+        top_k: 3,
+      }),
+    });
 
-查询：${query}
-
-候选：
-${candidateTexts}`);
-
-    try {
-      // Strip markdown code fences if present
-      let output = result.stdout;
-      const fenceMatch = output.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fenceMatch) output = fenceMatch[1];
-
-      // Find JSON array
-      const arrMatch = output.match(/\[\s*\{[\s\S]*\}\s*\]/);
-      if (!arrMatch) return candidates.slice(0, 3);
-
-      const parsed = JSON.parse(arrMatch[0]) as Array<{ index: number }>;
-      log.info(`rerank parsed: ${JSON.stringify(parsed.map(r => r.index))}, candidates: ${candidates.length}`);
-      if (!Array.isArray(parsed) || parsed.length === 0) return candidates.slice(0, 3);
-
-      const mapped = parsed
-        .slice(0, 3)
-        .map((r) => {
-          const idx = r.index - 1; // 1-based → 0-based
-          if (idx < 0 || idx >= candidates.length) {
-            log.warn(`rerank index ${r.index} out of range (candidates: ${candidates.length})`);
-            return null;
-          }
-          return candidates[idx];
-        })
-        .filter(Boolean);
-
-      if (mapped.length === 0) return candidates.slice(0, 3);
-      return mapped as typeof candidates;
-    } catch {
+    if (!res.ok) {
+      const errText = await res.text();
+      log.warn(`Voyage rerank API error ${res.status}: ${errText}`);
       return candidates.slice(0, 3);
     }
+
+    const data = (await res.json()) as {
+      results: Array<{ index: number; relevance_score: number }>;
+    };
+
+    if (!data.results?.length) return candidates.slice(0, 3);
+
+    const reranked = data.results
+      .map((r) => {
+        if (r.index < 0 || r.index >= candidates.length) {
+          log.warn(`rerank index ${r.index} out of range (candidates: ${candidates.length})`);
+          return null;
+        }
+        return candidates[r.index];
+      })
+      .filter(Boolean);
+
+    log.info(`rerank: ${data.results.map(r => `#${r.index}=${r.relevance_score.toFixed(3)}`).join(", ")}`);
+    return (reranked.length > 0 ? reranked : candidates.slice(0, 3)) as typeof candidates;
   }
 
   private _updateAccessStats(path: string): void {

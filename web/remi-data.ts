@@ -101,15 +101,15 @@ export class RemiData {
     this._metrics = new MetricsCollector(this.root);
   }
 
-  // ── Memory: MEMORY.md ──────────────────────────────
+  // ── Soul: ~/.remi/soul.md (global instructions) ──
 
-  readGlobalMemory(): string {
-    const p = join(this.memoryDir, "MEMORY.md");
+  readSoul(): string {
+    const p = join(this.root, "soul.md");
     return existsSync(p) ? readFileSync(p, "utf-8") : "";
   }
 
-  writeGlobalMemory(content: string): void {
-    const p = join(this.memoryDir, "MEMORY.md");
+  writeSoul(content: string): void {
+    const p = join(this.root, "soul.md");
     this._backup(p);
     writeFileSync(p, content, "utf-8");
   }
@@ -405,11 +405,11 @@ export class RemiData {
     const results: SearchResult[] = [];
 
     // Search global memory
-    const globalMem = this.readGlobalMemory();
-    if (globalMem.toLowerCase().includes(q)) {
-      const lines = globalMem.split("\n");
+    const soul = this.readSoul();
+    if (soul.toLowerCase().includes(q)) {
+      const lines = soul.split("\n");
       const matchLine = lines.find(l => l.toLowerCase().includes(q)) ?? "";
-      results.push({ source: "global", name: "MEMORY.md", snippet: matchLine.trim().slice(0, 200), path: "MEMORY.md" });
+      results.push({ source: "global", name: "soul.md", snippet: matchLine.trim().slice(0, 200), path: "soul.md" });
     }
 
     // Search entities
@@ -483,6 +483,66 @@ export class RemiData {
   }
 
   // ── Auth Tokens ────────────────────────────────────
+
+  // ── Token Sync Rules ─────────────────────────────────
+
+  readSyncRules(): Array<{ name: string; source: string; target: string; format: string; key?: string; extraKeys?: Record<string, string> }> {
+    const config = this._readRawConfig();
+    const rules = (config.token_sync ?? []) as Array<Record<string, any>>;
+    return rules.map(r => ({
+      name: r.name ?? "",
+      source: r.source ?? "",
+      target: r.target ?? "",
+      format: r.format ?? "mirror",
+      ...(r.key ? { key: r.key } : {}),
+      ...(r.extra_keys ? { extraKeys: r.extra_keys } : {}),
+    }));
+  }
+
+  saveSyncRules(rules: Array<{ name: string; source: string; target: string; format: string; key?: string; extraKeys?: Record<string, string> }>): boolean {
+    const config = this._readRawConfig();
+    config.token_sync = rules.map(r => ({
+      name: r.name,
+      source: r.source,
+      target: r.target,
+      format: r.format,
+      ...(r.key ? { key: r.key } : {}),
+      ...(r.extraKeys ? { extra_keys: r.extraKeys } : {}),
+    }));
+    return this._writeRawConfig(config);
+  }
+
+  /** Preview source token + synced target file for a sync rule */
+  previewSyncRule(source: string, target: string): { sourceContent: string | null; targetContent: string | null } {
+    // Read source tokens
+    let sourceContent: string | null = null;
+    const tokensPath = join(this.root, "auth", "tokens.json");
+    if (existsSync(tokensPath)) {
+      try {
+        const all = JSON.parse(readFileSync(tokensPath, "utf-8"));
+        const [adapter, tokenType] = source.split("/", 2);
+        if (tokenType === "*") {
+          // All tokens for this adapter
+          sourceContent = all[adapter] ? JSON.stringify(all[adapter], null, 2) : null;
+        } else {
+          sourceContent = all[adapter]?.[tokenType] ? JSON.stringify(all[adapter][tokenType], null, 2) : null;
+        }
+      } catch {}
+    }
+
+    // Read target file
+    let targetContent: string | null = null;
+    const expandedTarget = target.replace(/^~/, homedir());
+    if (existsSync(expandedTarget)) {
+      try {
+        const raw = readFileSync(expandedTarget, "utf-8");
+        // Try to pretty-print JSON
+        try { targetContent = JSON.stringify(JSON.parse(raw), null, 2); } catch { targetContent = raw; }
+      } catch {}
+    }
+
+    return { sourceContent, targetContent };
+  }
 
   readTokenStatus(): TokenStatus[] {
     const p = join(this.root, "auth", "tokens.json");
@@ -564,6 +624,67 @@ export class RemiData {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** Read raw TOML text with secrets redacted */
+  readConfigRaw(): { text: string; path: string } | null {
+    const paths = [
+      join(process.cwd(), "remi.toml"),
+      join(this.root, "remi.toml"),
+    ];
+
+    for (const p of paths) {
+      if (existsSync(p)) {
+        try {
+          let text = readFileSync(p, "utf-8");
+          // Redact secrets in raw text
+          text = text.replace(
+            /^(\s*(?:app_secret|encrypt_key|verification_token|user_access_token)\s*=\s*)"[^"]*"/gm,
+            '$1"***"',
+          );
+          return { text, path: p };
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Write raw TOML text, restoring redacted secrets from original file */
+  updateConfigRaw(newText: string): { ok: true } | { error: string; line?: number } {
+    // Validate TOML syntax
+    let newConfig: Record<string, any>;
+    try {
+      newConfig = parseToml(newText) as Record<string, any>;
+    } catch (e: any) {
+      const lineMatch = e.message?.match(/line (\d+)/i);
+      return { error: e.message ?? "Invalid TOML", line: lineMatch ? Number(lineMatch[1]) : undefined };
+    }
+
+    const p = join(this.root, "remi.toml");
+
+    // Restore redacted secrets from original file
+    if (existsSync(p)) {
+      try {
+        const original = parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
+        const secretKeys = ["app_secret", "encrypt_key", "verification_token", "user_access_token"];
+        if (original.feishu && newConfig.feishu) {
+          for (const key of secretKeys) {
+            if (newConfig.feishu[key] === "***" && original.feishu[key]) {
+              newConfig.feishu[key] = original.feishu[key];
+            }
+          }
+        }
+      } catch { /* ignore, proceed with what we have */ }
+    }
+
+    try {
+      writeFileSync(p, stringifyToml(newConfig), "utf-8");
+      return { ok: true };
+    } catch (e: any) {
+      return { error: e.message ?? "Failed to write config" };
     }
   }
 

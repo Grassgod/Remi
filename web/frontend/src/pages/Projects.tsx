@@ -19,11 +19,11 @@ function DirPicker({ open, onClose, onSelect }: {
   onClose: () => void;
   onSelect: (path: string) => void;
 }) {
-  const [currentPath, setCurrentPath] = useState("/data00/home/hehuajie/project");
+  const [currentPath, setCurrentPath] = useState("");
   const [dirs, setDirs] = useState<{ name: string; path: string }[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const browse = async (path: string) => {
+  const browse = async (path?: string) => {
     setLoading(true);
     try {
       const res = await api.browseDirs(path);
@@ -33,7 +33,7 @@ function DirPicker({ open, onClose, onSelect }: {
     setLoading(false);
   };
 
-  useEffect(() => { if (open) browse(currentPath); }, [open]);
+  useEffect(() => { if (open) browse(currentPath || undefined); }, [open]);
 
   const parentPath = currentPath.replace(/\/[^/]+$/, "") || "/";
 

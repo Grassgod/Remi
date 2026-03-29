@@ -68,11 +68,22 @@ export const getDaily = (date: string) =>
 
 // Auth
 export const getTokenStatus = () => request<import("./types").TokenStatus[]>("/api/v1/auth/status");
+export const getSyncRules = () => request<import("./types").SyncRule[]>("/api/v1/auth/sync-rules");
+export const updateSyncRules = (rules: import("./types").SyncRule[]) =>
+  request<{ ok: boolean }>("/api/v1/auth/sync-rules", { method: "PUT", body: JSON.stringify(rules) });
+export const getSyncPreview = (source: string, target: string) =>
+  request<{ sourceContent: string | null; targetContent: string | null }>(
+    `/api/v1/auth/sync-preview?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`);
 
 // Config
 export const getConfig = () => request<import("./types").RemiConfig>("/api/v1/config");
 export const updateConfig = (patch: Record<string, unknown>) =>
   request("/api/v1/config", { method: "PUT", body: JSON.stringify(patch) });
+export const getConfigRaw = () =>
+  request<{ text: string; path: string }>("/api/v1/config/raw");
+export const updateConfigRaw = (text: string) =>
+  request<{ ok: boolean } | { error: string; line?: number }>(
+    "/api/v1/config/raw", { method: "PUT", body: JSON.stringify({ text }) });
 
 // Bot Menu
 export const getBotMenu = () => request<any>("/api/v1/bot-menu");
@@ -159,6 +170,21 @@ export const ensureSymlink = (cwd: string) =>
 
 // Database
 export const getDbStats = () => request<import("./types").DbStats>("/api/v1/db/stats");
+export const getDbSchema = () => request<import("./types").DbSchemaResponse>("/api/v1/db/schema");
+export const getDbTableData = (tableName: string, opts?: { limit?: number; offset?: number; orderBy?: string; orderDir?: "asc" | "desc" }) => {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.orderBy) params.set("orderBy", opts.orderBy);
+  if (opts?.orderDir) params.set("orderDir", opts.orderDir);
+  const qs = params.toString();
+  return request<import("./types").DbTableDataResponse>(`/api/v1/db/tables/${encodeURIComponent(tableName)}${qs ? `?${qs}` : ""}`);
+};
+export const executeDbQuery = (sql: string, readOnly = true) =>
+  request<import("./types").DbQueryResult>("/api/v1/db/query", {
+    method: "POST",
+    body: JSON.stringify({ sql, readOnly }),
+  });
 export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv");
 export const getDbEmbeddings = () => request<import("./types").EmbeddingEntry[]>("/api/v1/db/embeddings");
 

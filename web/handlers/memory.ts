@@ -4,7 +4,7 @@ import type { RemiData } from "../remi-data.js";
 export function registerMemoryHandlers(app: Hono, data: RemiData) {
   // Global memory
   app.get("/api/v1/memory/global", (c) => {
-    return c.json({ content: data.readGlobalMemory() });
+    return c.json({ content: data.readSoul() });
   });
 
   app.put("/api/v1/memory/global", async (c) => {
@@ -12,7 +12,7 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     if (!body.content || typeof body.content !== "string") {
       return c.json({ error: "content required" }, 400);
     }
-    data.writeGlobalMemory(body.content);
+    data.writeSoul(body.content);
     return c.json({ ok: true });
   });
 

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, basename, relative } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
@@ -8,32 +8,11 @@ import type { RemiData } from "../remi-data.js";
 
 const HOME = homedir();
 const REMI_DATA = join(HOME, ".remi");
-const PROJECTS_DIR = join(REMI_DATA, "projects");
-const PERSONAL_WIKI_DIR = join(PROJECTS_DIR, "-data00-home-hehuajie", "wiki");
+const WIKI_DIR = join(REMI_DATA, "wiki");
+const WIKI_PROJECTS_DIR = join(WIKI_DIR, "projects");
 const SOUL_FILE = join(REMI_DATA, "soul.md");
-const REMI_REPO = "/data00/home/hehuajie/project/remi";
+const REMI_REPO = process.cwd();
 const AGENTS_DIR = join(REMI_REPO, "agents");
-const PROJECT_CONFIG = join(REMI_REPO, "CLAUDE.md");
-
-/** Convert project hash to readable name: "-data00-home-hehuajie-project-remi" → "remi" */
-function projectDisplayName(hash: string): string {
-  const m = hash.match(/-project-(.+)$/);
-  return m ? m[1] : hash;
-}
-
-/** Discover all project wikis (excluding personal wiki) */
-function discoverProjectWikis(): { name: string; hash: string; wikiDir: string }[] {
-  if (!existsSync(PROJECTS_DIR)) return [];
-  const results: { name: string; hash: string; wikiDir: string }[] = [];
-  for (const entry of readdirSync(PROJECTS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name === "-data00-home-hehuajie") continue;
-    const wikiDir = join(PROJECTS_DIR, entry.name, "wiki");
-    if (existsSync(wikiDir)) {
-      results.push({ name: projectDisplayName(entry.name), hash: entry.name, wikiDir });
-    }
-  }
-  return results.sort((a, b) => a.name.localeCompare(b.name));
-}
 
 // ── Types ───────────────────────────────────────────────
 
@@ -74,28 +53,35 @@ function scanDir(dir: string, pathPrefix: string): TreeNode[] {
   return result;
 }
 
-function resolveFilePath(path: string): string | null {
-  // Personal wiki: personal/...
-  if (path.startsWith("personal/")) {
-    return join(PERSONAL_WIKI_DIR, path.slice("personal/".length));
+function resolveFilePath(path: string, projects: Record<string, string>): string | null {
+  // Home wiki: home/... → ~/.remi/wiki/{...} (excluding projects/)
+  if (path.startsWith("home/")) {
+    const rest = path.slice("home/".length);
+    if (rest.startsWith("projects/")) return null; // block access to projects/ via home path
+    return join(WIKI_DIR, rest);
   }
-  // Project wiki: projects/<hash>/...
+  // Project wiki: projects/{alias}/... → ~/.remi/wiki/projects/{alias}/{...}
+  // Special: projects/{alias}/CLAUDE.md → {projectPath}/.claude/CLAUDE.md
   if (path.startsWith("projects/")) {
     const rest = path.slice("projects/".length);
     const slashIdx = rest.indexOf("/");
     if (slashIdx === -1) return null;
-    const hash = rest.slice(0, slashIdx);
+    const alias = rest.slice(0, slashIdx);
     const filePath = rest.slice(slashIdx + 1);
-    return join(PROJECTS_DIR, hash, "wiki", filePath);
+    if (filePath === "CLAUDE.md") {
+      const projectPath = projects[alias];
+      if (!projectPath) return null;
+      return join(projectPath, ".claude", "CLAUDE.md");
+    }
+    return join(WIKI_PROJECTS_DIR, alias, filePath);
   }
-  if (path === "soul" || path === "soul.md" || path.startsWith("soul/")) {
+  // Soul
+  if (path === "soul" || path === "soul.md") {
     return SOUL_FILE;
   }
+  // Agents
   if (path.startsWith("agents/")) {
     return join(AGENTS_DIR, path.slice("agents/".length));
-  }
-  if (path.startsWith("project/")) {
-    return join(REMI_REPO, path.slice("project/".length));
   }
   return null;
 }
@@ -130,26 +116,56 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
   // GET /api/v1/wiki/tree
   app.get("/api/v1/wiki/tree", (c) => {
     const tree: TreeNode[] = [];
+    const projects = data.readProjects(); // alias → path from remi.toml
 
-    // Personal Wiki
-    if (existsSync(PERSONAL_WIKI_DIR)) {
-      tree.push({
-        name: "Personal",
-        path: "personal",
-        type: "directory",
-        children: scanDir(PERSONAL_WIKI_DIR, "personal"),
-      });
+    // Home — ~/.remi/wiki/ top-level content (excluding projects/)
+    if (existsSync(WIKI_DIR)) {
+      const homeChildren: TreeNode[] = [];
+      for (const entry of readdirSync(WIKI_DIR, { withFileTypes: true })) {
+        if (entry.name.startsWith(".") || entry.name === "projects") continue;
+        const entryPath = `home/${entry.name}`;
+        if (entry.isDirectory()) {
+          homeChildren.push({
+            name: entry.name,
+            path: entryPath,
+            type: "directory",
+            children: scanDir(join(WIKI_DIR, entry.name), entryPath),
+          });
+        } else {
+          homeChildren.push({ name: entry.name, path: entryPath, type: "file" });
+        }
+      }
+      if (homeChildren.length > 0) {
+        tree.push({
+          name: "Home",
+          path: "home",
+          type: "directory",
+          children: homeChildren,
+        });
+      }
     }
 
-    // Project Wikis
-    const projects = discoverProjectWikis();
-    if (projects.length > 0) {
-      const projectChildren: TreeNode[] = projects.map(p => ({
-        name: p.name,
-        path: `projects/${p.hash}`,
-        type: "directory" as const,
-        children: scanDir(p.wikiDir, `projects/${p.hash}`),
-      }));
+    // Projects — from remi.toml, each with wiki content + CLAUDE.md
+    const projectChildren: TreeNode[] = [];
+    for (const [alias, projectPath] of Object.entries(projects).sort(([a], [b]) => a.localeCompare(b))) {
+      const wikiDir = join(WIKI_PROJECTS_DIR, alias);
+      const children: TreeNode[] = [];
+
+      // Wiki content
+      if (existsSync(wikiDir)) {
+        children.push(...scanDir(wikiDir, `projects/${alias}`));
+      }
+
+      if (children.length > 0) {
+        projectChildren.push({
+          name: alias,
+          path: `projects/${alias}`,
+          type: "directory",
+          children,
+        });
+      }
+    }
+    if (projectChildren.length > 0) {
       tree.push({
         name: "Projects",
         path: "projects",
@@ -160,14 +176,13 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
 
     // Soul
     if (existsSync(SOUL_FILE)) {
-      tree.push({ name: "Soul & Agents", path: "soul", type: "file" });
+      tree.push({ name: "Soul", path: "soul", type: "file" });
     }
 
     // Agents — scan for CLAUDE.md files
     if (existsSync(AGENTS_DIR)) {
-      const agentEntries = readdirSync(AGENTS_DIR, { withFileTypes: true });
       const agentChildren: TreeNode[] = [];
-      for (const entry of agentEntries) {
+      for (const entry of readdirSync(AGENTS_DIR, { withFileTypes: true })) {
         if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
         const claudeMd = join(AGENTS_DIR, entry.name, "CLAUDE.md");
         if (existsSync(claudeMd)) {
@@ -188,11 +203,6 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       }
     }
 
-    // Project config
-    if (existsSync(PROJECT_CONFIG)) {
-      tree.push({ name: "Project Config", path: "project/CLAUDE.md", type: "file" });
-    }
-
     return c.json(tree);
   });
 
@@ -201,7 +211,8 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
     const path = c.req.query("path");
     if (!path) return c.json({ error: "Missing path parameter" }, 400);
 
-    const fsPath = resolveFilePath(path);
+    const projects = data.readProjects();
+    const fsPath = resolveFilePath(path, projects);
     if (!fsPath || !existsSync(fsPath)) {
       return c.json({ error: "File not found" }, 404);
     }
@@ -243,7 +254,8 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "content required" }, 400);
     }
 
-    const fsPath = resolveFilePath(path);
+    const projects = data.readProjects();
+    const fsPath = resolveFilePath(path, projects);
     if (!fsPath) return c.json({ error: "Invalid path" }, 400);
     if (!existsSync(fsPath) || !statSync(fsPath).isFile()) {
       return c.json({ error: "File not found" }, 404);
@@ -264,7 +276,8 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
 
     const limit = Math.min(parseInt(c.req.query("limit") ?? "20", 10), 100);
 
-    const fsPath = resolveFilePath(path);
+    const projects = data.readProjects();
+    const fsPath = resolveFilePath(path, projects);
     if (!fsPath || !existsSync(fsPath)) {
       return c.json({ error: "File not found" }, 404);
     }
@@ -296,7 +309,8 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "Missing path or commit parameter" }, 400);
     }
 
-    const fsPath = resolveFilePath(path);
+    const projects = data.readProjects();
+    const fsPath = resolveFilePath(path, projects);
     if (!fsPath) return c.json({ error: "File not found" }, 404);
 
     const repoDir = getRepoDir(fsPath);

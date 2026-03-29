@@ -42,40 +42,11 @@ export interface SearchResult {
   path: string;
 }
 
-// Project Memory
-export interface ProjectMemoryFile {
-  name: string;
-  type: string;
-  summary: string;
-  path: string;
-  updatedAt: string;
-}
-
-export interface ProjectMemory {
-  projectId: string;
-  projectName: string;
-  projectPath: string;
-  hasMemoryMd: boolean;
-  memoryMdSize: number;
-  files: ProjectMemoryFile[];
-}
-
-// Recall Debug
-export interface RecallLayerResult {
-  name: string;
-  ran: boolean;
-  durationMs: number;
-  candidateCount: number;
-  exitedEarly?: boolean;
-  reason?: string;
-  matches: Array<{ source: string; name: string; snippet: string }>;
-}
-
-export interface RecallDebugResult {
-  query: string;
-  result: string;
-  totalMs: number;
-  layers: RecallLayerResult[];
+// Sessions
+export interface SessionEntry {
+  key: string;
+  sessionId: string;
+  isThread: boolean;
 }
 
 // Auth
@@ -86,6 +57,15 @@ export interface TokenStatus {
   expiresAt: number;
   expiresIn: string;
   refreshable: boolean;
+}
+
+export interface SyncRule {
+  name: string;
+  source: string;
+  target: string;
+  format: string;
+  key?: string;
+  extraKeys?: Record<string, string>;
 }
 
 // Config
@@ -136,7 +116,6 @@ export interface AnalyticsSummary {
   today: DailySummary;
   week: DailySummary;
   month: DailySummary;
-  allTime: DailySummary;
   dailyHistory: DailySummary[];
   usage: UsageQuota[];
 }
@@ -178,16 +157,7 @@ export interface TraceListItem {
   inputTokens: number | null;
   outputTokens: number | null;
   connector: string | null;
-  chatId: string | null;
-  messageId: string | null;
-  userMessage: string | null;
   createdAt: string;
-}
-
-// Traces — list response (with pagination)
-export interface TraceListResponse {
-  items: TraceListItem[];
-  hasMore: boolean;
 }
 
 // Traces — stats (server-side aggregation)
@@ -220,22 +190,12 @@ export interface TraceDetail {
     outputTokens: number | null;
     connector: string | null;
     chatId: string;
-    threadId: string | null;
-    messageId: string | null;
     senderName: string | null;
-    sessionId: string | null;
   };
   userMessage: string | null;
   toolCalls: ToolCallData[];
   jsonlAvailable: boolean;
   remiSpans: Array<{ op: string; ms: number }>;
-  timeline: Array<{
-    name: string;
-    startMs: number;
-    durationMs: number;
-    depth: number;
-    toolIndex?: number;
-  }>;
 }
 
 // Logs
@@ -255,16 +215,6 @@ export interface LogQueryResult {
   hasMore: boolean;
 }
 
-export interface LogStats {
-  total: number;
-  levels: { DEBUG: number; INFO: number; WARN: number; ERROR: number };
-  hourly: Array<{ hour: number; count: number; errors: number }>;
-  moduleCount: number;
-  topModules: string[];
-  lastError: string | null;
-  lastErrorModule: string | null;
-}
-
 // Monitor
 export interface MonitorStats {
   uptime: number;
@@ -279,6 +229,8 @@ export interface MonitorStats {
   tracesCount: number;
   logsCount: number;
   topOperations: Array<{ name: string; count: number; avgMs: number }>;
+  pm2Memory: number | null;
+  pm2Restarts: number | null;
 }
 
 // Scheduler
@@ -306,7 +258,6 @@ export interface SchedulerJobStatus {
   lastRun: CronJobLastRun | null;
   nextRunAt: string | null;
   consecutiveErrors: number;
-  config: Record<string, unknown> | null;
 }
 
 export interface SchedulerStatus {
@@ -319,8 +270,6 @@ export interface CronRunEntry {
   durationMs: number;
   error?: string;
   jobId?: string;
-  runId?: string;
-  phase?: string;
 }
 
 export interface DailySchedulerSummary {
@@ -337,6 +286,9 @@ export interface SymlinkMapping {
   target: string;
   type: "dir" | "file";
   status: "ok" | "broken" | "not_linked" | "missing_target";
+  category: "soul" | "global" | "memory" | "wiki" | "project";
+  projectAlias: string | null;
+  parentHash: string | null;
 }
 
 export interface SymlinksStatus {
@@ -345,14 +297,69 @@ export interface SymlinksStatus {
 }
 
 // Database
+export interface DbTableInfo {
+  name: string;
+  rowCount: number;
+  type: string;
+}
+
 export interface DbStats {
   dbPath: string;
   dbSizeBytes: number;
   journalMode: string;
-  tables: {
-    kv: { count: number };
-    embeddings: { count: number };
-  };
+  sqliteVersion: string;
+  vecEnabled: boolean;
+  tables: DbTableInfo[];
+  totalTables: number;
+  totalRows: number;
+}
+
+export interface DbColumnInfo {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: boolean;
+  dflt_value: string | null;
+  pk: boolean;
+}
+
+export interface DbIndexInfo {
+  name: string;
+  unique: boolean;
+  columns: string[];
+  sql: string | null;
+}
+
+export interface DbTableSchema {
+  name: string;
+  type: "table" | "virtual";
+  sql: string;
+  columns: DbColumnInfo[];
+  indexes: DbIndexInfo[];
+}
+
+export interface DbSchemaResponse {
+  tables: DbTableSchema[];
+}
+
+export interface DbTableDataResponse {
+  tableName: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DbQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated?: boolean;
+  executionMs: number;
+  type: "query" | "execute";
+  changes?: number;
+  error?: string;
 }
 
 export interface KvEntry {
@@ -373,7 +380,6 @@ export interface ConversationSummary {
   id: string;
   chatId: string;
   threadId: string | null;
-  sessionId?: string | null;
   topic: string;
   messageCount: number;
   tokenCount: number;
@@ -399,7 +405,6 @@ export interface ChatMessage {
     duration: number;
     toolCount?: number;
     sessionId?: string;
-    traceId?: number;
   };
 }
 
@@ -408,14 +413,6 @@ export interface StepItem {
   content: string;
   name?: string;
   thinking?: string;  // merged thinking before tool (if type=tool)
-}
-
-export interface ChatInfo {
-  chatId: string;
-  name: string;
-  conversationCount: number;
-  messageCount: number;
-  isP2P: boolean;
 }
 
 // Missions
@@ -438,25 +435,6 @@ export interface MissionItem {
   totalTokens: number;
   totalCost: number;
   totalDuration: number;
-}
-
-export interface MissionDetailItem extends MissionItem {
-  contract: {
-    cases: Array<{
-      id: string;
-      description: string;
-      input: string;
-      expectedOutput: string;
-      type: "unit" | "integration" | "e2e";
-    }>;
-    acceptanceCriteria: string[];
-    verificationResults?: {
-      caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;
-      overallPassed: boolean;
-      verifiedAt: string;
-    };
-  } | null;
-  outputDir: string | null;
 }
 
 export interface MissionStats {
@@ -485,76 +463,4 @@ export interface WikiGitEntry {
   message: string;
   author: string;
   date: string;
-}
-
-// Skills
-export interface SkillInfo {
-  name: string;
-  description: string;
-  hasSchedule: boolean;
-  cron?: string;
-  outputDir?: string;
-  reportCount?: number;
-  lastReportDate?: string;
-}
-
-export interface SkillFileNode {
-  name: string;
-  path: string;
-  type: "file" | "directory";
-  children?: SkillFileNode[];
-}
-
-// Agents
-export interface AgentRunEntry {
-  ts: string;
-  agent: string;
-  model: string;
-  exit: number;
-  duration_ms: number;
-  stdout_len: number;
-  stderr_len: number;
-}
-
-export interface AgentInfo {
-  name: string;
-  cwd: string;
-  model: string;
-  trigger: "debounce" | "cron" | "on-demand";
-  cron?: string;
-  debounce_ms?: number;
-  timeoutMs: number;
-  mcp: boolean;
-  description: string;
-  permissions: { mcpTools: string[]; cliTools: string[] };
-  skills: string[];
-  lastRun: AgentRunEntry | null;
-  runsToday: number;
-  successRate7d: number;
-}
-
-export interface AgentDetail {
-  claudeMd: string;
-  settingsJson: string;
-  skills: Array<{ name: string; content: string }>;
-}
-
-// MCP Scopes
-export interface McpScope {
-  id: string;
-  label: string;
-  path: string;
-  mcpJsonPath: string;
-  serverCount: number;
-  hasConfig: boolean;
-}
-
-export interface McpScopeDetail {
-  raw: string;
-  servers: Array<{
-    name: string;
-    command: string;
-    args: string[];
-    envKeys: string[];
-  }>;
 }
