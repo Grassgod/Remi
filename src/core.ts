@@ -29,7 +29,7 @@ import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
 import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
-import { insertConversationProcessing, completeConversation, failConversation } from "./db/index.js";
+import { insertConversationProcessing, completeConversation, failConversation, getDb } from "./db/index.js";
 import * as sessDb from "./db/sessions.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
@@ -177,6 +177,18 @@ export class Remi {
     return null;
   }
 
+  /** Look up project cwd from DB by chatId. */
+  private _getProjectCwd(chatId: string): string | null {
+    try {
+      const row = getDb()
+        .query("SELECT cwd FROM projects WHERE chat_id = ? AND (deleted = 0 OR deleted IS NULL) LIMIT 1")
+        .get(chatId) as { cwd: string } | null;
+      return row?.cwd ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   // ── Message handling (the core loop) ─────────────────────
 
   async handleMessage(msg: IncomingMessage): Promise<AgentResponse> {
@@ -277,7 +289,9 @@ export class Remi {
 
     const sessionKey = this._resolveSessionKey(msg);
     const botProfile = this._resolveBotProfile(msg);
-    const cwd = botProfile?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
+    // Project cwd from DB (shared with remi-web, no restart needed)
+    const projectCwd = this._getProjectCwd(msg.chatId);
+    const cwd = projectCwd || botProfile?.cwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     const sessRow = sessDb.getSession(sessionKey);
     const existingSessionId = sessRow?.session_id || undefined;
