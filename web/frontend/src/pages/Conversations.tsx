@@ -57,7 +57,7 @@ function cleanUserMessage(text: string): string {
 
 // ── Tool Icons (SVG, from Board MissionDetail) ────────
 
-const TOOL_SVGS: Record<string, JSX.Element> = {
+const TOOL_SVGS: Record<string, React.ReactElement> = {
   Bash: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="2" y="3" width="12" height="9" rx="1.5"/><path d="M5 7l2 1.5L5 10"/><line x1="9" y1="10" x2="12" y2="10"/></svg>,
   Write: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M9.5 4.5l2 2"/></svg>,
   Edit: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M9.5 4.5l2 2"/></svg>,

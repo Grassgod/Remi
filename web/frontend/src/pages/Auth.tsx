@@ -148,7 +148,7 @@ export function Auth() {
                       <span className="text-sm font-semibold text-foreground">{t.service}</span>
                       <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{t.type}</span>
                       {t.refreshable && (
-                        <RefreshCw className="h-3 w-3 text-muted-foreground" title="Auto-refreshable" />
+                        <RefreshCw className="h-3 w-3 text-muted-foreground" />
                       )}
                     </div>
                     <span className={cn("rounded-sm border px-2.5 py-0.5 font-mono text-[9px] uppercase tracking-wide", sc.border, sc.bg, sc.text)}>

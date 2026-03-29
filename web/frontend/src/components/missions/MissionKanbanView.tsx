@@ -12,9 +12,10 @@ import {
 
 interface MissionKanbanViewProps {
   missions: MissionItem[];
+  onMissionClick?: (mission: MissionItem) => void;
 }
 
-export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
+export function MissionKanbanView({ missions, onMissionClick }: MissionKanbanViewProps) {
   const [, navigate] = useLocation();
 
   const columns = KANBAN_COLUMNS.map(key => {
@@ -55,7 +56,7 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
                   col.items.map(mission => (
                     <div
                       key={mission.id}
-                      onClick={() => navigate(`/missions/${mission.id}`)}
+                      onClick={() => onMissionClick ? onMissionClick(mission) : navigate(`/missions/${mission.id}`)}
                       className="cursor-pointer rounded-md border border-border bg-card p-3 transition-all hover:border-primary/30 hover:bg-accent/30"
                     >
                       <div className="line-clamp-2 text-[13px] font-medium text-foreground">
@@ -118,7 +119,7 @@ export function MissionKanbanView({ missions }: MissionKanbanViewProps) {
             {otherItems.map(mission => (
               <div
                 key={mission.id}
-                onClick={() => navigate(`/missions/${mission.id}`)}
+                onClick={() => onMissionClick ? onMissionClick(mission) : navigate(`/missions/${mission.id}`)}
                 className="flex cursor-pointer items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5 transition-all hover:border-primary/30 hover:bg-accent/30"
               >
                 <span

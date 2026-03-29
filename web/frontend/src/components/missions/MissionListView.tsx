@@ -12,9 +12,10 @@ import {
 
 interface MissionListViewProps {
   missions: MissionItem[];
+  onMissionClick?: (mission: MissionItem) => void;
 }
 
-export function MissionListView({ missions }: MissionListViewProps) {
+export function MissionListView({ missions, onMissionClick }: MissionListViewProps) {
   const [, navigate] = useLocation();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
@@ -65,7 +66,7 @@ export function MissionListView({ missions }: MissionListViewProps) {
               {items.map(mission => (
                 <div
                   key={mission.id}
-                  onClick={() => navigate(`/missions/${mission.id}`)}
+                  onClick={() => onMissionClick ? onMissionClick(mission) : navigate(`/missions/${mission.id}`)}
                   className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-all hover:border-primary/30 hover:bg-accent/30"
                   style={{ borderLeftWidth: "3px", borderLeftColor: cfg.color }}
                 >

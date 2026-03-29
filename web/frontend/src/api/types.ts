@@ -152,6 +152,7 @@ export interface AnalyticsSummary {
   today: DailySummary;
   week: DailySummary;
   month: DailySummary;
+  allTime?: DailySummary;
   dailyHistory: DailySummary[];
   usage: UsageQuota[];
 }
@@ -193,6 +194,8 @@ export interface TraceListItem {
   inputTokens: number | null;
   outputTokens: number | null;
   connector: string | null;
+  chatId?: string;
+  userMessage?: string;
   createdAt: string;
 }
 
@@ -227,11 +230,23 @@ export interface TraceDetail {
     connector: string | null;
     chatId: string;
     senderName: string | null;
+    threadId?: string;
+    messageId?: string;
+    sessionId?: string;
   };
   userMessage: string | null;
   toolCalls: ToolCallData[];
   jsonlAvailable: boolean;
   remiSpans: Array<{ op: string; ms: number }>;
+  timeline: TraceTimelineEntry[];
+}
+
+export interface TraceTimelineEntry {
+  name: string;
+  startMs: number;
+  durationMs: number;
+  depth: number;
+  toolIndex?: number;
 }
 
 // Logs
@@ -291,6 +306,7 @@ export interface SchedulerJobStatus {
   enabled: boolean;
   handler: string;
   schedule: CronSchedule;
+  config?: Record<string, unknown>;
   lastRun: CronJobLastRun | null;
   nextRunAt: string | null;
   consecutiveErrors: number;
@@ -306,6 +322,7 @@ export interface CronRunEntry {
   durationMs: number;
   error?: string;
   jobId?: string;
+  phase?: string;
 }
 
 export interface DailySchedulerSummary {
@@ -416,6 +433,7 @@ export interface ConversationSummary {
   id: string;
   chatId: string;
   threadId: string | null;
+  sessionId?: string;
   topic: string;
   messageCount: number;
   tokenCount: number;
@@ -441,6 +459,7 @@ export interface ChatMessage {
     duration: number;
     toolCount?: number;
     sessionId?: string;
+    traceId?: number;
   };
 }
 
@@ -499,4 +518,151 @@ export interface WikiGitEntry {
   message: string;
   author: string;
   date: string;
+}
+
+// ── Memory – Recall Debug ──
+
+export interface RecallLayerResult {
+  name: string;
+  ran: boolean;
+  durationMs: number;
+  candidateCount: number;
+  exitedEarly?: boolean;
+  reason?: string;
+  matches: Array<{ source: string; name: string; snippet: string }>;
+}
+
+export interface RecallDebugResult {
+  query: string;
+  result: string;
+  totalMs: number;
+  layers: RecallLayerResult[];
+}
+
+// ── Memory – Project Memories ──
+
+export interface ProjectMemory {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  hasMemoryMd: boolean;
+  memoryMdSize: number;
+  files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }>;
+}
+
+// ── Traces – List Response ──
+
+export interface TraceListResponse {
+  items: TraceListItem[];
+  hasMore: boolean;
+}
+
+// ── Logs – Stats ──
+
+export interface LogStats {
+  total: number;
+  levels: { DEBUG: number; INFO: number; WARN: number; ERROR: number };
+  hourly: Array<{ hour: number; count: number; errors: number }>;
+  moduleCount: number;
+  topModules: string[];
+  lastError: string | null;
+  lastErrorModule: string | null;
+}
+
+// ── Conversations – Chat Info ──
+
+export interface ChatInfo {
+  chatId: string;
+  name: string;
+  conversationCount: number;
+  messageCount: number;
+  isP2P: boolean;
+}
+
+// ── Missions – Detail ──
+
+export interface MissionDetailItem extends MissionItem {
+  contract: {
+    acceptanceCriteria: string[];
+    verificationResults?: {
+      caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;
+      overallPassed: boolean;
+      verifiedAt: string;
+    };
+  } | null;
+}
+
+// ── Skills ──
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  hasSchedule: boolean;
+  cron?: string;
+  outputDir?: string;
+  reportCount?: number;
+  lastReportDate?: string;
+}
+
+export interface SkillFileNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: SkillFileNode[];
+}
+
+// ── Agents ──
+
+export interface AgentInfo {
+  name: string;
+  cwd: string;
+  model: string;
+  trigger: string;
+  cron?: string;
+  debounce_ms?: number;
+  timeoutMs: number;
+  mcp: boolean;
+  description: string;
+  permissions: { mcpTools: string[]; cliTools: string[] };
+  skills: string[];
+  lastRun: AgentRunEntry | null;
+  runsToday: number;
+  successRate7d: number;
+}
+
+export interface AgentDetail {
+  claudeMd: string;
+  settingsJson: string;
+  skills: Array<{ name: string; content: string }>;
+}
+
+export interface AgentRunEntry {
+  ts: string;
+  agent: string;
+  model: string;
+  exit: number;
+  duration_ms: number;
+  stdout_len: number;
+  stderr_len: number;
+}
+
+// ── MCP ──
+
+export interface McpScope {
+  id: string;
+  label: string;
+  path: string;
+  mcpJsonPath: string;
+  serverCount: number;
+  hasConfig: boolean;
+}
+
+export interface McpScopeDetail {
+  raw: string;
+  servers: Array<{
+    name: string;
+    command: string;
+    args: string[];
+    envKeys: string[];
+  }>;
 }

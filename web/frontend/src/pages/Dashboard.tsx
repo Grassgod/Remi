@@ -319,7 +319,7 @@ export function Dashboard() {
                     <HealthRow
                       icon={<Database className="h-3.5 w-3.5" />}
                       label="Database"
-                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "kv")?.rowCount : dbStats.tables?.kv?.count) ?? 0} KV · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "embeddings")?.rowCount : dbStats.tables?.embeddings?.count) ?? 0} embeds`}
+                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "kv")?.rowCount : (dbStats.tables as any)?.kv?.count) ?? 0} KV · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "embeddings")?.rowCount : (dbStats.tables as any)?.embeddings?.count) ?? 0} embeds`}
                       ok
                     />
                   )}
