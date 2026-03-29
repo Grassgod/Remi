@@ -40,6 +40,7 @@ import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
+import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../src/project/store.js";
 
 // ── Exported start/stop ────────────────────────────────
@@ -89,6 +90,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerAuthHandlers(app, data);
   registerConfigHandlers(app, data);
   registerProjectHandlers(app, data);
+  registerGroupHandlers(app);
   registerAnalyticsHandlers(app, data);
   registerTracesHandlers(app, data);
   registerLogsHandlers(app, data);
