@@ -8,26 +8,25 @@ import { ScrollArea } from "../components/ui/scroll-area";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import { SkillTreeNode } from "../components/SkillTreeNode";
 import {
-  Bot, RefreshCw, ChevronLeft, Play, Timer,
+  Bot, RefreshCw, ChevronLeft, Timer,
   AlertTriangle, Activity, Check, XCircle,
-  Cpu, Zap, Clock, Server,
+  Cpu, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAgentsStore } from "../stores/agents";
 import * as api from "../api/client";
-import type { AgentInfo, AgentRunEntry, McpServerInfo, SkillFileNode } from "../api/types";
+import type { AgentInfo, AgentRunEntry, SkillFileNode } from "../api/types";
 
 export function Agents() {
   const {
-    agents, selectedAgent, detail, runs, mcpServers,
-    loading, fetchAgents, selectAgent, fetchMcpServers,
+    agents, selectedAgent, detail, runs,
+    loading, fetchAgents, selectAgent,
     saveClaudeMd, saveSettings, saveSkill,
   } = useAgentsStore();
 
   useEffect(() => {
     selectAgent(null);
     fetchAgents();
-    fetchMcpServers();
   }, []);
 
   const totalErrors7d = agents.reduce((s, a) => s + (100 - a.successRate7d) * a.runsToday / 100, 0);
@@ -46,7 +45,6 @@ export function Agents() {
           agent={agent!}
           detail={detail}
           runs={runs}
-          mcpServers={mcpServers}
           loading={loading}
           onBack={() => selectAgent(null)}
           onSaveClaudeMd={(content) => saveClaudeMd(selectedAgent, content)}
@@ -90,21 +88,6 @@ export function Agents() {
         </CardContent>
       </Card>
 
-      {/* MCP Servers */}
-      {mcpServers.length > 0 && (
-        <Card>
-          <CardHeader className="space-y-0 pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Server className="h-4 w-4 text-muted-foreground" />
-              MCP Servers
-              <Badge variant="secondary" className="text-[10px]">{mcpServers.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <McpTable servers={mcpServers} />
-          </CardContent>
-        </Card>
-      )}
     </Layout>
   );
 }
@@ -200,22 +183,16 @@ function AgentCard({ agent, onClick }: { agent: AgentInfo; onClick: () => void }
 
 // ── Agent Detail View ─────────────────────────────────
 
-function AgentDetailView({ agent, detail, runs, mcpServers, loading, onBack, onSaveClaudeMd, onSaveSettings, onSaveSkill }: {
+function AgentDetailView({ agent, detail, runs, loading, onBack, onSaveClaudeMd, onSaveSettings, onSaveSkill }: {
   agent: AgentInfo;
   detail: import("../api/types").AgentDetail;
   runs: AgentRunEntry[];
-  mcpServers: McpServerInfo[];
   loading: boolean;
   onBack: () => void;
   onSaveClaudeMd: (content: string) => Promise<void>;
   onSaveSettings: (content: string) => Promise<void>;
   onSaveSkill: (skillName: string, content: string) => Promise<void>;
 }) {
-  // Resolve MCP tools to their servers
-  const agentMcpServers = mcpServers.filter(s =>
-    agent.permissions.mcpTools.some(t => t.startsWith(`mcp__${s.name.replace(/-/g, "-")}__`))
-  );
-
   return (
     <>
       {/* Breadcrumb */}
@@ -265,19 +242,6 @@ function AgentDetailView({ agent, detail, runs, mcpServers, loading, onBack, onS
             ))}
           </div>
 
-          {/* MCP Servers used by this agent */}
-          {agentMcpServers.length > 0 && (
-            <div className="mt-3 border-t border-border pt-3">
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">MCP Servers</div>
-              {agentMcpServers.map(s => (
-                <div key={s.name} className="flex items-center gap-2 text-xs">
-                  <Server className="h-3 w-3 text-muted-foreground" />
-                  <span className="font-mono font-medium">{s.name}</span>
-                  <span className="text-muted-foreground">{s.command} {s.args.join(" ")}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -435,33 +399,6 @@ function RunHistoryTable({ runs }: { runs: AgentRunEntry[] }) {
             </TableCell>
             <TableCell className="text-right font-mono text-xs text-muted-foreground">{formatDuration(run.duration_ms)}</TableCell>
             <TableCell className="hidden text-right font-mono text-xs text-muted-foreground sm:table-cell">{run.stdout_len}b</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
-
-// ── MCP Table ─────────────────────────────────────────
-
-function McpTable({ servers }: { servers: McpServerInfo[] }) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>Command</TableHead>
-          <TableHead className="hidden sm:table-cell">Args</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {servers.map(s => (
-          <TableRow key={s.name}>
-            <TableCell className="font-mono text-xs font-medium">{s.name}</TableCell>
-            <TableCell className="font-mono text-xs text-muted-foreground">{s.command}</TableCell>
-            <TableCell className="hidden max-w-[300px] truncate font-mono text-xs text-muted-foreground sm:table-cell" title={s.args.join(" ")}>
-              {s.args.join(" ")}
-            </TableCell>
           </TableRow>
         ))}
       </TableBody>

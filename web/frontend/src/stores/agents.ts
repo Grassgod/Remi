@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AgentInfo, AgentDetail, AgentRunEntry, McpServerInfo } from "../api/types";
+import type { AgentInfo, AgentDetail, AgentRunEntry } from "../api/types";
 import * as api from "../api/client";
 
 interface AgentsState {
@@ -7,13 +7,11 @@ interface AgentsState {
   selectedAgent: string | null;
   detail: AgentDetail | null;
   runs: AgentRunEntry[];
-  mcpServers: McpServerInfo[];
   loading: boolean;
 
   fetchAgents: () => Promise<void>;
   selectAgent: (name: string | null) => Promise<void>;
   fetchRuns: (name: string) => Promise<void>;
-  fetchMcpServers: () => Promise<void>;
   saveClaudeMd: (name: string, content: string) => Promise<void>;
   saveSettings: (name: string, content: string) => Promise<void>;
   saveSkill: (name: string, skillName: string, content: string) => Promise<void>;
@@ -24,7 +22,6 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
   selectedAgent: null,
   detail: null,
   runs: [],
-  mcpServers: [],
   loading: false,
 
   fetchAgents: async () => {
@@ -53,13 +50,6 @@ export const useAgentsStore = create<AgentsState>((set, get) => ({
     try {
       const runs = await api.getAgentRuns(name);
       set({ runs });
-    } catch { /* non-critical */ }
-  },
-
-  fetchMcpServers: async () => {
-    try {
-      const mcpServers = await api.getMcpServers();
-      set({ mcpServers });
     } catch { /* non-critical */ }
   },
 

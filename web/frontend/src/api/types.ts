@@ -539,12 +539,6 @@ export interface AgentDetail {
   skills: Array<{ name: string; content: string }>;
 }
 
-export interface McpServerInfo {
-  name: string;
-  command: string;
-  args: string[];
-}
-
 // MCP Scopes
 export interface McpScope {
   id: string;

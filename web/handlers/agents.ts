@@ -72,8 +72,4 @@ export function registerAgentsHandlers(app: Hono, data: RemiData) {
     return c.json({ content });
   });
 
-  // List MCP servers
-  app.get("/api/v1/mcp", (c) => {
-    return c.json(data.listMcpServers());
-  });
 }

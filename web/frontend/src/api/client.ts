@@ -254,9 +254,6 @@ export const getAgentSkillTree = (agentName: string, skillName: string) =>
   request<import("./types").SkillFileNode[]>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/tree`);
 export const getAgentSkillFile = (agentName: string, skillName: string, path = "SKILL.md") =>
   request<{ content: string }>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/file?path=${encodeURIComponent(path)}`);
-export const getMcpServers = () =>
-  request<import("./types").McpServerInfo[]>("/api/v1/mcp");
-
 // MCP
 export const getMcpScopes = () =>
   request<import("./types").McpScope[]>("/api/v1/mcp/scopes");
