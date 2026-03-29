@@ -35,9 +35,13 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
       return c.json({ error: `Project "${input.alias}" already exists` }, 409);
     }
 
-    const previousChatId = existing?.chatId ?? null;
+    // Look for chatId: current record → kv (from deleted project)
+    const { kvGet, kvDelete } = require("../../src/db/index.js");
+    const previousChatId = existing?.chatId
+      ?? kvGet(`deleted_project_chat:${input.alias}`)
+      ?? null;
 
-    // If there's a previous attempt, delete it first (chatId preserved above)
+    // If there's a previous attempt, delete it first
     if (existing) {
       store.delete(input.alias);
     }
@@ -47,6 +51,7 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
     // Restore previous chatId so step 1 skips group creation
     if (previousChatId) {
       store.updateField(input.alias, "chat_id", previousChatId);
+      kvDelete(`deleted_project_chat:${input.alias}`);
     }
 
     // Run async — don't await

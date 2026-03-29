@@ -46,11 +46,19 @@ export function registerProjectHandlers(app: Hono, data: RemiData) {
     return c.json({ ok: true });
   });
 
-  // Delete
+  // Delete — preserve chatId for potential re-init
   app.delete("/api/v1/projects/:alias", (c) => {
     const alias = decodeURIComponent(c.req.param("alias"));
-    const ok = store.delete(alias);
-    if (!ok) return c.json({ error: "not found" }, 404);
+    const project = store.getById(alias);
+    if (!project) return c.json({ error: "not found" }, 404);
+
+    // Save chatId so re-init can reuse the Feishu group
+    if (project.chatId) {
+      const { kvSet } = require("../../src/db/index.js");
+      kvSet(`deleted_project_chat:${alias}`, project.chatId);
+    }
+
+    store.delete(alias);
     data.deleteProject(alias);
     return c.json({ ok: true });
   });
