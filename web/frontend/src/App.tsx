@@ -3,19 +3,24 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { Dashboard } from "./pages/Dashboard";
 import { Conversations } from "./pages/Conversations";
 import { Missions } from "./pages/Missions";
+import { MissionDetail } from "./pages/MissionDetail";
 import { Memory } from "./pages/Memory";
 import { MemoryEntity } from "./pages/MemoryEntity";
 import { MemoryDaily } from "./pages/MemoryDaily";
 import { Wiki } from "./pages/Wiki";
+import { Skills } from "./pages/Skills";
+import { Mcp } from "./pages/Mcp";
 import { Analytics } from "./pages/Analytics";
 import { Traces } from "./pages/Traces";
 import { Logs } from "./pages/Logs";
 import { Scheduler } from "./pages/Scheduler";
-import { Sessions } from "./pages/Sessions";
+import { Agents } from "./pages/Agents";
 import { Projects } from "./pages/Projects";
 import { BotMenu } from "./pages/BotMenu";
 import { Config } from "./pages/Config";
 import { Auth } from "./pages/Auth";
+import { Database } from "./pages/Database";
+import { Symlinks } from "./pages/Symlinks";
 import { Layout } from "./components/Layout";
 
 function NotFound() {
@@ -40,11 +45,14 @@ export function App() {
 
         {/* Workspace */}
         <Route path="/conversations" component={Conversations} />
+        <Route path="/missions/:id" component={MissionDetail} />
         <Route path="/missions" component={Missions} />
         <Route path="/memory" component={Memory} />
         <Route path="/memory/entity/:type/:name" component={MemoryEntity} />
         <Route path="/memory/daily/:date" component={MemoryDaily} />
         <Route path="/wiki" component={Wiki} />
+        <Route path="/skills" component={Skills} />
+        <Route path="/mcp" component={Mcp} />
 
         {/* Observability */}
         <Route path="/analytics" component={Analytics} />
@@ -53,17 +61,18 @@ export function App() {
         <Route path="/scheduler" component={Scheduler} />
 
         {/* System */}
-        <Route path="/sessions" component={Sessions} />
+        <Route path="/agents" component={Agents} />
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 
         <Route path="/auth" component={Auth} />
+        <Route path="/database" component={Database} />
 
         {/* Redirects for old routes */}
+        <Route path="/sessions">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/monitor">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/database">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/config" component={Config} />
-        <Route path="/symlinks">{() => { window.location.hash = "#/"; return null; }}</Route>
+        <Route path="/symlinks" component={Symlinks} />
 
         <Route component={NotFound} />
       </Switch>

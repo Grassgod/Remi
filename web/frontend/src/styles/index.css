@@ -7,6 +7,7 @@
    ═══════════════════════════════════════════ */
 
 :root {
+  color-scheme: light dark;
   --radius: 0.625rem;
 
   /* Light mode */
@@ -143,4 +144,11 @@ body {
 @media (min-width: 769px) {
   .mobile-only { display: none !important; }
   .desktop-only { display: flex !important; }
+}
+
+/* Donut legend responsive gap */
+@media (max-width: 639px) {
+  .donut-legend {
+    gap: 4px 10px !important;
+  }
 }

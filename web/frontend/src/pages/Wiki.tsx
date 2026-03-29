@@ -10,8 +10,8 @@ import {
   GitCommit, Clock, File,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { FrontmatterDocument } from "../components/FrontmatterDocument";
 import * as api from "../api/client";
+import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import type { WikiFileNode, WikiFileContent, WikiGitEntry } from "../api/types";
 
 type FileNode = WikiFileNode;
@@ -127,7 +127,14 @@ export function Wiki() {
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <FrontmatterDocument body={fileContent.content} />
+                    <MarkdownFileViewer
+                      content={fileContent.content}
+                      onSave={async (content) => {
+                        if (!selectedPath) return;
+                        await api.putWikiFile(selectedPath, content);
+                        setFileContent({ ...fileContent, content });
+                      }}
+                    />
                   </CardContent>
                 </Card>
 

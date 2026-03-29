@@ -1,0 +1,103 @@
+<h2>Symlink 可视化展示形式</h2>
+<p class="subtitle">选择你偏好的映射关系展示方式</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>流向图 (Flow Diagram)</h3>
+      <p>左右两列：Source 在左，Target 在右，用连线表示映射关系。按分组（Projects / Globals / Wiki）折叠展示。一眼看清文件系统布局。</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:13px">
+          <div style="display:flex;gap:24px;align-items:flex-start">
+            <div style="flex:1;background:#1a1a2e;padding:12px;border-radius:8px;border:1px solid #333">
+              <div style="color:#888;font-size:11px;margin-bottom:8px">SOURCE (Claude)</div>
+              <div style="color:#6ee7b7;margin:4px 0">~/.claude/CLAUDE.md</div>
+              <div style="color:#6ee7b7;margin:4px 0">~/.claude/skills/</div>
+              <div style="color:#93c5fd;margin:4px 0">~/.claude/projects/-data00-.../</div>
+              <div style="color:#93c5fd;margin:4px 0">~/.claude/projects/-data00-.../memory/</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:12px;padding:8px 0;color:#666">
+              <div>→</div><div>→</div><div>→</div><div>→</div>
+            </div>
+            <div style="flex:1;background:#1a1a2e;padding:12px;border-radius:8px;border:1px solid #333">
+              <div style="color:#888;font-size:11px;margin-bottom:8px">TARGET (Remi)</div>
+              <div style="color:#6ee7b7;margin:4px 0">~/.remi/soul.md</div>
+              <div style="color:#6ee7b7;margin:4px 0">~/.remi/skills/</div>
+              <div style="color:#93c5fd;margin:4px 0">~/.remi/projects/-data00-.../</div>
+              <div style="color:#93c5fd;margin:4px 0">~/.remi/memory/</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>增强表格 (Enhanced Table)</h3>
+      <p>恢复原有表格，但增加：分组标签、路径缩写 hover 全路径、状态颜色编码、inline 修复按钮。实用为主。</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-body" style="padding:16px;font-family:monospace;font-size:12px">
+          <table style="width:100%;border-collapse:collapse;color:#ccc">
+            <tr style="color:#888;font-size:11px;border-bottom:1px solid #333">
+              <td style="padding:6px">GROUP</td><td>SOURCE</td><td></td><td>TARGET</td><td>STATUS</td>
+            </tr>
+            <tr style="border-bottom:1px solid #222">
+              <td style="padding:6px"><span style="background:#2d1b69;padding:2px 6px;border-radius:4px;font-size:10px">Global</span></td>
+              <td style="color:#93c5fd">~/.claude/CLAUDE.md</td>
+              <td style="color:#666">→</td>
+              <td style="color:#6ee7b7">~/.remi/soul.md</td>
+              <td><span style="color:#22c55e">● OK</span></td>
+            </tr>
+            <tr style="border-bottom:1px solid #222">
+              <td style="padding:6px"><span style="background:#2d1b69;padding:2px 6px;border-radius:4px;font-size:10px">Global</span></td>
+              <td style="color:#93c5fd">~/.claude/skills/</td>
+              <td style="color:#666">→</td>
+              <td style="color:#6ee7b7">~/.remi/skills/</td>
+              <td><span style="color:#22c55e">● OK</span></td>
+            </tr>
+            <tr style="border-bottom:1px solid #222">
+              <td style="padding:6px"><span style="background:#1b3a69;padding:2px 6px;border-radius:4px;font-size:10px">Project</span></td>
+              <td style="color:#93c5fd">~/.claude/projects/-data00-…/</td>
+              <td style="color:#666">→</td>
+              <td style="color:#6ee7b7">~/.remi/projects/-data00-…/</td>
+              <td><span style="color:#eab308">● Broken</span></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>混合模式 (Flow + Table)</h3>
+      <p>顶部用流向图展示分组概览（Globals / Projects / Memory），点击某个分组展开为详细表格。兼顾全貌和细节。</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-body" style="padding:16px;font-size:13px">
+          <div style="display:flex;gap:16px;margin-bottom:16px">
+            <div style="flex:1;background:#1a2e1a;padding:10px;border-radius:8px;border:1px solid #2d5a2d;text-align:center">
+              <div style="font-size:20px">🔗</div>
+              <div style="color:#6ee7b7;font-weight:bold">Globals</div>
+              <div style="color:#888;font-size:11px">2 links · all OK</div>
+            </div>
+            <div style="flex:1;background:#2e1a1a;padding:10px;border-radius:8px;border:1px solid #5a2d2d;text-align:center">
+              <div style="font-size:20px">📁</div>
+              <div style="color:#fca5a5;font-weight:bold">Projects</div>
+              <div style="color:#888;font-size:11px">3 links · 1 broken</div>
+            </div>
+            <div style="flex:1;background:#1a1a2e;padding:10px;border-radius:8px;border:1px solid #2d2d5a;text-align:center">
+              <div style="font-size:20px">🧠</div>
+              <div style="color:#93c5fd;font-weight:bold">Memory</div>
+              <div style="color:#888;font-size:11px">1 link · OK</div>
+            </div>
+          </div>
+          <div style="color:#888;font-size:11px;text-align:center">↓ 点击分组展开详细表格 ↓</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

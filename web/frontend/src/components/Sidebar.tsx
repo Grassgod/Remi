@@ -1,7 +1,8 @@
 import { useLocation } from "wouter";
 import {
   LayoutDashboard, MessageSquare, KanbanSquare, Brain, BookOpen,
-  BarChart3, Activity, FileText, Clock, Monitor, FolderOpen, Menu, Shield, Settings,
+  BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap, Bot, Shield, Plug,
+  Database, Settings, Link2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "./ui/scroll-area";
@@ -16,6 +17,11 @@ const navItems = [
     { path: "/memory", label: "Memory", icon: Brain },
     { path: "/wiki", label: "Wiki", icon: BookOpen },
   ]},
+  { group: "AI Engine", items: [
+    { path: "/agents", label: "Agents", icon: Bot },
+    { path: "/skills", label: "Skills", icon: Zap },
+    { path: "/mcp", label: "MCP", icon: Plug },
+  ]},
   { group: "Observability", items: [
     { path: "/analytics", label: "Analytics", icon: BarChart3 },
     { path: "/traces", label: "Traces", icon: Activity },
@@ -23,7 +29,8 @@ const navItems = [
     { path: "/scheduler", label: "Scheduler", icon: Clock },
   ]},
   { group: "System", items: [
-    { path: "/sessions", label: "Sessions", icon: Monitor },
+    { path: "/database", label: "Database", icon: Database },
+    { path: "/symlinks", label: "Symlinks", icon: Link2 },
     { path: "/projects", label: "Projects", icon: FolderOpen },
     { path: "/config", label: "Config", icon: Settings },
     { path: "/bot-menu", label: "Bot Menu", icon: Menu },
@@ -65,7 +72,15 @@ export function Sidebar({ daemonPid }: { daemonPid: number | null }) {
               return (
                 <div
                   key={item.path}
-                  onClick={() => setLocation(item.path)}
+                  onClick={() => {
+                    if (active) {
+                      // Force re-navigation to reset page state (e.g. detail → list)
+                      setLocation("/");
+                      setTimeout(() => setLocation(item.path), 0);
+                    } else {
+                      setLocation(item.path);
+                    }
+                  }}
                   className={cn(
                     "relative flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors",
                     active

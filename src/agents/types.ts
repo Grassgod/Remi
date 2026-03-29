@@ -9,6 +9,7 @@ export interface AgentConfig {
   debounce_ms?: number;
   cron?: string;
   timeoutMs?: number; // default 600_000 (10min)
+  mcp?: boolean; // load --mcp-config, default true
 }
 
 export interface AgentRunResult {

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { EntitySummary, EntityDetail, SearchResult, DailyLogEntry } from "../api/types";
+import type { EntitySummary, EntityDetail, SearchResult, DailyLogEntry, RecallDebugResult, ProjectMemory } from "../api/types";
 import * as api from "../api/client";
 
 interface MemoryState {
@@ -11,6 +11,18 @@ interface MemoryState {
   searchResults: SearchResult[];
   loading: boolean;
 
+  // Project memories
+  projectMemories: ProjectMemory[];
+  projectFileContent: string;
+
+  // Recall debug
+  recallResult: RecallDebugResult | null;
+  recallLoading: boolean;
+
+  // Tree filter
+  activeView: string;
+  activeScope: string | null;
+
   fetchEntities: () => Promise<void>;
   fetchEntity: (type: string, name: string) => Promise<void>;
   fetchGlobalMemory: () => Promise<void>;
@@ -19,6 +31,11 @@ interface MemoryState {
   fetchDaily: (date: string) => Promise<void>;
   search: (q: string) => Promise<void>;
   deleteEntity: (type: string, name: string) => Promise<void>;
+  runRecall: (query: string, cwd?: string) => Promise<void>;
+  fetchProjectMemories: () => Promise<void>;
+  fetchProjectFile: (projectId: string, path: string) => Promise<void>;
+  setActiveView: (view: string) => void;
+  setActiveScope: (scope: string | null) => void;
 }
 
 export const useMemoryStore = create<MemoryState>((set, get) => ({
@@ -29,6 +46,12 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
   dailyContent: "",
   searchResults: [],
   loading: false,
+  projectMemories: [],
+  projectFileContent: "",
+  recallResult: null,
+  recallLoading: false,
+  activeView: "entities",
+  activeScope: null,
 
   fetchEntities: async () => {
     set({ loading: true });
@@ -90,4 +113,33 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
     await api.deleteEntity(type, name);
     await get().fetchEntities();
   },
+
+  runRecall: async (query: string, cwd?: string) => {
+    set({ recallLoading: true });
+    try {
+      const result = await api.recallDebug(query, cwd);
+      set({ recallResult: result, recallLoading: false });
+    } catch {
+      set({ recallLoading: false });
+    }
+  },
+
+  fetchProjectMemories: async () => {
+    try {
+      const projectMemories = await api.getProjectMemories();
+      set({ projectMemories });
+    } catch {}
+  },
+
+  fetchProjectFile: async (projectId: string, path: string) => {
+    try {
+      const { content } = await api.getProjectMemoryFile(projectId, path);
+      set({ projectFileContent: content || "" });
+    } catch {
+      set({ projectFileContent: "" });
+    }
+  },
+
+  setActiveView: (view: string) => set({ activeView: view }),
+  setActiveScope: (scope: string | null) => set({ activeScope: scope }),
 }));

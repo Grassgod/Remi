@@ -2,37 +2,36 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Layout } from "../components/Layout";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Search, Brain, FileText, Calendar, RefreshCw, Trash2, X } from "lucide-react";
+import { Search, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useMemoryStore } from "../stores/memory";
-import * as api from "../api/client";
-import type { EntityDetail } from "../api/types";
-import { FrontmatterDocument } from "../components/FrontmatterDocument";
+import { MemoryTreeSidebar } from "../components/MemoryTreeSidebar";
+import { RecallDebugPanel } from "../components/RecallDebugPanel";
+import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 
 export function Memory() {
   const {
     entities, globalMemory, dailyDates, dailyContent, searchResults,
+    projectMemories, projectFileContent,
+    activeView, setActiveView,
     fetchEntities, fetchGlobalMemory, fetchDailyDates, fetchDaily, search,
+    fetchProjectMemories, fetchProjectFile,
   } = useMemoryStore();
   const [, setLocation] = useLocation();
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("entities");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-
-  // Entity sheet
-  const [sheetEntity, setSheetEntity] = useState<EntityDetail | null>(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => {
     fetchEntities();
     fetchGlobalMemory();
     fetchDailyDates();
+    fetchProjectMemories();
   }, []);
 
   useEffect(() => {
@@ -48,25 +47,67 @@ export function Memory() {
     if (dailyDates.length > 0 && !selectedDate) setSelectedDate(dailyDates[0].date);
   }, [dailyDates]);
 
-  const openEntity = async (type: string, name: string) => {
-    try {
-      const detail = await api.getEntity(type, name);
-      setSheetEntity(detail);
-      setSheetOpen(true);
-    } catch {}
+  const { currentEntity, fetchEntity, deleteEntity: storeDeleteEntity } = useMemoryStore();
+
+  const handleTreeNavigate = (view: string) => {
+    // If navigating to a specific entity, show inline
+    if (view.startsWith("entity:")) {
+      const parts = view.split(":");
+      const type = parts[1];
+      const name = parts.slice(2).join(":");
+      fetchEntity(type, name);
+    }
+    // If navigating to a project file, fetch its content
+    if (view.startsWith("project-file:")) {
+      const rest = view.replace("project-file:", "");
+      const colonIdx = rest.indexOf(":");
+      const projectId = rest.slice(0, colonIdx);
+      const filePath = rest.slice(colonIdx + 1);
+      fetchProjectFile(projectId, filePath);
+    }
+    setActiveView(view);
   };
 
-  const deleteEntity = async () => {
-    if (!sheetEntity) return;
-    await api.deleteEntity(sheetEntity.type, sheetEntity.name);
-    setSheetOpen(false);
-    setSheetEntity(null);
-    fetchEntities();
+  // Also handle clicking entities in the list → show inline
+  const openEntityInline = (type: string, name: string) => {
+    fetchEntity(type, name);
+    setActiveView(`entity:${type}:${name}`);
   };
+
+  const handleDeleteEntity = async () => {
+    if (!currentEntity) return;
+    if (confirm(`Delete "${currentEntity.name}"?`)) {
+      await storeDeleteEntity(currentEntity.type, currentEntity.name);
+      setActiveView("entities");
+    }
+  };
+
+  // Filter entities based on active view
+  const filteredEntities = (() => {
+    if (activeView.startsWith("type:")) {
+      const type = activeView.replace("type:", "");
+      return entities.filter(e => e.type === type);
+    }
+    // Default: show all entities (excluding types that have their own tree sections)
+    return entities;
+  })();
+
+  const viewTitle = (() => {
+    if (activeView.startsWith("type:")) {
+      const type = activeView.replace("type:", "");
+      const labels: Record<string, string> = {
+        person: "People", software: "Software", decision: "Decisions",
+        device: "Devices", service: "Services", project: "Projects",
+        platform: "Platforms", organization: "Organizations",
+      };
+      return labels[type] || type;
+    }
+    return "All Entities";
+  })();
 
   return (
     <Layout title="Memory" subtitle="Knowledge Base">
-      {/* Search */}
+      {/* Search - always visible */}
       <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -88,228 +129,272 @@ export function Memory() {
               <div
                 key={i}
                 className="flex cursor-pointer items-center gap-2.5 px-4 py-2 transition-colors hover:bg-accent/30"
-                onClick={() => { if (r.source !== "daily") openEntity(r.source, r.name); }}
+                onClick={() => {
+                  if (r.source === "entity") {
+                    const entity = entities.find(e => e.name === r.name);
+                    if (entity) {
+                      openEntityInline(entity.type, entity.name);
+                    }
+                  } else if (r.source === "daily") {
+                    setSelectedDate(r.name); // r.name is the date string
+                    setActiveView("daily");
+                  } else if (r.source === "global") {
+                    setActiveView("global");
+                  } else if (r.source === "project") {
+                    // path format: "projectId:filePath"
+                    const [projectId, ...rest] = r.path.split(":");
+                    const filePath = rest.join(":");
+                    fetchProjectFile(projectId, filePath);
+                    setActiveView(`project-file:${projectId}:${filePath}`);
+                  }
+                  setQuery("");
+                }}
               >
                 <Badge variant="outline" className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(r.source))}>
                   {r.source}
                 </Badge>
                 <span className="flex-1 text-sm font-medium">{r.name}</span>
+                {r.snippet && <span className="max-w-[200px] truncate text-xs text-muted-foreground">{r.snippet}</span>}
               </div>
             ))}
           </CardContent>
         </Card>
       )}
 
-      {/* Tabs */}
+      {/* Main layout: Tree Sidebar + Content */}
       {!query && (
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="mb-4">
-            <TabsTrigger value="entities">
-              <Brain className="mr-1.5 h-3.5 w-3.5" /> Entities
-            </TabsTrigger>
-            <TabsTrigger value="global">
-              <FileText className="mr-1.5 h-3.5 w-3.5" /> MEMORY.md
-            </TabsTrigger>
-            <TabsTrigger value="daily">
-              <Calendar className="mr-1.5 h-3.5 w-3.5" /> Daily Logs
-            </TabsTrigger>
-          </TabsList>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
+          {/* Tree Sidebar */}
+          <MemoryTreeSidebar
+            entities={entities}
+            projectMemories={projectMemories}
+            activeView={activeView}
+            onNavigate={handleTreeNavigate}
+          />
 
-          {/* Entities Tab */}
-          <TabsContent value="entities">
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm">
-                  Entities <Badge variant="secondary" className="ml-2 text-[10px]">{entities.length}</Badge>
-                </CardTitle>
-                <Button variant="ghost" size="sm" onClick={fetchEntities} className="h-7">
-                  <RefreshCw className="h-3 w-3" />
-                </Button>
-              </CardHeader>
-              <CardContent className="p-0">
-                <ScrollArea className="max-h-[500px]">
-                  {entities.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-muted-foreground">No entities found</div>
+          {/* Content Panel */}
+          <div>
+            {/* Inline Entity Detail */}
+            {activeView.startsWith("entity:") && currentEntity && (
+              <EntityDetailInline
+                entity={currentEntity}
+                onBack={() => setActiveView("entities")}
+                onBackToType={() => setActiveView(`type:${currentEntity.type}`)}
+                onDelete={handleDeleteEntity}
+              />
+            )}
+
+            {activeView === "global" && <MemoryEditor />}
+
+            {activeView.startsWith("project-file:") && (
+              <ProjectFileViewer
+                activeView={activeView}
+                content={projectFileContent}
+                projectMemories={projectMemories}
+              />
+            )}
+
+            {activeView === "daily" && (
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Daily Logs</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {dailyDates.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-muted-foreground">No daily logs</div>
                   ) : (
-                    entities.map((e, i) => (
-                      <div
-                        key={i}
-                        className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/30"
-                        onClick={() => openEntity(e.type, e.name)}
-                      >
-                        <Badge variant="outline" className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}>
-                          {e.type}
-                        </Badge>
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium">{e.name}</div>
-                          {e.summary && <div className="mt-0.5 truncate text-xs text-muted-foreground">{e.summary}</div>}
+                    <>
+                      <div className="mb-3 flex flex-wrap gap-1.5">
+                        {dailyDates.slice(0, 14).map(entry => (
+                          <Button
+                            key={entry.date}
+                            variant={selectedDate === entry.date ? "default" : "outline"}
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => setSelectedDate(entry.date)}
+                          >
+                            {entry.date.slice(5)} {dayOfWeek(entry.date)}
+                          </Button>
+                        ))}
+                      </div>
+                      {selectedDate && dailyContent && (
+                        <div className="prose prose-sm dark:prose-invert max-w-none rounded-md border border-border bg-muted/30 p-4 text-xs">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{dailyContent}</ReactMarkdown>
                         </div>
-                        {e.tags?.length > 0 && (
-                          <div className="hidden gap-1 sm:flex">
-                            {e.tags.slice(0, 3).map(tag => (
-                              <Badge key={tag} variant="outline" className="text-[8px]">{tag}</Badge>
-                            ))}
-                          </div>
-                        )}
-                        <span className="text-[10px] text-muted-foreground">{e.updatedAt?.slice(5, 10)}</span>
-                      </div>
-                    ))
+                      )}
+                    </>
                   )}
-                </ScrollArea>
-              </CardContent>
-            </Card>
-          </TabsContent>
+                </CardContent>
+              </Card>
+            )}
 
-          {/* MEMORY.md Tab */}
-          <TabsContent value="global">
-            <MemoryEditor />
-          </TabsContent>
+            {activeView === "recall" && <RecallDebugPanel />}
 
-          {/* Daily Logs Tab */}
-          <TabsContent value="daily">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Daily Logs</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {dailyDates.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-muted-foreground">No daily logs</div>
-                ) : (
-                  <>
-                    {/* Date selector */}
-                    <div className="mb-3 flex flex-wrap gap-1.5">
-                      {dailyDates.slice(0, 14).map(entry => (
-                        <Button
-                          key={entry.date}
-                          variant={selectedDate === entry.date ? "default" : "outline"}
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => setSelectedDate(entry.date)}
+            {(activeView === "entities" || activeView.startsWith("type:")) && (
+              <Card>
+                <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm">
+                    {viewTitle}
+                    <Badge variant="secondary" className="ml-2 text-[10px]">{filteredEntities.length}</Badge>
+                  </CardTitle>
+                  <Button variant="ghost" size="sm" onClick={fetchEntities} className="h-7">
+                    <RefreshCw className="h-3 w-3" />
+                  </Button>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <ScrollArea className="max-h-[600px]">
+                    {filteredEntities.length === 0 ? (
+                      <div className="p-8 text-center text-xs text-muted-foreground">No entities found</div>
+                    ) : (
+                      filteredEntities.map((e, i) => (
+                        <div
+                          key={i}
+                          className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-accent/30"
+                          onClick={() => openEntityInline(e.type, e.name)}
                         >
-                          {entry.date.slice(5)} {dayOfWeek(entry.date)}
-                        </Button>
-                      ))}
-                    </div>
-
-                    {/* Inline content */}
-                    {selectedDate && dailyContent && (
-                      <div className="rounded-md border border-border bg-muted/30 p-4">
-                        <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground">
-                          {dailyContent}
-                        </pre>
-                      </div>
+                          <Badge variant="outline" className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}>
+                            {e.type}
+                          </Badge>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium">{e.name}</div>
+                            {e.summary && <div className="mt-0.5 truncate text-xs text-muted-foreground">{e.summary}</div>}
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">{e.updatedAt?.slice(5, 10)}</span>
+                        </div>
+                      ))
                     )}
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+                  </ScrollArea>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </div>
       )}
-
-      {/* Entity Detail Sheet */}
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="right" onClose={() => setSheetOpen(false)} className="w-full max-w-md overflow-y-auto sm:max-w-lg">
-          {sheetEntity && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="flex items-center gap-2">
-                  <Badge variant="outline" className={cn("text-[10px] uppercase", entityBadgeClass(sheetEntity.type))}>
-                    {sheetEntity.type}
-                  </Badge>
-                  {sheetEntity.name}
-                </SheetTitle>
-              </SheetHeader>
-              <div className="mt-4 space-y-4 p-6 pt-0">
-                {/* Metadata grid */}
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  {sheetEntity.createdAt && (
-                    <div>
-                      <div className="text-muted-foreground">Created</div>
-                      <div className="font-medium">{sheetEntity.createdAt.slice(0, 10)}</div>
-                    </div>
-                  )}
-                  {sheetEntity.updatedAt && (
-                    <div>
-                      <div className="text-muted-foreground">Updated</div>
-                      <div className="font-medium">{sheetEntity.updatedAt.slice(0, 10)}</div>
-                    </div>
-                  )}
-                  {sheetEntity.aliases?.length > 0 && (
-                    <div className="col-span-2">
-                      <div className="text-muted-foreground">Aliases</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {sheetEntity.aliases.map(a => (
-                          <Badge key={a} variant="secondary" className="text-[10px]">{a}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {sheetEntity.tags?.length > 0 && (
-                    <div className="col-span-2">
-                      <div className="text-muted-foreground">Tags</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {sheetEntity.tags.map(t => (
-                          <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Extra metadata + Content */}
-                <FrontmatterDocument
-                  metadata={sheetEntity.metadata}
-                  body={sheetEntity.body || sheetEntity.content}
-                  knownFields={["type", "name", "created", "updated", "aliases", "tags", "summary"]}
-                />
-
-                {/* Delete button */}
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="w-full"
-                  onClick={deleteEntity}
-                >
-                  <Trash2 className="mr-2 h-3 w-3" /> Delete Entity
-                </Button>
-              </div>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
     </Layout>
   );
 }
 
 function MemoryEditor() {
   const { globalMemory, saveGlobalMemory } = useMemoryStore();
-  const [text, setText] = useState("");
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setText(globalMemory); }, [globalMemory]);
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">Soul.md</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <MarkdownFileViewer content={globalMemory} onSave={saveGlobalMemory} />
+      </CardContent>
+    </Card>
+  );
+}
 
-  const handleSave = async () => {
-    setSaving(true);
-    await saveGlobalMemory(text);
-    setSaving(false);
+function EntityDetailInline({ entity, onBack, onBackToType, onDelete }: {
+  entity: import("../api/types").EntityDetail;
+  onBack: () => void;
+  onBackToType: () => void;
+  onDelete: () => void;
+}) {
+  const handleSave = async (content: string) => {
+    const api = await import("../api/client");
+    await api.updateEntity(entity.type, entity.name, content);
   };
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm">MEMORY.md</CardTitle>
-        <Button variant="outline" size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
-          {saving ? "Saving..." : "Save"}
+      <CardHeader className="flex-row items-start justify-between space-y-0">
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <button onClick={onBack} className="hover:text-foreground transition-colors">Memory</button>
+            <span>/</span>
+            <button onClick={onBackToType} className="hover:text-foreground transition-colors capitalize">{entity.type}s</button>
+            <span>/</span>
+            <span className="text-foreground font-medium">{entity.name}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant="outline" className={cn("text-[10px] uppercase", entityBadgeClass(entity.type))}>
+              {entity.type}
+            </Badge>
+            <CardTitle className="text-lg">{entity.name}</CardTitle>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" onClick={onDelete} className="h-7 text-xs text-destructive hover:text-destructive">
+          Delete
         </Button>
       </CardHeader>
       <CardContent>
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          className="min-h-[400px] w-full resize-y rounded-md border border-border bg-muted/30 p-4 font-mono text-xs leading-relaxed text-foreground outline-none focus:border-input"
-          spellCheck={false}
+        {/* Metadata */}
+        <div className="mb-4 grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
+          {entity.createdAt && (
+            <div><span className="text-muted-foreground">Created</span><div className="font-medium">{entity.createdAt.slice(0, 10)}</div></div>
+          )}
+          {entity.updatedAt && (
+            <div><span className="text-muted-foreground">Updated</span><div className="font-medium">{entity.updatedAt.slice(0, 10)}</div></div>
+          )}
+          {entity.summary && (
+            <div className="col-span-2"><span className="text-muted-foreground">Summary</span><div className="font-medium">{entity.summary}</div></div>
+          )}
+        </div>
+        {(entity.aliases?.length > 0 || entity.tags?.length > 0) && (
+          <div className="mb-4 flex flex-wrap gap-3 border-t border-border pt-3 text-xs">
+            {entity.aliases?.length > 0 && (
+              <div>
+                <span className="mr-1 text-[10px] uppercase text-muted-foreground">Aliases:</span>
+                {entity.aliases.map(a => <Badge key={a} variant="secondary" className="mr-1 text-[10px]">{a}</Badge>)}
+              </div>
+            )}
+            {entity.tags?.length > 0 && (
+              <div>
+                <span className="mr-1 text-[10px] uppercase text-muted-foreground">Tags:</span>
+                {entity.tags.map(t => <Badge key={t} variant="outline" className="mr-1 text-[10px]">{t}</Badge>)}
+              </div>
+            )}
+          </div>
+        )}
+        <MarkdownFileViewer
+          content={entity.body || entity.content || ""}
+          metadata={entity.metadata}
+          knownFields={["type", "name", "created", "updated", "aliases", "tags", "summary"]}
+          onSave={handleSave}
         />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProjectFileViewer({ activeView, content, projectMemories }: {
+  activeView: string;
+  content: string;
+  projectMemories: import("../api/types").ProjectMemory[];
+}) {
+  const rest = activeView.replace("project-file:", "");
+  const colonIdx = rest.indexOf(":");
+  const projectId = rest.slice(0, colonIdx);
+  const filePath = rest.slice(colonIdx + 1);
+  const pm = projectMemories.find(p => p.projectId === projectId);
+  const projectName = pm?.projectName || projectId;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div>
+          <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span>Memory</span>
+            <span>/</span>
+            <span>{projectName}</span>
+            <span>/</span>
+            <span className="text-foreground font-medium">{filePath}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Badge variant="outline" className="text-[10px] uppercase border-green-500/30 text-green-500 bg-green-500/5">
+              Project Memory
+            </Badge>
+            <CardTitle className="text-lg">{filePath}</CardTitle>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <MarkdownFileViewer content={content} readOnly />
       </CardContent>
     </Card>
   );
@@ -324,6 +409,9 @@ function entityBadgeClass(type: string): string {
     organization: "border-amber-500/30 text-amber-500 bg-amber-500/5",
     decision: "border-red-500/30 text-red-500 bg-red-500/5",
     software: "border-cyan-500/30 text-cyan-500 bg-cyan-500/5",
+    entity: "border-green-500/30 text-green-500 bg-green-500/5",
+    daily: "border-amber-500/30 text-amber-500 bg-amber-500/5",
+    global: "border-blue-500/30 text-blue-500 bg-blue-500/5",
   };
   return map[type] ?? "";
 }

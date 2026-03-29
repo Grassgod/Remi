@@ -45,6 +45,23 @@ interface IndexEntry {
   accessCount: number;
 }
 
+export interface RecallLayerResult {
+  name: string;
+  ran: boolean;
+  durationMs: number;
+  candidateCount: number;
+  exitedEarly?: boolean;
+  reason?: string;
+  matches: Array<{ source: string; name: string; snippet: string }>;
+}
+
+export interface RecallDebugResult {
+  query: string;
+  result: string;
+  totalMs: number;
+  layers: RecallLayerResult[];
+}
+
 export class MemoryStore {
   root: string;
   private _index = new Map<string, IndexEntry>();
@@ -262,23 +279,29 @@ export class MemoryStore {
 
   // ── 2.5 Hot Path tools ────────────────────────────────────
 
+  async recall(query: string, options?: { type?: string | null; tags?: string[] | null; cwd?: string | null; debug?: false }): Promise<string>;
+  async recall(query: string, options: { type?: string | null; tags?: string[] | null; cwd?: string | null; debug: true }): Promise<RecallDebugResult>;
   async recall(
     query: string,
     options?: {
       type?: string | null;
       tags?: string[] | null;
       cwd?: string | null;
+      debug?: boolean;
     },
-  ): Promise<string> {
+  ): Promise<string | RecallDebugResult> {
     const type = options?.type ?? null;
     const tags = options?.tags ?? null;
     const cwd = options?.cwd ?? null;
+    const debug = options?.debug ?? false;
 
-    const results: Array<{
-      source: string;
-      path: string;
-      meta: IndexEntry | Record<string, never>;
-    }> = [];
+    const t0 = debug ? performance.now() : 0;
+    const layers: RecallLayerResult[] = [];
+
+    type Candidate = { source: string; path: string; meta: IndexEntry | Record<string, never> };
+    const results: Candidate[] = [];
+    const l1Start = debug ? performance.now() : 0;
+    const l1Matches: Array<{ source: string; name: string; snippet: string }> = [];
 
     // 1. Search entities (index first, then body)
     for (const [pathStr, meta] of this._index) {
@@ -289,6 +312,7 @@ export class MemoryStore {
       }
       if (this._matches(pathStr, query, meta)) {
         results.push({ source: "entity", path: pathStr, meta });
+        if (debug) l1Matches.push({ source: "entity", name: meta.name, snippet: meta.summary || meta.type });
       }
     }
 
@@ -309,6 +333,7 @@ export class MemoryStore {
               path: `## ${sec.heading}`,
               meta: {} as Record<string, never>,
             });
+            if (debug) l1Matches.push({ source: "memory-section", name: sec.heading, snippet: sec.body.slice(0, 100) });
           }
         }
       }
@@ -325,6 +350,7 @@ export class MemoryStore {
         const fullPath = join(dailyDir, file);
         if (this._matchesText(fullPath, query)) {
           results.push({ source: "daily", path: fullPath, meta: {} });
+          if (debug) l1Matches.push({ source: "daily", name: basename(file, ".md"), snippet: "" });
         }
       }
     }
@@ -335,31 +361,55 @@ export class MemoryStore {
       this._findRemiMemoryFiles(projectRoot, (mdFile) => {
         if (this._matchesText(mdFile, query)) {
           results.push({ source: "project", path: mdFile, meta: {} });
+          if (debug) l1Matches.push({ source: "project", name: basename(mdFile), snippet: "" });
         }
       });
     }
 
     // L1 check: if exact name match found, return immediately
     const q = query.toLowerCase();
+    let exactMatch = false;
+    let exactResult = "";
     for (const r of results) {
       if (r.source === "entity" && "name" in r.meta && (r.meta as IndexEntry).name.toLowerCase() === q) {
         this._updateAccessStats(r.path);
         log.info(`recall "${query}" → L1 exact match: ${(r.meta as IndexEntry).name}`);
-        return readFileSync(r.path, "utf-8");
+        exactResult = readFileSync(r.path, "utf-8");
+        exactMatch = true;
+        break;
       }
     }
 
     // Check L1 result quality — if only low-quality matches (short daily refs), continue to L2
     const formatted = results.length > 0 ? this._formatResults(results, query) : "";
     const l1Quality = formatted.length >= 50 && results.some(r => r.source === "entity");
+    const l1Early = exactMatch || (l1Quality && results.length <= 5);
 
-    if (l1Quality && results.length <= 5) {
-      log.info(`recall "${query}" → L1 substring: ${results.length} results (${formatted.length} chars)`);
-      return formatted;
+    if (l1Early && !debug) {
+      return exactMatch ? exactResult : formatted;
+    }
+
+    if (debug) {
+      layers.push({
+        name: "L1: Index + Substring Search", ran: true,
+        durationMs: Math.round((performance.now() - l1Start) * 10) / 10,
+        candidateCount: results.length, exitedEarly: l1Early, matches: l1Matches,
+      });
+    }
+
+    if (l1Early && debug) {
+      layers.push({ name: "L2: Vector Search", ran: false, durationMs: 0, candidateCount: 0, reason: "L1 quality sufficient", matches: [] });
+      layers.push({ name: "L3: Voyage Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "Skipped", matches: [] });
+      return { query, result: exactMatch ? exactResult : formatted, totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
     }
 
     // L2: Vector search (if available and L1 quality is insufficient)
+    const l2Start = debug ? performance.now() : 0;
+    const l2Matches: Array<{ source: string; name: string; snippet: string }> = [];
+    let l2Ran = false;
+
     if (this._vectorStore && !l1Quality) {
+      l2Ran = true;
       try {
         const vecResults = await this._vectorStore.search(query, 10);
         for (const vr of vecResults) {
@@ -367,6 +417,7 @@ export class MemoryStore {
             const meta = this._index.get(vr.id);
             if (meta) {
               results.push({ source: "vector", path: vr.id, meta });
+              if (debug) l2Matches.push({ source: "vector", name: meta.name, snippet: meta.summary || "" });
             }
           }
         }
@@ -376,23 +427,65 @@ export class MemoryStore {
       }
     }
 
+    if (debug) {
+      layers.push({
+        name: "L2: Vector Search", ran: l2Ran,
+        durationMs: Math.round((performance.now() - l2Start) * 10) / 10,
+        candidateCount: l2Matches.length,
+        reason: l2Ran ? undefined : (this._vectorStore ? "L1 quality sufficient" : "No vector store configured"),
+        matches: l2Matches,
+      });
+    }
+
     if (results.length === 0) {
       log.info(`recall "${query}" → no results at any level`);
+      if (debug) {
+        layers.push({ name: "L3: Voyage Rerank", ran: false, durationMs: 0, candidateCount: 0, reason: "No candidates", matches: [] });
+        return { query, result: "", totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+      }
       return "";
     }
 
     // L3: Rerank if too many candidates
+    const l3Start = debug ? performance.now() : 0;
+    let l3Ran = false;
+    const l3Matches: Array<{ source: string; name: string; snippet: string }> = [];
+
     if (results.length > 3) {
+      l3Ran = true;
       try {
         log.info(`recall "${query}" → L3 rerank: ${results.length} candidates → top 3`);
         const reranked = await this._rerank(results, query);
+        if (debug) {
+          for (const r of reranked) {
+            const name = "name" in r.meta ? (r.meta as IndexEntry).name : basename(r.path, ".md");
+            l3Matches.push({ source: r.source, name, snippet: "" });
+          }
+          layers.push({
+            name: "L3: Voyage Rerank", ran: true,
+            durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
+            candidateCount: l3Matches.length, matches: l3Matches,
+          });
+          return { query, result: this._formatResults(reranked, query), totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+        }
         return this._formatResults(reranked, query);
       } catch (e) {
         log.warn("Rerank failed, returning unranked:", e);
       }
     }
 
-    return this._formatResults(results, query);
+    const resultText = this._formatResults(results, query);
+    if (debug) {
+      layers.push({
+        name: "L3: Voyage Rerank", ran: l3Ran,
+        durationMs: Math.round((performance.now() - l3Start) * 10) / 10,
+        candidateCount: l3Ran ? 0 : 0,
+        reason: l3Ran ? "Rerank failed, returning unranked" : `Only ${results.length} candidates (<=3)`,
+        matches: l3Matches,
+      });
+      return { query, result: resultText, totalMs: Math.round((performance.now() - t0) * 10) / 10, layers };
+    }
+    return resultText;
   }
 
   private async _rerank(

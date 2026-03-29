@@ -25,46 +25,63 @@ const MODEL_COLORS = [
   "rgba(59,130,246,0.8)",    // blue
 ];
 
+const UNKNOWN_COLOR = "rgba(128,128,128,0.5)";
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(window.innerWidth < 640);
+  useEffect(() => {
+    const onResize = () => setMobile(window.innerWidth < 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return mobile;
+}
+
 export function Analytics() {
-  const { summary, recentMetrics, loading, fetchSummary, fetchRecent } = useAnalyticsStore();
-  const [refreshing, setRefreshing] = useState(false);
+  const { summary, recentMetrics, loading, refreshing, fetchSummary, fetchRecent, refreshAll } = useAnalyticsStore();
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     fetchSummary();
     fetchRecent(50);
   }, []);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await Promise.all([fetchSummary(), fetchRecent(50)]);
-    setRefreshing(false);
-  };
-
   const today = summary?.today;
   const week = summary?.week;
+  const allTime = summary?.allTime;
   const dailyHistory = summary?.dailyHistory ?? [];
 
-  // Compute values for cards
+  // Token calculations
+  const allTokens = (s: typeof today) => (s?.totalIn ?? 0) + (s?.totalOut ?? 0) + (s?.totalCacheRead ?? 0) + (s?.totalCacheCreate ?? 0);
   const todayTokens = (today?.totalIn ?? 0) + (today?.totalOut ?? 0);
-  const todayCacheRead = today?.totalCacheRead ?? 0;
-  const todayTotalIn = today?.totalIn ?? 0;
-  const cacheHitRate = todayTotalIn + todayCacheRead > 0
-    ? Math.min(100, Math.max(0, (todayCacheRead / (todayTotalIn + todayCacheRead)) * 100))
-    : 0;
+  const weekTokens = allTokens(week);
+  const allTimeTokens = allTokens(allTime);
   const todayRequests = today?.requestCount ?? 0;
   const todayCost = today?.totalCost ?? 0;
+  const allTimeCost = allTime?.totalCost ?? 0;
 
   // Last 14 days for bar chart
   const last14 = dailyHistory
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(-14);
 
-  // Model distribution from week summary
-  const modelSegments = Object.entries(week?.models ?? {}).map(([name, data], i) => ({
-    label: shortenModel(name),
-    value: data.in + data.out,
-    color: MODEL_COLORS[i % MODEL_COLORS.length],
-  }));
+  // Model distribution from week summary — unknown/empty sorted last, gray color
+  const modelSegments = Object.entries(week?.models ?? {})
+    .sort(([a], [b]) => {
+      const aUnknown = !a || a === "unknown";
+      const bUnknown = !b || b === "unknown";
+      if (aUnknown && !bUnknown) return 1;
+      if (!aUnknown && bUnknown) return -1;
+      return 0;
+    })
+    .map(([name, data], i) => {
+      const isUnknown = !name || name === "unknown";
+      return {
+        label: shortenModel(name || "unknown"),
+        value: data.in + data.out,
+        color: isUnknown ? UNKNOWN_COLOR : MODEL_COLORS[i % MODEL_COLORS.length],
+      };
+    });
 
   // Cache analysis from week
   const weekCacheRead = week?.totalCacheRead ?? 0;
@@ -80,8 +97,23 @@ export function Analytics() {
 
   const usageQuotas = summary?.usage ?? [];
 
+  const donutSize = isMobile ? 120 : 140;
+
+  // Global refresh button for header
+  const refreshButton = (
+    <Button
+      variant="ghost" size="sm"
+      onClick={refreshAll}
+      disabled={refreshing}
+      className="h-7 text-xs text-muted-foreground"
+    >
+      <RefreshCw className={cn("mr-1 h-3 w-3", refreshing && "animate-spin")} />
+      {refreshing ? "Refreshing..." : "Refresh"}
+    </Button>
+  );
+
   return (
-    <Layout title="Analytics" subtitle="TOKEN USAGE">
+    <Layout title="Analytics" subtitle="TOKEN USAGE" actions={refreshButton}>
       {/* ─── Top Stat Cards ─── */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -92,10 +124,9 @@ export function Analytics() {
         />
         <StatCard
           icon={<DatabaseZap className="h-4 w-4" />}
-          label="Cache Hit Rate"
-          value={`${cacheHitRate.toFixed(1)}%`}
-          sub={`CACHE READ ${formatNum(todayCacheRead)}`}
-          variant={cacheHitRate > 50 ? "success" : "warning"}
+          label="All-Time Tokens"
+          value={formatNum(allTimeTokens)}
+          sub={`TODAY: ${formatNum(todayTokens)} · 7D: ${formatNum(weekTokens)}`}
         />
         <StatCard
           icon={<Hash className="h-4 w-4" />}
@@ -107,8 +138,7 @@ export function Analytics() {
           icon={<Coins className="h-4 w-4" />}
           label="Est. Cost"
           value={todayCost > 0 ? `$${todayCost.toFixed(2)}` : "\u2014"}
-          sub={`7D: $${(week?.totalCost ?? 0).toFixed(2)}`}
-          variant={todayCost > 5 ? "warning" : "success"}
+          sub={`7D: $${(week?.totalCost ?? 0).toFixed(2)} · ALL: $${allTimeCost.toFixed(2)}`}
         />
       </div>
 
@@ -177,7 +207,7 @@ export function Analytics() {
                 segments={modelSegments}
                 centerLabel="MODELS"
                 centerValue={String(Object.keys(week?.models ?? {}).length)}
-                size={140}
+                size={donutSize}
               />
             </CardContent>
           </Card>
@@ -195,7 +225,7 @@ export function Analytics() {
                 segments={cacheSegments}
                 centerLabel="7D TOTAL"
                 centerValue={formatNum(weekIn + weekOut + weekCacheRead + weekCacheCreate)}
-                size={140}
+                size={donutSize}
               />
             </CardContent>
           </Card>
@@ -214,7 +244,7 @@ export function Analytics() {
                 segments={modelSegments}
                 centerLabel="MODELS"
                 centerValue={String(Object.keys(week?.models ?? {}).length)}
-                size={140}
+                size={donutSize}
               />
             </CardContent>
           </Card>
@@ -230,7 +260,7 @@ export function Analytics() {
                 segments={cacheSegments}
                 centerLabel="7D TOTAL"
                 centerValue={formatNum(weekIn + weekOut + weekCacheRead + weekCacheCreate)}
-                size={140}
+                size={donutSize}
               />
             </CardContent>
           </Card>
@@ -239,20 +269,11 @@ export function Analytics() {
 
       {/* ─── 14-Day Usage Trend ─── */}
       <Card className="mb-3">
-        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+        <CardHeader className="space-y-0 pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
             14-Day Usage Trend
           </CardTitle>
-          <Button
-            variant="ghost" size="sm"
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="h-7 text-xs text-muted-foreground"
-          >
-            <RefreshCw className={cn("mr-1 h-3 w-3", refreshing && "animate-spin")} />
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </Button>
         </CardHeader>
         <CardContent>
           <SvgBarChart data={last14} height={220} />
@@ -261,19 +282,11 @@ export function Analytics() {
 
       {/* ─── Recent Requests Table ─── */}
       <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+        <CardHeader className="space-y-0 pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
             <BarChart3 className="h-4 w-4 text-muted-foreground" />
             Recent Requests
           </CardTitle>
-          <Button
-            variant="ghost" size="sm"
-            onClick={() => { fetchSummary(); fetchRecent(50); }}
-            className="h-7 text-xs text-muted-foreground"
-          >
-            <RefreshCw className="mr-1 h-3 w-3" />
-            Refresh
-          </Button>
         </CardHeader>
         <CardContent className="p-0">
           {recentMetrics.length === 0 ? (
@@ -296,7 +309,7 @@ export function Analytics() {
                 </TableHeader>
                 <TableBody>
                   {recentMetrics.map((m, i) => (
-                    <TableRow key={i}>
+                    <TableRow key={i} className="hover:bg-muted/50">
                       <TableCell className="font-mono text-[11px] text-muted-foreground">
                         {formatTime(m.ts)}
                       </TableCell>
@@ -322,7 +335,7 @@ export function Analytics() {
                       </TableCell>
                       <TableCell className="text-center">
                         <Badge
-                          variant={m.src === "remi" ? "outline" : "warning"}
+                          variant={m.src === "remi" ? "outline" : "secondary"}
                           className="text-[9px] uppercase"
                         >
                           {m.src}
@@ -350,7 +363,7 @@ function StatCard({ icon, label, value, sub, variant }: {
   variant?: "success" | "warning" | "destructive";
 }) {
   return (
-    <Card className="transition-colors hover:bg-accent/30">
+    <Card className="border transition-all duration-200 hover:border-primary/20">
       <CardContent className="p-3 sm:p-4">
         <div className="flex items-center gap-2 text-muted-foreground">
           {icon}

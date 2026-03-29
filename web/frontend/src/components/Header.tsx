@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Sun, Moon } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { Button } from "./ui/button";
@@ -6,25 +7,27 @@ import { cn } from "@/lib/utils";
 interface HeaderProps {
   title: string;
   subtitle?: string;
+  actions?: ReactNode;
   daemonAlive?: boolean;
   tokensValid?: number;
   tokensTotal?: number;
 }
 
-export function Header({ title, subtitle, daemonAlive, tokensValid, tokensTotal }: HeaderProps) {
+export function Header({ title, subtitle, actions, daemonAlive, tokensValid, tokensTotal }: HeaderProps) {
   const { theme, toggleTheme } = useTheme();
 
   return (
-    <header className="flex h-[var(--header-height)] shrink-0 items-center gap-2 border-b border-border bg-card/50 px-4 sm:gap-4 sm:px-6">
-      <span className="text-sm font-semibold text-foreground">
-        {title}
-      </span>
-      {subtitle && (
-        <span className="hidden text-xs text-muted-foreground sm:inline">
-          {subtitle}
-        </span>
-      )}
-      <div className="flex-1" />
+    <header className="flex min-h-[var(--header-height)] shrink-0 items-center gap-2 border-b border-border bg-card/50 px-4 py-2 sm:gap-4 sm:px-6">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-foreground shrink-0">{title}</span>
+          {subtitle && (
+            <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+          )}
+        </div>
+        {/* Second row: page-specific actions */}
+        {actions && <div className="mt-0.5">{actions}</div>}
+      </div>
 
       {/* Status indicators */}
       <div className="flex items-center gap-2">

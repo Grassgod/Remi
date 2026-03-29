@@ -4,7 +4,7 @@ import type { RemiData } from "../remi-data.js";
 export function registerMemoryHandlers(app: Hono, data: RemiData) {
   // Global memory
   app.get("/api/v1/memory/global", (c) => {
-    return c.json({ content: data.readGlobalMemory() });
+    return c.json({ content: data.readSoul() });
   });
 
   app.put("/api/v1/memory/global", async (c) => {
@@ -12,7 +12,7 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     if (!body.content || typeof body.content !== "string") {
       return c.json({ error: "content required" }, 400);
     }
-    data.writeGlobalMemory(body.content);
+    data.writeSoul(body.content);
     return c.json({ ok: true });
   });
 
@@ -52,6 +52,16 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     return c.json({ ok: true });
   });
 
+  // Recall Debug
+  app.post("/api/v1/memory/recall", async (c) => {
+    const body = await c.req.json();
+    if (!body.query || typeof body.query !== "string") {
+      return c.json({ error: "query required" }, 400);
+    }
+    const result = await data.recallDebug(body.query, body.cwd);
+    return c.json(result);
+  });
+
   // Search
   app.get("/api/v1/memory/search", (c) => {
     const q = c.req.query("q") ?? "";
@@ -69,5 +79,16 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     const content = data.readDaily(date);
     if (!content) return c.json({ error: "not found" }, 404);
     return c.json({ date, content });
+  });
+
+  // Project-level memories
+  app.get("/api/v1/memory/projects", (c) => {
+    return c.json(data.listProjectMemories());
+  });
+
+  app.get("/api/v1/memory/projects/:projectId/:path{.+}", (c) => {
+    const content = data.readProjectMemoryFile(c.req.param("projectId"), c.req.param("path"));
+    if (!content) return c.json({ error: "not found" }, 404);
+    return c.json({ content });
   });
 }

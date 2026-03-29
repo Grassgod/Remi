@@ -7,9 +7,19 @@ export function registerLogsHandlers(app: Hono, data: RemiData) {
     const level = c.req.query("level") ?? null;
     const module = c.req.query("module") ?? null;
     const traceId = c.req.query("traceId") ?? null;
+    const search = c.req.query("search") ?? null;
     const limit = Math.min(parseInt(c.req.query("limit") ?? "200", 10), 1000);
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
-    return c.json(data.getLogs({ date, level, module, traceId, limit, offset }));
+    return c.json(data.getLogs({ date, level, module, traceId, search, limit, offset }));
+  });
+
+  app.get("/api/v1/logs/stats", (c) => {
+    const date = c.req.query("date") ?? new Date().toISOString().slice(0, 10);
+    const level = c.req.query("level") ?? null;
+    const module = c.req.query("module") ?? null;
+    const traceId = c.req.query("traceId") ?? null;
+    const search = c.req.query("search") ?? null;
+    return c.json(data.getLogStats({ date, level, module, traceId, search }));
   });
 
   app.get("/api/v1/logs/modules", (c) => {

@@ -7,10 +7,11 @@ import { useAppStore } from "../stores/app";
 interface LayoutProps {
   title: string;
   subtitle?: string;
+  actions?: ReactNode;
   children: ReactNode;
 }
 
-export function Layout({ title, subtitle, children }: LayoutProps) {
+export function Layout({ title, subtitle, actions, children }: LayoutProps) {
   const status = useAppStore(s => s.status);
 
   return (
@@ -20,6 +21,7 @@ export function Layout({ title, subtitle, children }: LayoutProps) {
         <Header
           title={title}
           subtitle={subtitle}
+          actions={actions}
           daemonAlive={status?.daemon.alive}
           tokensValid={status?.tokens.valid}
           tokensTotal={status?.tokens.total}

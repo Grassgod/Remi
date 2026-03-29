@@ -158,7 +158,7 @@ export class RemiQueueManager {
             repeatOpts,
             {
               name: "cron",
-              data: { handler: job.handler, handlerConfig: job.handlerConfig },
+              data: { jobId: job.id, handler: job.handler, handlerConfig: job.handlerConfig },
               opts: {
                 attempts: 2,
                 backoff: { type: "exponential", delay: 30_000 },
@@ -174,7 +174,7 @@ export class RemiQueueManager {
         // One-shot delayed job
         const delayMs = new Date(job.at).getTime() - Date.now();
         if (delayMs > 0) {
-          await this.cronQueue.add("cron", { handler: job.handler, handlerConfig: job.handlerConfig }, {
+          await this.cronQueue.add("cron", { jobId: job.id, handler: job.handler, handlerConfig: job.handlerConfig }, {
             delay: delayMs,
             jobId: `remi:${job.id}`,
             attempts: 2,

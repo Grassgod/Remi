@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { useLocation, useParams } from "wouter";
 import { Layout } from "../components/Layout";
-import { HudPanel } from "../components/HudPanel";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import { Button } from "../components/ui/button";
+import { ArrowLeft } from "lucide-react";
 import { useMemoryStore } from "../stores/memory";
 
 export function MemoryDaily() {
@@ -19,31 +21,43 @@ export function MemoryDaily() {
   }, [date]);
 
   return (
-    <Layout title="Memory" subtitle={`DAILY / ${date}`}>
-      <button
-        onClick={() => setLocation("/memory")}
-        className="mb-4 rounded-md border border-border bg-transparent px-3 py-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >← Back</button>
+    <Layout title="Memory" subtitle={`Daily / ${date}`}>
+      <div className="mb-4 flex items-center gap-2 text-xs">
+        <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={() => setLocation("/memory")}>
+          <ArrowLeft className="h-3 w-3" /> Memory
+        </Button>
+        <span className="text-muted-foreground">/</span>
+        <span className="text-muted-foreground">Daily</span>
+        <span className="text-muted-foreground">/</span>
+        <span className="font-medium">{date}</span>
+      </div>
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap gap-1.5">
         {dailyDates.map(entry => (
-          <button
+          <Button
             key={entry.date}
+            variant={entry.date === date ? "default" : "outline"}
+            size="sm"
+            className="h-7 text-xs"
             onClick={() => setLocation(`/memory/daily/${entry.date}`)}
-            className={`rounded-md border px-2.5 py-1 font-mono text-[10px] tracking-wide transition-colors
-              ${entry.date === date
-                ? "border-foreground/20 bg-accent text-foreground"
-                : "border-border text-muted-foreground hover:bg-accent hover:text-foreground"
-              }`}
-          >{entry.date}</button>
+          >
+            {entry.date.slice(5)}
+          </Button>
         ))}
       </div>
 
-      <HudPanel title={`Log — ${date}`} maxHeight={700}>
-        <pre className="whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed text-foreground">
-          {dailyContent || "No data for this date."}
-        </pre>
-      </HudPanel>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Log — {date}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border border-border bg-muted/30 p-4">
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground">
+              {dailyContent || "No data for this date."}
+            </pre>
+          </div>
+        </CardContent>
+      </Card>
     </Layout>
   );
 }

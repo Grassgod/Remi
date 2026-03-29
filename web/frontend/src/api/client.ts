@@ -52,19 +52,28 @@ export const deleteEntity = (type: string, name: string) =>
 export const searchMemory = (q: string) =>
   request<import("./types").SearchResult[]>(`/api/v1/memory/search?q=${encodeURIComponent(q)}`);
 
+export const recallDebug = (query: string, cwd?: string) =>
+  request<import("./types").RecallDebugResult>("/api/v1/memory/recall", {
+    method: "POST", body: JSON.stringify({ query, cwd }),
+  });
+
+export const getProjectMemories = () =>
+  request<import("./types").ProjectMemory[]>("/api/v1/memory/projects");
+export const getProjectMemoryFile = (projectId: string, path: string) =>
+  request<{ content: string }>(`/api/v1/memory/projects/${projectId}/${path}`);
+
 export const getDailyDates = () => request<import("./types").DailyLogEntry[]>("/api/v1/memory/daily");
 export const getDaily = (date: string) =>
   request<import("./types").DailyEntry>(`/api/v1/memory/daily/${date}`);
 
-// Sessions
-export const getSessions = () => request<import("./types").SessionEntry[]>("/api/v1/sessions");
-export const clearSession = (key: string) =>
-  request(`/api/v1/sessions/${encodeURIComponent(key)}`, { method: "DELETE" });
-export const clearAllSessions = () =>
-  request("/api/v1/sessions", { method: "DELETE" });
-
 // Auth
 export const getTokenStatus = () => request<import("./types").TokenStatus[]>("/api/v1/auth/status");
+export const getSyncRules = () => request<import("./types").SyncRule[]>("/api/v1/auth/sync-rules");
+export const updateSyncRules = (rules: import("./types").SyncRule[]) =>
+  request<{ ok: boolean }>("/api/v1/auth/sync-rules", { method: "PUT", body: JSON.stringify(rules) });
+export const getSyncPreview = (source: string, target: string) =>
+  request<{ sourceContent: string | null; targetContent: string | null }>(
+    `/api/v1/auth/sync-preview?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`);
 
 // Config
 export const getConfig = () => request<import("./types").RemiConfig>("/api/v1/config");
@@ -112,26 +121,39 @@ export const getRecentMetrics = (limit = 50) =>
 // Traces
 export const getTraceStats = (date?: string) =>
   request<import("./types").TraceStats>(`/api/v1/traces/stats${date ? `?date=${date}` : ""}`);
-export const getTraces = (date?: string, limit = 50, status?: string) => {
+export const getTraces = (opts: { date?: string; limit?: number; offset?: number; status?: string; search?: string }) => {
   const params = new URLSearchParams();
-  if (date) params.set("date", date);
-  params.set("limit", String(limit));
-  if (status) params.set("status", status);
-  return request<import("./types").TraceListItem[]>(`/api/v1/traces?${params}`);
+  if (opts.date) params.set("date", opts.date);
+  params.set("limit", String(opts.limit ?? 50));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  if (opts.status) params.set("status", opts.status);
+  if (opts.search) params.set("search", opts.search);
+  return request<import("./types").TraceListResponse>(`/api/v1/traces?${params}`);
 };
 export const getTraceDetail = (id: number | string) =>
   request<import("./types").TraceDetail>(`/api/v1/traces/${id}/detail`);
 
 // Logs
-export const getLogs = (params: { date?: string; level?: string; module?: string; traceId?: string; limit?: number; offset?: number }) => {
+export const getLogs = (params: { date?: string; level?: string; module?: string; traceId?: string; search?: string; limit?: number; offset?: number }) => {
   const qs = new URLSearchParams();
   if (params.date) qs.set("date", params.date);
   if (params.level) qs.set("level", params.level);
   if (params.module) qs.set("module", params.module);
   if (params.traceId) qs.set("traceId", params.traceId);
+  if (params.search) qs.set("search", params.search);
   if (params.limit) qs.set("limit", String(params.limit));
   if (params.offset) qs.set("offset", String(params.offset));
   return request<import("./types").LogQueryResult>(`/api/v1/logs?${qs.toString()}`);
+};
+export const getLogStats = (params?: { date?: string; level?: string; module?: string; search?: string; traceId?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.date) qs.set("date", params.date);
+  if (params?.level) qs.set("level", params.level);
+  if (params?.module) qs.set("module", params.module);
+  if (params?.search) qs.set("search", params.search);
+  if (params?.traceId) qs.set("traceId", params.traceId);
+  const q = qs.toString();
+  return request<import("./types").LogStats>(`/api/v1/logs/stats${q ? `?${q}` : ""}`);
 };
 export const getLogModules = (date?: string) =>
   request<string[]>(`/api/v1/logs/modules${date ? `?date=${date}` : ""}`);
@@ -148,16 +170,39 @@ export const ensureSymlink = (cwd: string) =>
 
 // Database
 export const getDbStats = () => request<import("./types").DbStats>("/api/v1/db/stats");
+export const getDbSchema = () => request<import("./types").DbSchemaResponse>("/api/v1/db/schema");
+export const getDbTableData = (tableName: string, opts?: { limit?: number; offset?: number; orderBy?: string; orderDir?: "asc" | "desc" }) => {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.orderBy) params.set("orderBy", opts.orderBy);
+  if (opts?.orderDir) params.set("orderDir", opts.orderDir);
+  const qs = params.toString();
+  return request<import("./types").DbTableDataResponse>(`/api/v1/db/tables/${encodeURIComponent(tableName)}${qs ? `?${qs}` : ""}`);
+};
+export const executeDbQuery = (sql: string, readOnly = true) =>
+  request<import("./types").DbQueryResult>("/api/v1/db/query", {
+    method: "POST",
+    body: JSON.stringify({ sql, readOnly }),
+  });
 export const getDbKv = () => request<import("./types").KvEntry[]>("/api/v1/db/kv");
 export const getDbEmbeddings = () => request<import("./types").EmbeddingEntry[]>("/api/v1/db/embeddings");
 
 // Conversations
-export const getConversations = (limit = 50) =>
-  request<import("./types").ConversationSummary[]>(`/api/v1/conversations?limit=${limit}`);
-export const getConversationMessages = (chatId: string, threadId?: string) => {
-  const params = threadId ? `?threadId=${encodeURIComponent(threadId)}` : "";
+export const getConversations = (limit = 50, offset = 0, chatId?: string) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (chatId) params.set("chatId", chatId);
+  return request<import("./types").ConversationSummary[]>(`/api/v1/conversations?${params}`);
+};
+export const getConversationMessages = (chatId: string, threadId?: string, sessionId?: string) => {
+  const qp = new URLSearchParams();
+  if (threadId) qp.set("threadId", threadId);
+  if (sessionId) qp.set("sessionId", sessionId);
+  const params = qp.toString() ? `?${qp}` : "";
   return request<import("./types").ChatMessage[]>(`/api/v1/conversations/${encodeURIComponent(chatId)}/messages${params}`);
 };
+export const getChats = () =>
+  request<import("./types").ChatInfo[]>("/api/v1/chats");
 
 // Missions
 export const getMissions = (projectId?: string, status?: string) => {
@@ -169,6 +214,8 @@ export const getMissions = (projectId?: string, status?: string) => {
 };
 export const getMission = (id: string) =>
   request<import("./types").MissionItem>(`/api/v1/missions/${id}`);
+export const getMissionDetail = (id: string) =>
+  request<import("./types").MissionDetailItem>(`/api/v1/missions/${id}`);
 export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
   request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
 export const getMissionStats = (projectId: string) =>
@@ -183,3 +230,76 @@ export const getWikiHistory = (path: string, limit = 20) =>
   request<import("./types").WikiGitEntry[]>(`/api/v1/wiki/history?path=${encodeURIComponent(path)}&limit=${limit}`);
 export const getWikiDiff = (path: string, commit: string) =>
   request<{ diff: string }>(`/api/v1/wiki/diff?path=${encodeURIComponent(path)}&commit=${commit}`);
+export const putWikiFile = (path: string, content: string) =>
+  request(`/api/v1/wiki/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+
+// Filesystem browse
+export const browseDirs = (path?: string) =>
+  request<{ path: string; dirs: { name: string; path: string }[] }>(`/api/v1/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+
+// Skills
+export const getSkills = () =>
+  request<import("./types").SkillInfo[]>("/api/v1/skills");
+export const getSkillFile = (name: string, path = "SKILL.md") =>
+  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`);
+export const putSkillFile = (name: string, content: string, path = "SKILL.md") =>
+  request(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const getSkillReports = (name: string) =>
+  request<string[]>(`/api/v1/skills/${encodeURIComponent(name)}/reports`);
+export const getSkillReport = (name: string, date: string) =>
+  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/reports/${date}`);
+export const getSkillsBasePath = () =>
+  request<{ basePath: string }>("/api/v1/skills/base-path");
+export const getSkillTree = (name: string) =>
+  request<import("./types").SkillFileNode[]>(`/api/v1/skills/${encodeURIComponent(name)}/tree`);
+
+// Agents
+export const getAgents = () =>
+  request<import("./types").AgentInfo[]>("/api/v1/agents");
+export const getAgentDetail = (name: string) =>
+  request<import("./types").AgentDetail>(`/api/v1/agents/${encodeURIComponent(name)}`);
+export const getAgentRuns = (name: string, limit = 50) =>
+  request<import("./types").AgentRunEntry[]>(`/api/v1/agents/${encodeURIComponent(name)}/runs?limit=${limit}`);
+export const updateAgentClaudeMd = (name: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/claude-md`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const updateAgentSettings = (name: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/settings`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const updateAgentSkill = (name: string, skillName: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/skills/${encodeURIComponent(skillName)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const getAgentSkillTree = (agentName: string, skillName: string) =>
+  request<import("./types").SkillFileNode[]>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/tree`);
+export const getAgentSkillFile = (agentName: string, skillName: string, path = "SKILL.md") =>
+  request<{ content: string }>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/file?path=${encodeURIComponent(path)}`);
+// MCP
+export const getMcpScopes = () =>
+  request<import("./types").McpScope[]>("/api/v1/mcp/scopes");
+
+export const getMcpScopeDetail = (id: string) =>
+  request<import("./types").McpScopeDetail>(`/api/v1/mcp/scopes/${encodeURIComponent(id)}`);
+
+export const writeMcpScope = (id: string, content: string) =>
+  request<{ ok: boolean }>(`/api/v1/mcp/scopes/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+
+export const deleteMcpServer = (scopeId: string, serverName: string) =>
+  request<{ ok: boolean }>(`/api/v1/mcp/scopes/${encodeURIComponent(scopeId)}/servers/${encodeURIComponent(serverName)}`, {
+    method: "DELETE",
+  });
+
+export const mergeMcpServers = (scopeId: string, content: string) =>
+  request<{ ok: boolean; added: string[] }>(`/api/v1/mcp/scopes/${encodeURIComponent(scopeId)}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });

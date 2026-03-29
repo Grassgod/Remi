@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import {
   LayoutDashboard, MessageSquare, KanbanSquare, Brain,
-  BookOpen, BarChart3, Activity, FileText, Clock, Monitor,
+  BookOpen, BarChart3, Activity, FileText, Clock,
   FolderOpen, Menu, MoreHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,6 @@ const moreItems = [
   { path: "/traces", label: "Traces", icon: Activity },
   { path: "/logs", label: "Logs", icon: FileText },
   { path: "/scheduler", label: "Scheduler", icon: Clock },
-  { path: "/sessions", label: "Sessions", icon: Monitor },
   { path: "/projects", label: "Projects", icon: FolderOpen },
   { path: "/bot-menu", label: "Bot Menu", icon: Menu },
 ];

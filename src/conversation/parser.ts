@@ -46,6 +46,7 @@ export interface ChatMessage {
 }
 
 export interface MetaRow {
+  id: number;
   model: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -76,7 +77,14 @@ export function stripContextTags(text: string): string {
       t = t.slice(0, replyIdx) + t.slice(closeIdx + 2);
     }
   }
-  t = t.replace(/^贺华杰:\s*/m, "");
+  // Strip sender name prefixes: "贺华杰: " or "ou_xxxxx: "
+  t = t.replace(/^(?:贺华杰|ou_[a-f0-9]+):\s*/m, "");
+  // Convert <media:image> {"image_key":"img_xxx","message_id":"om_xxx"} → markdown image with msgId
+  t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1?msgId=$2)\n");
+  t = t.replace(/<media:image>\s*\{[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$2?msgId=$1)\n");
+  // Fallback: image_key only (no message_id)
+  t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1)\n");
+  t = t.replace(/\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}\s*<media:image>/g, "\n![image](/api/image/$1)\n");
   return t.trim();
 }
 
@@ -108,8 +116,16 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
     try {
       const obj = JSON.parse(line);
 
-      if (obj.type === "queue-operation" && obj.operation === "enqueue" && obj.content) {
-        if (currentEnqueue && (currentText || currentSteps.length > 0)) {
+      // User message from BunQueue enqueue (may have empty content for image messages)
+      if (obj.type === "queue-operation" && obj.operation === "enqueue") {
+        // Skip system-only enqueues — they are not real user messages
+        // and should not split a conversation pair
+        const rawContent = obj.content ?? "";
+        if (rawContent.startsWith("<task-notification") || rawContent.startsWith("<system-reminder")) {
+          continue;
+        }
+        // Flush previous pair
+        if (currentEnqueue && currentEnqueue.content && (currentText || currentSteps.length > 0)) {
           pairs.push({
             userText: stripContextTags(currentEnqueue.content),
             remiText: stripContextTags(currentText),
@@ -119,9 +135,20 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
           });
         }
         const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : 0;
-        currentEnqueue = { content: obj.content, timestamp: ts };
+        currentEnqueue = { content: obj.content ?? "", timestamp: ts };
         currentText = "";
         currentSteps = [];
+      }
+
+      // CLI native user entry — backfill content when enqueue had none (e.g. image messages)
+      if (obj.type === "user" && currentEnqueue && !currentEnqueue.content) {
+        const blocks = obj.message?.content ?? [];
+        const textParts = blocks
+          .filter((b: any) => b.type === "text" && b.text)
+          .map((b: any) => b.text);
+        if (textParts.length > 0) {
+          currentEnqueue.content = textParts.join("\n");
+        }
       }
 
       if (obj.type === "assistant" && currentEnqueue) {
@@ -131,21 +158,18 @@ export function parseSessionPairs(jsonlPath: string, sessionId: string): ConvPai
           } else if (b.type === "thinking" && b.thinking) {
             currentSteps.push({ type: "thinking", content: b.thinking.trim() });
           } else if (b.type === "tool_use") {
-            const lastStep = currentSteps[currentSteps.length - 1];
-            if (lastStep?.type === "thinking") {
-              currentSteps[currentSteps.length - 1] = {
-                type: "tool",
-                name: b.name ?? "unknown",
-                content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-                thinking: lastStep.content,
-              };
-            } else {
-              currentSteps.push({
-                type: "tool",
-                name: b.name ?? "unknown",
-                content: b.input?.description ?? b.input?.command?.slice(0, 80) ?? b.input?.file_path ?? "",
-              });
-            }
+            const toolContent = b.input?.description
+              ?? b.input?.query            // WebSearch
+              ?? b.input?.url              // WebFetch
+              ?? b.input?.command?.slice(0, 80)  // Bash
+              ?? b.input?.file_path        // Read/Write/Edit
+              ?? b.input?.pattern          // Glob/Grep
+              ?? "";
+            currentSteps.push({
+              type: "tool",
+              name: b.name ?? "unknown",
+              content: toolContent,
+            });
           }
         }
       }
@@ -246,6 +270,7 @@ export function buildChatMessages(
         duration: meta.duration_ms,
         toolCount,
         sessionId: pair.sessionId,
+        traceId: meta.id,
       } : undefined,
     });
   }

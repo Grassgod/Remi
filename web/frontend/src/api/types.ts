@@ -59,6 +59,15 @@ export interface TokenStatus {
   refreshable: boolean;
 }
 
+export interface SyncRule {
+  name: string;
+  source: string;
+  target: string;
+  format: string;
+  key?: string;
+  extraKeys?: Record<string, string>;
+}
+
 // Config
 export interface RemiConfig {
   [key: string]: unknown;
@@ -277,6 +286,9 @@ export interface SymlinkMapping {
   target: string;
   type: "dir" | "file";
   status: "ok" | "broken" | "not_linked" | "missing_target";
+  category: "soul" | "global" | "memory" | "wiki" | "project";
+  projectAlias: string | null;
+  parentHash: string | null;
 }
 
 export interface SymlinksStatus {
@@ -285,14 +297,69 @@ export interface SymlinksStatus {
 }
 
 // Database
+export interface DbTableInfo {
+  name: string;
+  rowCount: number;
+  type: string;
+}
+
 export interface DbStats {
   dbPath: string;
   dbSizeBytes: number;
   journalMode: string;
-  tables: {
-    kv: { count: number };
-    embeddings: { count: number };
-  };
+  sqliteVersion: string;
+  vecEnabled: boolean;
+  tables: DbTableInfo[];
+  totalTables: number;
+  totalRows: number;
+}
+
+export interface DbColumnInfo {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: boolean;
+  dflt_value: string | null;
+  pk: boolean;
+}
+
+export interface DbIndexInfo {
+  name: string;
+  unique: boolean;
+  columns: string[];
+  sql: string | null;
+}
+
+export interface DbTableSchema {
+  name: string;
+  type: "table" | "virtual";
+  sql: string;
+  columns: DbColumnInfo[];
+  indexes: DbIndexInfo[];
+}
+
+export interface DbSchemaResponse {
+  tables: DbTableSchema[];
+}
+
+export interface DbTableDataResponse {
+  tableName: string;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DbQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  truncated?: boolean;
+  executionMs: number;
+  type: "query" | "execute";
+  changes?: number;
+  error?: string;
 }
 
 export interface KvEntry {

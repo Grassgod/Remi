@@ -20,7 +20,7 @@ import * as api from "../api/client";
 import type { MonitorStats, DbStats, SymlinksStatus, AnalyticsSummary } from "../api/types";
 
 export function Dashboard() {
-  const { status, tokens, fetchStatus, fetchTokens, fetchSessions } = useAppStore();
+  const { status, tokens, fetchStatus, fetchTokens } = useAppStore();
   const { entities, fetchEntities } = useMemoryStore();
   const { status: schedulerStatus, fetchStatus: fetchSchedulerStatus } = useSchedulerStore();
   const [, setLocation] = useLocation();
@@ -35,7 +35,6 @@ export function Dashboard() {
   useEffect(() => {
     fetchStatus();
     fetchTokens();
-    fetchSessions();
     fetchEntities();
     fetchSchedulerStatus();
     api.getMonitorStats().then(setMonitorStats).catch(() => {});
@@ -97,7 +96,7 @@ export function Dashboard() {
 
       {/* ─── Two Column Layout ─── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {/* ─── Left Column (Operational) ─── */}
+        {/* ─── Left Column ─── */}
         <div className="flex flex-col gap-3">
           {/* Token Budget */}
           <Card>
@@ -146,6 +145,91 @@ export function Dashboard() {
             </CardContent>
           </Card>
 
+          {/* Auth Tokens */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                Auth Tokens
+              </CardTitle>
+              <Button
+                variant="ghost" size="sm"
+                onClick={fetchTokens}
+                className="h-7 text-xs text-muted-foreground"
+              >
+                <RefreshCw className="h-3 w-3" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="max-h-[280px]">
+                {tokens.length === 0 ? (
+                  <EmptyState text="No tokens" />
+                ) : (
+                  tokens.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 px-4 py-2.5 transition-colors hover:bg-accent/30">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium">{t.service}</div>
+                        <div className="truncate text-[10px] text-muted-foreground">{t.type}</div>
+                      </div>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">{t.expiresIn}</span>
+                      <Badge variant={t.valid ? "success" : "destructive"} className="text-[9px]">
+                        {t.valid ? "VALID" : "EXPIRED"}
+                      </Badge>
+                    </div>
+                  ))
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          {/* Memory Entities */}
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Brain className="h-4 w-4 text-muted-foreground" />
+                Memory Entities
+                <Badge variant="secondary" className="ml-1 text-[10px]">{entities.length}</Badge>
+              </CardTitle>
+              <Button
+                variant="ghost" size="sm"
+                onClick={() => setLocation("/memory")}
+                className="h-7 text-xs text-muted-foreground"
+              >
+                Manage <ChevronRight className="h-3 w-3" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="max-h-[480px]">
+                {entities.length === 0 ? (
+                  <EmptyState text="No entities" />
+                ) : (
+                  entities.slice(0, 20).map((e, i) => (
+                    <div
+                      key={i}
+                      className="flex cursor-pointer items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/30"
+                      onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
+                    >
+                      <Badge
+                        variant="outline"
+                        className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}
+                      >
+                        {e.type}
+                      </Badge>
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
+                      <span className="hidden text-[10px] text-muted-foreground sm:inline">
+                        {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+        </div>
+
+        {/* ─── Right Column (System) ─── */}
+        <div className="flex flex-col gap-3">
           {/* System Health — Collapsible */}
           <Card>
             <Collapsible open={healthOpen} onOpenChange={setHealthOpen}>
@@ -235,7 +319,7 @@ export function Dashboard() {
                     <HealthRow
                       icon={<Database className="h-3.5 w-3.5" />}
                       label="Database"
-                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${dbStats.tables.kv.count} KV · ${dbStats.tables.embeddings.count} embeds`}
+                      value={`${(dbStats.dbSizeBytes / 1024 / 1024).toFixed(1)}MB · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "kv")?.rowCount : dbStats.tables?.kv?.count) ?? 0} KV · ${(Array.isArray(dbStats.tables) ? dbStats.tables.find((t: any) => t.name === "embeddings")?.rowCount : dbStats.tables?.embeddings?.count) ?? 0} embeds`}
                       ok
                     />
                   )}

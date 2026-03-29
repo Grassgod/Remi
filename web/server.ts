@@ -11,6 +11,7 @@
  */
 
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { readdirSync, statSync } from "node:fs";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -19,7 +20,6 @@ import { authMiddleware } from "./auth.js";
 import { RemiData } from "./remi-data.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
-import { registerSessionHandlers } from "./handlers/sessions.js";
 import { registerAuthHandlers } from "./handlers/auth.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
@@ -32,8 +32,13 @@ import { registerDbHandlers } from "./handlers/db.js";
 import { registerBotMenuHandlers } from "./handlers/bot-menu.js";
 import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
-import { registerMissionsHandlers } from "./handlers/missions.js";
+// Dynamic import — mission module may not exist in worktree
+let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
+try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
+import { registerSkillsHandlers } from "./handlers/skills.js";
+import { registerAgentsHandlers } from "./handlers/agents.js";
+import { registerMcpHandlers } from "./handlers/mcp.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -68,7 +73,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   // Register all handler modules
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
-  registerSessionHandlers(app, data);
   registerAuthHandlers(app, data);
   registerConfigHandlers(app, data);
   registerProjectHandlers(app, data);
@@ -81,11 +85,68 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerBotMenuHandlers(app, data);
   registerSymlinkHandlers(app, data);
   registerConversationsHandlers(app, data);
-  registerMissionsHandlers(app, data);
+  registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
+  registerSkillsHandlers(app, data);
+  registerAgentsHandlers(app, data);
+  registerMcpHandlers(app, data);
+
+  // ── Filesystem browse (for directory picker) ──
+  app.get("/api/v1/fs/browse", (c) => {
+    const { readdirSync, statSync } = require("node:fs");
+    const { join } = require("node:path");
+    const target = c.req.query("path") || join(homedir(), "project");
+    try {
+      const entries = readdirSync(target, { withFileTypes: true });
+      const dirs = entries
+        .filter((e: any) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e: any) => ({ name: e.name, path: join(target, e.name) }))
+        .sort((a: any, b: any) => a.name.localeCompare(b.name));
+      return c.json({ path: target, dirs });
+    } catch {
+      return c.json({ error: "Cannot read directory" }, 400);
+    }
+  });
+
+  // ── Image proxy (shared cache with Board server) ──
+  const imageCacheDir = join(require("node:os").homedir(), ".remi", "lark_image");
+  try { require("node:fs").mkdirSync(imageCacheDir, { recursive: true }); } catch {}
+
+  app.get("/api/image/:imageKey", async (c) => {
+    const imageKey = c.req.param("imageKey");
+    if (!imageKey?.startsWith("img_")) return c.json({ error: "invalid key" }, 400);
+
+    const { existsSync, readFileSync } = require("node:fs");
+    const cachePath = join(imageCacheDir, imageKey);
+
+    // Serve from shared disk cache
+    if (existsSync(cachePath)) {
+      const buf = readFileSync(cachePath);
+      return new Response(buf, {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
+      });
+    }
+
+    // Proxy to Board server (which has feishuClient for downloads)
+    try {
+      const boardPort = process.env.REMI_BOARD_PORT ?? "8090";
+      const msgId = c.req.query("msgId") ?? "";
+      const qs = msgId ? `?msgId=${encodeURIComponent(msgId)}` : "";
+      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}${qs}`);
+      if (!resp.ok) return c.json({ error: "image not found" }, resp.status);
+      const buf = Buffer.from(await resp.arrayBuffer());
+      // Cache locally for next time
+      try { require("node:fs").writeFileSync(cachePath, buf); } catch {}
+      return new Response(buf, {
+        headers: { "Content-Type": resp.headers.get("Content-Type") ?? "image/png", "Cache-Control": "public, max-age=86400" },
+      });
+    } catch {
+      return c.json({ error: "image proxy failed" }, 502);
+    }
+  });
 
   // Auto-mount all task directories as /tasks/<dir-name>/*
-  const tasksDir = "/data00/home/hehuajie/tasks";
+  const tasksDir = join(homedir(), "tasks");
   try {
     for (const entry of readdirSync(tasksDir)) {
       const fullPath = join(tasksDir, entry);
