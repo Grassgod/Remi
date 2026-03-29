@@ -9,11 +9,13 @@ import { cn } from "@/lib/utils";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import { SkillTreeNode } from "../components/SkillTreeNode";
 import * as api from "../api/client";
-import type { SkillInfo, SkillFileNode } from "../api/types";
+import type { SkillInfo, SkillFileNode, SkillScope } from "../api/types";
 
 type Tab = "file" | "reports";
 
 export function Skills() {
+  const [scopes, setScopes] = useState<SkillScope[]>([]);
+  const [activeScope, setActiveScope] = useState<string>("");
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [basePath, setBasePath] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -27,10 +29,27 @@ export function Skills() {
   const [loading, setLoading] = useState(true);
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
 
+  // Load scopes on mount
   useEffect(() => {
+    api.getSkillScopes().then((scopesData) => {
+      setScopes(scopesData);
+      // Default to remi-global, fall back to first scope
+      const defaultScope = scopesData.find(s => s.scope === "remi-global")?.scope ?? scopesData[0]?.scope ?? "";
+      setActiveScope(defaultScope);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  // Load skills when scope changes
+  useEffect(() => {
+    if (!activeScope) return;
+    setLoading(true);
+    setSelected(null);
+    setSkillTree([]);
+    setFileContent("");
+    setExpandedSkills(new Set());
     Promise.all([
-      api.getSkills(),
-      api.getSkillsBasePath(),
+      api.getSkills(activeScope),
+      api.getSkillsBasePath(activeScope),
     ]).then(([skillsData, baseData]) => {
       setSkills(skillsData);
       setBasePath(baseData.basePath);
@@ -41,18 +60,18 @@ export function Skills() {
       }
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, []);
+  }, [activeScope]);
 
   // Load tree + file when skill selected
   useEffect(() => {
     if (!selected) return;
     setTab("file");
     setSelectedFile("SKILL.md");
-    api.getSkillTree(selected).then(setSkillTree).catch(() => setSkillTree([]));
-    api.getSkillFile(selected).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
+    api.getSkillTree(selected, activeScope).then(setSkillTree).catch(() => setSkillTree([]));
+    api.getSkillFile(selected, "SKILL.md", activeScope).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
     const skill = skills.find(s => s.name === selected);
     if (skill?.hasSchedule) {
-      api.getSkillReports(selected).then(setReportDates).catch(() => setReportDates([]));
+      api.getSkillReports(selected, activeScope).then(setReportDates).catch(() => setReportDates([]));
     } else {
       setReportDates([]);
     }
@@ -64,17 +83,17 @@ export function Skills() {
   useEffect(() => {
     if (!selected || !selectedFile) return;
     setTab("file");
-    api.getSkillFile(selected, selectedFile).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
+    api.getSkillFile(selected, selectedFile, activeScope).then(d => setFileContent(d.content)).catch(() => setFileContent(""));
   }, [selectedFile]);
 
   useEffect(() => {
     if (!selected || !selectedDate) return;
-    api.getSkillReport(selected, selectedDate).then(d => setReportContent(d.content)).catch(() => setReportContent(""));
+    api.getSkillReport(selected, selectedDate, activeScope).then(d => setReportContent(d.content)).catch(() => setReportContent(""));
   }, [selectedDate]);
 
   const handleSaveFile = async (content: string) => {
     if (!selected) return;
-    await api.putSkillFile(selected, content, selectedFile);
+    await api.putSkillFile(selected, content, selectedFile, activeScope);
     setFileContent(content);
   };
 
@@ -102,6 +121,24 @@ export function Skills() {
 
   return (
     <Layout title="Skills" subtitle="Skill Definitions & Reports">
+      {/* Scope selector */}
+      {scopes.length > 1 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {scopes.map(s => (
+            <Button
+              key={s.scope}
+              variant={activeScope === s.scope ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setActiveScope(s.scope)}
+            >
+              {s.label}
+              <Badge variant="secondary" className="ml-1.5 text-[10px]">{s.count}</Badge>
+            </Button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div className="p-10 text-center text-xs text-muted-foreground">Loading...</div>
       ) : skills.length === 0 ? (
@@ -110,7 +147,7 @@ export function Skills() {
             <Zap className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" />
             <div className="text-sm text-muted-foreground">No skills found</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Skills are loaded from ~/.remi/.claude/skills/
+              {activeScope ? `No skills in this scope` : `Skills are loaded from ~/.remi/.claude/skills/`}
             </div>
           </CardContent>
         </Card>
@@ -275,4 +312,3 @@ export function Skills() {
     </Layout>
   );
 }
-

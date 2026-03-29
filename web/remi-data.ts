@@ -1486,11 +1486,61 @@ export class RemiData {
     return join(homedir(), ".remi", ".claude", "skills");
   }
 
-  listSkills(): Array<{
+  private _resolveSkillsDir(scope?: string): string {
+    if (!scope || scope === "remi-global") return this.skillsDir;
+    if (scope === "claude-global") return join(homedir(), ".claude", "skills");
+    if (scope.startsWith("project:")) {
+      const projectId = scope.slice("project:".length);
+      const { ProjectStore } = require("../src/project/store.js");
+      const pStore = new ProjectStore();
+      const projects = pStore.list();
+      const proj = projects.find((p: any) => p.id === projectId);
+      if (proj?.cwd) return join(proj.cwd, ".claude", "skills");
+    }
+    return this.skillsDir;
+  }
+
+  listSkillScopes(): Array<{ scope: string; label: string; path: string; count: number }> {
+    const scopes: Array<{ scope: string; label: string; path: string; count: number }> = [];
+
+    // Claude global
+    const claudeDir = join(homedir(), ".claude", "skills");
+    if (existsSync(claudeDir)) {
+      const count = readdirSync(claudeDir, { withFileTypes: true })
+        .filter(e => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith(".")).length;
+      if (count > 0) scopes.push({ scope: "claude-global", label: "Claude Global", path: claudeDir, count });
+    }
+
+    // Remi global
+    const remiDir = this.skillsDir;
+    if (existsSync(remiDir)) {
+      const count = readdirSync(remiDir, { withFileTypes: true })
+        .filter(e => e.isDirectory() && !e.name.startsWith(".")).length;
+      if (count > 0) scopes.push({ scope: "remi-global", label: "Remi Global", path: remiDir, count });
+    }
+
+    // Project scopes
+    const { ProjectStore } = require("../src/project/store.js");
+    const pStore = new ProjectStore();
+    for (const p of pStore.list()) {
+      if (!p.cwd) continue;
+      const projSkillsDir = join(p.cwd, ".claude", "skills");
+      if (!existsSync(projSkillsDir)) continue;
+      const count = readdirSync(projSkillsDir, { withFileTypes: true })
+        .filter(e => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith(".")).length;
+      if (count > 0) {
+        scopes.push({ scope: `project:${p.id}`, label: p.name || p.id, path: projSkillsDir, count });
+      }
+    }
+
+    return scopes;
+  }
+
+  listSkills(scope?: string): Array<{
     name: string; description: string; hasSchedule: boolean;
     cron?: string; outputDir?: string; reportCount?: number; lastReportDate?: string;
   }> {
-    const dir = this.skillsDir;
+    const dir = this._resolveSkillsDir(scope);
     if (!existsSync(dir)) return [];
 
     const cronJobs = this._loadCronJobs();
@@ -1546,8 +1596,8 @@ export class RemiData {
       });
   }
 
-  getSkillTree(name: string): { name: string; path: string; type: "file" | "directory"; children?: any[] }[] | null {
-    const dir = join(this.skillsDir, name);
+  getSkillTree(name: string, scope?: string): { name: string; path: string; type: "file" | "directory"; children?: any[] }[] | null {
+    const dir = join(this._resolveSkillsDir(scope), name);
     if (!existsSync(dir) || !statSync(dir).isDirectory()) return null;
     return this._scanSkillDir(dir, "");
   }
@@ -1578,28 +1628,28 @@ export class RemiData {
     });
   }
 
-  get skillsBasePath(): string {
-    return this.skillsDir;
+  getSkillsBasePath(scope?: string): string {
+    return this._resolveSkillsDir(scope);
   }
 
-  readSkillFile(name: string, path = "SKILL.md"): string | null {
+  readSkillFile(name: string, path = "SKILL.md", scope?: string): string | null {
     if (path.includes("..") || path.startsWith("/")) return null;
-    const filePath = join(this.skillsDir, name, path);
+    const filePath = join(this._resolveSkillsDir(scope), name, path);
     if (!existsSync(filePath) || !statSync(filePath).isFile()) return null;
     return readFileSync(filePath, "utf-8");
   }
 
-  writeSkillFile(name: string, content: string, path = "SKILL.md"): boolean {
+  writeSkillFile(name: string, content: string, path = "SKILL.md", scope?: string): boolean {
     if (path.includes("..") || path.startsWith("/")) return false;
-    const filePath = join(this.skillsDir, name, path);
+    const filePath = join(this._resolveSkillsDir(scope), name, path);
     if (!existsSync(filePath)) return false;
     this._backup(filePath);
     writeFileSync(filePath, content, "utf-8");
     return true;
   }
 
-  listSkillReports(name: string): string[] {
-    const skills = this.listSkills();
+  listSkillReports(name: string, scope?: string): string[] {
+    const skills = this.listSkills(scope);
     const skill = skills.find(s => s.name === name);
     if (!skill?.outputDir || !existsSync(skill.outputDir)) return [];
     return readdirSync(skill.outputDir)
@@ -1609,9 +1659,9 @@ export class RemiData {
       .reverse();
   }
 
-  readSkillReport(name: string, date: string): string | null {
+  readSkillReport(name: string, date: string, scope?: string): string | null {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-    const skills = this.listSkills();
+    const skills = this.listSkills(scope);
     const skill = skills.find(s => s.name === name);
     if (!skill?.outputDir) return null;
     const filePath = join(skill.outputDir, `${date}.md`);

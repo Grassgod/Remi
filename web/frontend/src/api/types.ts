@@ -639,6 +639,13 @@ export interface MissionDetailItem extends MissionItem {
 
 // ── Skills ──
 
+export interface SkillScope {
+  scope: string;
+  label: string;
+  path: string;
+  count: number;
+}
+
 export interface SkillInfo {
   name: string;
   description: string;

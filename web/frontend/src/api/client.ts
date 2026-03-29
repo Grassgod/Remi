@@ -279,22 +279,29 @@ export const browseDirs = (path?: string) =>
   request<{ path: string; dirs: { name: string; path: string }[] }>(`/api/v1/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
 
 // Skills
-export const getSkills = () =>
-  request<import("./types").SkillInfo[]>("/api/v1/skills");
-export const getSkillFile = (name: string, path = "SKILL.md") =>
-  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`);
-export const putSkillFile = (name: string, content: string, path = "SKILL.md") =>
-  request(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`, {
+const _scopeQ = (scope?: string) => scope ? `scope=${encodeURIComponent(scope)}` : "";
+const _appendScope = (url: string, scope?: string) => {
+  if (!scope) return url;
+  return url.includes("?") ? `${url}&${_scopeQ(scope)}` : `${url}?${_scopeQ(scope)}`;
+};
+export const getSkillScopes = () =>
+  request<import("./types").SkillScope[]>("/api/v1/skills/scopes");
+export const getSkills = (scope?: string) =>
+  request<import("./types").SkillInfo[]>(_appendScope("/api/v1/skills", scope));
+export const getSkillFile = (name: string, path = "SKILL.md", scope?: string) =>
+  request<{ content: string }>(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`, scope));
+export const putSkillFile = (name: string, content: string, path = "SKILL.md", scope?: string) =>
+  request(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`, scope), {
     method: "PUT", body: JSON.stringify({ content }),
   });
-export const getSkillReports = (name: string) =>
-  request<string[]>(`/api/v1/skills/${encodeURIComponent(name)}/reports`);
-export const getSkillReport = (name: string, date: string) =>
-  request<{ content: string }>(`/api/v1/skills/${encodeURIComponent(name)}/reports/${date}`);
-export const getSkillsBasePath = () =>
-  request<{ basePath: string }>("/api/v1/skills/base-path");
-export const getSkillTree = (name: string) =>
-  request<import("./types").SkillFileNode[]>(`/api/v1/skills/${encodeURIComponent(name)}/tree`);
+export const getSkillReports = (name: string, scope?: string) =>
+  request<string[]>(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/reports`, scope));
+export const getSkillReport = (name: string, date: string, scope?: string) =>
+  request<{ content: string }>(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/reports/${date}`, scope));
+export const getSkillsBasePath = (scope?: string) =>
+  request<{ basePath: string }>(_appendScope("/api/v1/skills/base-path", scope));
+export const getSkillTree = (name: string, scope?: string) =>
+  request<import("./types").SkillFileNode[]>(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/tree`, scope));
 
 // Agents
 export const getAgents = () =>
