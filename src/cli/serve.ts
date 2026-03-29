@@ -9,6 +9,8 @@ import { MissionStore } from "../mission/store.js";
 import { startBoardServer } from "../../web/board/server.js";
 import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
 import { createFeishuClient } from "../connectors/feishu/client.js";
+import { migrateGroupConfigs } from "../group/migrate.js";
+import { getDb } from "../db/index.js";
 
 const log = createLogger("serve");
 
@@ -22,6 +24,9 @@ export async function runServe(_args: string[]): Promise<void> {
     log.info("Config migrated: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]");
     config = loadConfig();
   }
+
+  // One-time migration: TOML bots/allowed_groups/monitor_groups → group_configs table
+  migrateGroupConfigs(getDb(), config);
 
   const remi = Remi.boot(config);
 
