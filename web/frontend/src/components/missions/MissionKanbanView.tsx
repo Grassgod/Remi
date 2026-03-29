@@ -18,12 +18,20 @@ interface MissionKanbanViewProps {
   onStatusChange?: () => void;
 }
 
+type PendingAction = {
+  missionId: string;
+  targetStatus: string;
+  label: string;
+};
+
+const STORAGE_KEY = "remi_approver_email";
+
 export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: MissionKanbanViewProps) {
   const [, navigate] = useLocation();
   const [updating, setUpdating] = useState<string | null>(null);
-  // Track which in_review card is showing the feedback form
-  const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
-  const [feedbackText, setFeedbackText] = useState("");
+  const [pending, setPending] = useState<PendingAction | null>(null);
+  const [email, setEmail] = useState(() => localStorage.getItem(STORAGE_KEY) ?? "");
+  const [reason, setReason] = useState("");
 
   const columns = KANBAN_COLUMNS.map(key => {
     const cfg = getStatusConfig(key);
@@ -37,42 +45,87 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
     m => !KANBAN_COLUMNS.includes(m.status as any)
   );
 
-  const handleStatusChange = async (e: React.MouseEvent, missionId: string, status: string) => {
+  const startAction = (e: React.MouseEvent, missionId: string, targetStatus: string, label: string) => {
     e.stopPropagation();
-    setUpdating(missionId);
-    try {
-      await api.updateMission(missionId, { status });
-      onStatusChange?.();
-    } catch {}
-    setUpdating(null);
+    setPending({ missionId, targetStatus, label });
+    setReason("");
   };
 
-  const handleRequestChanges = (e: React.MouseEvent, missionId: string) => {
+  const cancelAction = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setFeedbackFor(missionId);
-    setFeedbackText("");
+    setPending(null);
+    setReason("");
   };
 
-  const handleSubmitFeedback = async (e: React.MouseEvent, missionId: string) => {
+  const confirmAction = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setUpdating(missionId);
+    if (!pending || !email.trim()) return;
+
+    localStorage.setItem(STORAGE_KEY, email.trim());
+    setUpdating(pending.missionId);
+
     try {
-      // Send back to in_progress with feedback appended to description
-      const mission = missions.find(m => m.id === missionId);
+      const mission = missions.find(m => m.id === pending.missionId);
       const existing = mission?.description ?? "";
-      const feedback = feedbackText.trim();
-      const newDesc = feedback
-        ? `${existing}\n\n---\n**Review Feedback** (${new Date().toLocaleDateString()}):\n${feedback}`.trim()
-        : existing;
-      await api.updateMission(missionId, {
-        status: "in_progress",
-        ...(feedback ? { description: newDesc } : {}),
+      const note = `\n\n---\n**${pending.label}** by ${email.trim()} (${new Date().toLocaleDateString()})${reason.trim() ? `:\n${reason.trim()}` : ""}`;
+      await api.updateMission(pending.missionId, {
+        status: pending.targetStatus,
+        description: (existing + note).trim(),
       });
-      setFeedbackFor(null);
-      setFeedbackText("");
+      setPending(null);
+      setReason("");
       onStatusChange?.();
     } catch {}
     setUpdating(null);
+  };
+
+  const renderConfirmForm = (missionId: string) => {
+    if (pending?.missionId !== missionId) return null;
+
+    const isDestructive = pending.targetStatus === "rejected" || pending.targetStatus === "blocked";
+    const isChanges = pending.targetStatus === "in_progress";
+    const borderColor = isDestructive ? "border-red-800" : isChanges ? "border-amber-800" : "border-emerald-800";
+    const bgColor = isDestructive ? "bg-red-950/50" : isChanges ? "bg-amber-950/50" : "bg-emerald-950/50";
+    const textColor = isDestructive ? "text-red-400" : isChanges ? "text-amber-400" : "text-emerald-400";
+
+    return (
+      <div className="mt-2 space-y-2 rounded-md border border-border bg-background p-2.5" onClick={e => e.stopPropagation()}>
+        <div className="text-[10px] font-medium text-muted-foreground">
+          Confirm: {pending.label}
+        </div>
+        <input
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          placeholder="Your email"
+          className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+        />
+        <textarea
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          placeholder="Reason (optional)"
+          rows={2}
+          className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          autoFocus
+        />
+        <div className="flex items-center gap-1.5">
+          <button
+            disabled={!email.trim() || updating === missionId}
+            onClick={confirmAction}
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md border ${borderColor} ${bgColor} px-2 py-1 text-[10px] font-medium ${textColor} transition-colors hover:opacity-80 disabled:opacity-50`}
+          >
+            <Send className="h-3 w-3" />
+            Confirm
+          </button>
+          <button
+            onClick={cancelAction}
+            className="rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -103,7 +156,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                     const isInbox = col.key === "inbox";
                     const isReview = col.key === "in_review";
                     const showActions = isInbox || isReview;
-                    const showingFeedback = feedbackFor === mission.id;
+                    const hasPending = pending?.missionId === mission.id;
 
                     return (
                       <div
@@ -155,73 +208,40 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                         </div>
 
                         {/* Actions */}
-                        {showActions && (
-                          <div className="mt-2.5 border-t border-border/50 pt-2.5">
-                            {/* Feedback form for In Review */}
-                            {isReview && showingFeedback ? (
-                              <div className="space-y-2" onClick={e => e.stopPropagation()}>
-                                <textarea
-                                  value={feedbackText}
-                                  onChange={e => setFeedbackText(e.target.value)}
-                                  placeholder="Describe what needs to change..."
-                                  rows={3}
-                                  className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                                  autoFocus
-                                />
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    disabled={isUpdating}
-                                    onClick={e => handleSubmitFeedback(e, mission.id)}
-                                    className="flex flex-1 items-center justify-center gap-1 rounded-md border border-amber-800 bg-amber-950/50 px-2 py-1 text-[10px] font-medium text-amber-400 transition-colors hover:bg-amber-900/50 disabled:opacity-50"
-                                  >
-                                    <Send className="h-3 w-3" />
-                                    Send Back
-                                  </button>
-                                  <button
-                                    onClick={e => { e.stopPropagation(); setFeedbackFor(null); }}
-                                    className="rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
+                        {showActions && !hasPending && (
+                          <div className="mt-2.5 flex items-center gap-1.5 border-t border-border/50 pt-2.5">
+                            <button
+                              disabled={isUpdating}
+                              onClick={e => startAction(e, mission.id, isInbox ? "approved" : "done", "Approve")}
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-emerald-800 bg-emerald-950/50 px-2 py-1 text-[10px] font-medium text-emerald-400 transition-colors hover:bg-emerald-900/50 disabled:opacity-50"
+                            >
+                              <CheckCircle className="h-3 w-3" />
+                              Approve
+                            </button>
+                            {isInbox ? (
+                              <button
+                                disabled={isUpdating}
+                                onClick={e => startAction(e, mission.id, "rejected", "Reject")}
+                                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-red-800 bg-red-950/50 px-2 py-1 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/50 disabled:opacity-50"
+                              >
+                                <XCircle className="h-3 w-3" />
+                                Reject
+                              </button>
                             ) : (
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  disabled={isUpdating}
-                                  onClick={e => handleStatusChange(
-                                    e,
-                                    mission.id,
-                                    isInbox ? "approved" : "done"
-                                  )}
-                                  className="flex flex-1 items-center justify-center gap-1 rounded-md border border-emerald-800 bg-emerald-950/50 px-2 py-1 text-[10px] font-medium text-emerald-400 transition-colors hover:bg-emerald-900/50 disabled:opacity-50"
-                                >
-                                  <CheckCircle className="h-3 w-3" />
-                                  Approve
-                                </button>
-                                {isInbox ? (
-                                  <button
-                                    disabled={isUpdating}
-                                    onClick={e => handleStatusChange(e, mission.id, "rejected")}
-                                    className="flex flex-1 items-center justify-center gap-1 rounded-md border border-red-800 bg-red-950/50 px-2 py-1 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/50 disabled:opacity-50"
-                                  >
-                                    <XCircle className="h-3 w-3" />
-                                    Reject
-                                  </button>
-                                ) : (
-                                  <button
-                                    disabled={isUpdating}
-                                    onClick={e => handleRequestChanges(e, mission.id)}
-                                    className="flex flex-1 items-center justify-center gap-1 rounded-md border border-amber-800 bg-amber-950/50 px-2 py-1 text-[10px] font-medium text-amber-400 transition-colors hover:bg-amber-900/50 disabled:opacity-50"
-                                  >
-                                    <MessageSquare className="h-3 w-3" />
-                                    Request Changes
-                                  </button>
-                                )}
-                              </div>
+                              <button
+                                disabled={isUpdating}
+                                onClick={e => startAction(e, mission.id, "in_progress", "Request Changes")}
+                                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-amber-800 bg-amber-950/50 px-2 py-1 text-[10px] font-medium text-amber-400 transition-colors hover:bg-amber-900/50 disabled:opacity-50"
+                              >
+                                <MessageSquare className="h-3 w-3" />
+                                Request Changes
+                              </button>
                             )}
                           </div>
                         )}
+
+                        {/* Confirm form */}
+                        {renderConfirmForm(mission.id)}
                       </div>
                     );
                   })
