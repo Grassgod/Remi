@@ -157,6 +157,13 @@ export class FeishuConnector implements Connector {
     this._bots = bots;
   }
 
+  /** Add a bot profile at runtime (for project init). */
+  addBotProfile(bot: BotProfile): void {
+    // Remove existing profile with same id, then add new
+    this._bots = this._bots.filter((b) => b.id !== bot.id);
+    this._bots.push(bot);
+  }
+
   /** Find matching bot profile for a chat ID. */
   private _findBotProfile(chatId: string): BotProfile | null {
     return this._bots.find((b) => b.groups.includes(chatId)) ?? null;

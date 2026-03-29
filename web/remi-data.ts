@@ -726,6 +726,29 @@ export class RemiData {
     return this._writeRawConfig(config);
   }
 
+  /**
+   * Add a bot profile to remi.toml [[bots]] section.
+   * Skips if a profile with the same id already exists.
+   */
+  addBotProfile(profile: { id: string; name: string; groups: string[]; cwd: string; reply_mode?: string }): boolean {
+    const config = this._readRawConfig();
+    if (!Array.isArray(config.bots)) config.bots = [];
+    const bots = config.bots as Array<Record<string, any>>;
+
+    // Skip if exists
+    if (bots.some((b) => b.id === profile.id)) return true;
+
+    bots.push({
+      id: profile.id,
+      name: profile.name,
+      groups: profile.groups,
+      cwd: profile.cwd,
+      reply_mode: profile.reply_mode ?? "thread",
+    });
+
+    return this._writeRawConfig(config);
+  }
+
   deleteProject(alias: string): boolean {
     const config = this._readRawConfig();
     if (!config.projects || !(alias in (config.projects as Record<string, string>))) return false;

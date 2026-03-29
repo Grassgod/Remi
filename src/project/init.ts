@@ -145,17 +145,45 @@ export async function runProjectInit(
   });
   if (!step2) return;
 
-  // Step 3: Write config (toml)
+  // Step 3: Write config (toml) — project + bot profile
   const step3 = await runStep(store, projectId, "write_config", async () => {
     const project = store.getById(projectId)!;
     const ok = remiData.saveProject(projectId, project.cwd!);
     if (!ok) throw new Error("Failed to write remi.toml");
+
+    // Write bot profile so this group uses the project's cwd
+    if (project.chatId) {
+      remiData.addBotProfile({
+        id: `project-${projectId}`,
+        name: input.name,
+        groups: [project.chatId],
+        cwd: project.cwd!,
+        reply_mode: "thread",
+      });
+    }
+
     return "remi.toml updated";
   });
   if (!step3) return;
 
-  // Step 4: Register complete
+  // Step 4: Register complete + activate bot profile in live connector
   await runStep(store, projectId, "register_complete", async () => {
+    const project = store.getById(projectId)!;
+
+    // Register bot profile in running connector so cwd takes effect immediately
+    if (project.chatId && project.cwd) {
+      getActiveFeishuConnector()?.addBotProfile({
+        id: `project-${projectId}`,
+        name: input.name,
+        groups: [project.chatId],
+        cwd: project.cwd,
+        allowedTools: [],
+        addDirs: [],
+        replyMode: "thread",
+        systemPrompt: "",
+      });
+    }
+
     store.updateInitStatus(projectId, "completed");
     return "Project ready";
   });
