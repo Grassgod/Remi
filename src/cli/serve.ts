@@ -5,6 +5,10 @@
 import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../config.js";
 import { Remi } from "../core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "../logger.js";
+import { MissionStore } from "../mission/store.js";
+import { startBoardServer } from "../../web/board/server.js";
+import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
+import { createFeishuClient } from "../connectors/feishu/client.js";
 
 const log = createLogger("serve");
 
@@ -43,6 +47,43 @@ export async function runServe(_args: string[]): Promise<void> {
   // Register cron schedulers from config (replaces CronTimer)
   const cronJobs = migrateToCronJobs(config);
   await remi.queue.setupSchedulers(cronJobs, remi);
+
+  // Start Mission Board web server (port 8090)
+  try {
+    const missionStore = new MissionStore();
+    const feishuClient = config.feishu.appId
+      ? createFeishuClient({
+          appId: config.feishu.appId,
+          appSecret: config.feishu.appSecret,
+          domain: config.feishu.domain,
+        })
+      : undefined;
+    startBoardServer({
+      config,
+      missionStore,
+      authToken: process.env.REMI_WEB_AUTH_TOKEN,
+      feishuClient,
+    });
+
+    // Register mission approve/reject handler for Feishu card buttons
+    registerMissionActionHandler((actionType, missionId) => {
+      const mission = missionStore.getById(missionId);
+      if (!mission) return;
+
+      if (actionType === "mission_approve") {
+        missionStore.updateStatus(missionId, "approved");
+        remi.queue.enqueueMission({ missionId, step: "rfc" }).catch((err) => {
+          log.error(`Failed to enqueue mission ${missionId}:`, err);
+        });
+        log.info(`Mission ${missionId} approved, pipeline started`);
+      } else if (actionType === "mission_reject") {
+        missionStore.updateStatus(missionId, "rejected");
+        log.info(`Mission ${missionId} rejected`);
+      }
+    });
+  } catch (err) {
+    log.warn(`Board server failed to start: ${(err as Error).message}`);
+  }
 
   log.info("=".repeat(60));
   log.info(`Remi starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${config.provider.name})`);

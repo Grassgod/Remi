@@ -6,6 +6,7 @@ export const QUEUES = {
   CONVERSATION: "remi:conversation",
   MEMORY: "remi:memory",
   CRON: "remi:cron",
+  MISSION: "remi:mission",
 } as const;
 
 /** remi:conversation — trigger for memory extraction window check */
@@ -27,4 +28,11 @@ export interface MemoryJobData {
 export interface CronJobData {
   handler: string;
   handlerConfig?: Record<string, unknown>;
+}
+
+/** remi:mission — Mission pipeline step execution */
+export interface MissionJobData {
+  missionId: string;
+  step: string;   // PipelineStep
+  attempt?: number;
 }

@@ -615,7 +615,10 @@ export function startWebSocketListener(
         const action = event.action;
         if (!action) return { toast: { type: "info", content: "No action" } };
 
-        log.info(`card action: tag=${action.tag} name=${action.name ?? ""}`);
+        log.info(`card action: tag=${action.tag} name=${action.name ?? ""} has_form_value=${!!action.form_value} has_value=${!!action.value}`);
+        if (action.form_value) {
+          log.info(`form_value keys=[${Object.keys(action.form_value).join(",")}] raw=${JSON.stringify(action.form_value)}`);
+        }
 
         if (action.form_value) {
           // Form submission via WS: action.name is the button name, not form name.
@@ -624,10 +627,13 @@ export function startWebSocketListener(
           handleFormSubmission(formActionId || action.name || "", action.form_value);
         } else if (action.tag === "button" && action.value) {
           // Button click — route to pending action handler
+          log.info(`button value: ${typeof action.value === "string" ? action.value : JSON.stringify(action.value)}`);
           const valueStr = typeof action.value === "string"
             ? action.value
             : JSON.stringify(action.value);
           handleButtonClick(valueStr);
+        } else {
+          log.warn(`card action not handled: tag=${action.tag} name=${action.name}`);
         }
 
         return { toast: { type: "success", content: "已提交，处理中..." } };

@@ -143,9 +143,14 @@ let config: RemiConfig;
 beforeEach(() => {
   tmpDir = makeTmpDir();
   config = makeConfig(tmpDir);
+  // Isolate tests from production DB — use a temp DB file
+  const { setDbPath } = require("../src/db/index.js");
+  setDbPath(join(tmpDir, "test.db"));
 });
 
 afterEach(() => {
+  const { closeDb } = require("../src/db/index.js");
+  closeDb();
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -432,10 +437,6 @@ describe("RemiCore", () => {
   });
 
   it("migrates sessions.json on first load", async () => {
-    // Clear DB sessions so migration logic triggers
-    const { getDb } = await import("../src/db/index.js");
-    getDb().run("DELETE FROM sessions");
-
     // Write a legacy sessions file
     const sessData = {
       entries: [["restored-chat", "sess-restored"]],

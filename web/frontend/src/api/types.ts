@@ -220,6 +220,8 @@ export interface MonitorStats {
   tracesCount: number;
   logsCount: number;
   topOperations: Array<{ name: string; count: number; avgMs: number }>;
+  pm2Memory: number | null;
+  pm2Restarts: number | null;
 }
 
 // Scheduler

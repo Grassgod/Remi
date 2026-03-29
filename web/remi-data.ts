@@ -6,6 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, unlinkSync, statSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join, basename, extname, dirname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
@@ -445,6 +446,67 @@ export class RemiData {
     }
   }
 
+  /** Read raw TOML text with secrets redacted */
+  readConfigRaw(): { text: string; path: string } | null {
+    const paths = [
+      join(process.cwd(), "remi.toml"),
+      join(this.root, "remi.toml"),
+    ];
+
+    for (const p of paths) {
+      if (existsSync(p)) {
+        try {
+          let text = readFileSync(p, "utf-8");
+          // Redact secrets in raw text
+          text = text.replace(
+            /^(\s*(?:app_secret|encrypt_key|verification_token|user_access_token)\s*=\s*)"[^"]*"/gm,
+            '$1"***"',
+          );
+          return { text, path: p };
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Write raw TOML text, restoring redacted secrets from original file */
+  updateConfigRaw(newText: string): { ok: true } | { error: string; line?: number } {
+    // Validate TOML syntax
+    let newConfig: Record<string, any>;
+    try {
+      newConfig = parseToml(newText) as Record<string, any>;
+    } catch (e: any) {
+      const lineMatch = e.message?.match(/line (\d+)/i);
+      return { error: e.message ?? "Invalid TOML", line: lineMatch ? Number(lineMatch[1]) : undefined };
+    }
+
+    const p = join(this.root, "remi.toml");
+
+    // Restore redacted secrets from original file
+    if (existsSync(p)) {
+      try {
+        const original = parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
+        const secretKeys = ["app_secret", "encrypt_key", "verification_token", "user_access_token"];
+        if (original.feishu && newConfig.feishu) {
+          for (const key of secretKeys) {
+            if (newConfig.feishu[key] === "***" && original.feishu[key]) {
+              newConfig.feishu[key] = original.feishu[key];
+            }
+          }
+        }
+      } catch { /* ignore, proceed with what we have */ }
+    }
+
+    try {
+      writeFileSync(p, stringifyToml(newConfig), "utf-8");
+      return { ok: true };
+    } catch (e: any) {
+      return { error: e.message ?? "Failed to write config" };
+    }
+  }
+
   // ── Projects ─────────────────────────────────────────
 
   readProjects(): Record<string, string> {
@@ -489,28 +551,41 @@ export class RemiData {
     } catch { return false; }
   }
 
-  // ── Daemon ─────────────────────────────────────────
+  // ── Daemon (PM2-based detection) ──────────────────
 
-  getDaemonPid(): number | null {
-    const p = join(this.root, "remi.pid");
-    if (!existsSync(p)) return null;
+  private _pm2Cache: { data: Array<{ name: string; pid?: number; pm2_env?: { status?: string; pm_uptime?: number; restart_time?: number }; monit?: { memory?: number; cpu?: number } }>; ts: number } | null = null;
 
+  private _getPm2Apps() {
+    const now = Date.now();
+    if (this._pm2Cache && now - this._pm2Cache.ts < 5_000) return this._pm2Cache.data;
     try {
-      return parseInt(readFileSync(p, "utf-8").trim(), 10);
+      const output = execSync("pm2 jlist 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
+      const apps = JSON.parse(output);
+      this._pm2Cache = { data: apps, ts: now };
+      return apps as typeof this._pm2Cache.data;
     } catch {
-      return null;
+      return [];
     }
   }
 
+  getDaemonPid(): number | null {
+    const remi = this._getPm2Apps().find(a => a.name === "remi");
+    if (remi?.pid && remi.pm2_env?.status === "online") return remi.pid;
+
+    // Fallback: PID file
+    const p = join(this.root, "remi.pid");
+    if (!existsSync(p)) return null;
+    try { return parseInt(readFileSync(p, "utf-8").trim(), 10); } catch { return null; }
+  }
+
   isDaemonAlive(): boolean {
+    const remi = this._getPm2Apps().find(a => a.name === "remi");
+    if (remi) return remi.pm2_env?.status === "online";
+
+    // Fallback: PID file + kill(0)
     const pid = this.getDaemonPid();
     if (!pid) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
+    try { process.kill(pid, 0); return true; } catch { return false; }
   }
 
   // ── Status (aggregate) ─────────────────────────────
@@ -773,14 +848,24 @@ export class RemiData {
   getMonitorStats(): Record<string, unknown> {
     const today = new Date().toISOString().slice(0, 10);
 
-    // Uptime from PID file
+    // Uptime from PM2
     let uptime = 0;
-    const pidFile = join(this.root, "remi.pid");
-    if (existsSync(pidFile)) {
-      try {
-        const stat = statSync(pidFile);
-        uptime = Math.floor((Date.now() - stat.mtimeMs) / 1000);
-      } catch { /* ignore */ }
+    let pm2Memory: number | null = null;
+    let pm2Restarts: number | null = null;
+    const remiApp = this._getPm2Apps().find(a => a.name === "remi");
+    if (remiApp?.pm2_env?.pm_uptime) {
+      uptime = Math.floor((Date.now() - remiApp.pm2_env.pm_uptime) / 1000);
+      pm2Memory = remiApp.monit?.memory ?? null;
+      pm2Restarts = remiApp.pm2_env.restart_time ?? null;
+    } else {
+      // Fallback: PID file mtime
+      const pidFile = join(this.root, "remi.pid");
+      if (existsSync(pidFile)) {
+        try {
+          const stat = statSync(pidFile);
+          uptime = Math.floor((Date.now() - stat.mtimeMs) / 1000);
+        } catch { /* ignore */ }
+      }
     }
 
     // Active sessions
@@ -862,6 +947,8 @@ export class RemiData {
       tracesCount: traceTotal,
       logsCount,
       topOperations,
+      pm2Memory,
+      pm2Restarts,
     };
   }
 

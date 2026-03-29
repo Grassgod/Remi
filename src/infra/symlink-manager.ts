@@ -280,10 +280,10 @@ export class SymlinkManager {
         "dir",
       );
 
-      // Wiki: {project}/.claude/CLAUDE.md → {remi}/projects/{hash}/wiki/wiki.md
+      // Wiki: {project}/.claude/CLAUDE.md → {remi}/projects/{hash}/wiki/README.md
       this.ensureOne(
         join(projectPath, ".claude", "CLAUDE.md"),
-        join(REMI_PROJECTS, hash, "wiki", "wiki.md"),
+        join(REMI_PROJECTS, hash, "wiki", "README.md"),
         "file",
       );
     }

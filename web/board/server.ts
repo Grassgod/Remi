@@ -186,14 +186,40 @@ export function createBoardApp(deps: BoardDeps): Hono {
     // Download from Feishu and cache
     if (!deps.feishuClient) return c.json({ error: "no feishu client" }, 503);
     try {
-      const { downloadImageFeishu } = await import("../../src/connectors/feishu/media.js");
-      const { buffer } = await downloadImageFeishu(deps.feishuClient, imageKey);
+      const { downloadImageFeishu, downloadMessageResourceFeishu } = await import("../../src/connectors/feishu/media.js");
+      let buffer: Buffer;
+      const msgId = c.req.query("msgId");
+      if (msgId) {
+        // Message-embedded image (user-sent screenshots etc.)
+        ({ buffer } = await downloadMessageResourceFeishu(deps.feishuClient, msgId, imageKey, "image"));
+      } else {
+        // Standalone uploaded image (bot-created)
+        ({ buffer } = await downloadImageFeishu(deps.feishuClient, imageKey));
+      }
       writeFileSync(cachePath, buffer);
       return new Response(buffer, {
         headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
       });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 502);
+    }
+  });
+
+  // ── Chat name from Feishu API ──
+
+  const chatNameCache = new Map<string, string>();
+
+  app.get("/api/chat-name/:chatId", async (c) => {
+    const chatId = c.req.param("chatId");
+    if (chatNameCache.has(chatId)) return c.json({ name: chatNameCache.get(chatId) });
+    if (!deps.feishuClient) return c.json({ name: "" }, 503);
+    try {
+      const resp = await deps.feishuClient.im.chat.get({ path: { chat_id: chatId } });
+      const name = (resp as any)?.data?.name ?? "";
+      if (name) chatNameCache.set(chatId, name);
+      return c.json({ name });
+    } catch {
+      return c.json({ name: "" });
     }
   });
 

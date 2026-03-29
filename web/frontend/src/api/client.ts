@@ -70,6 +70,11 @@ export const getTokenStatus = () => request<import("./types").TokenStatus[]>("/a
 export const getConfig = () => request<import("./types").RemiConfig>("/api/v1/config");
 export const updateConfig = (patch: Record<string, unknown>) =>
   request("/api/v1/config", { method: "PUT", body: JSON.stringify(patch) });
+export const getConfigRaw = () =>
+  request<{ text: string; path: string }>("/api/v1/config/raw");
+export const updateConfigRaw = (text: string) =>
+  request<{ ok: boolean } | { error: string; line?: number }>(
+    "/api/v1/config/raw", { method: "PUT", body: JSON.stringify({ text }) });
 
 // Bot Menu
 export const getBotMenu = () => request<any>("/api/v1/bot-menu");

@@ -14,6 +14,8 @@ import { Scheduler } from "./pages/Scheduler";
 import { Sessions } from "./pages/Sessions";
 import { Projects } from "./pages/Projects";
 import { BotMenu } from "./pages/BotMenu";
+import { Config } from "./pages/Config";
+import { Auth } from "./pages/Auth";
 import { Layout } from "./components/Layout";
 
 function NotFound() {
@@ -55,11 +57,12 @@ export function App() {
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 
+        <Route path="/auth" component={Auth} />
+
         {/* Redirects for old routes */}
-        <Route path="/auth">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/monitor">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/database">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/config">{() => { window.location.hash = "#/"; return null; }}</Route>
+        <Route path="/config" component={Config} />
         <Route path="/symlinks">{() => { window.location.hash = "#/"; return null; }}</Route>
 
         <Route component={NotFound} />

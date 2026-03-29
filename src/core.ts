@@ -22,7 +22,7 @@ import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
-import { generateP2PMenu } from "./connectors/feishu/menu-generator.js";
+
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
 import { MemoryStore } from "./memory/store.js";
@@ -944,19 +944,13 @@ export class Remi {
       remi.addConnector(feishu);
       log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
 
-      // Bot menu sync (fire-and-forget on startup)
-      // Generate dynamic P2P menu from skills + projects, fallback to static config
+      // Bot menu sync (fire-and-forget on startup) — remi.toml is the single source of truth
       const menuSyncer = new MenuSyncer({
         appId: config.feishu.appId,
         appSecret: config.feishu.appSecret,
         domain: config.feishu.domain,
       });
-      const dynamicMenu = generateP2PMenu({
-        projects: config.projects,
-        dashboardUrl: "http://10.37.66.8:6120",
-      });
-      const menuConfig = { default: dynamicMenu, users: config.botMenu.users };
-      menuSyncer.syncAll(menuConfig, config.feishu.triggerUserIds).catch((err) => {
+      menuSyncer.syncAll(config.botMenu, config.feishu.triggerUserIds).catch((err) => {
         log.warn(`Bot menu sync failed: ${err.message}`);
       });
     }
