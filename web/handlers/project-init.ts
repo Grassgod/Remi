@@ -29,18 +29,25 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "existingPath required for existing mode" }, 400);
     }
 
-    // Check duplicate
+    // Check duplicate — preserve chatId from previous attempt for reuse
     const existing = store.getById(input.alias);
     if (existing && existing.initStatus === "completed") {
       return c.json({ error: `Project "${input.alias}" already exists` }, 409);
     }
 
-    // If there's a failed previous attempt, delete it first
+    const previousChatId = existing?.chatId ?? null;
+
+    // If there's a previous attempt, delete it first (chatId preserved above)
     if (existing) {
       store.delete(input.alias);
     }
 
     const project = store.create(input);
+
+    // Restore previous chatId so step 1 skips group creation
+    if (previousChatId) {
+      store.updateField(input.alias, "chat_id", previousChatId);
+    }
 
     // Run async — don't await
     runProjectInit(store, input, data).catch((err) => {
