@@ -37,6 +37,7 @@ try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); }
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
+import { registerMcpHandlers } from "./handlers/mcp.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -87,6 +88,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
+  registerMcpHandlers(app, data);
 
   // ── Filesystem browse (for directory picker) ──
   app.get("/api/v1/fs/browse", (c) => {
