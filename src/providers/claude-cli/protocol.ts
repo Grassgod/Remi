@@ -86,6 +86,31 @@ export interface ErrorEvent {
   code: string;
 }
 
+export interface CompactingStatus {
+  kind: "compacting_status";
+  status: "compacting" | null;
+}
+
+export interface CompactBoundary {
+  kind: "compact_boundary";
+  preTokens: number | null;
+}
+
+export interface ToolProgress {
+  kind: "tool_progress";
+  toolUseId: string;
+  toolName: string;
+  elapsedSeconds: number;
+}
+
+export interface ApiRetry {
+  kind: "api_retry";
+  attempt: number;
+  maxRetries: number;
+  retryDelayMs: number;
+  error: string;
+}
+
 export interface AssistantBlocks {
   kind: "assistant_blocks";
   blocks: ParsedMessage[];
@@ -101,6 +126,10 @@ export type ParsedMessage =
   | ParseError
   | RateLimitEvent
   | ErrorEvent
+  | CompactingStatus
+  | CompactBoundary
+  | ToolProgress
+  | ApiRetry
   | AssistantBlocks
   | Record<string, unknown>;
 
@@ -150,6 +179,46 @@ export function parseLine(line: string): ParsedMessage {
       tools: (data.tools as Array<Record<string, unknown>>) ?? [],
       model: (data.model as string) ?? "",
       mcpServers: (data.mcp_servers as Array<Record<string, unknown>>) ?? [],
+    };
+  }
+
+  // System status (compacting indicator)
+  if (msgType === "system" && data.subtype === "status") {
+    return {
+      kind: "compacting_status",
+      status: (data.status as "compacting" | null) ?? null,
+    };
+  }
+
+  // System compact boundary (compaction completed)
+  if (msgType === "system" && data.subtype === "compact_boundary") {
+    const meta = (data.compact_metadata as Record<string, unknown>)
+      ?? (data.compactMetadata as Record<string, unknown>)
+      ?? {};
+    return {
+      kind: "compact_boundary",
+      preTokens: (meta.pre_tokens as number) ?? (meta.preTokens as number) ?? null,
+    };
+  }
+
+  // System API retry
+  if (msgType === "system" && data.subtype === "api_retry") {
+    return {
+      kind: "api_retry",
+      attempt: (data.attempt as number) ?? 1,
+      maxRetries: (data.max_retries as number) ?? 3,
+      retryDelayMs: (data.retry_delay_ms as number) ?? 0,
+      error: (typeof data.error === "string" ? data.error : JSON.stringify(data.error)) ?? "unknown",
+    };
+  }
+
+  // Tool progress (bash execution heartbeat)
+  if (msgType === "tool_progress") {
+    return {
+      kind: "tool_progress",
+      toolUseId: (data.tool_use_id as string) ?? "",
+      toolName: (data.tool_name as string) ?? "",
+      elapsedSeconds: (data.elapsed_time_seconds as number) ?? 0,
     };
   }
 

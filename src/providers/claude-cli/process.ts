@@ -9,13 +9,17 @@ import type { Subprocess } from "bun";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  type ApiRetry,
   type AssistantBlocks,
+  type CompactBoundary,
+  type CompactingStatus,
   type ContentDelta,
   type MediaAttachment,
   type ParsedMessage,
   type ResultMessage,
   type SystemMessage,
   type ThinkingDelta,
+  type ToolProgress,
   type ToolResultMessage,
   type ToolUseRequest,
   formatToolResult,
@@ -415,6 +419,39 @@ export class ClaudeProcessManager {
               }
             }
           }
+          continue;
+        }
+
+        // Compacting status — CLI is about to compress context, extend timeout
+        if (msg.kind === "compacting_status") {
+          if ((msg as CompactingStatus).status === "compacting") {
+            this._dynamicTimeoutMs = 15 * 60 * 1000; // 15 min for compaction
+            retriedAfterTimeout = false; // reset retry so compaction gets a fresh chance
+            log.info("Context compaction started — timeout extended to 15min");
+          }
+          continue;
+        }
+
+        // Compact boundary — compaction finished, reset timeout
+        if (msg.kind === "compact_boundary") {
+          const preTokens = (msg as CompactBoundary).preTokens;
+          this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
+          log.info(`Context compaction completed (preTokens=${preTokens}) — timeout reset`);
+          continue;
+        }
+
+        // Tool progress — bash heartbeat, proves process is alive
+        if (msg.kind === "tool_progress") {
+          this._dynamicTimeoutMs = 30 * 60 * 1000; // keep 30 min for active tool
+          continue; // internal signal, don't yield to downstream
+        }
+
+        // API retry — extend timeout to cover retry delay
+        if (msg.kind === "api_retry") {
+          const retry = msg as ApiRetry;
+          const extendMs = retry.retryDelayMs + 120_000;
+          this._dynamicTimeoutMs = Math.max(extendMs, this._dynamicTimeoutMs);
+          log.warn(`API retry ${retry.attempt}/${retry.maxRetries}: ${retry.error} — timeout extended to ${Math.round(this._dynamicTimeoutMs / 1000)}s`);
           continue;
         }
 
