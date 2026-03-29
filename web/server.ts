@@ -73,17 +73,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     return c.json({ error: "Internal server error" }, 500);
   });
 
-  // Migrate toml projects → DB (one-time)
-  try {
-    const projectStore = new ProjectStore();
-    const tomlProjects = data.readProjects();
-    if (Object.keys(tomlProjects).length > 0) {
-      projectStore.importFromToml(tomlProjects);
-    }
-  } catch (err) {
-    console.error("[project-migration]", err);
-  }
-
   // Register all handler modules
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
@@ -105,7 +94,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
   registerMcpHandlers(app, data);
-  registerProjectInitHandlers(app, data);
+  registerProjectInitHandlers(app);
 
   // ── Filesystem browse (for directory picker) ──
   app.get("/api/v1/fs/browse", (c) => {

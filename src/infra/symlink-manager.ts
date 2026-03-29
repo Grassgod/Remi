@@ -69,7 +69,7 @@ export class SymlinkManager {
   private verified = new Set<string>();
   private _projects: Record<string, string> = {};
 
-  /** Register known projects from remi.toml [projects] */
+  /** Register known projects (id → cwd mapping). */
   setProjects(projects: Record<string, string>): void {
     this._projects = projects;
   }

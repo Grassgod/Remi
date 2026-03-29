@@ -6,7 +6,7 @@
  *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
  */
 
-import type { BotProfile, FeishuConfig } from "../../config.js";
+import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
@@ -122,7 +122,6 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
 export class FeishuConnector implements Connector {
   readonly name = "feishu";
   private _config: FeishuConfig & { domain?: string; connectionMode?: string };
-  private _bots: BotProfile[] = [];
   private _wsHandle: FeishuWSHandle | null = null;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
@@ -151,23 +150,6 @@ export class FeishuConnector implements Connector {
   /** Register a handler that kills the CLI process for a given sessionKey. */
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
     this._abortHandler = handler;
-  }
-
-  /** Set bot profiles for per-group reply mode configuration. */
-  setBotProfiles(bots: BotProfile[]): void {
-    this._bots = bots;
-  }
-
-  /** Add a bot profile at runtime (for project init). */
-  addBotProfile(bot: BotProfile): void {
-    // Remove existing profile with same id, then add new
-    this._bots = this._bots.filter((b) => b.id !== bot.id);
-    this._bots.push(bot);
-  }
-
-  /** Find matching bot profile for a chat ID. */
-  private _findBotProfile(chatId: string): BotProfile | null {
-    return this._bots.find((b) => b.groups.includes(chatId)) ?? null;
   }
 
   /** Set the token provider (from 1Passport AuthStore). */
@@ -205,11 +187,6 @@ export class FeishuConnector implements Connector {
     this._handler = null;
     this._streamHandler = null;
     log.info("connector stopped");
-  }
-
-  /** Add groups to the live whitelist (for project init). */
-  addGroups(chatIds: string[]): void {
-    this._wsHandle?.addGroups(chatIds);
   }
 
   async reply(chatId: string, response: AgentResponse): Promise<void> {

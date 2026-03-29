@@ -689,73 +689,6 @@ export class RemiData {
     }
   }
 
-  // ── Projects ─────────────────────────────────────────
-
-  readProjects(): Record<string, string> {
-    const config = this._readRawConfig();
-    return (config.projects ?? {}) as Record<string, string>;
-  }
-
-  saveProject(alias: string, path: string): boolean {
-    const config = this._readRawConfig();
-    if (!config.projects) config.projects = {};
-    (config.projects as Record<string, string>)[alias] = path;
-    return this._writeRawConfig(config);
-  }
-
-  /**
-   * Add a chat ID to feishu allowed_groups and monitor_groups in remi.toml.
-   */
-  addGroupToWhitelist(chatId: string): boolean {
-    const config = this._readRawConfig();
-    if (!config.feishu) config.feishu = {};
-    const feishu = config.feishu as Record<string, any>;
-
-    // Add to allowed_groups
-    if (!Array.isArray(feishu.allowed_groups)) feishu.allowed_groups = [];
-    if (!feishu.allowed_groups.includes(chatId)) {
-      feishu.allowed_groups.push(chatId);
-    }
-
-    // Add to monitor_groups (so bot auto-replies without @mention)
-    if (!Array.isArray(feishu.monitor_groups)) feishu.monitor_groups = [];
-    if (!feishu.monitor_groups.includes(chatId)) {
-      feishu.monitor_groups.push(chatId);
-    }
-
-    return this._writeRawConfig(config);
-  }
-
-  /**
-   * Add a bot profile to remi.toml [[bots]] section.
-   * Skips if a profile with the same id already exists.
-   */
-  addBotProfile(profile: { id: string; name: string; groups: string[]; cwd: string; reply_mode?: string }): boolean {
-    const config = this._readRawConfig();
-    if (!Array.isArray(config.bots)) config.bots = [];
-    const bots = config.bots as Array<Record<string, any>>;
-
-    // Skip if exists
-    if (bots.some((b) => b.id === profile.id)) return true;
-
-    bots.push({
-      id: profile.id,
-      name: profile.name,
-      groups: profile.groups,
-      cwd: profile.cwd,
-      reply_mode: profile.reply_mode ?? "thread",
-    });
-
-    return this._writeRawConfig(config);
-  }
-
-  deleteProject(alias: string): boolean {
-    const config = this._readRawConfig();
-    if (!config.projects || !(alias in (config.projects as Record<string, string>))) return false;
-    delete (config.projects as Record<string, string>)[alias];
-    return this._writeRawConfig(config);
-  }
-
   private _readRawConfig(): Record<string, any> {
     const paths = [
       join(process.cwd(), "remi.toml"),
@@ -1919,8 +1852,11 @@ export class RemiData {
     });
 
     // Project scopes
-    const projects = this.readProjects();
-    for (const [alias, projPath] of Object.entries(projects)) {
+    const { ProjectStore } = require("../src/project/store.js");
+    const pStore = new ProjectStore();
+    const dbProjects: Record<string, string> = {};
+    for (const p of pStore.list()) { if (p.cwd) dbProjects[p.id] = p.cwd; }
+    for (const [alias, projPath] of Object.entries(dbProjects)) {
       const mcpJsonPath = join(projPath, ".mcp.json");
       const exists = existsSync(mcpJsonPath);
       let count = 0;

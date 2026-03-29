@@ -3,7 +3,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { getDb, kvGet, kvSet } from "../db/index.js";
+import { getDb } from "../db/index.js";
 import type {
   Project,
   ProjectInitInput,
@@ -135,32 +135,6 @@ export class ProjectStore {
     this.db.run("DELETE FROM projects WHERE id = ?", [id]);
   }
 
-  // ── Migration ──
-
-  importFromToml(projects: Record<string, string>): number {
-    if (kvGet("projects_migrated") === "true") return 0;
-
-    let count = 0;
-    const now = new Date().toISOString();
-    const completedSteps = DEFAULT_INIT_STEPS.map((s) => ({
-      ...s,
-      status: "done" as const,
-      completedAt: now,
-    }));
-    const stepsJson = JSON.stringify(completedSteps);
-
-    for (const [alias, cwd] of Object.entries(projects)) {
-      this.db.run(
-        `INSERT OR IGNORE INTO projects (id, name, cwd, init_status, init_steps, created_at, updated_at)
-         VALUES (?, ?, ?, 'completed', ?, ?, ?)`,
-        [alias, alias, cwd, stepsJson, now, now],
-      );
-      count++;
-    }
-
-    kvSet("projects_migrated", "true");
-    return count;
-  }
 
   // ── Internal ──
 

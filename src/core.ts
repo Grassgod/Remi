@@ -14,9 +14,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import type { BotProfile, RemiConfig } from "./config.js";
+import type { RemiConfig } from "./config.js";
 import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
+import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
@@ -24,7 +25,6 @@ import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
-import { setActiveFeishuConnector } from "./connectors/feishu/registry.js";
 
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
@@ -711,53 +711,22 @@ export class Remi {
       case "project":
       case "p": {
         const arg = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+        const projectStore = new ProjectStore();
 
         if (!arg) {
           // Show current project + list
           const currentCwd = sessDb.getSession(sessionKey)?.cwd ?? undefined;
-          const projects = this.config.projects;
-          const aliases = Object.keys(projects);
+          const projects = projectStore.list().filter((p) => p.cwd);
           const lines = [`📍 当前: ${currentCwd ?? "~ (默认)"}`];
-          if (aliases.length > 0) {
+          if (projects.length > 0) {
             lines.push("", "可用项目:");
-            for (const [alias, path] of Object.entries(projects)) {
-              const marker = currentCwd === path ? " ◀" : "";
-              lines.push(`  ${alias}  →  ${path}${marker}`);
+            for (const p of projects) {
+              const marker = currentCwd === p.cwd ? " ◀" : "";
+              lines.push(`  ${p.id}  →  ${p.cwd}${marker}`);
             }
           } else {
             lines.push("", "暂无注册项目，请在 Dashboard → Projects 中添加。");
           }
-          return { text: lines.join("\n") };
-        }
-
-        if (arg.startsWith("init ")) {
-          const initSlug = arg.slice(5).trim();
-          if (!initSlug) return { text: "用法: `/project init <slug>` — 例如 `/project init larkparser-ts`" };
-
-          // Check if already registered
-          if (this.config.projects[initSlug]) {
-            const existingPath = typeof this.config.projects[initSlug] === "string"
-              ? this.config.projects[initSlug]
-              : (this.config.projects[initSlug] as any)?.cwd ?? "";
-            return { text: `项目 \`${initSlug}\` 已注册: ${existingPath}\n看板: http://10.37.66.8:8090/board/${initSlug}` };
-          }
-
-          // Use current session cwd or default home
-          const initCwd = sessDb.getSession(sessionKey)?.cwd ?? homedir();
-          // Register in config (runtime only — user should persist to remi.toml)
-          this.config.projects[initSlug] = initCwd;
-
-          const lines = [
-            `✅ 项目 **${initSlug}** 已初始化`,
-            `- 目录: ${initCwd}`,
-            `- 看板: http://10.37.66.8:8090/board/${initSlug}`,
-            "",
-            "请在 remi.toml 中持久化配置:",
-            "```toml",
-            `[projects]`,
-            `${initSlug} = "${initCwd}"`,
-            "```",
-          ];
           return { text: lines.join("\n") };
         }
 
@@ -773,8 +742,9 @@ export class Remi {
 
         // Resolve alias or direct path
         let targetPath: string;
-        if (this.config.projects[arg]) {
-          targetPath = this.config.projects[arg];
+        const matched = projectStore.getById(arg);
+        if (matched?.cwd) {
+          targetPath = matched.cwd;
         } else {
           // Treat as direct path, expand ~
           targetPath = arg.startsWith("~") ? arg.replace("~", homedir()) : resolve(arg);
@@ -794,7 +764,7 @@ export class Remi {
         }
 
         // Find alias name for display
-        const aliasName = Object.entries(this.config.projects).find(([, p]) => p === targetPath)?.[0];
+        const aliasName = matched?.id ?? projectStore.list().find((p) => p.cwd === targetPath)?.id;
         return { text: `项目已切换: ${aliasName ? `${aliasName} (${targetPath})` : targetPath}\n下条消息将在新目录启动 Claude。` };
       }
       case "context": {
@@ -940,12 +910,8 @@ export class Remi {
     // 3. Feishu connector
     if (hasFeishuCreds) {
       const feishuConfig = { ...config.feishu };
-      // Group filtering is now DB-based via group_configs table.
-      // No need to merge bot profile groups into allowedGroups.
-
       const feishu = new FeishuConnector(feishuConfig);
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
-      feishu.setBotProfiles(config.bots);
       // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
         remi.abortSession(chatId);  // Immediately unblock _readline via AbortSignal
@@ -955,8 +921,7 @@ export class Remi {
         }
       });
       remi.addConnector(feishu);
-      setActiveFeishuConnector(feishu);
-      log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
+      log.info("Registered Feishu connector (with 1Passport)");
 
       // Bot menu sync (fire-and-forget on startup) — remi.toml is the single source of truth
       const menuSyncer = new MenuSyncer({
@@ -972,7 +937,10 @@ export class Remi {
     // 4. SymlinkManager — 3-layer centralization
     const { symlinkManager } = require("./infra/symlink-manager");
     remi._symlinkManager = symlinkManager;
-    symlinkManager.setProjects(config.projects);
+    const pStore = new ProjectStore();
+    const projectMap: Record<string, string> = {};
+    for (const p of pStore.list()) { if (p.cwd) projectMap[p.id] = p.cwd; }
+    symlinkManager.setProjects(projectMap);
     symlinkManager.ensureAllProjects();
     symlinkManager.ensureGlobals();
     symlinkManager.ensureProjectMemoryLinks();

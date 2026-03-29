@@ -538,7 +538,6 @@ export type FeishuMessageCallback = (msg: ParsedFeishuMessage) => Promise<void>;
 
 export type FeishuWSHandle = {
   stop(): void;
-  addGroups(chatIds: string[]): void;
 };
 
 /** Start WebSocket listener. Returns a handle to stop it. */
@@ -655,9 +654,6 @@ export function startWebSocketListener(
     stop() {
       stopped = true;
       // WSClient doesn't expose a close method; setting flag prevents further processing
-    },
-    addGroups(_chatIds: string[]) {
-      // No-op: group management is now DB-based
     },
   };
 }

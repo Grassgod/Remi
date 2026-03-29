@@ -4,12 +4,11 @@
 
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import type { RemiData } from "../remi-data.js";
 import { ProjectStore } from "../../src/project/store.js";
 import type { ProjectInitInput } from "../../src/project/model.js";
 import { runProjectInit, retryProjectInit, subscribe } from "../../src/project/init.js";
 
-export function registerProjectInitHandlers(app: Hono, data: RemiData) {
+export function registerProjectInitHandlers(app: Hono) {
   const store = new ProjectStore();
 
   // ── Start init ──
@@ -49,7 +48,7 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
     }
 
     // Run async — don't await
-    runProjectInit(store, input, data).catch((err) => {
+    runProjectInit(store, input).catch((err) => {
       console.error(`[project-init] Fatal error for ${input.alias}:`, err);
     });
 
@@ -70,7 +69,7 @@ export function registerProjectInitHandlers(app: Hono, data: RemiData) {
 
     try {
       // Run async — don't await
-      retryProjectInit(store, id, data).catch((err) => {
+      retryProjectInit(store, id).catch((err) => {
         console.error(`[project-init] Retry error for ${id}:`, err);
       });
       return c.json({ ok: true });

@@ -7,7 +7,6 @@
 export type InitStepName =
   | "create_chat"
   | "setup_dir"
-  | "write_config"
   | "register_complete";
 
 export type InitStepStatus = "pending" | "running" | "done" | "error";
@@ -55,6 +54,5 @@ export interface ProjectInitInput {
 export const DEFAULT_INIT_STEPS: InitStep[] = [
   { name: "create_chat", label: "Create Feishu group", status: "pending" },
   { name: "setup_dir", label: "Setup directory", status: "pending" },
-  { name: "write_config", label: "Write configuration", status: "pending" },
   { name: "register_complete", label: "Register project", status: "pending" },
 ];

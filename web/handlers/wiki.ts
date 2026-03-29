@@ -3,6 +3,15 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
+import { ProjectStore } from "../../src/project/store.js";
+
+/** Get alias→cwd map from DB projects table. */
+function getProjectMap(): Record<string, string> {
+  const store = new ProjectStore();
+  const map: Record<string, string> = {};
+  for (const p of store.list()) { if (p.cwd) map[p.id] = p.cwd; }
+  return map;
+}
 
 // ── Path constants ──────────────────────────────────────
 
@@ -116,7 +125,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
   // GET /api/v1/wiki/tree
   app.get("/api/v1/wiki/tree", (c) => {
     const tree: TreeNode[] = [];
-    const projects = data.readProjects(); // alias → path from remi.toml
+    const projects = getProjectMap(); // alias → path from remi.toml
 
     // Home — ~/.remi/wiki/ top-level content (excluding projects/)
     if (existsSync(WIKI_DIR)) {
@@ -211,7 +220,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
     const path = c.req.query("path");
     if (!path) return c.json({ error: "Missing path parameter" }, 400);
 
-    const projects = data.readProjects();
+    const projects = getProjectMap();
     const fsPath = resolveFilePath(path, projects);
     if (!fsPath || !existsSync(fsPath)) {
       return c.json({ error: "File not found" }, 404);
@@ -254,7 +263,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "content required" }, 400);
     }
 
-    const projects = data.readProjects();
+    const projects = getProjectMap();
     const fsPath = resolveFilePath(path, projects);
     if (!fsPath) return c.json({ error: "Invalid path" }, 400);
     if (!existsSync(fsPath) || !statSync(fsPath).isFile()) {
@@ -276,7 +285,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
 
     const limit = Math.min(parseInt(c.req.query("limit") ?? "20", 10), 100);
 
-    const projects = data.readProjects();
+    const projects = getProjectMap();
     const fsPath = resolveFilePath(path, projects);
     if (!fsPath || !existsSync(fsPath)) {
       return c.json({ error: "File not found" }, 404);
@@ -309,7 +318,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       return c.json({ error: "Missing path or commit parameter" }, 400);
     }
 
-    const projects = data.readProjects();
+    const projects = getProjectMap();
     const fsPath = resolveFilePath(path, projects);
     if (!fsPath) return c.json({ error: "File not found" }, 404);
 

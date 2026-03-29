@@ -7,8 +7,6 @@ import { join } from "node:path";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat } from "../connectors/feishu/chat.js";
-import { getActiveFeishuConnector } from "../connectors/feishu/registry.js";
-import type { RemiData } from "../../web/remi-data.js";
 import { GroupConfigStore } from "../group/store.js";
 
 // Jack's hardcoded open_id — only group member besides Remi Bot
@@ -84,7 +82,6 @@ async function runStep(
 export async function runProjectInit(
   store: ProjectStore,
   input: ProjectInitInput,
-  remiData: RemiData,
 ): Promise<void> {
   const projectId = input.alias;
 
@@ -109,8 +106,6 @@ export async function runProjectInit(
       monitor: true,  // project groups auto-reply by default
       replyMode: "thread",
     });
-
-    getActiveFeishuConnector()?.addGroups([chatId]);
 
     return chatId;
   });
@@ -153,26 +148,7 @@ export async function runProjectInit(
   });
   if (!step2) return;
 
-  // Step 3: Register group config (DB) — replaces remi.toml writes
-  const step3 = await runStep(store, projectId, "write_config", async () => {
-    const project = store.getById(projectId)!;
-
-    // Ensure group_configs has an entry for this project's chat
-    if (project.chatId) {
-      const gcStore = new GroupConfigStore();
-      gcStore.upsert({
-        chatId: project.chatId,
-        projectId: projectId,
-        monitor: true,
-        replyMode: "thread",
-      });
-    }
-
-    return "group config registered";
-  });
-  if (!step3) return;
-
-  // Step 4: Register complete
+  // Step 3: Register complete
   await runStep(store, projectId, "register_complete", async () => {
     store.updateInitStatus(projectId, "completed");
     return "Project ready";
@@ -187,7 +163,6 @@ export async function runProjectInit(
 export async function retryProjectInit(
   store: ProjectStore,
   projectId: string,
-  remiData: RemiData,
 ): Promise<void> {
   const project = store.getById(projectId);
   if (!project) throw new Error(`Project not found: ${projectId}`);
@@ -211,5 +186,5 @@ export async function retryProjectInit(
     }
   }
 
-  await runProjectInit(store, input, remiData);
+  await runProjectInit(store, input);
 }

@@ -27,12 +27,6 @@ export interface FeishuConfig {
   domain: "feishu" | "lark" | (string & {});
   connectionMode: "websocket";
   userAccessToken: string;
-  /** @deprecated Use `allowedGroups` + `monitorGroups` instead. */
-  autoReplyGroups: string[];
-  /** Whitelist of group chat IDs allowed to interact with Remi. Empty = no restriction. */
-  allowedGroups: string[];
-  /** Group chat IDs where Remi reads all messages without requiring @mention. */
-  monitorGroups: string[];
   /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
   triggerUserIds: string[];
 }
@@ -111,27 +105,6 @@ export interface ServiceConfig {
  * Each profile overrides provider defaults (cwd, tools, system prompt)
  * and can control reply behavior (thread vs direct).
  */
-export interface BotProfile {
-  /** Unique identifier for this bot profile. */
-  id: string;
-  /** Display name. */
-  name: string;
-  /** Group chat IDs where this bot profile is active. */
-  groups: string[];
-  /** Working directory for Claude Code (loads CLAUDE.md from here). */
-  cwd: string;
-  /** Allowed tools whitelist. Empty = use global default. */
-  allowedTools: string[];
-  /** Additional directories to add (--add-dir). */
-  addDirs: string[];
-  /** Reply mode: "thread" = reply under user's message, "direct" = reply in chat. */
-  replyMode: "thread" | "direct";
-  /** Override system prompt. Empty = use default. */
-  systemPrompt: string;
-  /** Provider override for this group. e.g. "claude_cli" | "aiden_cli". Unset = global default. */
-  provider?: string;
-}
-
 export interface ByteDanceSSOConfig {
   clientId: string;
   ssoHost: string;
@@ -233,10 +206,6 @@ export interface RemiConfig {
   cronJobs: CronJobConfig[];
   /** Registered services managed by PM2. */
   services: ServiceConfig[];
-  /** Registered project aliases: alias → absolute path. */
-  projects: Record<string, string>;
-  /** Configurable bot profiles for specific groups. */
-  bots: BotProfile[];
   /** Bot menu config (千人千面菜单). */
   botMenu: BotMenuConfig;
   /** Proxy settings for outbound HTTP requests. */
@@ -274,9 +243,6 @@ function defaultFeishuConfig(): FeishuConfig {
     domain: "feishu",
     connectionMode: "websocket",
     userAccessToken: "",
-    autoReplyGroups: [],
-    allowedGroups: [],
-    monitorGroups: [],
     triggerUserIds: [],
   };
 }
@@ -297,8 +263,6 @@ export function defaultRemiConfig(): RemiConfig {
     scheduledSkills: [],
     cronJobs: [],
     services: [],
-    projects: {},
-    bots: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
     tracing: {
@@ -347,11 +311,11 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const cronData = (fileData.cron ?? {}) as Record<string, unknown>;
   const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
-  const botsData = (fileData.bots ?? []) as Array<Record<string, unknown>>;
+
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
-  const projectsData = (fileData.projects ?? {}) as Record<string, string>;
+
   const botMenuData = (fileData.bot_menu ?? {}) as Record<string, unknown>;
 
   const env = process.env;
@@ -373,10 +337,6 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       domain: (env.FEISHU_DOMAIN ?? (feishuData.domain as string) ?? "feishu") as FeishuConfig["domain"],
       connectionMode: "websocket" as const,
       userAccessToken: env.FEISHU_USER_ACCESS_TOKEN ?? (feishuData.user_access_token as string) ?? "",
-      autoReplyGroups: (feishuData.auto_reply_groups as string[]) ?? [],
-      allowedGroups: (feishuData.allowed_groups as string[]) ?? [],
-      monitorGroups: (feishuData.monitor_groups as string[]) ??
-                     (feishuData.auto_reply_groups as string[]) ?? [],
       triggerUserIds: (feishuData.trigger_user_ids as string[]) ?? [],
     },
     bytedanceSso: bytedanceSsoData
@@ -440,18 +400,6 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       http: (proxyData.http as string) ?? "",
       noProxy: (proxyData.no_proxy as string) ?? "",
     },
-    projects: projectsData,
-    bots: botsData.map((b) => ({
-      id: (b.id as string) ?? "",
-      name: (b.name as string) ?? "",
-      groups: (b.groups as string[]) ?? [],
-      cwd: (b.cwd as string) ?? "",
-      allowedTools: (b.allowed_tools as string[]) ?? [],
-      addDirs: (b.add_dirs as string[]) ?? [],
-      replyMode: ((b.reply_mode as string) ?? "direct") as BotProfile["replyMode"],
-      systemPrompt: (b.system_prompt as string) ?? "",
-      provider: (b.provider as string) || undefined,
-    })),
     botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData
       ? {

@@ -93,12 +93,11 @@ function buildStepPrompt(mission: { title: string; description: string | null; o
   }
 }
 
-function resolveProjectCwd(remi: Remi, projectId: string): string {
-  const projects = remi.config.projects;
-  const value = projects[projectId];
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object") return (value as any).cwd ?? process.env.HOME ?? "~";
-  return process.env.HOME ?? "~";
+function resolveProjectCwd(_remi: Remi, projectId: string): string {
+  const { ProjectStore } = require("../../project/store.js");
+  const store = new ProjectStore();
+  const project = store.getById(projectId);
+  return project?.cwd ?? process.env.HOME ?? "~";
 }
 
 function resolveNextStep(current: PipelineStep): PipelineStep | null {
