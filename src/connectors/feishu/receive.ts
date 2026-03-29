@@ -13,6 +13,19 @@ import { createLogger } from "../../logger.js";
 const log = createLogger("feishu");
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import { createFeishuClient, createFeishuWSClient, createEventDispatcher, probeFeishu } from "./client.js";
+import { getDb } from "../../db/index.js";
+
+/** Check if a chatId belongs to a registered project (DB query, fast). */
+function _isProjectChat(chatId: string): boolean {
+  try {
+    const row = getDb()
+      .query("SELECT 1 FROM projects WHERE chat_id = ? AND (deleted = 0 OR deleted IS NULL) LIMIT 1")
+      .get(chatId);
+    return !!row;
+  } catch {
+    return false;
+  }
+}
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu } from "./send.js";
@@ -426,12 +439,15 @@ export async function processFeishuMessageEvent(
   // 4) monitorGroups auto-reply for messages without explicit @mentions
   let monitored = false;
   if (ctx.chatType === "group") {
-    const allowed = !opts?.allowedGroups?.length || opts.allowedGroups.includes(ctx.chatId);
-    if (!allowed) {
+    // Check allowedGroups (config) + projects table (DB) for dynamic project groups
+    const inConfig = !opts?.allowedGroups?.length || opts.allowedGroups.includes(ctx.chatId);
+    const inProjects = !inConfig ? _isProjectChat(ctx.chatId) : false;
+    if (!inConfig && !inProjects) {
       log.info(`blocked group message ${messageId} (chatId=${ctx.chatId}, not in allowedGroups)`);
       return null;
     }
-    const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) ?? false;
+    // Project groups are auto-monitored (no @mention needed)
+    const isMonitor = opts?.monitorGroups?.includes(ctx.chatId) || inProjects;
     const mentions = event.message.mentions ?? [];
     const directedAtOthers = mentions.length > 0 && !ctx.mentionedBot;
     const isInThread = !!event.message.root_id;

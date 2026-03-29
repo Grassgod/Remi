@@ -166,24 +166,10 @@ export async function runProjectInit(
   });
   if (!step3) return;
 
-  // Step 4: Register complete + restart daemon to reload config
+  // Step 4: Register complete
   await runStep(store, projectId, "register_complete", async () => {
     store.updateInitStatus(projectId, "completed");
-
-    // remi-web and remi are separate PM2 processes — in-memory hot-reload
-    // won't work cross-process. Restart the daemon so it reloads remi.toml
-    // with the new allowedGroups + bot profile.
-    try {
-      const proc = Bun.spawn(["pm2", "restart", "remi", "--update-env"], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      await proc.exited;
-    } catch {
-      // Non-fatal — user can restart manually
-    }
-
-    return "Project ready (daemon restarted)";
+    return "Project ready";
   });
 
   emit(projectId, { type: "done", data: { status: "completed" } });
