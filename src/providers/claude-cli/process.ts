@@ -202,11 +202,14 @@ export class ClaudeProcessManager {
           if (this._process && !this._process.killed) {
             // EOF detected — process closed stdout (crash/exit), don't retry
             if (this._eofDetected) {
-              // Wait briefly for process to fully exit so we can get exitCode
+              // Kill process first so stderr closes, then read it
+              const pid = this._process.pid;
+              this._process.kill();
+              // Wait briefly for process to fully exit
               await new Promise((r) => setTimeout(r, 500));
               const exitCode = this._process.exitCode;
               const stderr = await this._readStderr();
-              log.error(`CLI process exited (EOF, exitCode=${exitCode}, pid=${this._process.pid})${stderr ? ` stderr: ${stderr}` : ""}`);
+              log.error(`CLI process crashed (EOF, exitCode=${exitCode}, pid=${pid})${stderr ? ` stderr: ${stderr}` : ""}`);
               yield {
                 kind: "error",
                 error: `CLI process exited unexpectedly (code ${exitCode}).${stderr ? ` ${stderr}` : ""}`,
@@ -553,8 +556,11 @@ export class ClaudeProcessManager {
   private async _readStderr(): Promise<string> {
     if (!this._process) return "";
     try {
-      const text = await new Response(this._process.stderr).text();
-      return text.trim().slice(0, 500);
+      const result = await Promise.race([
+        new Response(this._process.stderr).text(),
+        new Promise<string>((r) => setTimeout(() => r(""), 3000)), // 3s timeout
+      ]);
+      return result.trim().slice(0, 500);
     } catch {
       return "";
     }
