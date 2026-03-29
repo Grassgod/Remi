@@ -9,6 +9,7 @@ import { MemoryEntity } from "./pages/MemoryEntity";
 import { MemoryDaily } from "./pages/MemoryDaily";
 import { Wiki } from "./pages/Wiki";
 import { Skills } from "./pages/Skills";
+import { Mcp } from "./pages/Mcp";
 import { Analytics } from "./pages/Analytics";
 import { Traces } from "./pages/Traces";
 import { Logs } from "./pages/Logs";
@@ -48,6 +49,7 @@ export function App() {
         <Route path="/memory/daily/:date" component={MemoryDaily} />
         <Route path="/wiki" component={Wiki} />
         <Route path="/skills" component={Skills} />
+        <Route path="/mcp" component={Mcp} />
 
         {/* Observability */}
         <Route path="/analytics" component={Analytics} />
