@@ -544,3 +544,23 @@ export interface McpServerInfo {
   command: string;
   args: string[];
 }
+
+// MCP Scopes
+export interface McpScope {
+  id: string;
+  label: string;
+  path: string;
+  mcpJsonPath: string;
+  serverCount: number;
+  hasConfig: boolean;
+}
+
+export interface McpScopeDetail {
+  raw: string;
+  servers: Array<{
+    name: string;
+    command: string;
+    args: string[];
+    envKeys: string[];
+  }>;
+}

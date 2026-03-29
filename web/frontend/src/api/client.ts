@@ -256,3 +256,27 @@ export const getAgentSkillFile = (agentName: string, skillName: string, path = "
   request<{ content: string }>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/file?path=${encodeURIComponent(path)}`);
 export const getMcpServers = () =>
   request<import("./types").McpServerInfo[]>("/api/v1/mcp");
+
+// MCP
+export const getMcpScopes = () =>
+  request<import("./types").McpScope[]>("/api/v1/mcp/scopes");
+
+export const getMcpScopeDetail = (id: string) =>
+  request<import("./types").McpScopeDetail>(`/api/v1/mcp/scopes/${encodeURIComponent(id)}`);
+
+export const writeMcpScope = (id: string, content: string) =>
+  request<{ ok: boolean }>(`/api/v1/mcp/scopes/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+
+export const deleteMcpServer = (scopeId: string, serverName: string) =>
+  request<{ ok: boolean }>(`/api/v1/mcp/scopes/${encodeURIComponent(scopeId)}/servers/${encodeURIComponent(serverName)}`, {
+    method: "DELETE",
+  });
+
+export const mergeMcpServers = (scopeId: string, content: string) =>
+  request<{ ok: boolean; added: string[] }>(`/api/v1/mcp/scopes/${encodeURIComponent(scopeId)}/merge`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
