@@ -6,7 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { MessageSquare, Search, ArrowLeft, ChevronRight } from "lucide-react";
+import { MessageSquare, Search, ArrowLeft, ChevronRight, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "../api/client";
 import type { ConversationSummary, ChatMessage, StepItem } from "../api/types";
@@ -115,6 +115,24 @@ export function Conversations() {
 
   useEffect(() => { api.getChats().then(setChats).catch(() => {}); }, []);
   useEffect(() => { fetchConversations(true); }, [filterChatId]);
+
+  // Auto-select conversation from sessionStorage (set by Traces page)
+  useEffect(() => {
+    const raw = sessionStorage.getItem("conv-target");
+    if (raw) {
+      sessionStorage.removeItem("conv-target");
+      try {
+        const { chatId, threadId } = JSON.parse(raw);
+        if (chatId) {
+          api.getConversations(50, 0, chatId).then((data) => {
+            setConversations(data);
+            const match = data.find((c: ConversationSummary) => !threadId || c.threadId === threadId) ?? data[0];
+            if (match) setSelectedChat(match);
+          }).catch(() => {});
+        }
+      } catch {}
+    }
+  }, []);
 
   const fetchConversations = async (reset = false) => {
     if (reset) {
@@ -442,6 +460,21 @@ function RemiCard({ message, date, time }: { message: ChatMessage; date: string;
           )}
           {meta.model && (
             <span className="font-mono text-muted-foreground/50">{meta.model.replace("claude-", "").replace(/-2025.*/, "")}</span>
+          )}
+          {meta.traceId && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                // Store highlight target, then navigate
+                sessionStorage.setItem("trace-highlight", String(meta.traceId));
+                window.location.hash = "#/traces";
+              }}
+              className="ml-auto flex items-center gap-1 cursor-pointer text-muted-foreground/50 hover:text-foreground transition-colors"
+              title={`View Trace #${meta.traceId}`}
+            >
+              <Activity className="w-3 h-3" />
+              <span className="font-mono">#{meta.traceId}</span>
+            </span>
           )}
         </div>
       )}

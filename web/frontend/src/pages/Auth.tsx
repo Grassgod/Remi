@@ -3,6 +3,21 @@ import { Layout } from "../components/Layout";
 import { HudPanel } from "../components/HudPanel";
 import { useAppStore } from "../stores/app";
 
+/** Known max TTL per service (ms). Used to compute progress bar percentage. */
+const MAX_TTL: Record<string, number> = {
+  feishu: 2 * 60 * 60 * 1000,            // 2h
+  "bytedance-sso": 14 * 24 * 60 * 60 * 1000, // 14d
+};
+
+function tokenProgress(t: { service: string; valid: boolean; expiresAt: number }): number {
+  if (!t.valid) return 0;
+  const now = Date.now();
+  const remaining = t.expiresAt - now;
+  if (remaining <= 0) return 0;
+  const total = MAX_TTL[t.service] ?? remaining; // fallback: treat current remaining as 100%
+  return Math.min(100, Math.max(0, (remaining / total) * 100));
+}
+
 export function Auth() {
   const { tokens, fetchTokens } = useAppStore();
 
@@ -38,7 +53,7 @@ export function Auth() {
                 <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
                   <div
                     className={`h-full rounded-full transition-[width] duration-500 ${t.valid ? "bg-success" : "bg-destructive"}`}
-                    style={{ width: t.valid ? "60%" : "0%" }}
+                    style={{ width: `${tokenProgress(t)}%` }}
                   />
                 </div>
                 <span className={`min-w-[60px] text-right font-mono text-xs ${t.valid ? "text-success" : "text-destructive"}`}>

@@ -46,6 +46,7 @@ export interface ChatMessage {
 }
 
 export interface MetaRow {
+  id: number;
   model: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -76,7 +77,8 @@ export function stripContextTags(text: string): string {
       t = t.slice(0, replyIdx) + t.slice(closeIdx + 2);
     }
   }
-  t = t.replace(/^贺华杰:\s*/m, "");
+  // Strip sender name prefixes: "贺华杰: " or "ou_xxxxx: "
+  t = t.replace(/^(?:贺华杰|ou_[a-f0-9]+):\s*/m, "");
   // Convert <media:image> {"image_key":"img_xxx","message_id":"om_xxx"} → markdown image with msgId
   t = t.replace(/<media:image>\s*\{[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$1?msgId=$2)\n");
   t = t.replace(/<media:image>\s*\{[^}]*"message_id"\s*:\s*"([^"]+)"[^}]*"image_key"\s*:\s*"([^"]+)"[^}]*\}/g, "\n![image](/api/image/$2?msgId=$1)\n");
@@ -268,6 +270,7 @@ export function buildChatMessages(
         duration: meta.duration_ms,
         toolCount,
         sessionId: pair.sessionId,
+        traceId: meta.id,
       } : undefined,
     });
   }

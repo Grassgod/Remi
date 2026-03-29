@@ -8,12 +8,14 @@ export function registerTracesHandlers(app: Hono, data: RemiData) {
     return c.json(data.getTraceStats(date));
   });
 
-  // List (flat rows, no fake spans)
+  // List (flat rows with pagination + search)
   app.get("/api/v1/traces", (c) => {
     const date = c.req.query("date") ?? new Date().toISOString().slice(0, 10);
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+    const offset = parseInt(c.req.query("offset") ?? "0", 10);
     const status = c.req.query("status") || undefined;
-    return c.json(data.getTraces(date, limit, status));
+    const search = c.req.query("search") || undefined;
+    return c.json(data.getTraces({ date, limit, offset, status, search }));
   });
 
   // Detail (DB meta + JSONL tool calls)

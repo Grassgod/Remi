@@ -13,8 +13,10 @@ import { Analytics } from "./pages/Analytics";
 import { Traces } from "./pages/Traces";
 import { Logs } from "./pages/Logs";
 import { Scheduler } from "./pages/Scheduler";
+import { Agents } from "./pages/Agents";
 import { Projects } from "./pages/Projects";
 import { BotMenu } from "./pages/BotMenu";
+import { Auth } from "./pages/Auth";
 import { Layout } from "./components/Layout";
 
 function NotFound() {
@@ -54,12 +56,14 @@ export function App() {
         <Route path="/scheduler" component={Scheduler} />
 
         {/* System */}
+        <Route path="/agents" component={Agents} />
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 
+        <Route path="/auth" component={Auth} />
+
         {/* Redirects for old routes */}
         <Route path="/sessions">{() => { window.location.hash = "#/"; return null; }}</Route>
-        <Route path="/auth">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/monitor">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/database">{() => { window.location.hash = "#/"; return null; }}</Route>
         <Route path="/config">{() => { window.location.hash = "#/"; return null; }}</Route>

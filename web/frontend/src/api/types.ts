@@ -22,6 +22,7 @@ export interface EntityDetail extends EntitySummary {
   content: string;
   body: string;
   createdAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface DailyLogEntry {
@@ -177,7 +178,16 @@ export interface TraceListItem {
   inputTokens: number | null;
   outputTokens: number | null;
   connector: string | null;
+  chatId: string | null;
+  messageId: string | null;
+  userMessage: string | null;
   createdAt: string;
+}
+
+// Traces — list response (with pagination)
+export interface TraceListResponse {
+  items: TraceListItem[];
+  hasMore: boolean;
 }
 
 // Traces — stats (server-side aggregation)
@@ -210,12 +220,22 @@ export interface TraceDetail {
     outputTokens: number | null;
     connector: string | null;
     chatId: string;
+    threadId: string | null;
+    messageId: string | null;
     senderName: string | null;
+    sessionId: string | null;
   };
   userMessage: string | null;
   toolCalls: ToolCallData[];
   jsonlAvailable: boolean;
   remiSpans: Array<{ op: string; ms: number }>;
+  timeline: Array<{
+    name: string;
+    startMs: number;
+    durationMs: number;
+    depth: number;
+    toolIndex?: number;
+  }>;
 }
 
 // Logs
@@ -379,6 +399,7 @@ export interface ChatMessage {
     duration: number;
     toolCount?: number;
     sessionId?: string;
+    traceId?: number;
   };
 }
 
@@ -482,4 +503,44 @@ export interface SkillFileNode {
   path: string;
   type: "file" | "directory";
   children?: SkillFileNode[];
+}
+
+// Agents
+export interface AgentRunEntry {
+  ts: string;
+  agent: string;
+  model: string;
+  exit: number;
+  duration_ms: number;
+  stdout_len: number;
+  stderr_len: number;
+}
+
+export interface AgentInfo {
+  name: string;
+  cwd: string;
+  model: string;
+  trigger: "debounce" | "cron" | "on-demand";
+  cron?: string;
+  debounce_ms?: number;
+  timeoutMs: number;
+  mcp: boolean;
+  description: string;
+  permissions: { mcpTools: string[]; cliTools: string[] };
+  skills: string[];
+  lastRun: AgentRunEntry | null;
+  runsToday: number;
+  successRate7d: number;
+}
+
+export interface AgentDetail {
+  claudeMd: string;
+  settingsJson: string;
+  skills: Array<{ name: string; content: string }>;
+}
+
+export interface McpServerInfo {
+  name: string;
+  command: string;
+  args: string[];
 }

@@ -240,7 +240,7 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
         // P2P: single session
         sessionIds = [sessionId];
         metaRows = db.query(
-          "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE cli_session_id = ? AND status = 'completed' ORDER BY created_at ASC"
+          "SELECT id, model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE cli_session_id = ? AND status = 'completed' ORDER BY created_at ASC"
         ).all(sessionId) as MetaRow[];
       } else {
         // Group: by thread_id
@@ -253,8 +253,8 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
         sessionIds = sessionRows.map(r => r.cli_session_id);
 
         const metaSql = threadId
-          ? "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND thread_id = ? AND status = 'completed' ORDER BY created_at ASC"
-          : "SELECT model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND status = 'completed' ORDER BY created_at ASC";
+          ? "SELECT id, model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND thread_id = ? AND status = 'completed' ORDER BY created_at ASC"
+          : "SELECT id, model, input_tokens, output_tokens, cost_usd, duration_ms, spans, cli_session_id, sender_id, created_at FROM conversations WHERE chat_id = ? AND status = 'completed' ORDER BY created_at ASC";
         metaRows = (threadId
           ? db.query(metaSql).all(chatId, threadId)
           : db.query(metaSql).all(chatId)) as MetaRow[];

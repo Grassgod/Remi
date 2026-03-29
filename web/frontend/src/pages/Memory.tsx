@@ -351,7 +351,12 @@ function EntityDetailInline({ entity, onBack, onBackToType, onDelete }: {
             )}
           </div>
         )}
-        <MarkdownFileViewer content={entity.body || entity.content || ""} onSave={handleSave} />
+        <MarkdownFileViewer
+          content={entity.body || entity.content || ""}
+          metadata={entity.metadata}
+          knownFields={["type", "name", "created", "updated", "aliases", "tags", "summary"]}
+          onSave={handleSave}
+        />
       </CardContent>
     </Card>
   );

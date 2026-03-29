@@ -110,12 +110,14 @@ export const getRecentMetrics = (limit = 50) =>
 // Traces
 export const getTraceStats = (date?: string) =>
   request<import("./types").TraceStats>(`/api/v1/traces/stats${date ? `?date=${date}` : ""}`);
-export const getTraces = (date?: string, limit = 50, status?: string) => {
+export const getTraces = (opts: { date?: string; limit?: number; offset?: number; status?: string; search?: string }) => {
   const params = new URLSearchParams();
-  if (date) params.set("date", date);
-  params.set("limit", String(limit));
-  if (status) params.set("status", status);
-  return request<import("./types").TraceListItem[]>(`/api/v1/traces?${params}`);
+  if (opts.date) params.set("date", opts.date);
+  params.set("limit", String(opts.limit ?? 50));
+  if (opts.offset) params.set("offset", String(opts.offset));
+  if (opts.status) params.set("status", opts.status);
+  if (opts.search) params.set("search", opts.search);
+  return request<import("./types").TraceListResponse>(`/api/v1/traces?${params}`);
 };
 export const getTraceDetail = (id: number) =>
   request<import("./types").TraceDetail>(`/api/v1/traces/${id}/detail`);
@@ -228,3 +230,25 @@ export const getSkillsBasePath = () =>
   request<{ basePath: string }>("/api/v1/skills/base-path");
 export const getSkillTree = (name: string) =>
   request<import("./types").SkillFileNode[]>(`/api/v1/skills/${encodeURIComponent(name)}/tree`);
+
+// Agents
+export const getAgents = () =>
+  request<import("./types").AgentInfo[]>("/api/v1/agents");
+export const getAgentDetail = (name: string) =>
+  request<import("./types").AgentDetail>(`/api/v1/agents/${encodeURIComponent(name)}`);
+export const getAgentRuns = (name: string, limit = 50) =>
+  request<import("./types").AgentRunEntry[]>(`/api/v1/agents/${encodeURIComponent(name)}/runs?limit=${limit}`);
+export const updateAgentClaudeMd = (name: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/claude-md`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const updateAgentSettings = (name: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/settings`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const updateAgentSkill = (name: string, skillName: string, content: string) =>
+  request(`/api/v1/agents/${encodeURIComponent(name)}/skills/${encodeURIComponent(skillName)}`, {
+    method: "PUT", body: JSON.stringify({ content }),
+  });
+export const getMcpServers = () =>
+  request<import("./types").McpServerInfo[]>("/api/v1/mcp");

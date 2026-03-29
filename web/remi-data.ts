@@ -36,6 +36,7 @@ export interface EntityDetail extends EntitySummary {
   content: string;     // full markdown including frontmatter
   body: string;        // markdown body only
   createdAt: string;
+  metadata: Record<string, unknown>;  // complete YAML frontmatter
 }
 
 export interface TokenStatus {
@@ -301,6 +302,7 @@ export class RemiData {
       createdAt: data.created ?? "",
       content: raw,
       body: body.trim(),
+      metadata: data,
     };
   }
 
@@ -841,8 +843,8 @@ export class RemiData {
   } | null {
     const db = getDb();
     const row = db.query(`
-      SELECT id, status, error, chat_id, sender_id, connector,
-             cli_session_id, cost_usd, duration_ms, model,
+      SELECT id, status, error, chat_id, thread_id, sender_id, connector,
+             cli_session_id, message_id, cost_usd, duration_ms, model,
              input_tokens, output_tokens, spans, user_message,
              created_at, cli_round_start, cli_round_end
       FROM conversations WHERE id = ?
@@ -893,6 +895,8 @@ export class RemiData {
         outputTokens: row.output_tokens,
         connector: row.connector,
         chatId: row.chat_id,
+        threadId: row.thread_id,
+        messageId: row.message_id,
         senderName: row.sender_id,
         sessionId: row.cli_session_id,
       },

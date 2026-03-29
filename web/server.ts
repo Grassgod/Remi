@@ -36,6 +36,7 @@ let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
 try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
+import { registerAgentsHandlers } from "./handlers/agents.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -85,6 +86,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
+  registerAgentsHandlers(app, data);
 
   // ── Filesystem browse (for directory picker) ──
   app.get("/api/v1/fs/browse", (c) => {

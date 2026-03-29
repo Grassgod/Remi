@@ -20,7 +20,7 @@ import * as api from "../api/client";
 import type { MonitorStats, DbStats, SymlinksStatus, AnalyticsSummary } from "../api/types";
 
 export function Dashboard() {
-  const { status, tokens, fetchStatus, fetchTokens, fetchSessions } = useAppStore();
+  const { status, tokens, fetchStatus, fetchTokens } = useAppStore();
   const { entities, dailyDates, dailyContent, fetchEntities, fetchDailyDates, fetchDaily } = useMemoryStore();
   const { status: schedulerStatus, fetchStatus: fetchSchedulerStatus } = useSchedulerStore();
   const [, setLocation] = useLocation();
@@ -35,7 +35,6 @@ export function Dashboard() {
   useEffect(() => {
     fetchStatus();
     fetchTokens();
-    fetchSessions();
     fetchEntities();
     fetchDailyDates();
     fetchSchedulerStatus();

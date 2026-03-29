@@ -52,6 +52,16 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     return c.json({ ok: true });
   });
 
+  // Recall Debug
+  app.post("/api/v1/memory/recall", async (c) => {
+    const body = await c.req.json();
+    if (!body.query || typeof body.query !== "string") {
+      return c.json({ error: "query required" }, 400);
+    }
+    const result = await data.recallDebug(body.query, body.cwd);
+    return c.json(result);
+  });
+
   // Search
   app.get("/api/v1/memory/search", (c) => {
     const q = c.req.query("q") ?? "";
@@ -71,14 +81,14 @@ export function registerMemoryHandlers(app: Hono, data: RemiData) {
     return c.json({ date, content });
   });
 
-  // Recall debug
-  app.post("/api/v1/memory/recall", async (c) => {
-    const body = await c.req.json();
-    const query = body.query;
-    if (!query || typeof query !== "string") {
-      return c.json({ error: "query required" }, 400);
-    }
-    const result = await data.recallDebug(query, body.cwd);
-    return c.json(result);
+  // Project-level memories
+  app.get("/api/v1/memory/projects", (c) => {
+    return c.json(data.listProjectMemories());
+  });
+
+  app.get("/api/v1/memory/projects/:projectId/:path{.+}", (c) => {
+    const content = data.readProjectMemoryFile(c.req.param("projectId"), c.req.param("path"));
+    if (!content) return c.json({ error: "not found" }, 404);
+    return c.json({ content });
   });
 }
