@@ -77,12 +77,13 @@ export async function sendMessageFeishu(
  * - sessionId null → newborn name ("刚醒来的 Remi")
  * - sessionId undefined → plain "Remi" (non-streaming cards)
  */
-export function buildCardHeader(sessionId?: string | null, displayName?: string | null) {
-  const title =
+export function buildCardHeader(sessionId?: string | null, displayName?: string | null, nameSuffix?: string) {
+  const baseName =
     displayName ? displayName :
     sessionId ? getSessionName(sessionId) :
     sessionId === null ? getNewbornName() :
     "Remi";
+  const title = nameSuffix ? `${baseName}${nameSuffix}` : baseName;
   const now = new Date();
   const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");
   const mm = String(now.getUTCMinutes()).padStart(2, "0");

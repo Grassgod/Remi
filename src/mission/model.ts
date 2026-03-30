@@ -67,6 +67,9 @@ export interface Mission {
   // 步骤产出
   outputDir: string | null;
 
+  // Claude Code session 管理 (intake, plan, exec → real UUID)
+  sessions: Record<string, string>;
+
   // 元数据
   createdBy: string | null;
   createdByName: string | null;

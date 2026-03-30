@@ -10,7 +10,6 @@ import { startBoardServer } from "../../web/board/server.js";
 import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
 import { createFeishuClient } from "../connectors/feishu/client.js";
 import { sendToThread } from "../connectors/feishu/thread.js";
-import { setOnMissionCreated } from "../../web/handlers/missions.js";
 import { getDb } from "../db/index.js";
 
 const log = createLogger("serve");
@@ -47,6 +46,12 @@ export async function runServe(_args: string[]): Promise<void> {
   // Start BunQueue workers (conversation + memory + cron)
   await remi.queue.start();
 
+  // Wire mission enqueue to Feishu connector (for mission thread routing)
+  const feishuConnector = remi.getFeishuConnector();
+  if (feishuConnector) {
+    feishuConnector.setQueueRef((data) => remi.queue.enqueueMission(data));
+  }
+
   // Register cron schedulers from config (replaces CronTimer)
   const cronJobs = migrateToCronJobs(config);
   await remi.queue.setupSchedulers(cronJobs, remi);
@@ -66,14 +71,7 @@ export async function runServe(_args: string[]): Promise<void> {
       missionStore,
       authToken: process.env.REMI_WEB_AUTH_TOKEN,
       feishuClient,
-    });
-
-    // Wire up mission creation → auto enqueue intake
-    setOnMissionCreated((mission) => {
-      remi.queue.enqueueMission({ missionId: mission.id, step: "intake" }).catch((err) => {
-        log.error(`Failed to enqueue intake for mission ${mission.id}:`, err);
-      });
-      log.info(`Mission ${mission.id} created, intake enqueued`);
+      enqueueMission: (data) => remi.queue.enqueueMission(data),
     });
 
     // Register mission approve/reject handler for Feishu card buttons
@@ -82,7 +80,7 @@ export async function runServe(_args: string[]): Promise<void> {
       if (!mission) return;
 
       if (actionType === "mission_approve") {
-        missionStore.updateStatus(missionId, "approved");
+        missionStore.updateStatus(missionId, "in_progress");
         remi.queue.enqueueMission({ missionId, step: "rfc" }).catch((err) => {
           log.error(`Failed to enqueue mission ${missionId}:`, err);
         });

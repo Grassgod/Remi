@@ -8,6 +8,7 @@ export interface GroupConfig {
   projectId: string;
   name: string;
   monitor: boolean;
+  missionEnabled: boolean;
   replyMode: "thread" | "direct";
   systemPrompt: string;
   allowedTools: string[];
@@ -27,6 +28,7 @@ export interface GroupConfigInput {
   projectId?: string;
   name?: string;
   monitor?: boolean;
+  missionEnabled?: boolean;
   replyMode?: "thread" | "direct";
   systemPrompt?: string;
   allowedTools?: string[];

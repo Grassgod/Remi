@@ -8,16 +8,20 @@ import { getDb } from "../../src/db/index.js";
 const store = new MissionStore();
 const log = createLogger("missions-handler");
 
-/** Callback for post-creation pipeline trigger. Set by serve.ts when queue is available. */
-let _onMissionCreatedCb: ((mission: Mission) => void) | null = null;
+const BOARD_PORT = process.env.REMI_BOARD_PORT ?? "8090";
 
-export function setOnMissionCreated(cb: (mission: Mission) => void): void {
-  _onMissionCreatedCb = cb;
-}
-
-/** Trigger the mission-created callback (used by Feishu connector too). */
-export function triggerMissionCreated(mission: Mission): void {
-  if (_onMissionCreatedCb) _onMissionCreatedCb(mission);
+/** Enqueue a mission step via the Board server (runs in remi process with BunQueue). */
+export function enqueueViaBoard(missionId: string, step: string): void {
+  fetch(`http://127.0.0.1:${BOARD_PORT}/api/internal/enqueue-intake`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ missionId, step }),
+  })
+    .then((res) => {
+      if (!res.ok) log.warn(`enqueue-intake returned ${res.status} for ${missionId}`);
+      else log.info(`Mission ${missionId} step=${step} enqueued via board`);
+    })
+    .catch((err) => log.warn(`enqueue-intake failed for ${missionId}: ${err}`));
 }
 
 export function registerMissionsHandlers(app: Hono, _data: RemiData) {
@@ -86,10 +90,8 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
       description,
     });
 
-    // Trigger intake pipeline step
-    try { triggerMissionCreated(mission); } catch (err) {
-      log.warn(`onMissionCreated callback failed: ${err}`);
-    }
+    // Trigger intake pipeline step (cross-process via HTTP to remi daemon)
+    enqueueViaBoard(mission.id, "intake");
 
     return c.json(mission, 201);
   });
@@ -116,6 +118,13 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     if (body.currentStep !== undefined) fields.currentStep = body.currentStep;
 
     store.update(id, fields);
+
+    // If status changed to "approved" or "in_progress" from inbox, trigger pipeline
+    if ((fields.status === "approved" || fields.status === "in_progress") && existing.status === "inbox") {
+      store.update(id, { status: "in_progress" as any });
+      enqueueViaBoard(id, "rfc");
+    }
+
     return c.json({ ok: true });
   });
 

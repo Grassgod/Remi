@@ -127,6 +127,11 @@ export class Remi {
     this._connectors.push(connector);
   }
 
+  /** Get the Feishu connector (for mission pipeline streaming). */
+  getFeishuConnector(): import("./connectors/feishu/index.js").FeishuConnector | null {
+    return (this._connectors.find((c) => c.name === "feishu") as any) ?? null;
+  }
+
   /** Register a callback that fires when /restart is invoked. */
   onRestart(cb: (info: { chatId: string; connectorName?: string }) => void): void {
     this._onRestart = cb;
@@ -291,19 +296,24 @@ export class Remi {
     const cwd = groupConfig?.cwd || groupConfig?.projectCwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     const sessRow = sessDb.getSession(sessionKey);
-    const existingSessionId = sessRow?.session_id || undefined;
-    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
+    // Mission pipeline can pass a specific sessionId to resume (real Claude UUID)
+    const missionSessionId = msg.metadata?.missionSessionId as string | undefined;
+    const existingSessionId = missionSessionId || sessRow?.session_id || undefined;
+    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}${missionSessionId ? " [mission-session]" : ""}`);
     const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
+
+    // Mission pipeline can override CWD to the project directory
+    const missionCwd = msg.metadata?.missionCwd as string | undefined;
 
     // AbortController for /esc — allows immediate readline interruption
     const abortController = new AbortController();
     this._activeAborts.set(sessionKey, abortController);
 
     const streamOptions = {
-      systemPrompt: groupConfig?.systemPrompt || undefined,
+      systemPrompt: (msg.metadata?.systemPromptOverride as string) || groupConfig?.systemPrompt || undefined,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
-      cwd: cwd ?? undefined,
+      cwd: missionCwd || cwd || undefined,
       media: msg.media,
       allowedTools: groupConfig?.allowedTools?.length ? groupConfig.allowedTools : undefined,
       addDirs: groupConfig?.addDirs?.length ? groupConfig.addDirs : undefined,

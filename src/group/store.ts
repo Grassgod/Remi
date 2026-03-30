@@ -77,12 +77,13 @@ export class GroupConfigStore {
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO group_configs
-        (chat_id, project_id, name, monitor, reply_mode, system_prompt, allowed_tools, allowed_mcps, add_dirs, provider, cwd, launch_command, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (chat_id, project_id, name, monitor, mission_enabled, reply_mode, system_prompt, allowed_tools, allowed_mcps, add_dirs, provider, cwd, launch_command, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(chat_id) DO UPDATE SET
         project_id = excluded.project_id,
         name = excluded.name,
         monitor = excluded.monitor,
+        mission_enabled = excluded.mission_enabled,
         reply_mode = excluded.reply_mode,
         system_prompt = excluded.system_prompt,
         allowed_tools = excluded.allowed_tools,
@@ -97,6 +98,7 @@ export class GroupConfigStore {
         input.projectId ?? "global",
         input.name ?? "",
         input.monitor ? 1 : 0,
+        input.missionEnabled ? 1 : 0,
         input.replyMode ?? "thread",
         input.systemPrompt ?? "",
         JSON.stringify(input.allowedTools ?? []),
@@ -122,6 +124,7 @@ export class GroupConfigStore {
     if (fields.projectId !== undefined) { sets.push("project_id = ?"); vals.push(fields.projectId); }
     if (fields.name !== undefined) { sets.push("name = ?"); vals.push(fields.name); }
     if (fields.monitor !== undefined) { sets.push("monitor = ?"); vals.push(fields.monitor ? 1 : 0); }
+    if (fields.missionEnabled !== undefined) { sets.push("mission_enabled = ?"); vals.push(fields.missionEnabled ? 1 : 0); }
     if (fields.replyMode !== undefined) { sets.push("reply_mode = ?"); vals.push(fields.replyMode); }
     if (fields.systemPrompt !== undefined) { sets.push("system_prompt = ?"); vals.push(fields.systemPrompt); }
     if (fields.allowedTools !== undefined) { sets.push("allowed_tools = ?"); vals.push(JSON.stringify(fields.allowedTools)); }
@@ -169,6 +172,7 @@ export class GroupConfigStore {
       projectId: (row.project_id as string) ?? "global",
       name: (row.name as string) ?? "",
       monitor: !!(row.monitor as number),
+      missionEnabled: !!(row.mission_enabled as number),
       replyMode: (row.reply_mode as "thread" | "direct") ?? "thread",
       systemPrompt: (row.system_prompt as string) ?? "",
       allowedTools: JSON.parse((row.allowed_tools as string) || "[]"),

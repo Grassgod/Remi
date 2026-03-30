@@ -37,4 +37,5 @@ export interface MissionJobData {
   step: string;   // PipelineStep
   attempt?: number;
   evalFailureInfo?: string;  // eval 失败时传给 execute 的失败详情
+  userMessage?: string;      // 用户在话题中的回复内容（intake 多轮）
 }

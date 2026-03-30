@@ -286,7 +286,7 @@ export class RemiQueueManager {
 
   private async cleanStaleJobs(): Promise<void> {
     const STALE_THRESHOLD = 30 * 60 * 1000; // 30 minutes (cron jobs like compaction/skill:gen can take 5-10min)
-    for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue]) {
+    for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue, this.missionQueue]) {
       try {
         const active = q.getActive();
         for (const job of active) {

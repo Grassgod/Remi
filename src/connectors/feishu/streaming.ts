@@ -419,14 +419,14 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null },
+    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string },
   ): Promise<void> {
     if (this.state) return;
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
-      header: buildCardHeader(options?.sessionId, options?.displayName),
+      header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix),
       config: {
         width_mode: "fill",
         streaming_mode: true,

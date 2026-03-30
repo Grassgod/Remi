@@ -74,6 +74,7 @@ export function MissionListView({ missions, onMissionClick }: MissionListViewPro
                     <div className="text-[13px] font-medium text-foreground">
                       {mission.title}
                     </div>
+                    <span className="text-xs text-zinc-500 font-mono">{mission.id}</span>
                     <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                       <span className="text-muted-foreground">{mission.projectId}</span>
                       <span>·</span>

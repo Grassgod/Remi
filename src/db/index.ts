@@ -157,6 +157,7 @@ export function getDb(): Database {
       project_id TEXT DEFAULT 'global',
       name TEXT DEFAULT '',
       monitor INTEGER DEFAULT 0,
+      mission_enabled INTEGER DEFAULT 0,
       reply_mode TEXT DEFAULT 'thread',
       system_prompt TEXT DEFAULT '',
       allowed_tools TEXT DEFAULT '[]',
@@ -242,6 +243,16 @@ export function getDb(): Database {
       if (!gcColNames.has("allowed_mcps")) db.exec("ALTER TABLE group_configs ADD COLUMN allowed_mcps TEXT DEFAULT '[]'");
       if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
       if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
+      if (!gcColNames.has("mission_enabled")) db.exec("ALTER TABLE group_configs ADD COLUMN mission_enabled INTEGER DEFAULT 0");
+    }
+  } catch {}
+
+  // Missions table migration — add sessions column
+  try {
+    const msnCols = db.query("PRAGMA table_info(missions)").all() as Array<{ name: string }>;
+    const msnColNames = new Set(msnCols.map((c) => c.name));
+    if (msnColNames.size > 0 && !msnColNames.has("sessions")) {
+      db.exec("ALTER TABLE missions ADD COLUMN sessions TEXT DEFAULT '{}'");
     }
   } catch {}
 

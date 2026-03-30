@@ -167,6 +167,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                         <div className="line-clamp-2 text-[13px] font-medium text-foreground">
                           {mission.title}
                         </div>
+                        <span className="text-xs text-zinc-500 font-mono">{mission.id}</span>
                         {mission.description && (
                           <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                             {mission.description}
@@ -268,7 +269,10 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                   className="h-2 w-2 rounded-full"
                   style={{ background: getStatusConfig(mission.status).color }}
                 />
-                <span className="flex-1 text-[13px] font-medium text-foreground">{mission.title}</span>
+                <div className="flex flex-col min-w-0 flex-1">
+                  <span className="text-[13px] font-medium text-foreground">{mission.title}</span>
+                  <span className="text-xs text-zinc-500 font-mono">{mission.id}</span>
+                </div>
                 <span
                   className="rounded px-2 py-0.5 text-[9px] font-medium"
                   style={{

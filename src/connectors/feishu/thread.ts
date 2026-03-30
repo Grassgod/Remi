@@ -29,13 +29,13 @@ function getClient() {
   });
 }
 
-function getBaseUrl(domain: string): string {
+export function getBaseUrl(domain: string): string {
   if (domain === "bytedance") return "https://fsopen.bytedance.net/open-apis";
   if (domain === "lark") return "https://open.larksuite.com/open-apis";
   return "https://open.feishu.cn/open-apis";
 }
 
-async function getTenantToken(appId: string, appSecret: string, baseUrl: string): Promise<string> {
+export async function getTenantToken(appId: string, appSecret: string, baseUrl: string): Promise<string> {
   const res = await fetch(`${baseUrl}/auth/v3/tenant_access_token/internal`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -52,9 +52,9 @@ async function getTenantToken(appId: string, appSecret: string, baseUrl: string)
 
 /**
  * Create a thread (话题) in a topic-mode group.
- * Sends the title as the initial post; returns the thread_id.
+ * Sends the title as the initial post; returns both thread_id (omt_xxx) and root message_id (om_xxx).
  */
-export async function createThread(chatId: string, title: string): Promise<string> {
+export async function createThread(chatId: string, title: string): Promise<{ threadId: string; messageId: string }> {
   const client = getClient();
 
   const content = JSON.stringify({
@@ -71,17 +71,20 @@ export async function createThread(chatId: string, title: string): Promise<strin
   }
 
   const threadId = res.data?.thread_id;
+  const messageId = res.data?.message_id;
   if (!threadId) {
     throw new Error("No thread_id returned — is the group in topic mode?");
   }
 
-  log.info(`created thread ${threadId} in ${chatId}: ${title}`);
-  return threadId;
+  log.info(`created thread ${threadId} (root=${messageId}) in ${chatId}: ${title}`);
+  return { threadId, messageId: messageId ?? threadId };
 }
 
 /**
  * Send a message to a specific thread (话题).
- * Fetches the root message, then replies with reply_in_thread.
+ * Accepts either omt_xxx (thread container ID) or om_xxx (root message ID).
+ * For omt_xxx: lists thread messages to get root, then replies.
+ * For om_xxx: replies directly to the message in-thread.
  */
 export async function sendToThread(
   chatId: string,
@@ -92,26 +95,33 @@ export async function sendToThread(
   const baseUrl = getBaseUrl(config.feishu.domain);
   const token = await getTenantToken(config.feishu.appId, config.feishu.appSecret, baseUrl);
 
-  // Get root message of the thread
-  const listParams = new URLSearchParams({
-    container_id_type: "thread",
-    container_id: threadId,
-    sort_type: "ByCreateTimeAsc",
-    page_size: "1",
-  });
-  const listRes = await fetch(`${baseUrl}/im/v1/messages?${listParams}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const listData = (await listRes.json()) as any;
-  if (listData.code !== 0) {
-    throw new Error(
-      `Failed to list thread messages: ${listData.msg ?? JSON.stringify(listData)}`,
-    );
-  }
+  let rootMsgId: string;
 
-  const rootMsgId = listData.data?.items?.[0]?.message_id;
-  if (!rootMsgId) {
-    throw new Error(`Thread ${threadId} has no messages`);
+  if (threadId.startsWith("om_")) {
+    // threadId is already a message ID — use directly as reply target
+    rootMsgId = threadId;
+  } else {
+    // threadId is omt_xxx — list thread messages to get root message
+    const listParams = new URLSearchParams({
+      container_id_type: "thread",
+      container_id: threadId,
+      sort_type: "ByCreateTimeAsc",
+      page_size: "1",
+    });
+    const listRes = await fetch(`${baseUrl}/im/v1/messages?${listParams}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const listData = (await listRes.json()) as any;
+    if (listData.code !== 0) {
+      throw new Error(
+        `Failed to list thread messages: ${listData.msg ?? JSON.stringify(listData)}`,
+      );
+    }
+
+    rootMsgId = listData.data?.items?.[0]?.message_id;
+    if (!rootMsgId) {
+      throw new Error(`Thread ${threadId} has no messages`);
+    }
   }
 
   // Reply to root message in-thread

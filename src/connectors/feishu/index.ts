@@ -12,7 +12,7 @@ import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
 import { createLogger } from "../../logger.js";
-import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
@@ -151,6 +151,9 @@ export class FeishuConnector implements Connector {
   /** Callback to kill the CLI process on /esc (set by Remi core via setAbortHandler). */
   private _abortHandler: ((sessionKey: string) => Promise<void>) | null = null;
 
+  /** Enqueue mission step to BunQueue (set by serve.ts). */
+  private _enqueueMission: ((data: import("../../queue/queues.js").MissionJobData) => Promise<void>) | null = null;
+
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
   }
@@ -160,16 +163,14 @@ export class FeishuConnector implements Connector {
    * Group threads use chatId:thread:rootId; new group @mentions use chatId:thread:messageId; P2P uses chatId.
    */
   /**
-   * Auto-create a Mission if a group thread doesn't have one yet.
-   * This enables "user creates topic in Feishu group → Mission auto-created on Board".
+   * Resolve or create a Mission for a group thread.
+   * Works for both first messages (no rootId, uses messageId) and subsequent messages (has rootId).
+   * Returns the mission if found/created, null if non-project group.
    */
-  /**
-   * Returns true if this thread belongs to a mission (existing or newly created).
-   * Returns false if this is a non-project group or non-thread message.
-   */
-  private async _ensureMissionForThread(msg: ParsedFeishuMessage): Promise<boolean> {
-    if (!msg.rootId) return false;
-
+  private async _resolveMissionForThread(
+    msg: ParsedFeishuMessage,
+    threadId: string,
+  ): Promise<{ mission: import("../../mission/model.js").Mission; isNew: boolean } | null> {
     const { MissionStore } = await import("../../mission/store.js");
     const { getDb } = await import("../../db/index.js");
     const db = getDb();
@@ -177,36 +178,34 @@ export class FeishuConnector implements Connector {
     // Check if a mission already exists for this thread
     const existing = db.query(
       "SELECT id FROM missions WHERE chat_id = ? AND thread_id = ?",
-    ).get(msg.chatId, msg.rootId) as { id: string } | null;
-    if (existing) return true; // Already a mission thread
+    ).get(msg.chatId, threadId) as { id: string } | null;
+    if (existing) {
+      const store = new MissionStore();
+      const mission = store.getById(existing.id);
+      if (mission) return { mission, isNew: false };
+    }
 
-    // Find the project for this group
+    // Only create missions for groups with mission_enabled flag
     const gcStore = new GroupConfigStore();
     const gc = gcStore.getByChatId(msg.chatId);
-    const projectId = gc?.projectId ?? "global";
-    if (projectId === "global") return false; // Non-project group, normal flow
+    if (!gc?.missionEnabled) return null; // Mission not enabled for this group
+    const projectId = gc.projectId;
 
-    // Create mission from thread — use the message text as title
-    const title = msg.rawContent.slice(0, 100) || `Topic ${msg.rootId.slice(0, 8)}`;
+    // Create mission — use the message text as title
+    const title = msg.rawContent.slice(0, 100) || `Topic ${threadId.slice(0, 8)}`;
     const store = new MissionStore();
     const mission = store.create({
       title,
       projectId,
       chatId: msg.chatId,
-      threadId: msg.rootId,
+      threadId,
       createdBy: msg.senderOpenId,
       createdByName: msg.senderName ?? undefined,
     });
 
-    log.info(`Auto-created mission ${mission.id} for thread ${msg.rootId} in group ${msg.chatId}`);
+    log.info(`Auto-created mission ${mission.id} for thread ${threadId} in group ${msg.chatId}`);
 
-    // Trigger intake pipeline (reuse the same callback set by serve.ts)
-    try {
-      const { triggerMissionCreated } = await import("../../../web/handlers/missions.js");
-      triggerMissionCreated(mission);
-    } catch {}
-
-    return true;
+    return { mission, isNew: true };
   }
 
   private _resolveSessionKey(msg: ParsedFeishuMessage): string {
@@ -215,6 +214,7 @@ export class FeishuConnector implements Connector {
     return msg.chatId;
   }
 
+  /** Load IntakeSkill SKILL.md with mission context appended. */
   /** Register a handler that kills the CLI process for a given sessionKey. */
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
     this._abortHandler = handler;
@@ -223,6 +223,11 @@ export class FeishuConnector implements Connector {
   /** Set the token provider (from 1Passport AuthStore). */
   setTokenProvider(provider: TokenProvider): void {
     this._tokenProvider = provider;
+  }
+
+  /** Set the queue enqueue function (from serve.ts, for mission thread routing). */
+  setQueueRef(fn: (data: import("../../queue/queues.js").MissionJobData) => Promise<void>): void {
+    this._enqueueMission = fn;
   }
 
   async start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void> {
@@ -301,17 +306,25 @@ export class FeishuConnector implements Connector {
       return;
     }
 
-    // ── Auto-create Mission for new group threads ──
-    // If message belongs to a mission thread, skip normal conversation flow
-    if (msg.chatType === "group" && msg.rootId) {
+    // ── Mission thread routing ──
+    // Detect mission thread → enqueue to BunQueue. Connector is pure router.
+    if (msg.chatType === "group" && this._enqueueMission) {
+      const threadId = msg.rootId || msg.messageId;
       try {
-        const isMissionThread = await this._ensureMissionForThread(msg);
-        if (isMissionThread) {
-          log.info(`Message in mission thread ${msg.rootId}, skipping normal conversation flow`);
-          return; // Don't process as normal conversation — pipeline handles it
+        const result = await this._resolveMissionForThread(msg, threadId);
+        if (result) {
+          const { mission } = result;
+          // Route ALL mission thread messages to BunQueue
+          await this._enqueueMission({
+            missionId: mission.id,
+            step: mission.currentStep,
+            userMessage: msg.rawContent,
+          });
+          log.info(`Mission ${mission.id} message routed to BunQueue (step=${mission.currentStep}, thread=${threadId})`);
+          return; // BunQueue handles it, connector done
         }
       } catch (err) {
-        log.warn(`ensureMissionForThread failed: ${err}`);
+        log.warn(`resolveMissionForThread failed: ${err}`);
       }
     }
 
@@ -438,13 +451,26 @@ export class FeishuConnector implements Connector {
    * Real streaming: start card immediately, pipe deltas as they arrive.
    * Falls back to static card if streaming card creation fails.
    */
+  /**
+   * Stream a message to a Feishu thread (public API for mission pipeline).
+   * Reuses _handleStreaming with full UI features.
+   */
+  async streamToThread(
+    incoming: IncomingMessage,
+    chatId: string,
+    threadId: string,
+  ): Promise<import("../../providers/base.js").AgentResponse | null> {
+    const sessionKey = `${chatId}:thread:${threadId}`;
+    return this._handleStreaming(incoming, chatId, sessionKey, threadId);
+  }
+
   private async _handleStreaming(
     incoming: IncomingMessage,
     chatId: string,
     sessionKey: string,
     replyToMessageId?: string,
     _log?: import("../../logger.js").Logger,
-  ): Promise<void> {
+  ): Promise<import("../../providers/base.js").AgentResponse | null> {
     const slog = _log ?? log; // streaming-scoped logger
     const creds = {
       appId: this._config.appId,
@@ -489,7 +515,9 @@ export class FeishuConnector implements Connector {
     await this._streamHandler!(incoming, async (stream, meta) => {
       // Start streaming card with session name (existing session → deterministic name, new → newborn)
       try {
-        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName });
+        // Append mission ID to card header if this is a pipeline message
+        const missionSuffix = incoming.metadata?.missionId ? ` · ${incoming.metadata.missionId}` : "";
+        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName ?? undefined, nameSuffix: missionSuffix || undefined });
       } catch (err) {
         slog.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
         if (this._handler) {
@@ -754,6 +782,8 @@ export class FeishuConnector implements Connector {
         this._activeSessions.delete(sessionKey);
       }
     });
+
+    return finalResponse;
   }
 
   /**

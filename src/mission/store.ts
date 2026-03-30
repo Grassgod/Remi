@@ -69,8 +69,11 @@ export class MissionStore {
 
     if (!threadId && input.chatId) {
       try {
-        threadId = await createThread(input.chatId, `Mission: ${input.title}`);
-        log.info(`Auto-created thread ${threadId} for mission "${input.title}"`);
+        const result = await createThread(input.chatId, `Mission: ${input.title}`);
+        // Store the root message ID (om_xxx) as threadId — this matches msg.rootId
+        // in Feishu message events, enabling _resolveMissionForThread to find the mission.
+        threadId = result.messageId;
+        log.info(`Auto-created thread ${result.threadId} (root=${result.messageId}) for mission "${input.title}"`);
       } catch (err) {
         log.warn(`Failed to auto-create thread: ${(err as Error).message}`);
       }
@@ -110,32 +113,40 @@ export class MissionStore {
   // ── Update ──
 
   updateStatus(id: string, status: MissionStatus): void {
-    const completedAt = status === "done" ? new Date().toISOString() : null;
+    const now = new Date().toISOString();
+    const completedAt = status === "done" ? now : null;
     this.db.run(
-      `UPDATE missions SET status = ?, updated_at = datetime('now'),
+      `UPDATE missions SET status = ?, updated_at = ?,
        completed_at = COALESCE(?, completed_at) WHERE id = ?`,
-      [status, completedAt, id],
+      [status, now, completedAt, id],
     );
   }
 
   updateStep(id: string, step: PipelineStep): void {
     this.db.run(
-      "UPDATE missions SET current_step = ?, updated_at = datetime('now') WHERE id = ?",
-      [step, id],
+      "UPDATE missions SET current_step = ?, updated_at = ? WHERE id = ?",
+      [step, new Date().toISOString(), id],
+    );
+  }
+
+  updateSessions(id: string, sessions: Record<string, string>): void {
+    this.db.run(
+      "UPDATE missions SET sessions = ?, updated_at = ? WHERE id = ?",
+      [JSON.stringify(sessions), new Date().toISOString(), id],
     );
   }
 
   updateMR(id: string, mrUrl: string, mrStatus: string): void {
     this.db.run(
-      "UPDATE missions SET mr_url = ?, mr_status = ?, updated_at = datetime('now') WHERE id = ?",
-      [mrUrl, mrStatus, id],
+      "UPDATE missions SET mr_url = ?, mr_status = ?, updated_at = ? WHERE id = ?",
+      [mrUrl, mrStatus, new Date().toISOString(), id],
     );
   }
 
   updateContract(id: string, contract: string): void {
     this.db.run(
-      "UPDATE missions SET contract = ?, updated_at = datetime('now') WHERE id = ?",
-      [contract, id],
+      "UPDATE missions SET contract = ?, updated_at = ? WHERE id = ?",
+      [contract, new Date().toISOString(), id],
     );
   }
 
@@ -149,7 +160,8 @@ export class MissionStore {
     if (fields.currentStep !== undefined) { sets.push("current_step = ?"); values.push(fields.currentStep); }
 
     if (sets.length === 0) return;
-    sets.push("updated_at = datetime('now')");
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
     values.push(id);
 
     this.db.run(`UPDATE missions SET ${sets.join(", ")} WHERE id = ?`, values);
@@ -226,6 +238,7 @@ export class MissionStore {
       mrUrl: (row.mr_url as string) ?? null,
       mrStatus: (row.mr_status as string) ?? null,
       outputDir: (row.output_dir as string) ?? null,
+      sessions: row.sessions ? JSON.parse(row.sessions as string) : {},
       createdBy: (row.created_by as string) ?? null,
       createdByName: (row.created_by_name as string) ?? null,
       createdAt: row.created_at as string,

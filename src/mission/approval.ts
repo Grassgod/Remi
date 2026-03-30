@@ -58,6 +58,26 @@ export function buildApprovalCard(mission: Mission): Record<string, unknown> {
   };
 }
 
+/** Send the approval card to the mission's Feishu thread. */
+export async function sendApprovalCard(mission: Mission): Promise<void> {
+  if (!mission.chatId || !mission.threadId) return;
+
+  const { loadConfig } = await import("../config.js");
+  const config = loadConfig();
+  const { createFeishuClient } = await import("../connectors/feishu/client.js");
+  const { sendCardFeishu } = await import("../connectors/feishu/send.js");
+
+  const client = createFeishuClient({
+    appId: config.feishu.appId,
+    appSecret: config.feishu.appSecret,
+    domain: config.feishu.domain,
+  });
+
+  // threadId is om_xxx (root message ID) — use directly for reply
+  const card = buildApprovalCard(mission);
+  await sendCardFeishu(client, mission.chatId, card, { replyToMessageId: mission.threadId });
+}
+
 /**
  * Parse a mission action from a card button click value.
  * Returns null if not a mission action.

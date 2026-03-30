@@ -22,6 +22,7 @@ export interface BoardDeps {
   missionStore?: any;        // Kept for backward compat, not used directly
   authToken?: string;
   feishuClient?: any;        // Lark.Client for image proxy
+  enqueueMission?: (data: { missionId: string; step: string }) => Promise<void>;
 }
 
 export function createBoardApp(deps: BoardDeps): Hono {
@@ -35,14 +36,15 @@ export function createBoardApp(deps: BoardDeps): Hono {
   registerMissionsHandlers(app, data);
   registerConversationsHandlers(app, data);
 
-  // ── Projects API (lightweight, from config) ──
+  // ── Projects API (from DB, same format as Dashboard) ──
   app.get("/api/v1/projects", (c) => {
-    const projects = deps.config.projects as Record<string, unknown> ?? {};
-    const result: Record<string, string> = {};
-    for (const [slug, value] of Object.entries(projects)) {
-      result[slug] = typeof value === "string" ? value : (value as any)?.cwd ?? "";
+    try {
+      const { ProjectStore } = require("../../src/project/store.js");
+      const store = new ProjectStore();
+      return c.json(store.list());
+    } catch {
+      return c.json([]);
     }
-    return c.json(result);
   });
 
   // ── Image proxy with disk cache ──
@@ -83,6 +85,15 @@ export function createBoardApp(deps: BoardDeps): Hono {
     } catch (err) {
       return c.json({ error: (err as Error).message }, 502);
     }
+  });
+
+  // ── Internal: cross-process mission enqueue (called by remi-web) ──
+  app.post("/api/internal/enqueue-intake", async (c) => {
+    const { missionId, step } = await c.req.json();
+    if (!missionId || !step) return c.json({ error: "missionId and step required" }, 400);
+    if (!deps.enqueueMission) return c.json({ error: "enqueue not available" }, 503);
+    await deps.enqueueMission({ missionId, step });
+    return c.json({ ok: true, missionId, step });
   });
 
   // ── Health ──
