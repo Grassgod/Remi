@@ -74,6 +74,8 @@ export class ClaudeProcessManager {
   private _reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private _decoder: TextDecoder | null = null;
   private _lineBuffer = "";
+  /** Set to true when _readline detects EOF (stdout closed). */
+  private _eofDetected = false;
   /** Dynamic timeout for _readline(), adjusted based on rate limits and tool execution. */
   private _dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
 
@@ -186,6 +188,7 @@ export class ClaudeProcessManager {
       let builtInToolPending: { toolUseId: string; name: string; t0: number } | null = null;
       // Reset dynamic state for this interaction
       this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
+      this._eofDetected = false;
       // Liveness-check retry: allow one extended wait before killing
       let retriedAfterTimeout = false;
 
@@ -193,12 +196,13 @@ export class ClaudeProcessManager {
         const line = await this._readline(this._dynamicTimeoutMs);
         if (line === null) {
           if (this._process && !this._process.killed) {
-            const exitCode = this._process.exitCode;
-
-            // Process already exited on its own — this is a crash, not a hang
-            if (exitCode !== null) {
+            // EOF detected — process closed stdout (crash/exit), don't retry
+            if (this._eofDetected) {
+              // Wait briefly for process to fully exit so we can get exitCode
+              await new Promise((r) => setTimeout(r, 500));
+              const exitCode = this._process.exitCode;
               const stderr = await this._readStderr();
-              log.error(`CLI process exited unexpectedly (exitCode=${exitCode}, pid=${this._process.pid})${stderr ? ` stderr: ${stderr}` : ""}`);
+              log.error(`CLI process exited (EOF, exitCode=${exitCode}, pid=${this._process.pid})${stderr ? ` stderr: ${stderr}` : ""}`);
               yield {
                 kind: "error",
                 error: `CLI process exited unexpectedly (code ${exitCode}).${stderr ? ` ${stderr}` : ""}`,
@@ -207,7 +211,7 @@ export class ClaudeProcessManager {
               break;
             }
 
-            // Process still alive but not outputting — true hang, give one more chance
+            // True timeout (no EOF) — process still alive but not outputting
             if (!retriedAfterTimeout) {
               retriedAfterTimeout = true;
               const extendMs = 10 * 60 * 1000;
@@ -571,8 +575,9 @@ export class ClaudeProcessManager {
         const { value, done } = readResult;
         if (done) {
           // True EOF — process closed stdout
+          this._eofDetected = true;
           const exitCode = this._process?.exitCode;
-          log.warn(`readline EOF — process exited (exitCode=${exitCode})`);
+          log.warn(`readline EOF — stdout closed (exitCode=${exitCode}, pid=${this._process?.pid})`);
           // Flush any remaining partial line in buffer
           if (this._lineBuffer.trim()) {
             const remaining = this._lineBuffer.trim();
