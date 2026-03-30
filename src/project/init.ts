@@ -9,6 +9,7 @@ import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat } from "../connectors/feishu/chat.js";
 import { getActiveFeishuConnector } from "../connectors/feishu/registry.js";
 import type { RemiData } from "../../web/remi-data.js";
+import { GroupConfigStore } from "../group/store.js";
 
 // Jack's hardcoded open_id — only group member besides Remi Bot
 const OWNER_OPEN_ID = "ou_f4ed0b435518ee382e7e06c147a9db9f";
@@ -100,8 +101,15 @@ export async function runProjectInit(
       store.updateField(projectId, "chat_id", chatId);
     }
 
-    // Always ensure whitelist (idempotent — runs even if group already existed)
-    remiData.addGroupToWhitelist(chatId);
+    // Register in group_configs for DB-based filtering (idempotent upsert)
+    const gcStore = new GroupConfigStore();
+    gcStore.upsert({
+      chatId: chatId,
+      projectId: projectId,
+      monitor: true,  // project groups auto-reply by default
+      replyMode: "thread",
+    });
+
     getActiveFeishuConnector()?.addGroups([chatId]);
 
     return chatId;
@@ -145,24 +153,22 @@ export async function runProjectInit(
   });
   if (!step2) return;
 
-  // Step 3: Write config (toml) — project + bot profile
+  // Step 3: Register group config (DB) — replaces remi.toml writes
   const step3 = await runStep(store, projectId, "write_config", async () => {
     const project = store.getById(projectId)!;
-    const ok = remiData.saveProject(projectId, project.cwd!);
-    if (!ok) throw new Error("Failed to write remi.toml");
 
-    // Write bot profile so this group uses the project's cwd
+    // Ensure group_configs has an entry for this project's chat
     if (project.chatId) {
-      remiData.addBotProfile({
-        id: `project-${projectId}`,
-        name: input.name,
-        groups: [project.chatId],
-        cwd: project.cwd!,
-        reply_mode: "thread",
+      const gcStore = new GroupConfigStore();
+      gcStore.upsert({
+        chatId: project.chatId,
+        projectId: projectId,
+        monitor: true,
+        replyMode: "thread",
       });
     }
 
-    return "remi.toml updated";
+    return "group config registered";
   });
   if (!step3) return;
 
