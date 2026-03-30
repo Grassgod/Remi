@@ -118,6 +118,10 @@ export async function handleMissionJob(
     const label = STEP_LABEL[step] ?? step;
     const outputFile = STEP_OUTPUT_FILE[step] ? `${mission.outputDir}/${STEP_OUTPUT_FILE[step]}` : null;
     let systemPrompt = `执行 Mission Pipeline 的 ${label} 阶段。阅读并严格遵循 .claude/skills/${skillDir}/SKILL.md 的指示。\n\nMission ID: ${missionId}\n产出目录: ${mission.outputDir}`;
+    // Force worktree for rfc/execute steps (code isolation)
+    if (step === "rfc" || step === "execute") {
+      systemPrompt += `\n\n必须先调用 superpowers:using-git-worktrees 创建隔离工作区，再进行任何代码探索或修改。不要在主分支上直接工作。`;
+    }
     if (outputFile) {
       systemPrompt += `\n\n重要：本阶段的产出文件必须写到 ${outputFile}，不要写到其他位置（如 docs/superpowers/）。`;
     }

@@ -114,6 +114,8 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
       return `Searching: ${trunc(s(input?.query), MAX)}...`;
     case "Agent":
       return `Agent: ${trunc(s(input?.description ?? input?.prompt), MAX)}...`;
+    case "Skill":
+      return `Skill: ${trunc(s(input?.skill ?? input?.args), MAX)}`;
     default:
       return `Tool: ${name}...`;
   }

@@ -1,0 +1,78 @@
+<h2>Skills + Wiki + Memory: 统一编辑体验</h2>
+<p class="subtitle">三个方案，核心区别在于代码复用层级</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>抽取 MarkdownFileViewer 共享组件 (推荐)</h3>
+      <p>从 Memory 现有代码中提取一个通用的 <code>&lt;MarkdownFileViewer /&gt;</code> 组件，封装 Edit/Preview 切换 + Save + textarea/ReactMarkdown 逻辑。Skills、Wiki、Memory 三个页面都使用这个组件。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>UI 一致性有保障，改一处全局生效</li>
+            <li>各页面保留自己的数据获取和树结构逻辑</li>
+            <li>改动量适中，不需要重构整个架构</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>需要给 Wiki 新增写入 API</li>
+            <li>组件 props 需要兼容三个页面的差异（面包屑、metadata 等）</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>统一文件浏览器模式</h3>
+      <p>构建一个通用的 <code>&lt;FileBrowser /&gt;</code>，包含 TreeSidebar + FileViewer + Editor 整套。Skills/Wiki/Memory 只负责提供数据源配置，UI 完全统一。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>最高度统一，三个页面几乎零重复代码</li>
+            <li>未来新增类似页面几乎零成本</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>过度抽象——Memory 有搜索/实体元数据、Wiki 有 git 历史、Skills 有 cron 状态，差异很大</li>
+            <li>改动量大，需重构三个已有页面</li>
+            <li>违反 YAGNI 原则</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Skills 独立实现 + Wiki 最小改动</h3>
+      <p>Skills 页面参照 Memory 的模式独立实现编辑功能。Wiki 页面只加一个 Edit/Save 按钮到现有 Card 里。不提取共享组件。</p>
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Pros</h4>
+          <ul>
+            <li>最快交付，每个页面独立可测</li>
+            <li>不动 Memory 现有代码，风险最低</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Cons</h4>
+          <ul>
+            <li>Edit/Preview 逻辑重复三遍</li>
+            <li>后续样式调整需改多处</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

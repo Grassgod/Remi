@@ -1,0 +1,230 @@
+<h2>Logs 页面全面升级 — 整体布局</h2>
+<p class="subtitle">完整页面结构预览，从上到下依次为：统计卡片 → 筛选栏 → 日志表（含行内展开）</p>
+
+<!-- Full page mockup -->
+<div class="mockup">
+  <div class="mockup-header">Logs — STRUCTURED LOGS</div>
+  <div class="mockup-body" style="padding: 16px; background: #0a0a0f; color: #e2e8f0; font-family: ui-monospace, monospace;">
+
+    <!-- ═══ Section 1: Stat Cards ═══ -->
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
+      <!-- Card 1 -->
+      <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 11px; color: #9ca3af;">Total Entries</span>
+          <span style="font-size: 12px; color: #6b7280;">📄</span>
+        </div>
+        <div style="font-size: 24px; font-weight: 700; color: #f9fafb;">1,847</div>
+        <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">Today</div>
+      </div>
+      <!-- Card 2 -->
+      <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 11px; color: #9ca3af;">Errors</span>
+          <span style="font-size: 12px; color: #ef4444;">⚠</span>
+        </div>
+        <div style="font-size: 24px; font-weight: 700; color: #ef4444;">23</div>
+        <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">1.2% error rate</div>
+      </div>
+      <!-- Card 3 -->
+      <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 11px; color: #9ca3af;">Active Modules</span>
+          <span style="font-size: 12px; color: #6b7280;">📦</span>
+        </div>
+        <div style="font-size: 24px; font-weight: 700; color: #f9fafb;">8</div>
+        <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">lark, scheduler, cli...</div>
+      </div>
+      <!-- Card 4 -->
+      <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-size: 11px; color: #9ca3af;">Last Error</span>
+          <span style="font-size: 12px; color: #f59e0b;">🕐</span>
+        </div>
+        <div style="font-size: 18px; font-weight: 700; color: #f59e0b;">14:32</div>
+        <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">12 min ago · lark</div>
+      </div>
+    </div>
+
+    <!-- ═══ Section 2: Hourly Distribution Mini Chart ═══ -->
+    <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: 1px;">Hourly Distribution</span>
+        <span style="font-size: 10px; color: #6b7280;">00:00 — 23:00</span>
+      </div>
+      <div style="display: flex; gap: 2px; align-items: end; height: 40px;">
+        <!-- Simulated hourly bars -->
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 8px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 5px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 3px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 2px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 4px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 6px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 12px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 20px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 28px;"></div>
+        <div style="flex:1; background: linear-gradient(to top, #1e40af 70%, #ef4444 70%); border-radius: 2px 2px 0 0; height: 35px;" title="10:00 - 3 errors"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 40px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 32px;"></div>
+        <div style="flex:1; background: #1e40af; border-radius: 2px 2px 0 0; height: 25px;"></div>
+        <div style="flex:1; background: linear-gradient(to top, #1e40af 85%, #ef4444 85%); border-radius: 2px 2px 0 0; height: 30px;" title="13:00 - 2 errors"></div>
+        <div style="flex:1; background: linear-gradient(to top, #1e40af 60%, #ef4444 60%); border-radius: 2px 2px 0 0; height: 38px;" title="14:00 - 5 errors"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+        <div style="flex:1; background: #374151; border-radius: 2px 2px 0 0; height: 0px;"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+        <span style="font-size: 9px; color: #4b5563;">00</span>
+        <span style="font-size: 9px; color: #4b5563;">06</span>
+        <span style="font-size: 9px; color: #4b5563;">12</span>
+        <span style="font-size: 9px; color: #4b5563;">18</span>
+        <span style="font-size: 9px; color: #4b5563;">23</span>
+      </div>
+    </div>
+
+    <!-- ═══ Section 3: Enhanced Filter Bar ═══ -->
+    <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px;">
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <span style="font-size: 12px; color: #6b7280;">🔍</span>
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #e2e8f0;">2026-03-27</div>
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #9ca3af;">All Levels <span style="font-size: 9px; color: #6b7280;">(≥)</span></div>
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #9ca3af;">All Modules</div>
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #9ca3af; display: flex; align-items: center; gap: 4px;">
+          <span style="font-size: 10px;">🔎</span> Search messages...
+        </div>
+        <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 4px 8px; font-size: 11px; color: #9ca3af;">Trace ID...</div>
+
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 10px; color: #6b7280;">1,847 entries</span>
+          <div style="display: flex; align-items: center; gap: 4px; background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 3px 8px;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></div>
+            <span style="font-size: 10px; color: #9ca3af;">Auto 30s</span>
+          </div>
+          <div style="background: #1e40af; border-radius: 6px; padding: 4px 10px; font-size: 11px; color: white; cursor: pointer;">↻ Refresh</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ Section 4: Log Table with Expanded Row ═══ -->
+    <div style="background: #111827; border: 1px solid #1f2937; border-radius: 8px; overflow: hidden;">
+      <!-- Header -->
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #1f2937;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 12px; color: #6b7280;">📄</span>
+          <span style="font-size: 13px; font-weight: 600; color: #f9fafb;">Log Entries</span>
+        </div>
+      </div>
+
+      <!-- Table Header -->
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; border-bottom: 1px solid #1f2937; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #6b7280;">
+        <span>Time</span><span>Level</span><span>Module</span><span>Message</span><span>Trace</span><span></span>
+      </div>
+
+      <!-- Normal row -->
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; align-items: center; border-bottom: 1px solid rgba(31,41,55,0.5); font-size: 11px;">
+        <span style="color: #6b7280;">14:44:12</span>
+        <span><span style="background: rgba(34,197,94,0.1); color: #22c55e; padding: 1px 6px; border-radius: 4px; font-size: 10px;">INFO</span></span>
+        <span style="color: #9ca3af;">scheduler</span>
+        <span style="color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Cron job executed successfully: ai-daily-briefing</span>
+        <span style="color: #3b82f6; font-size: 10px; cursor: pointer;">a1b2c3d4e5f6</span>
+        <span style="color: #6b7280; font-size: 10px; cursor: pointer;">📋</span>
+      </div>
+
+      <!-- ERROR row (highlighted) -->
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; align-items: center; border-left: 2px solid rgba(239,68,68,0.4); background: rgba(239,68,68,0.03); font-size: 11px; cursor: pointer;" title="点击展开详情">
+        <span style="color: #6b7280;">14:32:08</span>
+        <span><span style="background: rgba(239,68,68,0.15); color: #ef4444; padding: 1px 6px; border-radius: 4px; font-size: 10px;">ERROR</span></span>
+        <span style="color: #9ca3af;">lark</span>
+        <span style="color: #fca5a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">OAuth token refresh failed: 401 Unauthorized</span>
+        <span style="color: #3b82f6; font-size: 10px; cursor: pointer;">f7e8d9c0b1a2</span>
+        <span style="color: #6b7280; font-size: 10px; cursor: pointer;">📋</span>
+      </div>
+
+      <!-- ═══ EXPANDED DETAIL (accordion) ═══ -->
+      <div style="background: #0d1117; border-left: 2px solid rgba(239,68,68,0.4); border-bottom: 1px solid #1f2937; padding: 12px 14px 12px 28px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+          <div>
+            <div style="font-size: 9px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Full Message</div>
+            <div style="font-size: 11px; color: #fca5a5; line-height: 1.5;">OAuth token refresh failed: 401 Unauthorized — tenant_access_token expired, auto-renewal returned HTTP 401. Retry exhausted after 3 attempts.</div>
+          </div>
+          <div>
+            <div style="font-size: 9px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Metadata</div>
+            <div style="font-size: 10px; color: #9ca3af; line-height: 1.8;">
+              <div><span style="color: #6b7280;">Module:</span> lark</div>
+              <div><span style="color: #6b7280;">Trace:</span> <span style="color: #3b82f6; cursor: pointer; text-decoration: underline;">f7e8d9c0b1a2 →</span></div>
+              <div><span style="color: #6b7280;">Span:</span> sp_oauth_refresh</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 9px; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;">Data (JSON)</div>
+          <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 8px 10px; font-size: 10px; line-height: 1.6; overflow-x: auto;">
+            <span style="color: #6b7280;">{</span><br>
+            &nbsp;&nbsp;<span style="color: #7ee787;">"endpoint"</span><span style="color: #6b7280;">:</span> <span style="color: #a5d6ff;">"https://open.feishu.cn/open-apis/auth/v3/tenant_access_token"</span><span style="color: #6b7280;">,</span><br>
+            &nbsp;&nbsp;<span style="color: #7ee787;">"status"</span><span style="color: #6b7280;">:</span> <span style="color: #f2cc60;">401</span><span style="color: #6b7280;">,</span><br>
+            &nbsp;&nbsp;<span style="color: #7ee787;">"retries"</span><span style="color: #6b7280;">:</span> <span style="color: #f2cc60;">3</span><span style="color: #6b7280;">,</span><br>
+            &nbsp;&nbsp;<span style="color: #7ee787;">"error_code"</span><span style="color: #6b7280;">:</span> <span style="color: #a5d6ff;">"token_expired"</span><br>
+            <span style="color: #6b7280;">}</span>
+          </div>
+        </div>
+        <div style="margin-top: 8px; display: flex; gap: 8px;">
+          <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #9ca3af; cursor: pointer;">📋 Copy JSON</div>
+          <div style="background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #9ca3af; cursor: pointer;">📋 Copy Full Entry</div>
+          <div style="background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #3b82f6; cursor: pointer;">→ View Trace</div>
+        </div>
+      </div>
+
+      <!-- WARN row -->
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; align-items: center; border-left: 2px solid rgba(245,158,11,0.3); font-size: 11px;">
+        <span style="color: #6b7280;">14:28:55</span>
+        <span><span style="background: rgba(245,158,11,0.1); color: #f59e0b; padding: 1px 6px; border-radius: 4px; font-size: 10px;">WARN</span></span>
+        <span style="color: #9ca3af;">cli</span>
+        <span style="color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Session heartbeat timeout after 30s, marking as potentially dead</span>
+        <span style="color: #3b82f6; font-size: 10px; cursor: pointer;">c3d4e5f6a7b8</span>
+        <span style="color: #6b7280; font-size: 10px; cursor: pointer;">📋</span>
+      </div>
+
+      <!-- More normal rows -->
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; align-items: center; border-bottom: 1px solid rgba(31,41,55,0.5); font-size: 11px;">
+        <span style="color: #6b7280;">14:25:03</span>
+        <span><span style="background: rgba(34,197,94,0.1); color: #22c55e; padding: 1px 6px; border-radius: 4px; font-size: 10px;">INFO</span></span>
+        <span style="color: #9ca3af;">lark</span>
+        <span style="color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Message received from group chat: remi-dev</span>
+        <span style="color: #3b82f6; font-size: 10px; cursor: pointer;">d4e5f6a7b8c9</span>
+        <span style="color: #6b7280; font-size: 10px; cursor: pointer;">📋</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 90px 70px 100px 1fr 110px 40px; padding: 6px 14px; align-items: center; font-size: 11px;">
+        <span style="color: #6b7280;">14:20:17</span>
+        <span><span style="background: rgba(107,114,128,0.15); color: #9ca3af; padding: 1px 6px; border-radius: 4px; font-size: 10px;">DEBUG</span></span>
+        <span style="color: #9ca3af;">scheduler</span>
+        <span style="color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Next cron tick in 300s for job: repo-update</span>
+        <span style="color: #6b7280; font-size: 10px; opacity: 0.4;">—</span>
+        <span style="color: #6b7280; font-size: 10px; cursor: pointer;">📋</span>
+      </div>
+
+      <!-- Load More -->
+      <div style="border-top: 1px solid #1f2937; padding: 10px 14px; text-align: center;">
+        <span style="font-size: 11px; color: #3b82f6; cursor: pointer;">▼ LOAD MORE (1,841 remaining)</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);">
+  <h3 style="margin: 0 0 8px 0; font-size: 14px;">设计亮点</h3>
+  <ul style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8; color: #ccc;">
+    <li><strong>4 StatCards</strong> — 总条目、错误数/率、模块数、最近错误时间</li>
+    <li><strong>纯 CSS 柱状图</strong> — 按小时分布，错误用红色叠加，零依赖</li>
+    <li><strong>增强筛选栏</strong> — 新增全文搜索 + Level ≥ 语义提示 + 自动轮询 toggle</li>
+    <li><strong>行内展开详情</strong> — 完整消息、元数据、JSON 语法高亮、复制按钮、Trace 跳转</li>
+    <li><strong>后端新增</strong> — <code>/api/v1/logs/stats</code> 聚合接口 + <code>search</code> 参数支持全文搜索</li>
+  </ul>
+</div>

@@ -1,0 +1,3 @@
+{"type":"server-started","port":60676,"host":"0.0.0.0","url_host":"10.37.66.8","url":"http://10.37.66.8:60676","screen_dir":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/937448-1774617220/content","state_dir":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/937448-1774617220/state"}
+{"type":"screen-added","file":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/937448-1774617220/content/logs-layout.html"}
+{"type":"server-stopped","reason":"owner process exited"}

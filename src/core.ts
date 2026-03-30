@@ -297,8 +297,11 @@ export class Remi {
 
     const sessRow = sessDb.getSession(sessionKey);
     // Mission pipeline can pass a specific sessionId to resume (real Claude UUID)
+    // When missionSessionId is explicitly provided (even if null), use it exclusively —
+    // don't fall back to sessRow (which would mix sessions across pipeline steps)
+    const isMissionPipeline = msg.metadata?.pipelineStep !== undefined;
     const missionSessionId = msg.metadata?.missionSessionId as string | undefined;
-    const existingSessionId = missionSessionId || sessRow?.session_id || undefined;
+    const existingSessionId = isMissionPipeline ? (missionSessionId || undefined) : (sessRow?.session_id || undefined);
     _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}${missionSessionId ? " [mission-session]" : ""}`);
     const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
 

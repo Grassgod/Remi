@@ -1,0 +1,147 @@
+<h2>Entity Detail & Recall Testing</h2>
+<p class="subtitle">Full-page entity view + Recall debug console design</p>
+
+<div class="section">
+  <h3>1. Entity Detail Page (replaces current Sheet popup)</h3>
+  <div class="mockup">
+    <div class="mockup-header">Memory > Personal > People > 贺华杰</div>
+    <div class="mockup-body" style="padding:0;">
+      <div style="background:#1a1a2e;padding:20px;font-family:system-ui;font-size:13px;color:#e0e0e0;min-height:320px;">
+        <!-- Breadcrumb -->
+        <div style="color:#888;font-size:11px;margin-bottom:16px;">
+          <span style="color:#4ade80;cursor:pointer;">Memory</span> / <span style="color:#aaa;">Personal</span> / <span style="color:#aaa;">People</span> / <span style="color:#fff;">贺华杰</span>
+        </div>
+        <!-- Header -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span style="background:#1e3a5f;color:#60a5fa;padding:3px 8px;border-radius:4px;font-size:11px;">PERSON</span>
+              <h2 style="color:#fff;margin:0;font-size:20px;">贺华杰</h2>
+            </div>
+            <div style="color:#888;font-size:12px;margin-top:4px;">aka: Jack</div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <div style="background:#252540;padding:6px 12px;border-radius:6px;color:#888;font-size:11px;cursor:pointer;">&#9998; Edit</div>
+            <div style="background:#3f1515;padding:6px 12px;border-radius:6px;color:#ef4444;font-size:11px;cursor:pointer;">&#128465; Delete</div>
+          </div>
+        </div>
+        <!-- Metadata -->
+        <div style="display:flex;gap:24px;margin-bottom:16px;padding:12px;background:#252540;border-radius:8px;">
+          <div><span style="color:#888;font-size:11px;">Created</span><br><span style="color:#aaa;font-size:12px;">2026-02-15</span></div>
+          <div><span style="color:#888;font-size:11px;">Updated</span><br><span style="color:#aaa;font-size:12px;">2026-03-25</span></div>
+          <div><span style="color:#888;font-size:11px;">Tags</span><br><span style="color:#4ade80;font-size:12px;">creator, admin</span></div>
+          <div><span style="color:#888;font-size:11px;">Scope</span><br><span style="color:#f59e0b;font-size:12px;">Personal</span></div>
+        </div>
+        <!-- Content -->
+        <div style="background:#252540;border-radius:8px;padding:16px;">
+          <div style="color:#fff;font-size:14px;font-weight:500;margin-bottom:8px;">Content</div>
+          <div style="color:#ccc;font-size:12px;line-height:1.8;">
+            Jack，Remi创建者和项目主人，字节跳动上海漕河泾。<br>
+            架构偏好：先出方案再实现。<br>
+            女朋友是周昱萱，在携程做产品运营。<br>
+            关注 NBA。<br>
+            "提交" = git commit + git push。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>2. Recall Testing Console</h3>
+  <p class="subtitle">How should Recall debug/testing be presented?</p>
+
+  <div class="cards">
+    <!-- Option A: Inline in Memory page -->
+    <div class="card" data-choice="recall-inline" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div style="background:#1a1a2e;border-radius:8px;padding:16px;font-family:monospace;font-size:12px;color:#e0e0e0;min-height:220px;">
+          <!-- Search bar enhanced -->
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <div style="flex:1;background:#252540;border:1px solid #333;border-radius:6px;padding:8px 12px;color:#aaa;">&#128269; recall: larkparser 权限问题</div>
+            <div style="background:#4ade80;color:#000;padding:8px 14px;border-radius:6px;font-weight:bold;cursor:pointer;">Recall</div>
+          </div>
+          <!-- Pipeline steps -->
+          <div style="margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+              <span style="background:#166534;color:#4ade80;padding:1px 6px;border-radius:3px;font-size:10px;">L1</span>
+              <span style="color:#4ade80;">✓ Full-text search</span>
+              <span style="color:#555;font-size:10px;">12ms · 3 hits</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+              <span style="background:#1e3a5f;color:#60a5fa;padding:1px 6px;border-radius:3px;font-size:10px;">L2</span>
+              <span style="color:#60a5fa;">✓ Entity matching</span>
+              <span style="color:#555;font-size:10px;">45ms · matched "larkparser"</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+              <span style="background:#4a1d5f;color:#a78bfa;padding:1px 6px;border-radius:3px;font-size:10px;">L3</span>
+              <span style="color:#a78bfa;">✓ Context assembly</span>
+              <span style="color:#555;font-size:10px;">8ms · 2 entities + 1 daily</span>
+            </div>
+          </div>
+          <!-- Results -->
+          <div style="border-top:1px solid #333;padding-top:8px;">
+            <div style="color:#888;font-size:10px;margin-bottom:6px;">RESULTS (3)</div>
+            <div style="background:#252540;padding:6px 10px;border-radius:4px;margin-bottom:4px;border-left:3px solid #4ade80;">
+              <span style="color:#fff;">larkparser</span> <span style="color:#888;">- 飞书文档解析SDK</span>
+            </div>
+            <div style="background:#252540;padding:6px 10px;border-radius:4px;margin-bottom:4px;border-left:3px solid #60a5fa;">
+              <span style="color:#fff;">larkparser_answer</span> <span style="color:#888;">- 公众答疑机器人</span>
+            </div>
+            <div style="background:#252540;padding:6px 10px;border-radius:4px;border-left:3px solid #f59e0b;">
+              <span style="color:#fff;">2026-03-26.md</span> <span style="color:#888;">- "...权限配置问题..."</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>A. Inline Recall Panel (Recommended)</h3>
+        <p>Recall search bar at top of Memory page. Shows L1/L2/L3 pipeline steps with timing, then matched results. One-click test, immediate feedback.</p>
+      </div>
+    </div>
+
+    <!-- Option B: Dedicated Recall Debug Page -->
+    <div class="card" data-choice="recall-page" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div style="background:#1a1a2e;border-radius:8px;padding:16px;font-family:monospace;font-size:12px;color:#e0e0e0;min-height:220px;">
+          <!-- Tab bar -->
+          <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid #333;">
+            <div style="padding:6px 16px;color:#888;">Entities</div>
+            <div style="padding:6px 16px;color:#888;">MEMORY.md</div>
+            <div style="padding:6px 16px;color:#888;">Daily Logs</div>
+            <div style="padding:6px 16px;color:#f59e0b;border-bottom:2px solid #f59e0b;font-weight:bold;">&#128270; Recall Debug</div>
+          </div>
+          <!-- Full debug view -->
+          <div style="display:flex;gap:12px;">
+            <!-- Left: Query -->
+            <div style="flex:1;">
+              <div style="color:#888;font-size:10px;margin-bottom:4px;">QUERY</div>
+              <textarea style="width:100%;background:#252540;border:1px solid #333;border-radius:4px;padding:8px;color:#fff;font-size:12px;height:60px;resize:none;font-family:monospace;">larkparser 权限问题</textarea>
+              <div style="margin-top:6px;display:flex;gap:6px;">
+                <div style="background:#4ade80;color:#000;padding:4px 10px;border-radius:4px;font-size:11px;">Run</div>
+                <select style="background:#252540;border:1px solid #333;color:#aaa;padding:4px;border-radius:4px;font-size:11px;"><option>All layers</option><option>L1 only</option><option>L1+L2</option></select>
+              </div>
+            </div>
+            <!-- Right: Execution log -->
+            <div style="flex:1;">
+              <div style="color:#888;font-size:10px;margin-bottom:4px;">EXECUTION LOG</div>
+              <div style="background:#0d0d1a;border:1px solid #333;border-radius:4px;padding:8px;font-size:11px;height:100px;overflow-y:auto;">
+                <div style="color:#4ade80;">[L1] grep "larkparser" → 3 matches (12ms)</div>
+                <div style="color:#4ade80;">[L1] grep "权限" → 5 matches (8ms)</div>
+                <div style="color:#60a5fa;">[L2] entity_match("larkparser") → exact (45ms)</div>
+                <div style="color:#60a5fa;">[L2] related: larkparser_answer, lark_parser_service</div>
+                <div style="color:#a78bfa;">[L3] assemble context: 2 entities + 1 daily (8ms)</div>
+                <div style="color:#fff;">[OK] Total: 73ms, 3 results</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <h3>B. Dedicated Recall Debug Tab</h3>
+        <p>New tab in Memory page. Full query editor, layer filter, detailed execution log with grep commands. More power for deep debugging.</p>
+      </div>
+    </div>
+  </div>
+</div>

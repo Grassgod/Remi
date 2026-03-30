@@ -1,0 +1,124 @@
+<h2>对话详情怎么展开？</h2>
+<p class="subtitle">点击对话列表中的某条对话后，如何展示完整对话内容</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="padding: 16px; font-family: monospace; font-size: 11px; line-height: 1.6; background: #1a1a2e; color: #ccc; border-radius: 8px;">
+        <div style="display: flex; height: 220px;">
+          <!-- Left: conversation list -->
+          <div style="width: 35%; border-right: 1px solid #333; padding-right: 8px;">
+            <div style="font-size: 9px; color: #0ea5e9; margin-bottom: 8px;">CONVERSATIONS</div>
+            <div style="background: #0ea5e933; border-left: 2px solid #0ea5e9; padding: 6px 8px; margin-bottom: 4px; border-radius: 0 4px 4px 0;">
+              Dashboard优化 <span style="color:#666; font-size: 9px;">3m</span>
+            </div>
+            <div style="padding: 6px 8px; margin-bottom: 4px; color: #888;">
+              RFC评测报告 <span style="color:#666; font-size: 9px;">1h</span>
+            </div>
+            <div style="padding: 6px 8px; color: #888;">
+              Dorado解析 <span style="color:#666; font-size: 9px;">2h</span>
+            </div>
+          </div>
+          <!-- Right: conversation detail -->
+          <div style="width: 65%; padding-left: 10px; overflow: auto;">
+            <div style="font-size: 9px; color: #0ea5e9; margin-bottom: 4px;">Dashboard优化 · 2.1K tokens · 3m ago</div>
+            <div style="background: #16213e; padding: 6px 8px; border-radius: 6px; margin-bottom: 6px;">
+              <div style="color: #666; font-size: 9px;">Jack</div>
+              <div>Dashboard优化，想用 shadcn/ui</div>
+            </div>
+            <div style="background: #1e293b; padding: 6px 8px; border-radius: 6px; margin-bottom: 6px;">
+              <div style="color: #0ea5e9; font-size: 9px;">Remi</div>
+              <div>让我先看看当前 Dashboard 现状...</div>
+            </div>
+            <div style="background: #16213e; padding: 6px 8px; border-radius: 6px;">
+              <div style="color: #666; font-size: 9px;">Jack</div>
+              <div>TailAdmin 有看板，开源吗？</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 主从面板 (Master-Detail)</h3>
+      <p>首页对话列表点击后，右侧原地展开对话内容。类似邮件客户端（左列表右详情）。不离开首页。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="padding: 16px; font-family: monospace; font-size: 11px; line-height: 1.6; background: #1a1a2e; color: #ccc; border-radius: 8px;">
+        <div style="position: relative; height: 220px;">
+          <!-- Background: dashboard (dimmed) -->
+          <div style="opacity: 0.3; padding: 8px;">
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <div style="flex:1; background: #16213e; border-radius: 4px; padding: 6px; text-align: center;">12 CHATS</div>
+              <div style="flex:1; background: #16213e; border-radius: 4px; padding: 6px; text-align: center;">45.2K TOK</div>
+            </div>
+            <div style="background: #16213e; border-radius: 4px; padding: 8px;">CONVERSATIONS...</div>
+          </div>
+          <!-- Overlay: slide-over sheet -->
+          <div style="position: absolute; top: 0; right: 0; width: 60%; height: 100%; background: #0f172a; border-left: 1px solid #334155; padding: 12px; overflow: auto;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <div style="color: #0ea5e9; font-size: 10px;">Dashboard优化</div>
+              <div style="color: #666; cursor: pointer;">✕</div>
+            </div>
+            <div style="font-size: 9px; color: #666; margin-bottom: 8px;">2.1K tokens · 8 messages · 3m ago</div>
+            <div style="background: #16213e; padding: 6px 8px; border-radius: 6px; margin-bottom: 6px;">
+              <div style="color: #666; font-size: 9px;">Jack</div>
+              <div>Dashboard优化</div>
+            </div>
+            <div style="background: #1e293b; padding: 6px 8px; border-radius: 6px; margin-bottom: 6px;">
+              <div style="color: #0ea5e9; font-size: 9px;">Remi</div>
+              <div>让我先看看当前状态...</div>
+            </div>
+            <div style="background: #16213e; padding: 6px 8px; border-radius: 6px;">
+              <div style="color: #666; font-size: 9px;">Jack</div>
+              <div>TailAdmin 开源吗？</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 侧滑面板 (Sheet)</h3>
+      <p>点击对话后，从右侧滑出面板覆盖部分首页。关闭回到首页。shadcn Sheet 组件原生支持。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="padding: 16px; font-family: monospace; font-size: 11px; line-height: 1.6; background: #1a1a2e; color: #ccc; border-radius: 8px;">
+        <div style="height: 220px;">
+          <!-- Full page conversation view -->
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #333;">
+            <div style="color: #0ea5e9;">← Back</div>
+            <div style="font-weight: bold;">Dashboard优化</div>
+            <div style="margin-left: auto; color: #666; font-size: 9px;">2.1K tokens · 8 msgs · 3m ago</div>
+          </div>
+          <div style="overflow: auto;">
+            <div style="background: #16213e; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; max-width: 80%;">
+              <div style="color: #666; font-size: 9px;">Jack · 14:23</div>
+              <div>Dashboard优化，想用 shadcn/ui，你现在是什么风格？</div>
+            </div>
+            <div style="background: #1e293b; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; max-width: 85%; margin-left: auto;">
+              <div style="color: #0ea5e9; font-size: 9px;">Remi · 14:23</div>
+              <div>当前是 "HUD 终端极简" 风格 — 纯平面、无阴影、大量 monospace...</div>
+            </div>
+            <div style="background: #16213e; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; max-width: 80%;">
+              <div style="color: #666; font-size: 9px;">Jack · 14:25</div>
+              <div>TailAdmin 有看板，开源吗？</div>
+            </div>
+            <div style="background: #1e293b; padding: 8px 10px; border-radius: 6px; max-width: 85%; margin-left: auto;">
+              <div style="color: #0ea5e9; font-size: 9px;">Remi · 14:25</div>
+              <div>开源的！MIT License。GitHub 1.1k stars...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 独立全页 (Full Page)</h3>
+      <p>点击对话后跳转到独立的对话详情页，有返回按钮。空间最大，适合长对话阅读。类似飞书消息详情。</p>
+    </div>
+  </div>
+</div>

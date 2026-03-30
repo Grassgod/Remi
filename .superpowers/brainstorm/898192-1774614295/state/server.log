@@ -1,0 +1,4 @@
+{"type":"server-started","port":54560,"host":"0.0.0.0","url_host":"10.37.66.8","url":"http://10.37.66.8:54560","screen_dir":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/898192-1774614295/content","state_dir":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/898192-1774614295/state"}
+{"type":"screen-added","file":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/898192-1774614295/content/design-direction.html"}
+{"type":"screen-added","file":"/data00/home/hehuajie/project/remi/.superpowers/brainstorm/898192-1774614295/content/list-view.html"}
+{"type":"server-stopped","reason":"owner process exited"}

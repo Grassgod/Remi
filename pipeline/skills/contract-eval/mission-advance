@@ -33,6 +33,12 @@ if (!mission) {
   process.exit(1);
 }
 
+// Only allow execution during eval step
+if (mission.current_step !== "eval") {
+  console.error(`❌ mission-advance can only run during eval step (current: ${mission.current_step})`);
+  process.exit(1);
+}
+
 if (v === "pass") {
   db.run("UPDATE missions SET status = 'in_review', updated_at = datetime('now') WHERE id = ?", [missionId]);
   console.log(`✅ Mission ${missionId} eval PASSED → in_review`);

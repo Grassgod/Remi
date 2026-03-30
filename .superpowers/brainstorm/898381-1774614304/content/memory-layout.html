@@ -1,0 +1,178 @@
+<h2>Memory Module Redesign: Layout Structure</h2>
+<p class="subtitle">How should personal & project memories be organized?</p>
+
+<div class="cards">
+  <!-- Option A: Tree Sidebar -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;font-family:monospace;font-size:12px;color:#e0e0e0;min-height:280px;display:flex;gap:12px;">
+        <!-- Left Tree -->
+        <div style="width:200px;border-right:1px solid #333;padding-right:12px;flex-shrink:0;">
+          <div style="color:#888;font-size:10px;text-transform:uppercase;margin-bottom:8px;">Memory Sources</div>
+          <div style="margin-bottom:4px;">
+            <span style="color:#4ade80;">&#9660;</span> <span style="color:#fff;font-weight:bold;">Personal</span>
+          </div>
+          <div style="padding-left:16px;color:#aaa;">
+            <div style="margin:2px 0;">&#128100; People (8)</div>
+            <div style="margin:2px 0;">&#128187; Software (12)</div>
+            <div style="margin:2px 0;">&#9881; Services (3)</div>
+            <div style="margin:2px 0;">&#128196; Decisions (2)</div>
+          </div>
+          <div style="margin-top:8px;margin-bottom:4px;">
+            <span style="color:#4ade80;">&#9660;</span> <span style="color:#fff;font-weight:bold;">Projects</span>
+          </div>
+          <div style="padding-left:16px;color:#aaa;">
+            <div style="margin:2px 0;color:#4ade80;">&#9654; Remi</div>
+            <div style="margin:2px 0;color:#4ade80;">&#9654; larkparser</div>
+            <div style="margin:2px 0;color:#4ade80;">&#9654; dorado</div>
+            <div style="margin:2px 0;color:#4ade80;">&#9654; markone</div>
+          </div>
+          <div style="margin-top:8px;margin-bottom:4px;">
+            <span style="color:#60a5fa;">&#128196;</span> <span style="color:#fff;">MEMORY.md</span>
+          </div>
+          <div style="margin-top:4px;margin-bottom:4px;">
+            <span style="color:#f59e0b;">&#128197;</span> <span style="color:#fff;">Daily Logs</span>
+          </div>
+        </div>
+        <!-- Right Content -->
+        <div style="flex:1;">
+          <div style="color:#888;font-size:10px;margin-bottom:8px;">Personal > People</div>
+          <div style="display:grid;gap:6px;">
+            <div style="background:#252540;padding:8px 12px;border-radius:6px;border-left:3px solid #60a5fa;">
+              <div style="color:#fff;font-size:13px;">贺华杰</div>
+              <div style="color:#888;font-size:11px;">Jack, Remi创建者</div>
+            </div>
+            <div style="background:#252540;padding:8px 12px;border-radius:6px;border-left:3px solid #60a5fa;">
+              <div style="color:#fff;font-size:13px;">周昱萱</div>
+              <div style="color:#888;font-size:11px;">Jack的女朋友，携程产品运营</div>
+            </div>
+            <div style="background:#252540;padding:8px 12px;border-radius:6px;border-left:3px solid #60a5fa;">
+              <div style="color:#fff;font-size:13px;">朱坤</div>
+              <div style="color:#888;font-size:11px;">LarkParser TS版协作开发者</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Tree Sidebar + Content Panel</h3>
+      <p>Left sidebar shows memory tree (Personal / Projects), right panel shows filtered entities. Click tree node to filter, click entity to open full page.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Clear hierarchy at a glance</li><li>Fast navigation between scopes</li><li>Familiar file-explorer pattern</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Takes horizontal space</li><li>May be overkill if few projects</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Scope Tabs + Type Groups -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;font-family:monospace;font-size:12px;color:#e0e0e0;min-height:280px;">
+        <!-- Scope Tabs -->
+        <div style="display:flex;gap:0;margin-bottom:12px;border-bottom:1px solid #333;">
+          <div style="padding:6px 16px;color:#4ade80;border-bottom:2px solid #4ade80;font-weight:bold;">All</div>
+          <div style="padding:6px 16px;color:#888;">Personal</div>
+          <div style="padding:6px 16px;color:#888;">Remi</div>
+          <div style="padding:6px 16px;color:#888;">larkparser</div>
+          <div style="padding:6px 16px;color:#888;">dorado</div>
+          <div style="padding:6px 16px;color:#888;">+</div>
+        </div>
+        <!-- Grouped Entities -->
+        <div style="margin-bottom:10px;">
+          <div style="color:#4ade80;font-size:11px;text-transform:uppercase;margin-bottom:6px;">Projects (16)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">Remi</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">larkparser</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">markone</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">dorado</div>
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="color:#60a5fa;font-size:11px;text-transform:uppercase;margin-bottom:6px;">People (8)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">贺华杰</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">周昱萱</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">朱坤</div>
+          </div>
+        </div>
+        <div>
+          <div style="color:#a78bfa;font-size:11px;text-transform:uppercase;margin-bottom:6px;">Software (12)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">Claude Code</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">Hono</div>
+            <div style="background:#252540;padding:4px 10px;border-radius:4px;border:1px solid #333;">Langfuse</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Scope Tabs + Type Groups</h3>
+      <p>Top tabs switch between All / Personal / per-Project scope. Entities grouped by type within each scope. Click entity to open full page.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Simple, flat navigation</li><li>Easy to add new projects as tabs</li><li>No sidebar space cost</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Many projects = too many tabs</li><li>No visual hierarchy</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C: Hybrid -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1a1a2e;border-radius:8px;padding:16px;font-family:monospace;font-size:12px;color:#e0e0e0;min-height:280px;">
+        <!-- Top: Scope Selector -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #4ade80;color:#4ade80;font-size:11px;">&#127968; Personal</div>
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #333;color:#888;font-size:11px;">&#128194; Remi</div>
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #333;color:#888;font-size:11px;">&#128194; larkparser</div>
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #333;color:#888;font-size:11px;">&#128194; dorado</div>
+          <div style="color:#888;">|</div>
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #333;color:#888;font-size:11px;">&#128196; MEMORY.md</div>
+          <div style="background:#252540;padding:6px 12px;border-radius:6px;border:1px solid #333;color:#888;font-size:11px;">&#128197; Daily</div>
+        </div>
+        <!-- Entity List -->
+        <div style="display:grid;gap:6px;">
+          <div style="background:#252540;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;">
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:#166534;color:#4ade80;padding:2px 6px;border-radius:3px;font-size:10px;">PROJECT</span>
+                <span style="color:#fff;font-size:13px;font-weight:500;">Remi</span>
+              </div>
+              <div style="color:#888;font-size:11px;margin-top:2px;">Jack的AI助手项目，Bun/TS</div>
+            </div>
+            <div style="color:#555;font-size:11px;">03-27</div>
+          </div>
+          <div style="background:#252540;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:#1e3a5f;color:#60a5fa;padding:2px 6px;border-radius:3px;font-size:10px;">PERSON</span>
+                <span style="color:#fff;font-size:13px;font-weight:500;">贺华杰</span>
+              </div>
+              <div style="color:#888;font-size:11px;margin-top:2px;">Jack，Remi创建者和项目主人</div>
+            </div>
+            <div style="color:#555;font-size:11px;">03-25</div>
+          </div>
+          <div style="background:#252540;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:#4a1d5f;color:#a78bfa;padding:2px 6px;border-radius:3px;font-size:10px;">SOFTWARE</span>
+                <span style="color:#fff;font-size:13px;font-weight:500;">Claude Code</span>
+              </div>
+              <div style="color:#888;font-size:11px;margin-top:2px;">Remi底层AI provider</div>
+            </div>
+            <div style="color:#555;font-size:11px;">02-27</div>
+          </div>
+        </div>
+        <!-- Bottom: Click hint -->
+        <div style="text-align:center;color:#555;font-size:11px;margin-top:12px;">Click any entity to open full detail page &rarr;</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. Chip Selector + Full-Page Detail (Recommended)</h3>
+      <p>Scope chips at top (Personal / each Project / MEMORY.md / Daily). Click chip to filter scope. Click entity navigates to full-page detail view. Keeps current list UX but adds project awareness.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Minimal layout change from current</li><li>Clear scope switching via chips</li><li>Full-page detail (no more sheet)</li><li>Scalable: chips scroll horizontally</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Less visual hierarchy than tree</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>

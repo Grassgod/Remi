@@ -1,0 +1,252 @@
+<h2>Mission 模块 — 设计方向</h2>
+<p class="subtitle">选择一个整体设计风格，后续细节会在此基础上展开</p>
+
+<div class="cards">
+  <!-- Option A: Linear-style -->
+  <div class="card" data-choice="linear-style" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #0a0a0a;">
+      <!-- Linear-inspired mockup -->
+      <div style="font-family: system-ui; color: #e5e5e5;">
+        <!-- Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 18px; font-weight: 600;">Missions</span>
+            <span style="font-size: 12px; color: #666; background: #1a1a2e; padding: 2px 8px; border-radius: 10px;">12</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #1a1a2e; color: #888;">Board</div>
+            <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #2563eb22; color: #60a5fa; border: 1px solid #2563eb44;">List</div>
+          </div>
+        </div>
+        <!-- Kanban columns -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+          <div>
+            <div style="font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #333;">Inbox <span style="margin-left: 4px; color: #444;">3</span></div>
+            <div style="background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px; margin-bottom: 6px;">
+              <div style="font-size: 11px; font-weight: 500;">支持 minutes 格式</div>
+              <div style="font-size: 9px; color: #666; margin-top: 4px;">larkparser</div>
+              <div style="display: flex; gap: 4px; margin-top: 8px;">
+                <span style="font-size: 8px; padding: 2px 6px; border-radius: 4px; background: #7c3aed22; color: #a78bfa;">RFC</span>
+              </div>
+            </div>
+            <div style="background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px; margin-bottom: 6px;">
+              <div style="font-size: 11px; font-weight: 500;">OAuth token 自动续期</div>
+              <div style="font-size: 9px; color: #666; margin-top: 4px;">remi</div>
+              <div style="display: flex; gap: 4px; margin-top: 8px;">
+                <span style="font-size: 8px; padding: 2px 6px; border-radius: 4px; background: #2563eb22; color: #60a5fa;">Intake</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 10px; color: #f59e0b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #f59e0b44;">In Progress <span style="margin-left: 4px; color: #444;">2</span></div>
+            <div style="background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px; margin-bottom: 6px; border-left: 2px solid #f59e0b;">
+              <div style="font-size: 11px; font-weight: 500;">Dashboard Redesign</div>
+              <div style="font-size: 9px; color: #666; margin-top: 4px;">remi</div>
+              <div style="display: flex; gap: 4px; margin-top: 8px; align-items: center;">
+                <span style="font-size: 8px; padding: 2px 6px; border-radius: 4px; background: #f59e0b22; color: #fbbf24;">Execute</span>
+                <span style="font-size: 8px; color: #22c55e;">● PR open</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 10px; color: #8b5cf6; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #8b5cf644;">In Review <span style="margin-left: 4px; color: #444;">1</span></div>
+            <div style="background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px; margin-bottom: 6px; border-left: 2px solid #8b5cf6;">
+              <div style="font-size: 11px; font-weight: 500;">Dorado 离线解析</div>
+              <div style="font-size: 9px; color: #666; margin-top: 4px;">larkparser</div>
+              <div style="display: flex; gap: 4px; margin-top: 8px; align-items: center;">
+                <span style="font-size: 8px; padding: 2px 6px; border-radius: 4px; background: #8b5cf622; color: #a78bfa;">Eval</span>
+                <span style="font-size: 8px; color: #f59e0b;">● PR review</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 10px; color: #22c55e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #22c55e44;">Done <span style="margin-left: 4px; color: #444;">6</span></div>
+            <div style="background: #111; border: 1px solid #222; border-radius: 8px; padding: 10px; margin-bottom: 6px; opacity: 0.6;">
+              <div style="font-size: 11px; font-weight: 500;">记忆系统 MCP</div>
+              <div style="font-size: 9px; color: #666; margin-top: 4px;">remi</div>
+              <div style="display: flex; gap: 4px; margin-top: 8px; align-items: center;">
+                <span style="font-size: 8px; color: #22c55e;">✓ merged</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Linear 风格 — 精简工程感</h3>
+      <p>深色极简，强调状态颜色编码和信息密度。卡片轻量，左侧彩色边框标识状态。适合工程师日常使用。</p>
+    </div>
+  </div>
+
+  <!-- Option B: Notion-style -->
+  <div class="card" data-choice="notion-style" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #191919;">
+      <!-- Notion-inspired mockup -->
+      <div style="font-family: system-ui; color: #e5e5e5;">
+        <!-- Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 18px; font-weight: 600;">📋 Missions</span>
+          </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <div style="padding: 4px 10px; border-radius: 4px; font-size: 11px; background: transparent; color: #999; border: 1px solid #333;">⊞ Board</div>
+            <div style="padding: 4px 10px; border-radius: 4px; font-size: 11px; background: transparent; color: #999; border: 1px solid #333;">☰ List</div>
+            <div style="padding: 4px 10px; border-radius: 4px; font-size: 11px; background: transparent; color: #999; border: 1px solid #333;">Filter</div>
+          </div>
+        </div>
+        <!-- Kanban with wider cards -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+          <div>
+            <div style="font-size: 12px; color: #999; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: #666;"></span> Inbox <span style="color: #555; font-size: 10px;">3</span>
+            </div>
+            <div style="background: #252525; border-radius: 6px; padding: 12px; margin-bottom: 8px; cursor: pointer;">
+              <div style="font-size: 12px; font-weight: 500;">支持 minutes 格式</div>
+              <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #35374b; color: #8b8fa3;">larkparser</span>
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #2d3436; color: #74b9ff;">RFC</span>
+              </div>
+              <div style="margin-top: 8px; display: flex; align-items: center; gap: 4px;">
+                <div style="width: 16px; height: 16px; border-radius: 50%; background: #4a4a4a; font-size: 8px; display: flex; align-items: center; justify-content: center;">朱</div>
+                <span style="font-size: 9px; color: #666;">2h ago</span>
+              </div>
+            </div>
+            <div style="background: #252525; border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+              <div style="font-size: 12px; font-weight: 500;">OAuth token 自动续期</div>
+              <div style="margin-top: 8px; display: flex; gap: 4px;">
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #35374b; color: #8b8fa3;">remi</span>
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #2d3436; color: #a29bfe;">Intake</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: #f59e0b; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;"></span> In Progress <span style="color: #555; font-size: 10px;">2</span>
+            </div>
+            <div style="background: #252525; border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+              <div style="font-size: 12px; font-weight: 500;">Dashboard Redesign</div>
+              <div style="margin-top: 6px; display: flex; align-items: center; gap: 6px;">
+                <div style="flex: 1; height: 3px; background: #333; border-radius: 2px; overflow: hidden;">
+                  <div style="width: 60%; height: 100%; background: #f59e0b; border-radius: 2px;"></div>
+                </div>
+                <span style="font-size: 9px; color: #666;">4/6</span>
+              </div>
+              <div style="margin-top: 8px; display: flex; gap: 4px; align-items: center;">
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #2d3436; color: #00b894;">PR #47</span>
+                <span style="font-size: 9px; color: #666;">$0.85</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: #a78bfa; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: #8b5cf6;"></span> In Review <span style="color: #555; font-size: 10px;">1</span>
+            </div>
+            <div style="background: #252525; border-radius: 6px; padding: 12px;">
+              <div style="font-size: 12px; font-weight: 500;">Dorado 离线解析</div>
+              <div style="margin-top: 8px; display: flex; gap: 4px;">
+                <span style="font-size: 9px; padding: 2px 6px; border-radius: 3px; background: #35374b; color: #8b8fa3;">larkparser</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 12px; color: #22c55e; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span> Done <span style="color: #555; font-size: 10px;">6</span>
+            </div>
+            <div style="background: #252525; border-radius: 6px; padding: 12px; opacity: 0.5;">
+              <div style="font-size: 12px; font-weight: 500;">记忆系统 MCP</div>
+              <div style="margin-top: 6px; font-size: 9px; color: #22c55e;">✓ merged · 3d ago</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Notion 风格 — 圆润温和</h3>
+      <p>温暖的深色调，圆角卡片，带进度条和头像。信息层次清晰，视觉舒适。适合产品化展示。</p>
+    </div>
+  </div>
+
+  <!-- Option C: GitHub Projects style -->
+  <div class="card" data-choice="github-style" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #0d1117;">
+      <!-- GitHub Projects-inspired mockup -->
+      <div style="font-family: system-ui; color: #c9d1d9;">
+        <!-- Header -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 18px; font-weight: 600;">Missions</span>
+            <span style="font-size: 11px; color: #8b949e; background: #21262d; padding: 2px 8px; border-radius: 12px; border: 1px solid #30363d;">12 items</span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <div style="padding: 5px 12px; border-radius: 6px; font-size: 12px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; display: flex; align-items: center; gap: 4px;">
+              <span style="font-size: 10px;">▦</span> Board
+            </div>
+            <div style="padding: 5px 12px; border-radius: 6px; font-size: 12px; background: #21262d; color: #8b949e; border: 1px solid #30363d; display: flex; align-items: center; gap: 4px;">
+              <span style="font-size: 10px;">☰</span> Table
+            </div>
+          </div>
+        </div>
+        <!-- Kanban -->
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+          <div>
+            <div style="font-size: 13px; font-weight: 600; color: #8b949e; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #21262d; display: flex; justify-content: space-between;">
+              <span>📥 Inbox</span>
+              <span style="background: #21262d; padding: 0 6px; border-radius: 10px; font-size: 11px;">3</span>
+            </div>
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+              <div style="font-size: 13px; font-weight: 500; color: #c9d1d9;">支持 minutes 格式</div>
+              <div style="font-size: 11px; color: #8b949e; margin-top: 4px;">larkparser</div>
+              <div style="display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;">
+                <span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: #1f2937; color: #79c0ff; border: 1px solid #1f6feb44;">RFC</span>
+                <span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: #1c2128; color: #8b949e; border: 1px solid #30363d;">朱坤</span>
+              </div>
+            </div>
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+              <div style="font-size: 13px; font-weight: 500; color: #c9d1d9;">OAuth token 自动续期</div>
+              <div style="display: flex; gap: 6px; margin-top: 10px;">
+                <span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: #1f2937; color: #d2a8ff; border: 1px solid #8b5cf644;">Intake</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 600; color: #d29922; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #d2992244;">
+              <span>🔄 In Progress</span>
+              <span style="background: #21262d; padding: 0 6px; border-radius: 10px; font-size: 11px; float: right; color: #8b949e;">2</span>
+            </div>
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+              <div style="font-size: 13px; font-weight: 500; color: #c9d1d9;">Dashboard Redesign</div>
+              <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 10px; padding: 2px 8px; border-radius: 12px; background: #0d419d44; color: #58a6ff; border: 1px solid #1f6feb44;">⬆ PR #47</span>
+                <span style="font-size: 10px; color: #8b949e;">45K tok · $0.85</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 600; color: #a371f7; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #a371f744;">
+              <span>👁 In Review</span>
+              <span style="background: #21262d; padding: 0 6px; border-radius: 10px; font-size: 11px; float: right; color: #8b949e;">1</span>
+            </div>
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px;">
+              <div style="font-size: 13px; font-weight: 500; color: #c9d1d9;">Dorado 离线解析</div>
+              <div style="font-size: 11px; color: #8b949e; margin-top: 4px;">larkparser</div>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 13px; font-weight: 600; color: #3fb950; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #3fb95044;">
+              <span>✅ Done</span>
+              <span style="background: #21262d; padding: 0 6px; border-radius: 10px; font-size: 11px; float: right; color: #8b949e;">6</span>
+            </div>
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px; opacity: 0.5;">
+              <div style="font-size: 13px; font-weight: 500; color: #c9d1d9;">记忆系统 MCP</div>
+              <div style="font-size: 11px; color: #3fb950; margin-top: 6px;">✓ merged · 3d ago</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. GitHub Projects 风格 — 开发者熟悉</h3>
+      <p>GitHub 经典深色，Pill 标签，PR 状态一等公民。开发者最熟悉的视觉语言，上手零成本。</p>
+    </div>
+  </div>
+</div>

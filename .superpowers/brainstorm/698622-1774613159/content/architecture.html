@@ -1,0 +1,122 @@
+<h2>架构总览: 共享组件 + 三页面改造</h2>
+<p class="subtitle">方案 A — 抽取 MarkdownFileViewer，保留各页面特色</p>
+
+<div class="section">
+  <h3>组件层次</h3>
+  <div class="mockup">
+    <div class="mockup-header">组件依赖关系</div>
+    <div class="mockup-body" style="font-family: monospace; font-size: 13px; line-height: 1.8; padding: 20px;">
+      <div style="color: #22c55e; font-weight: bold;">新增共享组件:</div>
+      <div style="margin-left: 16px;">
+        <code>&lt;MarkdownFileViewer /&gt;</code> — Edit/Preview 切换 + Save + textarea/ReactMarkdown<br/>
+        &nbsp;&nbsp;Props: content, onSave, readOnly?, breadcrumbs?, headerExtra?
+      </div>
+      <br/>
+      <div style="color: #3b82f6; font-weight: bold;">Skills 页面 (新增):</div>
+      <div style="margin-left: 16px;">
+        <code>Skills.tsx</code> — SkillTreeSidebar + MarkdownFileViewer<br/>
+        <code>skills.ts</code> (handler) — 文件树/读取/写入 API<br/>
+        <code>remi-data.ts</code> — listSkills(), readSkillFile(), writeSkillFile()
+      </div>
+      <br/>
+      <div style="color: #a855f7; font-weight: bold;">Wiki 页面 (增强):</div>
+      <div style="margin-left: 16px;">
+        <code>Wiki.tsx</code> — 现有 TreeNode + <strong>替换内容区为 MarkdownFileViewer</strong><br/>
+        <code>wiki.ts</code> (handler) — <strong>新增 PUT /api/v1/wiki/file 写入 API</strong><br/>
+        保留 git history 面板
+      </div>
+      <br/>
+      <div style="color: #f59e0b; font-weight: bold;">Memory 页面 (重构):</div>
+      <div style="margin-left: 16px;">
+        <code>Memory.tsx</code> — MemoryEditor / EntityDetailInline / ProjectFileViewer<br/>
+        &nbsp;&nbsp;<strong>内部 textarea+ReactMarkdown 替换为 MarkdownFileViewer</strong><br/>
+        保留搜索、实体元数据、recall debug 等特色功能
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Skills 页面布局</h3>
+  <div class="mockup">
+    <div class="mockup-header">Skills — 左树右内容</div>
+    <div class="mockup-body" style="display: flex; gap: 12px; padding: 16px; min-height: 300px;">
+      <!-- Left: Tree -->
+      <div class="mock-sidebar" style="width: 220px; font-size: 12px; padding: 12px;">
+        <div style="font-weight: bold; margin-bottom: 8px; color: var(--foreground);">Skills</div>
+        <div style="padding: 4px 8px; background: var(--accent); border-radius: 4px; margin-bottom: 2px;">ai-daily-briefing</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">authorize-doc</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">brand-guidelines</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">browser-sso</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">contract-eval</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">feishu-insight</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">frontend-design</div>
+        <div style="padding: 4px 8px; margin-bottom: 2px; opacity: 0.7;">...</div>
+        <div style="border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; font-size: 10px; color: var(--muted-foreground);">15 skills total</div>
+      </div>
+      <!-- Right: Content -->
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 12px;">
+        <!-- Skill Header -->
+        <div style="background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">
+          <div style="font-size: 10px; color: var(--muted-foreground); margin-bottom: 4px;">Skills / ai-daily-briefing</div>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <span style="font-weight: bold; font-size: 16px;">AI Daily Briefing</span>
+              <span style="margin-left: 8px; font-size: 10px; padding: 2px 8px; border: 1px solid rgba(34,197,94,0.3); color: #22c55e; border-radius: 999px;">Scheduled</span>
+              <span style="margin-left: 4px; font-size: 10px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;">10:15 daily</span>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="mock-button" style="font-size: 11px; padding: 4px 12px;">Edit</button>
+              <button class="mock-button" style="font-size: 11px; padding: 4px 12px;">Save</button>
+            </div>
+          </div>
+        </div>
+        <!-- File tabs -->
+        <div style="display: flex; gap: 4px; font-size: 11px;">
+          <span style="padding: 4px 12px; background: var(--accent); border-radius: 4px; font-weight: 500;">SKILL.md</span>
+          <span style="padding: 4px 12px; border-radius: 4px; opacity: 0.6;">Reports (20)</span>
+        </div>
+        <!-- Content area (MarkdownFileViewer) -->
+        <div style="background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; flex: 1;">
+          <div style="font-size: 12px; line-height: 1.8;">
+            <div style="color: var(--muted-foreground); font-size: 10px; margin-bottom: 8px;">Markdown Preview</div>
+            <strong>概述</strong><br/>
+            每天调研 AI Agent、大模型领域<strong>昨天</strong>最火爆的 5 件事...<br/><br/>
+            <strong>Step 1: 信息采集</strong><br/>
+            使用 WebSearch 工具，针对以下维度分别搜索...<br/><br/>
+            <strong>Step 2: 筛选 Top 5</strong><br/>
+            从采集到的信息中，按以下标准筛选...
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Reports 子视图</h3>
+  <div class="mockup">
+    <div class="mockup-header">Skills / ai-daily-briefing / Reports</div>
+    <div class="mockup-body" style="padding: 16px; font-size: 12px;">
+      <div style="display: flex; gap: 4px; margin-bottom: 12px; font-size: 11px;">
+        <span style="padding: 4px 12px; border-radius: 4px; opacity: 0.6;">SKILL.md</span>
+        <span style="padding: 4px 12px; background: var(--accent); border-radius: 4px; font-weight: 500;">Reports (20)</span>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px;">
+        <span style="padding: 3px 10px; background: var(--primary); color: var(--primary-foreground); border-radius: 4px; font-size: 11px;">03-26</span>
+        <span style="padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;">03-25</span>
+        <span style="padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;">03-24</span>
+        <span style="padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;">03-23</span>
+        <span style="padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;">03-22</span>
+        <span style="padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px;">...</span>
+      </div>
+      <div style="background: var(--muted); border-radius: 6px; padding: 16px; line-height: 1.8;">
+        <strong>2026-03-26 AI 每日简报</strong><br/><br/>
+        <strong>1. Claude 4 发布...</strong><br/>
+        Anthropic 今日发布最新模型...<br/><br/>
+        <strong>2. OpenAI 开源 GPT-5 权重...</strong><br/>
+        ...
+      </div>
+    </div>
+  </div>
+</div>

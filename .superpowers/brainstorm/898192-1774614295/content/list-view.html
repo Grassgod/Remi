@@ -1,0 +1,143 @@
+<h2>列表视图 — 布局方案</h2>
+<p class="subtitle">看板之外的第二种视图，适合批量浏览和筛选</p>
+
+<div class="cards">
+  <!-- Option A: Compact table -->
+  <div class="card" data-choice="compact-table" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #0a0a0a;">
+      <div style="font-family: system-ui; color: #e5e5e5;">
+        <!-- Filter bar -->
+        <div style="display: flex; gap: 8px; margin-bottom: 14px; align-items: center;">
+          <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #1a1a2e; color: #60a5fa; border: 1px solid #2563eb44;">All (12)</div>
+          <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #111; color: #888; border: 1px solid #222;">Inbox (3)</div>
+          <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #111; color: #888; border: 1px solid #222;">Active (3)</div>
+          <div style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #111; color: #888; border: 1px solid #222;">Done (6)</div>
+          <div style="margin-left: auto; padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #111; color: #666; border: 1px solid #222;">🔍 Search</div>
+        </div>
+        <!-- Table header -->
+        <div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 8px; padding: 6px 12px; font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #222;">
+          <div>Mission</div>
+          <div>Status</div>
+          <div>Step</div>
+          <div>Cost</div>
+          <div>Updated</div>
+        </div>
+        <!-- Rows -->
+        <div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 8px; padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #1a1a1a; align-items: center; cursor: pointer;" onmouseover="this.style.background='#111'" onmouseout="this.style.background='transparent'">
+          <div>
+            <div style="font-weight: 500;">支持 minutes 格式</div>
+            <div style="font-size: 10px; color: #555; margin-top: 2px;">larkparser · 朱坤</div>
+          </div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #333; color: #888;">Inbox</span></div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #7c3aed22; color: #a78bfa;">RFC</span></div>
+          <div style="font-size: 11px; color: #666;">$0.42</div>
+          <div style="font-size: 11px; color: #555;">2h ago</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 8px; padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #1a1a1a; align-items: center; background: #0d0d15;">
+          <div>
+            <div style="font-weight: 500;">Dashboard Redesign</div>
+            <div style="font-size: 10px; color: #555; margin-top: 2px;">remi · <span style="color: #22c55e;">PR #47</span></div>
+          </div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #f59e0b22; color: #fbbf24;">Active</span></div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #f59e0b22; color: #fbbf24;">Execute</span></div>
+          <div style="font-size: 11px; color: #666;">$0.85</div>
+          <div style="font-size: 11px; color: #555;">30m ago</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 8px; padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #1a1a1a; align-items: center;">
+          <div>
+            <div style="font-weight: 500;">Dorado 离线解析</div>
+            <div style="font-size: 10px; color: #555; margin-top: 2px;">larkparser</div>
+          </div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #8b5cf622; color: #a78bfa;">Review</span></div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #8b5cf622; color: #a78bfa;">Eval</span></div>
+          <div style="font-size: 11px; color: #666;">$1.20</div>
+          <div style="font-size: 11px; color: #555;">1d ago</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr 1fr; gap: 8px; padding: 10px 12px; font-size: 12px; border-bottom: 1px solid #1a1a1a; align-items: center; opacity: 0.5;">
+          <div>
+            <div style="font-weight: 500;">记忆系统 MCP</div>
+            <div style="font-size: 10px; color: #555; margin-top: 2px;">remi</div>
+          </div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #22c55e22; color: #22c55e;">Done</span></div>
+          <div><span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #22c55e22; color: #22c55e;">Summary</span></div>
+          <div style="font-size: 11px; color: #666;">$2.10</div>
+          <div style="font-size: 11px; color: #555;">3d ago</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 紧凑表格 — 高信息密度</h3>
+      <p>类 Linear 的表格视图，状态/步骤用小标签，一行一个 Mission。顶部 Tab 式筛选。扫一眼就能看到全貌。</p>
+    </div>
+  </div>
+
+  <!-- Option B: Grouped list -->
+  <div class="card" data-choice="grouped-list" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 20px; background: #0a0a0a;">
+      <div style="font-family: system-ui; color: #e5e5e5;">
+        <!-- Group: In Progress -->
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 11px; color: #f59e0b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #f59e0b;"></span>
+            In Progress
+            <span style="color: #444; font-size: 10px;">2</span>
+            <span style="flex: 1; height: 1px; background: #1a1a1a; margin-left: 8px;"></span>
+          </div>
+          <!-- Card rows -->
+          <div style="background: #111; border: 1px solid #1a1a1a; border-radius: 8px; margin-bottom: 4px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; border-left: 3px solid #f59e0b;">
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 500;">Dashboard Redesign</div>
+              <div style="font-size: 10px; color: #555; margin-top: 3px;">remi · Execute · 45K tok</div>
+            </div>
+            <span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #22c55e22; color: #22c55e;">PR #47</span>
+            <span style="font-size: 10px; color: #555;">$0.85</span>
+            <span style="font-size: 10px; color: #444;">30m</span>
+            <span style="color: #333;">›</span>
+          </div>
+          <div style="background: #111; border: 1px solid #1a1a1a; border-radius: 8px; margin-bottom: 4px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; border-left: 3px solid #f59e0b;">
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 500;">OAuth token 自动续期</div>
+              <div style="font-size: 10px; color: #555; margin-top: 3px;">remi · Intake</div>
+            </div>
+            <span style="font-size: 10px; color: #555;">$0.12</span>
+            <span style="font-size: 10px; color: #444;">1h</span>
+            <span style="color: #333;">›</span>
+          </div>
+        </div>
+        <!-- Group: In Review -->
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 11px; color: #a78bfa; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #8b5cf6;"></span>
+            In Review
+            <span style="color: #444; font-size: 10px;">1</span>
+            <span style="flex: 1; height: 1px; background: #1a1a1a; margin-left: 8px;"></span>
+          </div>
+          <div style="background: #111; border: 1px solid #1a1a1a; border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; border-left: 3px solid #8b5cf6;">
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 500;">Dorado 离线解析</div>
+              <div style="font-size: 10px; color: #555; margin-top: 3px;">larkparser · Eval</div>
+            </div>
+            <span style="font-size: 9px; padding: 2px 8px; border-radius: 4px; background: #f59e0b22; color: #fbbf24;">PR review</span>
+            <span style="font-size: 10px; color: #555;">$1.20</span>
+            <span style="font-size: 10px; color: #444;">1d</span>
+            <span style="color: #333;">›</span>
+          </div>
+        </div>
+        <!-- Group: Done (collapsed) -->
+        <div>
+          <div style="font-size: 11px; color: #22c55e; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e;"></span>
+            Done
+            <span style="color: #444; font-size: 10px;">6</span>
+            <span style="color: #333; font-size: 10px; margin-left: 4px;">▸ collapsed</span>
+            <span style="flex: 1; height: 1px; background: #1a1a1a; margin-left: 8px;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 分组列表 — 按状态折叠</h3>
+      <p>每个状态一个分组，可折叠/展开。左侧彩色边框延续看板的状态编码。行内显示关键信息，右侧箭头进入详情。</p>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,94 @@
+<h2>Logs 模块全面升级 — 3 种方案</h2>
+<p class="subtitle">点击选择你偏好的方案，或在终端告诉我</p>
+
+<div class="options">
+  <!-- Option A -->
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>方案 A — 稳健升级（推荐）</h3>
+      <p><strong>监控区：</strong>4 个 StatCard（总条目、错误数/率、模块数、最近错误时间）+ 按小时分布的迷你柱状图（纯 CSS，无依赖）</p>
+      <p><strong>日志表：</strong>行内 accordion 展开详情 + 全文搜索 + 复制按钮 + Level 筛选提示（≥ 语义）</p>
+      <p><strong>后端：</strong>新增 <code>/api/v1/logs/stats</code> 聚合接口，前端一次请求拿到统计</p>
+      <p><strong>实时：</strong>手动刷新 + 可选自动轮询（30s 间隔 toggle）</p>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>零新依赖，纯 CSS 柱状图</li>
+            <li>改动范围可控：1 个后端接口 + 前端重构</li>
+            <li>对标 Traces 页的设计语言</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>限制</h4>
+          <ul>
+            <li>柱状图相比 chart 库视觉丰富度有限</li>
+            <li>轮询而非实时推送</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B -->
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>方案 B — 专业日志查看器</h3>
+      <p><strong>监控区：</strong>4 StatCard + Recharts 折线图（按小时日志量趋势 + 错误率曲线）</p>
+      <p><strong>日志表：</strong>虚拟滚动（react-window）+ 行内展开 + JSON 语法高亮 + 全文搜索 + 键盘导航</p>
+      <p><strong>后端：</strong>stats 接口 + 流式 SSE 实时推送</p>
+      <p><strong>实时：</strong>SSE 实时尾随（tail -f 体验）</p>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>最接近专业工具（Grafana Loki / Datadog Logs）体验</li>
+            <li>大量日志下性能好（虚拟滚动）</li>
+            <li>实时推送，延迟最低</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>限制</h4>
+          <ul>
+            <li>新增 2-3 个依赖（recharts, react-window）</li>
+            <li>SSE 后端改动较大</li>
+            <li>工作量约为方案 A 的 2-3 倍</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C -->
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>方案 C — 渐进式（先 A 后 B）</h3>
+      <p><strong>第一阶段：</strong>实现方案 A 全部内容，立即可用</p>
+      <p><strong>第二阶段：</strong>在 A 基础上升级：加 Recharts 图表、虚拟滚动、SSE 实时</p>
+      <p><strong>架构：</strong>第一阶段就预留接口，第二阶段无需重构</p>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>优势</h4>
+          <ul>
+            <li>快速出可用版本</li>
+            <li>第二阶段可根据实际需求决定是否做</li>
+            <li>风险最低</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>限制</h4>
+          <ul>
+            <li>总工作量略多于一步到位</li>
+            <li>需要两轮迭代</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
