@@ -398,50 +398,6 @@ export function Dashboard() {
 
         {/* ─── Right Column (Data) ─── */}
         <div className="flex flex-col gap-3">
-          {/* Memory Entities */}
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Brain className="h-4 w-4 text-muted-foreground" />
-                Memory Entities
-                <Badge variant="secondary" className="ml-1 text-[10px]">{entities.length}</Badge>
-              </CardTitle>
-              <Button
-                variant="ghost" size="sm"
-                onClick={() => setLocation("/memory")}
-                className="h-7 text-xs text-muted-foreground"
-              >
-                Manage <ChevronRight className="h-3 w-3" />
-              </Button>
-            </CardHeader>
-            <CardContent className="p-0">
-              <ScrollArea className="max-h-[360px]">
-                {entities.length === 0 ? (
-                  <EmptyState text="No entities" />
-                ) : (
-                  entities.slice(0, 15).map((e, i) => (
-                    <div
-                      key={i}
-                      className="flex cursor-pointer items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/30"
-                      onClick={() => setLocation(`/memory/entity/${e.type}/${encodeURIComponent(e.name)}`)}
-                    >
-                      <Badge
-                        variant="outline"
-                        className={cn("min-w-[52px] justify-center text-[9px] uppercase", entityBadgeClass(e.type))}
-                      >
-                        {e.type}
-                      </Badge>
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{e.name}</span>
-                      <span className="hidden text-[10px] text-muted-foreground sm:inline">
-                        {e.updatedAt ? e.updatedAt.slice(5, 10) : ""}
-                      </span>
-                    </div>
-                  ))
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
-
           {/* Scheduler Quick Status */}
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
