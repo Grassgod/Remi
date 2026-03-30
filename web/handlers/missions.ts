@@ -64,7 +64,7 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
       );
     }
 
-    const mission = store.create({
+    const mission = await store.createWithThread({
       title,
       projectId,
       chatId,

@@ -98,7 +98,10 @@ function resolveSkillPath(skillName: string, cwd?: string): string {
   }
   const p = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
   if (existsSync(p)) return p;
-  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.remi)`);
+  // Pipeline skills (built-in, shipped with Remi source)
+  const p2 = join(import.meta.dir, "../../../pipeline/skills", skillName, "SKILL.md");
+  if (existsSync(p2)) return p2;
+  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.remi, pipeline/)`);
 }
 
 handlers.set("skill:run", async (remi, config) => {

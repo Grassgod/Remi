@@ -4,6 +4,8 @@
 
 import type { Database } from "bun:sqlite";
 import { getDb } from "../db/index.js";
+import { createThread } from "../connectors/feishu/thread.js";
+import { createLogger } from "../logger.js";
 import type {
   Mission,
   MissionCreate,
@@ -12,6 +14,8 @@ import type {
   SkillFeedback,
   FeedbackType,
 } from "./model.js";
+
+const log = createLogger("mission-store");
 
 function nanoid(len = 12): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -55,6 +59,24 @@ export class MissionStore {
     );
 
     return this.getById(id)!;
+  }
+
+  /**
+   * Create a mission with automatic thread creation for topic-mode groups.
+   */
+  async createWithThread(input: MissionCreate): Promise<Mission> {
+    let threadId = input.threadId;
+
+    if (!threadId && input.chatId) {
+      try {
+        threadId = await createThread(input.chatId, `Mission: ${input.title}`);
+        log.info(`Auto-created thread ${threadId} for mission "${input.title}"`);
+      } catch (err) {
+        log.warn(`Failed to auto-create thread: ${(err as Error).message}`);
+      }
+    }
+
+    return this.create({ ...input, threadId });
   }
 
   // ── Read ──

@@ -9,6 +9,7 @@ import { MissionStore } from "../mission/store.js";
 import { startBoardServer } from "../../web/board/server.js";
 import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
 import { createFeishuClient } from "../connectors/feishu/client.js";
+import { sendToThread } from "../connectors/feishu/thread.js";
 import { getDb } from "../db/index.js";
 
 const log = createLogger("serve");
@@ -77,9 +78,15 @@ export async function runServe(_args: string[]): Promise<void> {
           log.error(`Failed to enqueue mission ${missionId}:`, err);
         });
         log.info(`Mission ${missionId} approved, pipeline started`);
+        if (mission.threadId) {
+          sendToThread(mission.chatId, mission.threadId, "**Mission 已审批通过** — 开始执行 RFC 阶段").catch(() => {});
+        }
       } else if (actionType === "mission_reject") {
         missionStore.updateStatus(missionId, "rejected");
         log.info(`Mission ${missionId} rejected`);
+        if (mission.threadId) {
+          sendToThread(mission.chatId, mission.threadId, "**Mission 已驳回**").catch(() => {});
+        }
       }
     });
   } catch (err) {
