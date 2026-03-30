@@ -98,7 +98,7 @@ export class ClaudeProcessManager {
   }
 
   get isAlive(): boolean {
-    return this._process !== null && !this._process.killed && this._process.exitCode === null;
+    return this._process !== null && !this._process.killed && this._process.exitCode === null && !this._eofDetected;
   }
 
   get sessionId(): string | null {
@@ -191,6 +191,10 @@ export class ClaudeProcessManager {
       this._eofDetected = false;
       // Liveness-check retry: allow one extended wait before killing
       let retriedAfterTimeout = false;
+      // Content timeout: kill if no actual content arrives for too long
+      // (rate_limit events alone should NOT prevent this from firing)
+      let lastContentAt = Date.now();
+      const CONTENT_TIMEOUT_MS = 10 * 60 * 1000; // 10 min without content = stuck
 
       while (true) {
         const line = await this._readline(this._dynamicTimeoutMs);
@@ -277,6 +281,11 @@ export class ClaudeProcessManager {
           }
         }
 
+        // Reset content timer on tool_use (model produced real output)
+        if (msg.kind === "tool_use") {
+          lastContentAt = Date.now();
+        }
+
         // Extend timeout when entering built-in tool execution (Bash, etc. can run long)
         if (msg.kind === "tool_use" && !builtInToolPending) {
           // Will be set to builtInToolPending after toolHandler returns null below;
@@ -287,6 +296,7 @@ export class ClaudeProcessManager {
         // Reset timeout on normal content (model is actively producing output)
         if (msg.kind === "content_delta" || msg.kind === "thinking_delta") {
           this._dynamicTimeoutMs = ClaudeProcessManager.READLINE_TIMEOUT_MS;
+          lastContentAt = Date.now();
         }
 
         // Tool use start (streaming — input comes via deltas)
@@ -479,6 +489,20 @@ export class ClaudeProcessManager {
           // Extend readline timeout to accommodate CLI's internal retry wait
           this._dynamicTimeoutMs = Math.max(retryMs + 120_000, this._dynamicTimeoutMs);
           log.info(`Dynamic timeout extended to ${Math.round(this._dynamicTimeoutMs / 1000)}s (rate limit)`);
+
+          // Check content timeout — kill if rate limit loop produces no real content
+          const contentAge = Date.now() - lastContentAt;
+          if (contentAge > CONTENT_TIMEOUT_MS) {
+            log.error(`No content produced for ${Math.round(contentAge / 1000)}s despite rate limit activity — aborting`);
+            this._process?.kill();
+            yield {
+              kind: "error",
+              error: "CLI stuck in rate limit loop without producing content. Try again later.",
+              code: "rate_limit_stall",
+            } as import("./protocol.js").ErrorEvent;
+            break;
+          }
+
           yield msg;
           continue;
         }

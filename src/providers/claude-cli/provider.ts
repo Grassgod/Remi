@@ -212,7 +212,7 @@ export class ClaudeCLIProvider implements Provider {
         const err = msg as ErrorEvent;
         _log.debug(`yield error: ${err.error}`);
         // Remove dead process from pool to ensure respawn on next message
-        if (err.code === "process_hang" || err.code === "process_crash") {
+        if (err.code === "process_hang" || err.code === "process_crash" || err.code === "rate_limit_stall") {
           const key = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
           this._pool.delete(key);
           this._lastUsed.delete(key);
