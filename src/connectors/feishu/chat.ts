@@ -30,8 +30,8 @@ export async function createProjectChat(
 
   const res: any = await client.im.chat.create({
     data: {
-      name,
-      chat_mode: "group",
+      name: `${name} · Remi`,
+      chat_mode: "topic",
       chat_type: "private",
       owner_id: ownerOpenId,
       user_id_list: [ownerOpenId],
