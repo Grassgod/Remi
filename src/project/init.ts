@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
-import { createProjectChat } from "../connectors/feishu/chat.js";
+import { createProjectChat, setupProjectChat } from "../connectors/feishu/chat.js";
 import { GroupConfigStore } from "../group/store.js";
 
 // Jack's hardcoded open_id — only group member besides Remi Bot
@@ -106,6 +106,9 @@ export async function runProjectInit(
       monitor: true,  // project groups auto-reply by default
       replyMode: "thread",
     });
+
+    // Setup group: avatar + mission board tab
+    await setupProjectChat(chatId, projectId);
 
     return chatId;
   });

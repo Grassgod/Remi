@@ -110,3 +110,78 @@ export async function updateChat(chatId: string, opts: {
     return false;
   }
 }
+
+/** Default Remi group avatar key (from the manually set remi · Remi group). */
+export const REMI_AVATAR_KEY = "v3_00109_804c22d4-047c-4a29-b2cd-b4c5e9bbf13g";
+
+/** Base URL for the Board app (mission board). */
+export const BOARD_BASE_URL = "http://n37-066-008.byted.org:8090";
+
+/**
+ * Add a Chat Tab (群标签页) to a group, linking to the project's mission board.
+ */
+export async function addChatTab(chatId: string, projectId: string): Promise<boolean> {
+  try {
+    const client = getClient();
+    const config = loadConfig();
+    const baseUrl = getBaseUrl(config.feishu.domain);
+    const token = await getTenantToken(config.feishu.appId, config.feishu.appSecret, baseUrl);
+
+    const tabUrl = `${BOARD_BASE_URL}/mission/${projectId}`;
+    const res = await fetch(`${baseUrl}/im/v1/chats/${chatId}/chat_tabs`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        chat_tabs: [{
+          tab_name: "Missions",
+          tab_type: "url",
+          tab_content: { url: tabUrl },
+        }],
+      }),
+    });
+    const data = await res.json() as any;
+    if (data.code !== 0) {
+      log.warn(`failed to add chat tab to ${chatId}: ${data.msg}`);
+      return false;
+    }
+    log.info(`added Mission tab to ${chatId} → ${tabUrl}`);
+    return true;
+  } catch (e) {
+    log.warn(`failed to add chat tab to ${chatId}: ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Full group setup: avatar + chat tab. Called during project init after chat creation.
+ */
+export async function setupProjectChat(chatId: string, projectId: string): Promise<void> {
+  // Set avatar
+  await updateChat(chatId, { avatar: REMI_AVATAR_KEY });
+  // Add mission board tab
+  await addChatTab(chatId, projectId);
+}
+
+// ── Internal helpers ──
+
+function getBaseUrl(domain: string): string {
+  if (domain === "bytedance") return "https://fsopen.bytedance.net/open-apis";
+  if (domain === "lark") return "https://open.larksuite.com/open-apis";
+  return "https://open.feishu.cn/open-apis";
+}
+
+async function getTenantToken(appId: string, appSecret: string, baseUrl: string): Promise<string> {
+  const res = await fetch(`${baseUrl}/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const data = await res.json() as any;
+  if (data.code !== 0 || !data.tenant_access_token) {
+    throw new Error(`Failed to get tenant token: ${data.msg}`);
+  }
+  return data.tenant_access_token;
+}
