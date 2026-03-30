@@ -8,6 +8,7 @@ import type { MissionJobData } from "../queues.js";
 import { MissionStore } from "../../mission/store.js";
 import type { Mission, PipelineStep, Contract, ContractVerification } from "../../mission/model.js";
 import { sendToThread } from "../../connectors/feishu/thread.js";
+import { insertConversationProcessing, completeConversation } from "../../db/index.js";
 import { createLogger } from "../../logger.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ const STEP_SKILL_DIR: Record<string, string> = {
 
 /** PipelineStep → 输出文件名 */
 const STEP_OUTPUT_FILE: Record<string, string> = {
+  intake: "description.md",
   rfc: "RFC.md",
   decompose: "tasks.md",
   execute: "execute-log.md",
@@ -37,6 +39,7 @@ const STEP_OUTPUT_FILE: Record<string, string> = {
 
 /** PipelineStep → 中文标签（话题通知用） */
 const STEP_LABEL: Record<string, string> = {
+  intake: "需求澄清",
   rfc: "RFC 技术方案",
   decompose: "任务拆解",
   execute: "代码执行",
@@ -94,6 +97,9 @@ export async function handleMissionJob(
 
     log.info(`Mission ${missionId} step ${step} completed (${result.text?.length ?? 0} chars)`);
 
+    // Record to conversations table so MissionDetail can display it
+    recordMissionConversation(mission, step as PipelineStep, prompt, result);
+
     // Write output to file
     writeStepOutput(mission.outputDir, step as PipelineStep, result.text);
 
@@ -101,6 +107,13 @@ export async function handleMissionJob(
     notifyThread(mission, step as PipelineStep, result.text).catch((err) =>
       log.warn(`Thread notify failed for ${missionId}: ${err}`),
     );
+
+    // Handle intake completion → inbox (wait for approval)
+    if (step === "intake") {
+      store.updateStatus(missionId, "inbox");
+      log.info(`Mission ${missionId} intake complete → inbox (awaiting approval)`);
+      return;
+    }
 
     // Handle eval result (pass/fail routing)
     if (step === "eval") {
@@ -161,6 +174,39 @@ function buildStepPrompt(
   }
 
   return parts.join("\n");
+}
+
+// ── Conversation Recording ──
+
+function recordMissionConversation(
+  mission: Mission,
+  step: PipelineStep,
+  userPrompt: string,
+  result: { text: string; model?: string | null; inputTokens?: number | null; outputTokens?: number | null; costUsd?: number | null; durationMs?: number | null; sessionId?: string | null },
+): void {
+  try {
+    const convId = insertConversationProcessing({
+      chatId: mission.chatId,
+      senderId: "remi",
+      connector: "mission-pipeline",
+      threadId: mission.threadId ?? undefined,
+      userMessage: userPrompt,
+      sessionKey: `${mission.chatId}:thread:${mission.threadId ?? mission.id}`,
+      cliSessionId: result.sessionId ?? undefined,
+    });
+
+    completeConversation({
+      id: convId,
+      model: result.model ?? undefined,
+      inputTokens: result.inputTokens ?? undefined,
+      outputTokens: result.outputTokens ?? undefined,
+      costUsd: result.costUsd ?? undefined,
+      durationMs: result.durationMs ?? undefined,
+      cliRoundEnd: new Date().toISOString(),
+    });
+  } catch (err) {
+    log.warn(`Failed to record mission conversation: ${err}`);
+  }
 }
 
 // ── Session Management ──

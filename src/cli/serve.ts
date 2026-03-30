@@ -10,6 +10,7 @@ import { startBoardServer } from "../../web/board/server.js";
 import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
 import { createFeishuClient } from "../connectors/feishu/client.js";
 import { sendToThread } from "../connectors/feishu/thread.js";
+import { setOnMissionCreated } from "../../web/handlers/missions.js";
 import { getDb } from "../db/index.js";
 
 const log = createLogger("serve");
@@ -65,6 +66,14 @@ export async function runServe(_args: string[]): Promise<void> {
       missionStore,
       authToken: process.env.REMI_WEB_AUTH_TOKEN,
       feishuClient,
+    });
+
+    // Wire up mission creation → auto enqueue intake
+    setOnMissionCreated((mission) => {
+      remi.queue.enqueueMission({ missionId: mission.id, step: "intake" }).catch((err) => {
+        log.error(`Failed to enqueue intake for mission ${mission.id}:`, err);
+      });
+      log.info(`Mission ${mission.id} created, intake enqueued`);
     });
 
     // Register mission approve/reject handler for Feishu card buttons

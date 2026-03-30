@@ -1,10 +1,19 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { MissionStore } from "../../src/mission/store.js";
-import type { MissionStatus, PipelineStep } from "../../src/mission/model.js";
+import type { Mission, MissionStatus, PipelineStep } from "../../src/mission/model.js";
+import { createLogger } from "../../src/logger.js";
 import { getDb } from "../../src/db/index.js";
 
 const store = new MissionStore();
+const log = createLogger("missions-handler");
+
+/** Callback for post-creation pipeline trigger. Set by serve.ts when queue is available. */
+let _onMissionCreated: ((mission: Mission) => void) | null = null;
+
+export function setOnMissionCreated(cb: (mission: Mission) => void): void {
+  _onMissionCreated = cb;
+}
 
 export function registerMissionsHandlers(app: Hono, _data: RemiData) {
   // GET /api/v1/missions — List missions with optional filters
@@ -71,6 +80,13 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
       threadId,
       description,
     });
+
+    // Trigger intake pipeline step
+    if (_onMissionCreated) {
+      try { _onMissionCreated(mission); } catch (err) {
+        log.warn(`onMissionCreated callback failed: ${err}`);
+      }
+    }
 
     return c.json(mission, 201);
   });

@@ -159,6 +159,44 @@ export class FeishuConnector implements Connector {
    * Derive session key from a Feishu message, mirroring core._resolveSessionKey().
    * Group threads use chatId:thread:rootId; new group @mentions use chatId:thread:messageId; P2P uses chatId.
    */
+  /**
+   * Auto-create a Mission if a group thread doesn't have one yet.
+   * This enables "user creates topic in Feishu group → Mission auto-created on Board".
+   */
+  private async _ensureMissionForThread(msg: ParsedFeishuMessage): Promise<void> {
+    if (!msg.rootId) return;
+
+    const { MissionStore } = await import("../../mission/store.js");
+    const { getDb } = await import("../../db/index.js");
+    const db = getDb();
+
+    // Check if a mission already exists for this thread
+    const existing = db.query(
+      "SELECT id FROM missions WHERE chat_id = ? AND thread_id = ?",
+    ).get(msg.chatId, msg.rootId) as { id: string } | null;
+    if (existing) return;
+
+    // Find the project for this group
+    const gcStore = new GroupConfigStore();
+    const gc = gcStore.getByChatId(msg.chatId);
+    const projectId = gc?.projectId ?? "global";
+    if (projectId === "global") return; // Don't auto-create for non-project groups
+
+    // Create mission from thread — use the message text as title
+    const title = msg.rawContent.slice(0, 100) || `Topic ${msg.rootId.slice(0, 8)}`;
+    const store = new MissionStore();
+    const mission = store.create({
+      title,
+      projectId,
+      chatId: msg.chatId,
+      threadId: msg.rootId,
+      createdBy: msg.senderOpenId,
+      createdByName: msg.senderName ?? undefined,
+    });
+
+    log.info(`Auto-created mission ${mission.id} for thread ${msg.rootId} in group ${msg.chatId}`);
+  }
+
   private _resolveSessionKey(msg: ParsedFeishuMessage): string {
     if (msg.rootId) return `${msg.chatId}:thread:${msg.rootId}`;
     if (msg.chatType === "group") return `${msg.chatId}:thread:${msg.messageId}`;
@@ -249,6 +287,15 @@ export class FeishuConnector implements Connector {
         log.info(`/esc received but no active session for "${sessionKey}"`);
       }
       return;
+    }
+
+    // ── Auto-create Mission for new group threads ──
+    if (msg.chatType === "group" && msg.rootId) {
+      try {
+        await this._ensureMissionForThread(msg);
+      } catch (err) {
+        log.warn(`ensureMissionForThread failed: ${err}`);
+      }
     }
 
     // Request-scoped logger with traceId = feishu messageId
