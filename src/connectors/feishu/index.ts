@@ -199,6 +199,13 @@ export class FeishuConnector implements Connector {
     });
 
     log.info(`Auto-created mission ${mission.id} for thread ${msg.rootId} in group ${msg.chatId}`);
+
+    // Trigger intake pipeline (reuse the same callback set by serve.ts)
+    try {
+      const { triggerMissionCreated } = await import("../../../web/handlers/missions.js");
+      triggerMissionCreated(mission);
+    } catch {}
+
     return true;
   }
 

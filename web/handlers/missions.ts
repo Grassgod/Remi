@@ -9,10 +9,15 @@ const store = new MissionStore();
 const log = createLogger("missions-handler");
 
 /** Callback for post-creation pipeline trigger. Set by serve.ts when queue is available. */
-let _onMissionCreated: ((mission: Mission) => void) | null = null;
+let _onMissionCreatedCb: ((mission: Mission) => void) | null = null;
 
 export function setOnMissionCreated(cb: (mission: Mission) => void): void {
-  _onMissionCreated = cb;
+  _onMissionCreatedCb = cb;
+}
+
+/** Trigger the mission-created callback (used by Feishu connector too). */
+export function triggerMissionCreated(mission: Mission): void {
+  if (_onMissionCreatedCb) _onMissionCreatedCb(mission);
 }
 
 export function registerMissionsHandlers(app: Hono, _data: RemiData) {
@@ -82,10 +87,8 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     });
 
     // Trigger intake pipeline step
-    if (_onMissionCreated) {
-      try { _onMissionCreated(mission); } catch (err) {
-        log.warn(`onMissionCreated callback failed: ${err}`);
-      }
+    try { triggerMissionCreated(mission); } catch (err) {
+      log.warn(`onMissionCreated callback failed: ${err}`);
     }
 
     return c.json(mission, 201);
