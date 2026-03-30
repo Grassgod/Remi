@@ -491,10 +491,15 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
 
       {showAdvanced && (
         <div className="space-y-3 border-t border-zinc-800 pt-3">
-          <div>
-            <label className="text-sm text-zinc-400 block mb-1">CWD (override project path)</label>
-            <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/workspace" />
-          </div>
+          {(initial?.cwd || initial?.projectCwd) && (
+            <div>
+              <label className="text-sm text-zinc-400 block mb-1">Effective CWD</label>
+              <div className="font-mono text-xs text-zinc-300 bg-zinc-800 rounded px-3 py-2">
+                {initial.cwd || initial.projectCwd || "—"}
+                {initial.cwd ? <span className="text-zinc-500 ml-2">(group override)</span> : <span className="text-zinc-500 ml-2">(from project)</span>}
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-sm text-zinc-400 block mb-1">Launch Command</label>
             <Input value={launchCommand} onChange={(e) => setLaunchCommand(e.target.value)} placeholder="claude --model opus --dangerously-skip-permissions" />
@@ -794,6 +799,7 @@ export function Projects() {
                 <TableHead>Chat ID</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Project</TableHead>
+                <TableHead>CWD</TableHead>
                 <TableHead>Monitor</TableHead>
                 <TableHead>Reply Mode</TableHead>
                 <TableHead>Provider</TableHead>
@@ -809,6 +815,9 @@ export function Projects() {
                     <Badge variant={g.projectId === "global" ? "secondary" : "default"}>
                       {g.projectName || g.projectId}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs text-zinc-400 max-w-[200px] truncate" title={g.cwd || g.projectCwd || "—"}>
+                    {g.cwd || g.projectCwd || "—"}
                   </TableCell>
                   <TableCell>
                     <button
@@ -846,7 +855,7 @@ export function Projects() {
               ))}
               {groups.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-zinc-500 py-8">
+                  <TableCell colSpan={8} className="text-center text-zinc-500 py-8">
                     No group configs found
                   </TableCell>
                 </TableRow>
