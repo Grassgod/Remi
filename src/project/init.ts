@@ -166,26 +166,24 @@ export async function runProjectInit(
   });
   if (!step3) return;
 
-  // Step 4: Register complete + activate bot profile in live connector
+  // Step 4: Register complete + restart daemon to reload config
   await runStep(store, projectId, "register_complete", async () => {
-    const project = store.getById(projectId)!;
+    store.updateInitStatus(projectId, "completed");
 
-    // Register bot profile in running connector so cwd takes effect immediately
-    if (project.chatId && project.cwd) {
-      getActiveFeishuConnector()?.addBotProfile({
-        id: `project-${projectId}`,
-        name: input.name,
-        groups: [project.chatId],
-        cwd: project.cwd,
-        allowedTools: [],
-        addDirs: [],
-        replyMode: "thread",
-        systemPrompt: "",
+    // remi-web and remi are separate PM2 processes — in-memory hot-reload
+    // won't work cross-process. Restart the daemon so it reloads remi.toml
+    // with the new allowedGroups + bot profile.
+    try {
+      const proc = Bun.spawn(["pm2", "restart", "remi", "--update-env"], {
+        stdout: "pipe",
+        stderr: "pipe",
       });
+      await proc.exited;
+    } catch {
+      // Non-fatal — user can restart manually
     }
 
-    store.updateInitStatus(projectId, "completed");
-    return "Project ready";
+    return "Project ready (daemon restarted)";
   });
 
   emit(projectId, { type: "done", data: { status: "completed" } });
