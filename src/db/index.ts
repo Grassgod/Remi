@@ -134,6 +134,22 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status);
     CREATE INDEX IF NOT EXISTS idx_missions_thread ON missions(thread_id);
 
+    -- Projects (replaces toml-only storage)
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      chat_id TEXT,
+      repo_url TEXT,
+      cwd TEXT,
+      pipeline_config TEXT,
+      init_status TEXT DEFAULT 'pending',
+      init_steps TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_projects_init_status ON projects(init_status);
+
     CREATE TABLE IF NOT EXISTS skill_feedbacks (
       id TEXT PRIMARY KEY,
       mission_id TEXT NOT NULL,

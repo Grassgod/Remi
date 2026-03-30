@@ -93,13 +93,50 @@ export const syncBotMenu = () =>
   request<{ ok: boolean }>("/api/v1/bot-menu/sync", { method: "POST" });
 
 // Projects
-export const getProjects = () => request<import("./types").ProjectMap>("/api/v1/projects");
+export const getProjects = () => request<import("./types").Project[]>("/api/v1/projects");
 export const createProject = (alias: string, path: string) =>
   request("/api/v1/projects", { method: "POST", body: JSON.stringify({ alias, path }) });
 export const updateProject = (alias: string, path: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "PUT", body: JSON.stringify({ path }) });
 export const deleteProject = (alias: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });
+
+// Project Init
+export const initProject = (input: import("./types").ProjectInitInput) =>
+  request<{ id: string; status: string }>("/api/v1/projects/init", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const getInitStatus = (id: string) =>
+  request<import("./types").Project>(`/api/v1/projects/init/${encodeURIComponent(id)}`);
+export const retryInit = (id: string) =>
+  request<{ ok: true }>(`/api/v1/projects/init/${encodeURIComponent(id)}/retry`, { method: "POST" });
+
+export function subscribeInitStream(
+  id: string,
+  onEvent: (event: { type: string; data: any }) => void,
+): () => void {
+  const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : "";
+  const url = `${BASE}/api/v1/projects/init/${encodeURIComponent(id)}/stream${tokenParam}`;
+  const es = new EventSource(url);
+
+  const handler = (type: string) => (e: MessageEvent) => {
+    try { onEvent({ type, data: JSON.parse(e.data) }); } catch {}
+  };
+
+  es.addEventListener("state", handler("state"));
+  es.addEventListener("step", handler("step"));
+  es.addEventListener("done", (e) => {
+    handler("done")(e as MessageEvent);
+    es.close();
+  });
+  es.addEventListener("error", (e) => {
+    if (es.readyState === EventSource.CLOSED) return;
+    handler("error")(e as MessageEvent);
+  });
+
+  return () => es.close();
+}
 
 // Scheduler
 export const getSchedulerStatus = () => request<import("./types").SchedulerStatus>("/api/v1/scheduler/status");

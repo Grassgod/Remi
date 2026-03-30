@@ -74,7 +74,43 @@ export interface RemiConfig {
 }
 
 // Projects
-export type ProjectMap = Record<string, string>; // alias → path
+export type ProjectMap = Record<string, string>; // alias → path (legacy)
+
+export type InitStepName = "create_chat" | "setup_dir" | "write_config" | "register_complete";
+export type InitStepStatus = "pending" | "running" | "done" | "error";
+export type ProjectInitStatus = "pending" | "running" | "completed" | "failed";
+
+export interface InitStep {
+  name: InitStepName;
+  label: string;
+  status: InitStepStatus;
+  result?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  chatId: string | null;
+  repoUrl: string | null;
+  cwd: string | null;
+  pipelineConfig: unknown | null;
+  initStatus: ProjectInitStatus;
+  initSteps: InitStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectInitInput {
+  alias: string;
+  name: string;
+  repoUrl?: string;
+  dirMode: "clone" | "existing";
+  parentDir?: string;
+  existingPath?: string;
+}
 
 // Analytics
 export interface TokenMetricEntry {

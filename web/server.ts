@@ -34,11 +34,13 @@ import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
 // Dynamic import — mission module may not exist in worktree
 let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
-try { ({ registerMissionsHandlers } = await import("./handlers/missions.js")); } catch {}
+try { ({ registerMissionsHandlers } = require("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
+import { registerProjectInitHandlers } from "./handlers/project-init.js";
+import { ProjectStore } from "../src/project/store.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -70,6 +72,17 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     return c.json({ error: "Internal server error" }, 500);
   });
 
+  // Migrate toml projects → DB (one-time)
+  try {
+    const projectStore = new ProjectStore();
+    const tomlProjects = data.readProjects();
+    if (Object.keys(tomlProjects).length > 0) {
+      projectStore.importFromToml(tomlProjects);
+    }
+  } catch (err) {
+    console.error("[project-migration]", err);
+  }
+
   // Register all handler modules
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
@@ -90,6 +103,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
   registerMcpHandlers(app, data);
+  registerProjectInitHandlers(app, data);
 
   // ── Filesystem browse (for directory picker) ──
   app.get("/api/v1/fs/browse", (c) => {
