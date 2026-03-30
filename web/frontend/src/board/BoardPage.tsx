@@ -74,7 +74,7 @@ export function BoardPage() {
       ) : view === "list" ? (
         <MissionListView missions={missions} onMissionClick={handleMissionClick} />
       ) : (
-        <MissionKanbanView missions={missions} onMissionClick={handleMissionClick} />
+        <MissionKanbanView missions={missions} onMissionClick={handleMissionClick} onStatusChange={() => api.getMissions(slug).then(setMissions).catch(() => {})} />
       )}
     </BoardLayout>
   );

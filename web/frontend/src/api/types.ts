@@ -616,8 +616,18 @@ export interface ChatInfo {
 
 // ── Missions – Detail ──
 
+export interface ContractCase {
+  id: string;
+  description: string;
+  input: string;
+  expectedOutput: string;
+  type: "unit" | "integration" | "e2e";
+}
+
 export interface MissionDetailItem extends MissionItem {
+  outputDir: string | null;
   contract: {
+    cases?: ContractCase[];
     acceptanceCriteria: string[];
     verificationResults?: {
       caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;

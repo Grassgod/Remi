@@ -2,13 +2,23 @@ import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { Layout } from "../components/Layout";
 import { Button } from "../components/ui/button";
-import { ArrowLeft, ExternalLink, GitPullRequest, Check, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ExternalLink,
+  GitPullRequest,
+  Check,
+  X,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 import * as api from "../api/client";
 import type { MissionDetailItem, ChatMessage } from "../api/types";
 import { PipelineProgress } from "../components/missions/PipelineProgress";
 import {
   getStatusConfig,
   STEP_LABELS,
+  PIPELINE_STEPS,
   formatRelative,
   formatCost,
   formatNum,
@@ -35,6 +45,14 @@ function cleanUserMessage(text: string): string {
     .trim();
 }
 
+/** Map pipeline steps to their known output file names */
+const STEP_OUTPUT_FILES: Record<string, { file: string; label: string }> = {
+  rfc: { file: "rfc.md", label: "RFC Document" },
+  decompose: { file: "tasks.md", label: "Task Breakdown" },
+  eval: { file: "eval-report.md", label: "Evaluation Report" },
+  summary: { file: "summary.md", label: "Summary" },
+};
+
 export function MissionDetail() {
   const [, params] = useRoute("/missions/:id");
   const [, navigate] = useLocation();
@@ -44,6 +62,7 @@ export function MissionDetail() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [msgLoading, setMsgLoading] = useState(false);
+  const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!id) return;
@@ -97,6 +116,16 @@ export function MissionDetail() {
   }
 
   const statusCfg = getStatusConfig(mission.status);
+  const currentStepIdx = PIPELINE_STEPS.indexOf(mission.currentStep as any);
+
+  const toggleCase = (caseId: string) => {
+    setExpandedCases(prev => {
+      const next = new Set(prev);
+      if (next.has(caseId)) next.delete(caseId);
+      else next.add(caseId);
+      return next;
+    });
+  };
 
   return (
     <Layout title="Mission" subtitle={mission.title}>
@@ -125,6 +154,113 @@ export function MissionDetail() {
             </div>
             <PipelineProgress currentStep={mission.currentStep} />
           </div>
+
+          {/* Contract Cases */}
+          {mission.contract?.cases && mission.contract.cases.length > 0 && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <div className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Contract Cases
+              </div>
+              <div className="space-y-2">
+                {mission.contract.cases.map((c, i) => {
+                  const expanded = expandedCases.has(c.id);
+                  const result = mission.contract?.verificationResults?.caseResults?.find(
+                    r => r.caseId === c.id
+                  );
+                  return (
+                    <div key={c.id} className="rounded-md border border-border bg-background p-3">
+                      <div
+                        className="flex cursor-pointer items-center gap-2"
+                        onClick={() => toggleCase(c.id)}
+                      >
+                        {expanded ? (
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                        )}
+                        <span className="text-[11px] font-mono text-muted-foreground">
+                          #{i + 1}
+                        </span>
+                        {result && (
+                          result.passed ? (
+                            <Check className="h-3 w-3 text-emerald-500" />
+                          ) : (
+                            <X className="h-3 w-3 text-red-400" />
+                          )
+                        )}
+                        <span className="flex-1 text-[12px] text-foreground">
+                          {c.description}
+                        </span>
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                          {c.type}
+                        </span>
+                      </div>
+                      {expanded && (
+                        <div className="mt-3 space-y-2 border-t border-border/50 pt-3">
+                          <div>
+                            <div className="text-[10px] font-medium text-muted-foreground">Input</div>
+                            <pre className="mt-1 rounded bg-muted/50 p-2 text-[11px] text-foreground whitespace-pre-wrap">
+                              {c.input}
+                            </pre>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-medium text-muted-foreground">Expected Output</div>
+                            <pre className="mt-1 rounded bg-muted/50 p-2 text-[11px] text-foreground whitespace-pre-wrap">
+                              {c.expectedOutput}
+                            </pre>
+                          </div>
+                          {result && (
+                            <div>
+                              <div className="text-[10px] font-medium text-muted-foreground">Result</div>
+                              <p className={`mt-1 text-[11px] ${result.passed ? "text-emerald-400" : "text-red-400"}`}>
+                                {result.detail}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Output Files */}
+          {mission.outputDir && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Output Files
+              </div>
+              <p className="mb-3 text-[10px] font-mono text-muted-foreground/60 break-all">
+                {mission.outputDir}
+              </p>
+              <div className="space-y-1">
+                {Object.entries(STEP_OUTPUT_FILES).map(([step, { file, label }]) => {
+                  const stepIdx = PIPELINE_STEPS.indexOf(step as any);
+                  const completed = stepIdx >= 0 && stepIdx <= currentStepIdx;
+                  return (
+                    <div
+                      key={step}
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5"
+                    >
+                      {completed ? (
+                        <Check className="h-3 w-3 text-emerald-500" />
+                      ) : (
+                        <FileText className="h-3 w-3 text-muted-foreground/40" />
+                      )}
+                      <span className={`text-[12px] ${completed ? "text-foreground" : "text-muted-foreground/50"}`}>
+                        {label}
+                      </span>
+                      <span className={`ml-auto font-mono text-[10px] ${completed ? "text-muted-foreground" : "text-muted-foreground/30"}`}>
+                        {file}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div>
             <div className="mb-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">

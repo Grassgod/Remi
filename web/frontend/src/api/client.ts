@@ -255,6 +255,8 @@ export const getMissionDetail = (id: string) =>
   request<import("./types").MissionDetailItem>(`/api/v1/missions/${id}`);
 export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
   request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
+export const createMission = (data: { title: string; projectId: string; chatId: string; description?: string }) =>
+  request<import("./types").MissionItem>("/api/v1/missions", { method: "POST", body: JSON.stringify(data) });
 export const getMissionStats = (projectId: string) =>
   request<import("./types").MissionStats>(`/api/v1/missions/stats?projectId=${encodeURIComponent(projectId)}`);
 
