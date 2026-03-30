@@ -534,6 +534,7 @@ export type FeishuMessageCallback = (msg: ParsedFeishuMessage) => Promise<void>;
 
 export type FeishuWSHandle = {
   stop(): void;
+  addGroups(chatIds: string[]): void;
 };
 
 /** Start WebSocket listener. Returns a handle to stop it. */
@@ -551,9 +552,24 @@ export function startWebSocketListener(
   let botOpenId: string | undefined;
   let stopped = false;
 
-  const allowedGroups = config.allowedGroups ?? [];
-  const monitorGroups = config.monitorGroups ?? [];
+  // Live-reload: re-read from config on each message so runtime changes (e.g. project init) take effect
+  let allowedGroups = config.allowedGroups ?? [];
+  let monitorGroups = config.monitorGroups ?? [];
   const triggerUserIds = config.triggerUserIds ?? [];
+
+  // Allow runtime updates (called by project init after creating a new group)
+  const _updateGroupLists = (added: { allowed?: string[]; monitor?: string[] }) => {
+    if (added.allowed) {
+      for (const g of added.allowed) {
+        if (!allowedGroups.includes(g)) allowedGroups = [...allowedGroups, g];
+      }
+    }
+    if (added.monitor) {
+      for (const g of added.monitor) {
+        if (!monitorGroups.includes(g)) monitorGroups = [...monitorGroups, g];
+      }
+    }
+  };
 
   // Probe bot open_id in background
   probeFeishu(creds).then((result) => {
@@ -652,6 +668,9 @@ export function startWebSocketListener(
     stop() {
       stopped = true;
       // WSClient doesn't expose a close method; setting flag prevents further processing
+    },
+    addGroups(chatIds: string[]) {
+      _updateGroupLists({ allowed: chatIds, monitor: chatIds });
     },
   };
 }

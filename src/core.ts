@@ -22,6 +22,7 @@ import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
+import { setActiveFeishuConnector } from "./connectors/feishu/registry.js";
 
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
@@ -942,6 +943,7 @@ export class Remi {
         }
       });
       remi.addConnector(feishu);
+      setActiveFeishuConnector(feishu);
       log.info(`Registered Feishu connector (with 1Passport, ${config.bots.length} bot profiles)`);
 
       // Bot menu sync (fire-and-forget on startup) — remi.toml is the single source of truth

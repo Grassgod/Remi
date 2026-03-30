@@ -199,6 +199,11 @@ export class FeishuConnector implements Connector {
     log.info("connector stopped");
   }
 
+  /** Add groups to the live whitelist (for project init). */
+  addGroups(chatIds: string[]): void {
+    this._wsHandle?.addGroups(chatIds);
+  }
+
   async reply(chatId: string, response: AgentResponse): Promise<void> {
     const client = createFeishuClient({
       appId: this._config.appId,

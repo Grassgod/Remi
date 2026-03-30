@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat } from "../connectors/feishu/chat.js";
+import { getActiveFeishuConnector } from "../connectors/feishu/registry.js";
 import type { RemiData } from "../../web/remi-data.js";
 
 // Jack's hardcoded open_id — only group member besides Remi Bot
@@ -89,13 +90,20 @@ export async function runProjectInit(
   // Mark running
   store.updateInitStatus(projectId, "running");
 
-  // Step 1: Create Feishu group
+  // Step 1: Create Feishu group + whitelist it
   const step1 = await runStep(store, projectId, "create_chat", async () => {
     const existing = store.getById(projectId);
     if (existing?.chatId) return existing.chatId;
 
     const chatId = await createProjectChat(input.name, OWNER_OPEN_ID);
     store.updateField(projectId, "chat_id", chatId);
+
+    // Add to allowed_groups + monitor_groups so Remi responds in this group
+    remiData.addGroupToWhitelist(chatId);
+
+    // Hot-reload: update live WS listener so it accepts messages immediately
+    getActiveFeishuConnector()?.addGroups([chatId]);
+
     return chatId;
   });
   if (!step1) return;

@@ -703,6 +703,29 @@ export class RemiData {
     return this._writeRawConfig(config);
   }
 
+  /**
+   * Add a chat ID to feishu allowed_groups and monitor_groups in remi.toml.
+   */
+  addGroupToWhitelist(chatId: string): boolean {
+    const config = this._readRawConfig();
+    if (!config.feishu) config.feishu = {};
+    const feishu = config.feishu as Record<string, any>;
+
+    // Add to allowed_groups
+    if (!Array.isArray(feishu.allowed_groups)) feishu.allowed_groups = [];
+    if (!feishu.allowed_groups.includes(chatId)) {
+      feishu.allowed_groups.push(chatId);
+    }
+
+    // Add to monitor_groups (so bot auto-replies without @mention)
+    if (!Array.isArray(feishu.monitor_groups)) feishu.monitor_groups = [];
+    if (!feishu.monitor_groups.includes(chatId)) {
+      feishu.monitor_groups.push(chatId);
+    }
+
+    return this._writeRawConfig(config);
+  }
+
   deleteProject(alias: string): boolean {
     const config = this._readRawConfig();
     if (!config.projects || !(alias in (config.projects as Record<string, string>))) return false;
