@@ -90,13 +90,50 @@ export interface InitStep {
   completedAt?: string;
 }
 
+export interface NotificationConfig {
+  enabled: boolean;
+  targets: string[];
+}
+
+export interface PipelineConfig {
+  notifications: {
+    dailyChangelog: NotificationConfig;
+    missionProgress: NotificationConfig;
+    evalReport: NotificationConfig;
+  };
+  pipeline: {
+    releaseBranch: string;
+    skipRfc: boolean;
+    skipDecompose: boolean;
+    testCommand: string;
+    lintCommand: string;
+    buildCommand: string;
+  };
+}
+
+export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
+  notifications: {
+    dailyChangelog: { enabled: true, targets: [] },
+    missionProgress: { enabled: true, targets: [] },
+    evalReport: { enabled: true, targets: [] },
+  },
+  pipeline: {
+    releaseBranch: "",
+    skipRfc: false,
+    skipDecompose: false,
+    testCommand: "bun test",
+    lintCommand: "",
+    buildCommand: "",
+  },
+};
+
 export interface Project {
   id: string;
   name: string;
   chatId: string | null;
   repoUrl: string | null;
   cwd: string | null;
-  pipelineConfig: unknown | null;
+  pipelineConfig: PipelineConfig | null;
   initStatus: ProjectInitStatus;
   initSteps: InitStep[];
   createdAt: string;

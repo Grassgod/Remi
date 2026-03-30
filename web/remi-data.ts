@@ -1489,6 +1489,7 @@ export class RemiData {
   private _resolveSkillsDir(scope?: string): string {
     if (!scope || scope === "remi-global") return this.skillsDir;
     if (scope === "claude-global") return join(homedir(), ".claude", "skills");
+    if (scope === "pipeline") return join(__dirname, "..", "pipeline", "skills");
     if (scope.startsWith("project:")) {
       const projectId = scope.slice("project:".length);
       const { ProjectStore } = require("../src/project/store.js");
@@ -1517,6 +1518,14 @@ export class RemiData {
       const count = readdirSync(remiDir, { withFileTypes: true })
         .filter(e => e.isDirectory() && !e.name.startsWith(".")).length;
       if (count > 0) scopes.push({ scope: "remi-global", label: "Remi Global", path: remiDir, count });
+    }
+
+    // Pipeline skills (shipped with Remi source code)
+    const pipelineDir = join(__dirname, "..", "pipeline", "skills");
+    if (existsSync(pipelineDir)) {
+      const count = readdirSync(pipelineDir, { withFileTypes: true })
+        .filter(e => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith(".")).length;
+      if (count > 0) scopes.push({ scope: "pipeline", label: "Pipeline", path: pipelineDir, count });
     }
 
     // Project scopes

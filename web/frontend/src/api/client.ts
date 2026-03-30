@@ -101,6 +101,21 @@ export const updateProject = (alias: string, path: string) =>
 export const deleteProject = (alias: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });
 
+// Project Config
+export const getProjectConfig = (id: string) =>
+  request<import("./types").PipelineConfig>(`/api/v1/projects/${encodeURIComponent(id)}/config`);
+export const updateProjectConfig = (id: string, config: import("./types").PipelineConfig) =>
+  request<{ ok: boolean }>(`/api/v1/projects/${encodeURIComponent(id)}/config`, {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
+
+// Project Release
+export const createReleasePR = (id: string) =>
+  request<{ prUrl: string; prNumber: number }>(`/api/v1/projects/${encodeURIComponent(id)}/release`, { method: "POST" });
+export const confirmReleaseMerge = (id: string) =>
+  request<{ newBranch: string; newVersion: string }>(`/api/v1/projects/${encodeURIComponent(id)}/release/confirm`, { method: "POST" });
+
 // Project Init
 export const initProject = (input: import("./types").ProjectInitInput) =>
   request<{ id: string; status: string }>("/api/v1/projects/init", {

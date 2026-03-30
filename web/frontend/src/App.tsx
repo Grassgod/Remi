@@ -16,6 +16,7 @@ import { Logs } from "./pages/Logs";
 import { Scheduler } from "./pages/Scheduler";
 import { Agents } from "./pages/Agents";
 import { Projects } from "./pages/Projects";
+import { ProjectConfig } from "./pages/ProjectConfig";
 import { BotMenu } from "./pages/BotMenu";
 import { Config } from "./pages/Config";
 import { Auth } from "./pages/Auth";
@@ -62,6 +63,7 @@ export function App() {
 
         {/* System */}
         <Route path="/agents" component={Agents} />
+        <Route path="/projects/:id/config" component={ProjectConfig} />
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 

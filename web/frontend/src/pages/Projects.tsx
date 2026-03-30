@@ -10,9 +10,10 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from ".
 import { InitStepper } from "../components/ui/init-stepper";
 import {
   FolderOpen, Plus, Trash2, AlertTriangle, Check, X, Pencil, ChevronRight,
-  Folder, CornerLeftUp, Loader2, RotateCcw, ExternalLink,
+  Folder, CornerLeftUp, Loader2, RotateCcw, ExternalLink, Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useLocation } from "wouter";
 import * as api from "../api/client";
 import { getGroups, createGroup, updateGroup, deleteGroup, syncGroupNames } from "@/api/client";
 import type { Project, InitStep, ProjectInitInput, GroupConfig, GroupConfigInput } from "../api/types";
@@ -745,6 +746,14 @@ export function Projects() {
                               title="Edit path"
                             >
                               <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => { window.location.hash = `#/projects/${encodeURIComponent(p.id)}/config`; }}
+                              title="Pipeline settings"
+                            >
+                              <Settings className="h-3.5 w-3.5" />
                             </Button>
                             <Button
                               variant="ghost" size="icon"

@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { ProjectStore } from "../../src/project/store.js";
 import { GroupConfigStore } from "../../src/group/store.js";
+import { execSync } from "node:child_process";
 
 export function registerProjectHandlers(app: Hono, _data: RemiData) {
   const store = new ProjectStore();
@@ -58,5 +59,130 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
     const ok = store.delete(alias);
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // Get project pipeline config
+  app.get("/api/v1/projects/:id/config", (c) => {
+    const id = decodeURIComponent(c.req.param("id"));
+    const project = store.getById(id);
+    if (!project) return c.json({ error: "not found" }, 404);
+
+    const defaultConfig = {
+      notifications: {
+        dailyChangelog: { enabled: true, targets: [] },
+        missionProgress: { enabled: true, targets: [] },
+        evalReport: { enabled: true, targets: [] },
+      },
+      pipeline: {
+        releaseBranch: "",
+        skipRfc: false,
+        skipDecompose: false,
+        testCommand: "bun test",
+        lintCommand: "",
+        buildCommand: "",
+      },
+    };
+
+    return c.json(project.pipelineConfig ?? defaultConfig);
+  });
+
+  // Update project pipeline config
+  app.put("/api/v1/projects/:id/config", async (c) => {
+    const id = decodeURIComponent(c.req.param("id"));
+    const config = await c.req.json();
+
+    const project = store.getById(id);
+    if (!project) return c.json({ error: "not found" }, 404);
+
+    store.updatePipelineConfig(id, config);
+    return c.json({ ok: true });
+  });
+
+  // Create release PR: release branch → main
+  app.post("/api/v1/projects/:id/release", (c) => {
+    const id = decodeURIComponent(c.req.param("id"));
+    const project = store.getById(id);
+    if (!project) return c.json({ error: "not found" }, 404);
+    if (!project.cwd) return c.json({ error: "project has no cwd" }, 400);
+
+    const cfg = (project.pipelineConfig as any) ?? {};
+    const releaseBranch = cfg?.pipeline?.releaseBranch;
+    if (!releaseBranch) return c.json({ error: "releaseBranch not configured" }, 400);
+
+    try {
+      // Extract version from branch name (e.g., "release/1.2.0" → "v1.2.0")
+      const version = releaseBranch.replace(/^release\//, "v");
+
+      const result = execSync(
+        `gh pr create --base main --head ${releaseBranch} --title "Release ${version}" --body "$(cat <<'PREOF'\n## Release ${version}\n\nMerge ${releaseBranch} into main.\nPREOF\n)"`,
+        { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+      ).trim();
+
+      // gh pr create returns the PR URL
+      const prUrl = result;
+      const prMatch = prUrl.match(/\/(\d+)$/);
+      const prNumber = prMatch ? Number(prMatch[1]) : 0;
+
+      return c.json({ prUrl, prNumber });
+    } catch (e: any) {
+      return c.json({ error: e.message || "Failed to create PR" }, 500);
+    }
+  });
+
+  // Confirm release merge: verify PR merged, create new release branch
+  app.post("/api/v1/projects/:id/release/confirm", (c) => {
+    const id = decodeURIComponent(c.req.param("id"));
+    const project = store.getById(id);
+    if (!project) return c.json({ error: "not found" }, 404);
+    if (!project.cwd) return c.json({ error: "project has no cwd" }, 400);
+
+    const cfg = (project.pipelineConfig as any) ?? {};
+    const releaseBranch = cfg?.pipeline?.releaseBranch as string;
+    if (!releaseBranch) return c.json({ error: "releaseBranch not configured" }, 400);
+
+    try {
+      // Verify the release branch has been merged into main
+      execSync("git fetch origin", { cwd: project.cwd, encoding: "utf-8", timeout: 30000 });
+
+      // Check if release branch is merged into main
+      const merged = execSync(
+        `git branch -r --merged origin/main | grep "origin/${releaseBranch}" || true`,
+        { cwd: project.cwd, encoding: "utf-8" },
+      ).trim();
+
+      if (!merged) {
+        return c.json({ error: `${releaseBranch} has not been merged into main yet` }, 400);
+      }
+
+      // Bump version: release/1.2.0 → release/1.2.1
+      const versionMatch = releaseBranch.match(/release\/(\d+)\.(\d+)\.(\d+)/);
+      if (!versionMatch) return c.json({ error: "Cannot parse version from branch name" }, 400);
+
+      const [, major, minor, patch] = versionMatch;
+      const newVersion = `${major}.${minor}.${Number(patch) + 1}`;
+      const newBranch = `release/${newVersion}`;
+
+      // Create new release branch from main
+      execSync(`git checkout main && git pull origin main && git checkout -b ${newBranch} && git push origin ${newBranch}`, {
+        cwd: project.cwd,
+        encoding: "utf-8",
+        timeout: 30000,
+      });
+
+      // Tag the merge point
+      execSync(`git tag v${newVersion} main && git push origin v${newVersion}`, {
+        cwd: project.cwd,
+        encoding: "utf-8",
+        timeout: 15000,
+      });
+
+      // Update config with new release branch
+      const updatedConfig = { ...cfg, pipeline: { ...cfg.pipeline, releaseBranch: newBranch } };
+      store.updatePipelineConfig(id, updatedConfig);
+
+      return c.json({ newBranch, newVersion });
+    } catch (e: any) {
+      return c.json({ error: e.message || "Failed to confirm release" }, 500);
+    }
   });
 }

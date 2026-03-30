@@ -112,6 +112,13 @@ export class ProjectStore {
     );
   }
 
+  updatePipelineConfig(id: string, config: unknown): void {
+    this.db.run(
+      "UPDATE projects SET pipeline_config = ?, updated_at = datetime('now') WHERE id = ?",
+      [JSON.stringify(config), id],
+    );
+  }
+
   // ── Delete (soft) ──
 
   delete(id: string): boolean {
