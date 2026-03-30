@@ -392,3 +392,10 @@ export const syncGroupNames = () =>
   request<{ ok: true; updated: number }>("/api/v1/groups/sync-names", {
     method: "POST",
   });
+
+// Missions — internal actions
+export const reEnqueueStep = (missionId: string, step: string) =>
+  request<{ ok: boolean }>("/api/internal/enqueue-intake", {
+    method: "POST",
+    body: JSON.stringify({ missionId, step }),
+  });

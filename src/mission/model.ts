@@ -17,8 +17,7 @@ export type MissionStatus =
 
 export type PipelineStep =
   | "intake"       // 需求澄清
-  | "rfc"          // RFC / Proposal
-  | "decompose"    // Task 拆解
+  | "rfc"          // RFC / Proposal + Task 拆解
   | "execute"      // 编码执行
   | "eval"         // Contract 验证
   | "summary";     // 总结

@@ -24,13 +24,12 @@ export const KANBAN_COLUMNS = ["inbox", "in_progress", "in_review", "done"] as c
 export const STEP_LABELS: Record<string, string> = {
   intake: "Intake",
   rfc: "RFC",
-  decompose: "Decompose",
   execute: "Execute",
   eval: "Eval",
   summary: "Summary",
 };
 
-export const PIPELINE_STEPS = ["intake", "rfc", "decompose", "execute", "eval", "summary"] as const;
+export const PIPELINE_STEPS = ["intake", "rfc", "execute", "eval", "summary"] as const;
 
 export function getStatusConfig(status: string): StatusConfig {
   return STATUS_ORDER.find(s => s.key === status) ?? STATUS_ORDER[2]; // default to inbox

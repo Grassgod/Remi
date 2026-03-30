@@ -31,7 +31,6 @@ import { ConversationView } from "../ConversationView";
 const STEP_OUTPUT_FILES: Record<string, { file: string; label: string }> = {
   intake: { file: "description.md", label: "Requirements" },
   rfc: { file: "RFC.md", label: "Technical RFC" },
-  decompose: { file: "tasks.md", label: "Task Breakdown" },
   eval: { file: "eval-report.md", label: "Evaluation Report" },
   summary: { file: "summary.md", label: "Summary" },
 };
@@ -48,6 +47,7 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
   const [loading, setLoading] = useState(true);
   const [msgLoading, setMsgLoading] = useState(false);
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
+  const [reEnqueueLoading, setReEnqueueLoading] = useState(false);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -105,6 +105,23 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
 
   const statusCfg = getStatusConfig(mission.status);
   const currentStepIdx = PIPELINE_STEPS.indexOf(mission.currentStep as any);
+
+  const refreshMission = async () => {
+    try {
+      const data = await api.getMissionDetail(id);
+      setMission(data);
+    } catch {}
+  };
+
+  const handleReEnqueue = async () => {
+    if (!mission || reEnqueueLoading) return;
+    setReEnqueueLoading(true);
+    try {
+      await api.reEnqueueStep(mission.id, mission.currentStep);
+      await refreshMission();
+    } catch {}
+    setReEnqueueLoading(false);
+  };
 
   const toggleCase = (caseId: string) => {
     setExpandedCases(prev => {
@@ -279,6 +296,16 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
               {statusCfg.label}
             </span>
           </SidebarSection>
+
+          <button
+            onClick={handleReEnqueue}
+            disabled={reEnqueueLoading}
+            className="w-full rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          >
+            {reEnqueueLoading
+              ? "Enqueueing..."
+              : `Re-enqueue ${STEP_LABELS[mission.currentStep] ?? mission.currentStep}`}
+          </button>
 
           <SidebarSection label="Current Step">
             <span className="text-sm text-foreground">

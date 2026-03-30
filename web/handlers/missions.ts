@@ -139,4 +139,20 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     store.delete(id);
     return c.json({ ok: true });
   });
+
+  // POST /api/internal/enqueue-intake — Proxy to Board server for re-enqueue
+  app.post("/api/internal/enqueue-intake", async (c) => {
+    const body = await c.req.json();
+    try {
+      const res = await fetch(`http://127.0.0.1:${BOARD_PORT}/api/internal/enqueue-intake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      return c.json(data, res.status as any);
+    } catch (err) {
+      return c.json({ error: `Board server unreachable: ${err}` }, 503);
+    }
+  });
 }

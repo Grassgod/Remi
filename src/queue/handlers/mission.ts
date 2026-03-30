@@ -25,7 +25,6 @@ const log = createLogger("mission");
 const STEP_SKILL_DIR: Record<string, string> = {
   intake: "intake",
   rfc: "rfc",
-  decompose: "decompose",
   execute: "execute",
   eval: "contract-eval",
   summary: "mission-summary",
@@ -35,7 +34,6 @@ const STEP_SKILL_DIR: Record<string, string> = {
 const STEP_OUTPUT_FILE: Record<string, string> = {
   intake: "description.md",
   rfc: "RFC.md",
-  decompose: "tasks.md",
   execute: "execute-log.md",
   eval: "eval-report.md",
   summary: "summary.md",
@@ -44,28 +42,19 @@ const STEP_OUTPUT_FILE: Record<string, string> = {
 /** PipelineStep → 中文标签 */
 const STEP_LABEL: Record<string, string> = {
   intake: "需求澄清",
-  rfc: "RFC 技术方案",
-  decompose: "任务拆解",
+  rfc: "RFC 技术方案 + 任务拆解",
   execute: "代码执行",
   eval: "Contract 验证",
   summary: "总结",
 };
 
-/** PipelineStep → session type (null = new session every time) */
-const STEP_SESSION_TYPE: Record<string, string | null> = {
-  intake: "intake",
-  rfc: "plan",
-  decompose: "plan",
-  execute: "exec",
-  eval: null,
-  summary: null,
-};
+/** All steps share one session per mission */
+const MISSION_SESSION_KEY = "pipeline";
 
 /** Step flow: current → next */
 const STEP_FLOW: Record<string, PipelineStep | null> = {
   intake: null,     // intake → approval card, not auto-advance
-  rfc: "decompose",
-  decompose: "execute",
+  rfc: "execute",   // rfc now includes task decomposition, goes straight to execute
   execute: "eval",
   eval: null,       // eval → model calls mission-advance script
   summary: null,    // pipeline complete
@@ -97,9 +86,8 @@ export async function handleMissionJob(
   try {
     const projectCwd = resolveProjectCwd(remi, mission.projectId);
 
-    // ── 1. Resolve session ──
-    const sessionType = STEP_SESSION_TYPE[step] ?? null;
-    const existingSessionId = sessionType ? (mission.sessions[sessionType] ?? null) : null;
+    // ── 1. Resolve session (single session for entire pipeline) ──
+    const existingSessionId = mission.sessions[MISSION_SESSION_KEY] ?? null;
 
     // ── 2. Build prompt ──
     let prompt: string;
@@ -171,7 +159,7 @@ export async function handleMissionJob(
           systemPromptOverride: systemPrompt,
           missionSessionId: existingSessionId,
           missionCwd: projectCwd,
-          missionSessionType: sessionType ?? step,
+          missionSessionType: MISSION_SESSION_KEY,
           // rootId is needed by core._resolveSessionKey to isolate session per thread
           rootId: mission.threadId,
           chatType: "group",
@@ -194,10 +182,10 @@ export async function handleMissionJob(
     log.info(`Mission ${missionId} step ${step} completed (${result.text?.length ?? 0} chars)`);
 
     // ── 5. Save session ID ──
-    if (sessionType && result.sessionId) {
-      const sessions = { ...mission.sessions, [sessionType]: result.sessionId };
+    if (result.sessionId) {
+      const sessions = { ...mission.sessions, [MISSION_SESSION_KEY]: result.sessionId };
       store.updateSessions(missionId, sessions);
-      log.info(`Saved session ${sessionType}=${result.sessionId} for mission ${missionId}`);
+      log.info(`Saved session ${MISSION_SESSION_KEY}=${result.sessionId} for mission ${missionId}`);
     }
 
     // ── 6. Record conversation + accumulate stats ──
