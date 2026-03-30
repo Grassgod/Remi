@@ -163,8 +163,12 @@ export class FeishuConnector implements Connector {
    * Auto-create a Mission if a group thread doesn't have one yet.
    * This enables "user creates topic in Feishu group → Mission auto-created on Board".
    */
-  private async _ensureMissionForThread(msg: ParsedFeishuMessage): Promise<void> {
-    if (!msg.rootId) return;
+  /**
+   * Returns true if this thread belongs to a mission (existing or newly created).
+   * Returns false if this is a non-project group or non-thread message.
+   */
+  private async _ensureMissionForThread(msg: ParsedFeishuMessage): Promise<boolean> {
+    if (!msg.rootId) return false;
 
     const { MissionStore } = await import("../../mission/store.js");
     const { getDb } = await import("../../db/index.js");
@@ -174,13 +178,13 @@ export class FeishuConnector implements Connector {
     const existing = db.query(
       "SELECT id FROM missions WHERE chat_id = ? AND thread_id = ?",
     ).get(msg.chatId, msg.rootId) as { id: string } | null;
-    if (existing) return;
+    if (existing) return true; // Already a mission thread
 
     // Find the project for this group
     const gcStore = new GroupConfigStore();
     const gc = gcStore.getByChatId(msg.chatId);
     const projectId = gc?.projectId ?? "global";
-    if (projectId === "global") return; // Don't auto-create for non-project groups
+    if (projectId === "global") return false; // Non-project group, normal flow
 
     // Create mission from thread — use the message text as title
     const title = msg.rawContent.slice(0, 100) || `Topic ${msg.rootId.slice(0, 8)}`;
@@ -195,6 +199,7 @@ export class FeishuConnector implements Connector {
     });
 
     log.info(`Auto-created mission ${mission.id} for thread ${msg.rootId} in group ${msg.chatId}`);
+    return true;
   }
 
   private _resolveSessionKey(msg: ParsedFeishuMessage): string {
@@ -290,9 +295,14 @@ export class FeishuConnector implements Connector {
     }
 
     // ── Auto-create Mission for new group threads ──
+    // If message belongs to a mission thread, skip normal conversation flow
     if (msg.chatType === "group" && msg.rootId) {
       try {
-        await this._ensureMissionForThread(msg);
+        const isMissionThread = await this._ensureMissionForThread(msg);
+        if (isMissionThread) {
+          log.info(`Message in mission thread ${msg.rootId}, skipping normal conversation flow`);
+          return; // Don't process as normal conversation — pipeline handles it
+        }
       } catch (err) {
         log.warn(`ensureMissionForThread failed: ${err}`);
       }
