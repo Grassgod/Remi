@@ -50,7 +50,7 @@ export interface StreamingCloseOptions {
   /** Pre-built AskUserQuestion form data (actionId + questions). Set by index.ts after registerPendingAction. */
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** Pre-built ExitPlanMode data (actionId). Set by index.ts after registerPendingAction. */
-  planReview?: { actionId: string };
+  planReview?: { actionId: string; planContent?: string };
 }
 
 /** Step data for process panel rendering. */
@@ -135,7 +135,7 @@ export function buildFinalCard(opts: {
   /** AskUserQuestion questions from permission_denials — rendered as form in final card. */
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
-  planReview?: { actionId: string };
+  planReview?: { actionId: string; planContent?: string };
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -258,6 +258,22 @@ export function buildFinalCard(opts: {
   // ExitPlanMode — between content and stats bar (matches Claude Code CLI wording)
   if (opts.planReview) {
     elements.push({ tag: "hr" });
+    // Show plan content if available (truncate to fit Feishu card limits)
+    if (opts.planReview.planContent) {
+      const planText = opts.planReview.planContent.length > 3000
+        ? opts.planReview.planContent.slice(0, 3000) + "\n\n*(...truncated)*"
+        : opts.planReview.planContent;
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: true,
+        header: {
+          title: { tag: "plain_text", content: "Implementation Plan" },
+        },
+        border: { color: "grey" },
+        vertical_spacing: "default",
+        elements: [{ tag: "markdown", content: planText }],
+      });
+    }
     elements.push({
       tag: "markdown",
       content: "**Plan ready for review.** How would you like to proceed?",

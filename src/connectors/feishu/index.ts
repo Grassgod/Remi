@@ -12,9 +12,9 @@ import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
 import { createLogger } from "../../logger.js";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 
 const log = createLogger("feishu");
 import { createFeishuClient } from "./client.js";
@@ -116,6 +116,24 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
       return `Agent: ${trunc(s(input?.description ?? input?.prompt), MAX)}...`;
     default:
       return `Tool: ${name}...`;
+  }
+}
+
+/** Read the most recently modified plan file from .claude/plans/ directory. */
+function readLatestPlanContent(cwd?: string): string | null {
+  const plansDir = join(cwd || homedir(), ".claude", "plans");
+  try {
+    const files = readdirSync(plansDir)
+      .filter((f) => f.endsWith(".md") && !f.includes("-agent-"))
+      .map((f) => {
+        const full = join(plansDir, f);
+        return { path: full, mtime: statSync(full).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    if (files.length === 0) return null;
+    return readFileSync(files[0].path, "utf-8");
+  } catch {
+    return null;
   }
 }
 
@@ -568,7 +586,7 @@ export class FeishuConnector implements Connector {
 
         // Extract permission_denials and register card actions for AskUserQuestion / ExitPlanMode
         let askQuestions: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> } | undefined;
-        let planReviewAction: { actionId: string } | undefined;
+        let planReviewAction: { actionId: string; planContent?: string } | undefined;
         const denials = finalResponse?.permissionDenials;
 
         if (denials && denials.length > 0) {
@@ -634,8 +652,13 @@ export class FeishuConnector implements Connector {
                 undefined,
                 chatId,
               );
-              planReviewAction = { actionId };
-              slog.info(`Embedded ExitPlanMode buttons: actionId=${actionId}`);
+              // Read plan file content to display before the approval form
+              const gcStore = new GroupConfigStore();
+              const gc = gcStore.getByChatId(chatId);
+              const planCwd = gc?.cwd || gc?.projectCwd || (incoming.metadata?.cwd as string) || undefined;
+              const planContent = readLatestPlanContent(planCwd);
+              planReviewAction = { actionId, planContent: planContent ?? undefined };
+              slog.info(`Embedded ExitPlanMode buttons: actionId=${actionId}, planContent=${planContent ? `${planContent.length} chars` : "none"}`);
             }
           }
         }
