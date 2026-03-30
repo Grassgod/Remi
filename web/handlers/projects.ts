@@ -1,13 +1,22 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { ProjectStore } from "../../src/project/store.js";
+import { GroupConfigStore } from "../../src/group/store.js";
 
-export function registerProjectHandlers(app: Hono, data: RemiData) {
+export function registerProjectHandlers(app: Hono, _data: RemiData) {
   const store = new ProjectStore();
+  const gcStore = new GroupConfigStore();
 
-  // List all projects (from DB)
+  // List all projects with group counts
   app.get("/api/v1/projects", (c) => {
-    return c.json(store.list());
+    const projects = store.list();
+    const groupCounts = gcStore.countByProject();
+    return c.json(
+      projects.map((p) => ({
+        ...p,
+        groupCount: groupCounts[p.id] ?? 0,
+      })),
+    );
   });
 
   // Simple create (alias + path, for backward compat)
@@ -15,7 +24,6 @@ export function registerProjectHandlers(app: Hono, data: RemiData) {
     const { alias, path } = (await c.req.json()) as { alias: string; path: string };
     if (!alias || !path) return c.json({ error: "alias and path required" }, 400);
 
-    // Write to both DB and toml
     const existing = store.getById(alias);
     if (existing) {
       store.updateField(alias, "cwd", path);
@@ -28,7 +36,6 @@ export function registerProjectHandlers(app: Hono, data: RemiData) {
       });
       store.updateInitStatus(alias, "completed");
     }
-    data.saveProject(alias, path);
     return c.json({ ok: true });
   });
 
@@ -42,16 +49,14 @@ export function registerProjectHandlers(app: Hono, data: RemiData) {
     if (!existing) return c.json({ error: "not found" }, 404);
 
     store.updateField(alias, "cwd", path);
-    data.saveProject(alias, path);
     return c.json({ ok: true });
   });
 
-  // Delete (soft) — preserves chatId for re-init reuse
+  // Delete (soft)
   app.delete("/api/v1/projects/:alias", (c) => {
     const alias = decodeURIComponent(c.req.param("alias"));
     const ok = store.delete(alias);
     if (!ok) return c.json({ error: "not found" }, 404);
-    data.deleteProject(alias);
     return c.json({ ok: true });
   });
 }
