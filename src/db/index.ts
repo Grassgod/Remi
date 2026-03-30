@@ -151,6 +151,23 @@ export function getDb(): Database {
 
     CREATE INDEX IF NOT EXISTS idx_projects_init_status ON projects(init_status);
 
+    -- Group configs (per-group settings, replaces toml bots/allowed_groups/monitor_groups)
+    CREATE TABLE IF NOT EXISTS group_configs (
+      chat_id TEXT PRIMARY KEY,
+      project_id TEXT DEFAULT 'global',
+      name TEXT DEFAULT '',
+      monitor INTEGER DEFAULT 0,
+      reply_mode TEXT DEFAULT 'thread',
+      system_prompt TEXT DEFAULT '',
+      allowed_tools TEXT DEFAULT '[]',
+      add_dirs TEXT DEFAULT '[]',
+      provider TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gc_project ON group_configs(project_id);
+
     CREATE TABLE IF NOT EXISTS skill_feedbacks (
       id TEXT PRIMARY KEY,
       mission_id TEXT NOT NULL,
