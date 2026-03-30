@@ -16,7 +16,7 @@ export function BoardPage() {
 
   const [missions, setMissions] = useState<MissionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ViewMode>("list");
+  const [view, setView] = useState<ViewMode>("kanban");
 
   useEffect(() => {
     if (!slug) return;
