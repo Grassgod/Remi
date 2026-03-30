@@ -18,8 +18,12 @@ export function Missions() {
   const [projects, setProjects] = useState<string[]>([]);
 
   useEffect(() => {
-    api.getProjects().then(map => {
-      setProjects(Object.keys(map).sort());
+    api.getProjects().then(list => {
+      // getProjects returns Project[] — extract ids
+      const ids = Array.isArray(list)
+        ? list.map((p: any) => p.id as string)
+        : Object.keys(list);
+      setProjects(ids.sort());
     }).catch(() => {});
   }, []);
 
