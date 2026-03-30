@@ -25,6 +25,7 @@ export async function createProjectChat(
       name: `[Remi] ${name}`,
       chat_mode: "group",
       chat_type: "private",
+      owner_id: ownerOpenId,
       user_id_list: [ownerOpenId],
     },
     params: { user_id_type: "open_id" },
