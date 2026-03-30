@@ -7,6 +7,7 @@
  */
 
 import type { BotProfile, FeishuConfig } from "../../config.js";
+import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
@@ -340,9 +341,10 @@ export class FeishuConnector implements Connector {
         }
       }
 
-      // Determine reply mode: p2p chats never use thread; groups check bot profile
-      const botProfile = this._findBotProfile(msg.chatId);
-      const replyInThread = msg.chatType === "p2p" ? false : (botProfile ? botProfile.replyMode === "thread" : true);
+      // Determine reply mode: p2p chats never use thread; groups check group_configs DB
+      const gcStore = new GroupConfigStore();
+      const groupConfig = gcStore.getByChatId(msg.chatId);
+      const replyInThread = msg.chatType === "p2p" ? false : (groupConfig ? groupConfig.replyMode === "thread" : true);
       const replyToId = replyInThread ? msg.messageId : undefined;
 
       // Use real streaming if streamHandler is available
