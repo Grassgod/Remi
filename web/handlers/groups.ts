@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { GroupConfigStore } from "../../src/group/store.js";
-import { getChatName } from "../../src/connectors/feishu/chat.js";
+import { getChatName, transferChatOwner, updateChat } from "../../src/connectors/feishu/chat.js";
 import { invalidateGroupNameCache } from "./conversations.js";
 import { createLogger } from "../../src/logger.js";
 
@@ -68,5 +68,35 @@ export function registerGroupHandlers(app: Hono) {
     }
     invalidateGroupNameCache();
     return c.json({ ok: true, updated });
+  });
+
+  // Transfer ownership of all project groups to a user
+  app.post("/api/v1/groups/transfer-ownership", async (c) => {
+    const { ownerOpenId } = (await c.req.json()) as { ownerOpenId: string };
+    if (!ownerOpenId) return c.json({ error: "ownerOpenId required" }, 400);
+
+    const groups = store.list();
+    let transferred = 0;
+    let failed = 0;
+    for (const g of groups) {
+      const ok = await transferChatOwner(g.chatId, ownerOpenId);
+      if (ok) transferred++;
+      else failed++;
+    }
+    return c.json({ ok: true, transferred, failed });
+  });
+
+  // Update chat avatar for a group
+  app.post("/api/v1/groups/update-chat", async (c) => {
+    const { chatId, name, avatar, description } = (await c.req.json()) as {
+      chatId: string;
+      name?: string;
+      avatar?: string;
+      description?: string;
+    };
+    if (!chatId) return c.json({ error: "chatId required" }, 400);
+    const ok = await updateChat(chatId, { name, avatar, description });
+    if (!ok) return c.json({ error: "failed to update chat" }, 500);
+    return c.json({ ok: true });
   });
 }
