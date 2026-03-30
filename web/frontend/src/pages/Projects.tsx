@@ -14,7 +14,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "../api/client";
-import type { Project, InitStep, ProjectInitInput } from "../api/types";
+import { getGroups, createGroup, updateGroup, deleteGroup } from "@/api/client";
+import type { Project, InitStep, ProjectInitInput, GroupConfig, GroupConfigInput } from "../api/types";
 
 // ── Directory Picker Dialog ────────────────────────────
 
@@ -412,6 +413,120 @@ function InitStatusBadge({ status }: { status: string }) {
   }
 }
 
+// ── Group Form ──
+
+function GroupForm({ initial, projects, onSave, onCancel }: {
+  initial: GroupConfig | null;
+  projects: Project[];
+  onSave: (input: GroupConfigInput) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [chatId, setChatId] = useState(initial?.chatId ?? "");
+  const [projectId, setProjectId] = useState(initial?.projectId ?? "global");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [monitor, setMonitor] = useState(initial?.monitor ?? false);
+  const [replyMode, setReplyMode] = useState<"thread" | "direct">(initial?.replyMode ?? "thread");
+  const [provider, setProvider] = useState(initial?.provider ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
+  const [allowedTools, setAllowedTools] = useState(initial?.allowedTools?.join(", ") ?? "");
+  const [addDirs, setAddDirs] = useState(initial?.addDirs?.join(", ") ?? "");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="text-sm text-zinc-400 block mb-1">Chat ID</label>
+        <Input value={chatId} onChange={(e) => setChatId(e.target.value)} disabled={!!initial} placeholder="oc_xxxxxxx" />
+      </div>
+      <div>
+        <label className="text-sm text-zinc-400 block mb-1">Name</label>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Group display name" />
+      </div>
+      <div>
+        <label className="text-sm text-zinc-400 block mb-1">Project</label>
+        <select
+          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+        >
+          <option value="global">Global (no project)</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-4 items-center">
+        <label className="flex items-center gap-2 text-sm text-zinc-400">
+          <input type="checkbox" checked={monitor} onChange={(e) => setMonitor(e.target.checked)} className="rounded" />
+          Monitor (auto-reply)
+        </label>
+        <select
+          className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+          value={replyMode}
+          onChange={(e) => setReplyMode(e.target.value as "thread" | "direct")}
+        >
+          <option value="thread">Thread</option>
+          <option value="direct">Direct</option>
+        </select>
+      </div>
+      <div>
+        <label className="text-sm text-zinc-400 block mb-1">Provider</label>
+        <select
+          className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+        >
+          <option value="">Default</option>
+          <option value="claude_cli">Claude CLI</option>
+          <option value="aiden_cli">Aiden CLI</option>
+        </select>
+      </div>
+
+      <button className="text-xs text-zinc-500 hover:text-zinc-300" onClick={() => setShowAdvanced(!showAdvanced)}>
+        {showAdvanced ? "▼ Hide" : "▶ Show"} Advanced
+      </button>
+
+      {showAdvanced && (
+        <div className="space-y-3 border-t border-zinc-800 pt-3">
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1">System Prompt</label>
+            <textarea
+              className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 min-h-[80px]"
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1">Allowed Tools (comma-separated)</label>
+            <Input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} placeholder="Read, Write, Bash" />
+          </div>
+          <div>
+            <label className="text-sm text-zinc-400 block mb-1">Additional Dirs (comma-separated)</label>
+            <Input value={addDirs} onChange={(e) => setAddDirs(e.target.value)} placeholder="/path/to/dir" />
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 justify-end pt-2">
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button onClick={() => onSave({
+          chatId,
+          projectId,
+          name,
+          monitor,
+          replyMode,
+          provider: provider || undefined,
+          systemPrompt,
+          allowedTools: allowedTools ? allowedTools.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          addDirs: addDirs ? addDirs.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        })}>
+          {initial ? "Save" : "Create"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ──
 
 export function Projects() {
@@ -426,6 +541,14 @@ export function Projects() {
   // Resume dialog for running/failed projects
   const [resumeProject, setResumeProject] = useState<Project | null>(null);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<"projects" | "groups">("projects");
+
+  // Groups state
+  const [groups, setGroups] = useState<GroupConfig[]>([]);
+  const [showGroupDialog, setShowGroupDialog] = useState(false);
+  const [editingGroup, setEditingGroup] = useState<GroupConfig | null>(null);
+
   const fetchProjects = async () => {
     try {
       setProjects(await api.getProjects());
@@ -435,7 +558,20 @@ export function Projects() {
     }
   };
 
+  const fetchGroups = async () => {
+    try {
+      const data = await getGroups();
+      setGroups(data);
+    } catch (e) {
+      console.error("Failed to fetch groups:", e);
+    }
+  };
+
   useEffect(() => { fetchProjects(); }, []);
+
+  useEffect(() => {
+    if (activeTab === "groups") fetchGroups();
+  }, [activeTab]);
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -462,129 +598,258 @@ export function Projects() {
 
   return (
     <Layout title="Projects" subtitle="Workspace Management">
-      <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <FolderOpen className="h-4 w-4 text-muted-foreground" />
-            Projects
-            <Badge variant="secondary" className="text-[10px]">{projects.length}</Badge>
-          </CardTitle>
-          <Button variant="outline" size="sm" onClick={() => setInitOpen(true)} className="h-7 text-xs">
-            <Plus className="mr-1 h-3 w-3" /> New Project
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0">
-          {error && (
-            <div className="flex items-center justify-between border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
-              <span>{error}</span>
-              <button onClick={() => setError(null)} className="ml-2 opacity-70 hover:opacity-100">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          )}
+      {/* Tab buttons */}
+      <div className="flex gap-2 mb-4">
+        <button
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === "projects"
+              ? "bg-zinc-800 text-white"
+              : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
+          }`}
+          onClick={() => setActiveTab("projects")}
+        >
+          Projects
+        </button>
+        <button
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === "groups"
+              ? "bg-zinc-800 text-white"
+              : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
+          }`}
+          onClick={() => setActiveTab("groups")}
+        >
+          Groups
+        </button>
+      </div>
 
-          {projects.length === 0 ? (
-            <div className="p-10 text-center text-xs text-muted-foreground">No projects registered</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[100px]">Alias</TableHead>
-                  <TableHead className="w-[140px]">Name</TableHead>
-                  <TableHead>Path</TableHead>
-                  <TableHead className="w-[90px]">Status</TableHead>
-                  <TableHead className="w-[60px]" />
+      {activeTab === "projects" && (
+        <>
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                Projects
+                <Badge variant="secondary" className="text-[10px]">{projects.length}</Badge>
+              </CardTitle>
+              <Button variant="outline" size="sm" onClick={() => setInitOpen(true)} className="h-7 text-xs">
+                <Plus className="mr-1 h-3 w-3" /> New Project
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              {error && (
+                <div className="flex items-center justify-between border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+                  <span>{error}</span>
+                  <button onClick={() => setError(null)} className="ml-2 opacity-70 hover:opacity-100">
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+
+              {projects.length === 0 ? (
+                <div className="p-10 text-center text-xs text-muted-foreground">No projects registered</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[100px]">Alias</TableHead>
+                      <TableHead className="w-[140px]">Name</TableHead>
+                      <TableHead>Path</TableHead>
+                      <TableHead className="w-[90px]">Status</TableHead>
+                      <TableHead className="w-[60px]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projects.map((p) => (
+                      <TableRow
+                        key={p.id}
+                        className={cn(
+                          (p.initStatus === "running" || p.initStatus === "failed") && "cursor-pointer hover:bg-accent/50",
+                        )}
+                        onClick={() => {
+                          if (p.initStatus === "running" || p.initStatus === "failed") {
+                            setResumeProject(p);
+                          }
+                        }}
+                      >
+                        <TableCell className="font-mono text-xs font-semibold">{p.id}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{p.name}</TableCell>
+                        <TableCell>
+                          {editing === p.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <Input
+                                value={editPath}
+                                onChange={e => setEditPath(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") handleEdit(p.id);
+                                  if (e.key === "Escape") { setEditing(null); setEditPath(""); }
+                                }}
+                                className="h-7 flex-1 text-xs"
+                                autoFocus
+                                onClick={e => e.stopPropagation()}
+                              />
+                              <Button
+                                variant="ghost" size="icon" className="h-7 w-7"
+                                onClick={(e) => { e.stopPropagation(); setPickerOpen(true); }}
+                              >
+                                <FolderOpen className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon" className="h-7 w-7"
+                                onClick={(e) => { e.stopPropagation(); handleEdit(p.id); }}
+                              >
+                                <Check className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="select-all break-all font-mono text-xs text-muted-foreground">
+                              {p.cwd || "—"}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <InitStatusBadge status={p.initStatus} />
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={() => { setEditing(p.id); setEditPath(p.cwd || ""); }}
+                              title="Edit path"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost" size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => setDeleteTarget(p.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Usage hint */}
+          <Card className="mt-3">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Usage</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1 font-mono text-xs text-muted-foreground">
+              <div><span className="text-foreground">/project &lt;alias&gt;</span> — switch to project directory</div>
+              <div><span className="text-foreground">/project</span> — show current project and list</div>
+              <div><span className="text-foreground">/project reset</span> — reset to default directory</div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {activeTab === "groups" && (
+        <Card>
+          <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+            <h3 className="text-sm font-medium text-zinc-300">Group Configurations</h3>
+            <Button size="sm" onClick={() => { setEditingGroup(null); setShowGroupDialog(true); }}>
+              Add Group
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Chat ID</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Project</TableHead>
+                <TableHead>Monitor</TableHead>
+                <TableHead>Reply Mode</TableHead>
+                <TableHead>Provider</TableHead>
+                <TableHead className="w-20">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {groups.map((g) => (
+                <TableRow key={g.chatId}>
+                  <TableCell className="font-mono text-xs">{g.chatId}</TableCell>
+                  <TableCell>{g.name || "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant={g.projectId === "global" ? "secondary" : "default"}>
+                      {g.projectName || g.projectId}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <button
+                      onClick={async () => {
+                        await updateGroup(g.chatId, { monitor: !g.monitor });
+                        fetchGroups();
+                      }}
+                      className={`w-8 h-4 rounded-full transition-colors relative ${
+                        g.monitor ? "bg-emerald-500" : "bg-zinc-600"
+                      }`}
+                    >
+                      <span className={`block w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${
+                        g.monitor ? "left-4" : "left-0.5"
+                      }`} />
+                    </button>
+                  </TableCell>
+                  <TableCell>{g.replyMode}</TableCell>
+                  <TableCell>{g.provider || "default"}</TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => { setEditingGroup(g); setShowGroupDialog(true); }}>
+                        Edit
+                      </Button>
+                      <Button size="sm" variant="ghost" className="text-red-400" onClick={async () => {
+                        if (confirm(`Remove group ${g.chatId}?`)) {
+                          await deleteGroup(g.chatId);
+                          fetchGroups();
+                        }
+                      }}>
+                        Del
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {projects.map((p) => (
-                  <TableRow
-                    key={p.id}
-                    className={cn(
-                      (p.initStatus === "running" || p.initStatus === "failed") && "cursor-pointer hover:bg-accent/50",
-                    )}
-                    onClick={() => {
-                      if (p.initStatus === "running" || p.initStatus === "failed") {
-                        setResumeProject(p);
-                      }
-                    }}
-                  >
-                    <TableCell className="font-mono text-xs font-semibold">{p.id}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{p.name}</TableCell>
-                    <TableCell>
-                      {editing === p.id ? (
-                        <div className="flex items-center gap-1.5">
-                          <Input
-                            value={editPath}
-                            onChange={e => setEditPath(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === "Enter") handleEdit(p.id);
-                              if (e.key === "Escape") { setEditing(null); setEditPath(""); }
-                            }}
-                            className="h-7 flex-1 text-xs"
-                            autoFocus
-                            onClick={e => e.stopPropagation()}
-                          />
-                          <Button
-                            variant="ghost" size="icon" className="h-7 w-7"
-                            onClick={(e) => { e.stopPropagation(); setPickerOpen(true); }}
-                          >
-                            <FolderOpen className="h-3 w-3" />
-                          </Button>
-                          <Button
-                            variant="ghost" size="icon" className="h-7 w-7"
-                            onClick={(e) => { e.stopPropagation(); handleEdit(p.id); }}
-                          >
-                            <Check className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className="select-all break-all font-mono text-xs text-muted-foreground">
-                          {p.cwd || "—"}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <InitStatusBadge status={p.initStatus} />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
-                        <Button
-                          variant="ghost" size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => { setEditing(p.id); setEditPath(p.cwd || ""); }}
-                          title="Edit path"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="ghost" size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                          onClick={() => setDeleteTarget(p.id)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+              ))}
+              {groups.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-zinc-500 py-8">
+                    No group configs found
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
 
-      {/* Usage hint */}
-      <Card className="mt-3">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Usage</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1 font-mono text-xs text-muted-foreground">
-          <div><span className="text-foreground">/project &lt;alias&gt;</span> — switch to project directory</div>
-          <div><span className="text-foreground">/project</span> — show current project and list</div>
-          <div><span className="text-foreground">/project reset</span> — reset to default directory</div>
-        </CardContent>
-      </Card>
+      {/* Group dialog */}
+      {showGroupDialog && (
+        <Dialog open={showGroupDialog} onOpenChange={setShowGroupDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{editingGroup ? "Edit Group" : "Add Group"}</DialogTitle>
+            </DialogHeader>
+            <GroupForm
+              initial={editingGroup}
+              projects={projects}
+              onSave={async (input) => {
+                if (editingGroup) {
+                  await updateGroup(editingGroup.chatId, input);
+                } else {
+                  await createGroup(input);
+                }
+                setShowGroupDialog(false);
+                fetchGroups();
+              }}
+              onCancel={() => setShowGroupDialog(false)}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Init dialog */}
       <InitDialog

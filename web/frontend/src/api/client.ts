@@ -340,3 +340,26 @@ export const mergeMcpServers = (scopeId: string, content: string) =>
     method: "POST",
     body: JSON.stringify({ content }),
   });
+
+// ── Groups ──
+export const getGroups = () =>
+  request<import("./types").GroupConfig[]>("/api/v1/groups");
+
+export const createGroup = (input: import("./types").GroupConfigInput) =>
+  request<{ ok: true }>("/api/v1/groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+export const updateGroup = (chatId: string, fields: Partial<import("./types").GroupConfigInput>) =>
+  request<{ ok: true }>(`/api/v1/groups/${encodeURIComponent(chatId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+
+export const deleteGroup = (chatId: string) =>
+  request<{ ok: true }>(`/api/v1/groups/${encodeURIComponent(chatId)}`, {
+    method: "DELETE",
+  });

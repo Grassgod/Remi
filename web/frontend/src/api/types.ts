@@ -101,6 +101,7 @@ export interface Project {
   initSteps: InitStep[];
   createdAt: string;
   updatedAt: string;
+  groupCount?: number;
 }
 
 export interface ProjectInitInput {
@@ -110,6 +111,34 @@ export interface ProjectInitInput {
   dirMode: "clone" | "existing";
   parentDir?: string;
   existingPath?: string;
+}
+
+export interface GroupConfig {
+  chatId: string;
+  projectId: string;
+  name: string;
+  monitor: boolean;
+  replyMode: "thread" | "direct";
+  systemPrompt: string;
+  allowedTools: string[];
+  addDirs: string[];
+  provider?: string;
+  createdAt: string;
+  updatedAt: string;
+  cwd?: string;
+  projectName?: string;
+}
+
+export interface GroupConfigInput {
+  chatId: string;
+  projectId?: string;
+  name?: string;
+  monitor?: boolean;
+  replyMode?: "thread" | "direct";
+  systemPrompt?: string;
+  allowedTools?: string[];
+  addDirs?: string[];
+  provider?: string;
 }
 
 // Analytics
