@@ -38,3 +38,26 @@ export async function createProjectChat(
   }
   return chatId;
 }
+
+/**
+ * Fetch chat/group info from Feishu API.
+ * Returns the chat name, or null if not found.
+ */
+export async function getChatName(chatId: string): Promise<string | null> {
+  try {
+    const config = loadConfig();
+    const client = createFeishuClient({
+      appId: config.feishu.appId,
+      appSecret: config.feishu.appSecret,
+      domain: config.feishu.domain,
+    });
+
+    const res: any = await client.im.chat.get({
+      path: { chat_id: chatId },
+    });
+
+    return res?.data?.name ?? null;
+  } catch {
+    return null;
+  }
+}

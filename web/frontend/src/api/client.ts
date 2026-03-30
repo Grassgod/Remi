@@ -363,3 +363,8 @@ export const deleteGroup = (chatId: string) =>
   request<{ ok: true }>(`/api/v1/groups/${encodeURIComponent(chatId)}`, {
     method: "DELETE",
   });
+
+export const syncGroupNames = () =>
+  request<{ ok: true; updated: number }>("/api/v1/groups/sync-names", {
+    method: "POST",
+  });

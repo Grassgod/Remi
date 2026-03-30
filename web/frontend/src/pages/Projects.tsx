@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as api from "../api/client";
-import { getGroups, createGroup, updateGroup, deleteGroup } from "@/api/client";
+import { getGroups, createGroup, updateGroup, deleteGroup, syncGroupNames } from "@/api/client";
 import type { Project, InitStep, ProjectInitInput, GroupConfig, GroupConfigInput } from "../api/types";
 
 // ── Directory Picker Dialog ────────────────────────────
@@ -570,7 +570,11 @@ export function Projects() {
   useEffect(() => { fetchProjects(); }, []);
 
   useEffect(() => {
-    if (activeTab === "groups") fetchGroups();
+    if (activeTab === "groups") {
+      fetchGroups();
+      // Auto-sync names from Feishu on first load
+      syncGroupNames().then((r) => { if (r.updated > 0) fetchGroups(); }).catch(() => {});
+    }
   }, [activeTab]);
 
   const handleDelete = async () => {
@@ -754,9 +758,17 @@ export function Projects() {
         <Card>
           <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
             <h3 className="text-sm font-medium text-zinc-300">Group Configurations</h3>
-            <Button size="sm" onClick={() => { setEditingGroup(null); setShowGroupDialog(true); }}>
-              Add Group
-            </Button>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={async () => {
+                const result = await syncGroupNames();
+                if (result.updated > 0) fetchGroups();
+              }}>
+                Sync Names
+              </Button>
+              <Button size="sm" onClick={() => { setEditingGroup(null); setShowGroupDialog(true); }}>
+                Add Group
+              </Button>
+            </div>
           </div>
           <Table>
             <TableHeader>

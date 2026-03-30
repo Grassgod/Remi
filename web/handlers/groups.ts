@@ -1,5 +1,10 @@
 import type { Hono } from "hono";
 import { GroupConfigStore } from "../../src/group/store.js";
+import { getChatName } from "../../src/connectors/feishu/chat.js";
+import { invalidateGroupNameCache } from "./conversations.js";
+import { createLogger } from "../../src/logger.js";
+
+const log = createLogger("groups");
 
 export function registerGroupHandlers(app: Hono) {
   const store = new GroupConfigStore();
@@ -46,5 +51,22 @@ export function registerGroupHandlers(app: Hono) {
     const ok = store.delete(chatId);
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // Sync group names from Feishu API → group_configs.name
+  app.post("/api/v1/groups/sync-names", async (c) => {
+    const groups = store.list();
+    let updated = 0;
+    for (const g of groups) {
+      if (g.name) continue; // already has a name
+      const name = await getChatName(g.chatId);
+      if (name) {
+        store.update(g.chatId, { name });
+        updated++;
+        log.info(`synced group name: ${g.chatId} → ${name}`);
+      }
+    }
+    invalidateGroupNameCache();
+    return c.json({ ok: true, updated });
   });
 }

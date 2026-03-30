@@ -136,6 +136,16 @@ export class GroupConfigStore {
     return result.changes > 0;
   }
 
+  /** Get name→chatId map for all groups (for conversations display). */
+  getNameMap(): Map<string, string> {
+    const rows = this.db
+      .query("SELECT chat_id, name FROM group_configs WHERE name IS NOT NULL AND name != ''")
+      .all() as Array<{ chat_id: string; name: string }>;
+    const map = new Map<string, string>();
+    for (const r of rows) map.set(r.chat_id, r.name);
+    return map;
+  }
+
   /** Check if a chat_id exists in group_configs (fast allow check). */
   exists(chatId: string): boolean {
     const row = this.db

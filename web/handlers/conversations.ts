@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { getDb } from "../../src/db/index.js";
+import { GroupConfigStore } from "../../src/group/store.js";
 import { buildChatMessages, stripContextTags, findSessionJsonl, parseSessionPairs } from "../../src/conversation/parser.js";
 import type { MetaRow } from "../../src/conversation/parser.js";
 
@@ -23,37 +24,40 @@ function cleanTopic(raw: string): string {
   return t.trim().slice(0, 80) || "Untitled";
 }
 
-// Chat name cache (populated from Feishu API via Board proxy)
-const chatNameCache = new Map<string, string>();
+// Chat name cache: prioritizes group_configs DB, falls back to Feishu API
+let _gcNameMap: Map<string, string> | null = null;
+
+function getGroupNameMap(): Map<string, string> {
+  if (!_gcNameMap) {
+    try {
+      _gcNameMap = new GroupConfigStore().getNameMap();
+    } catch {
+      _gcNameMap = new Map();
+    }
+  }
+  return _gcNameMap;
+}
+
+/** Invalidate cache so next call re-reads from DB (call after name updates). */
+export function invalidateGroupNameCache(): void {
+  _gcNameMap = null;
+}
 
 /** Get a readable name for a chat_id */
 function getChatName(db: any, chatId: string, isP2P: boolean): string {
-  // Check cache first (populated by async fetchChatNames)
-  const cached = chatNameCache.get(chatId);
-  if (cached) return cached;
+  // 1. group_configs DB (populated by migration or Feishu API sync)
+  const gcName = getGroupNameMap().get(chatId);
+  if (gcName) return gcName;
 
+  // 2. P2P: show sender name
   if (isP2P) {
     const sender = db.query(
       "SELECT sender_id FROM conversations WHERE chat_id = ? AND sender_id IS NOT NULL AND sender_id != '' ORDER BY created_at ASC LIMIT 1"
     ).get(chatId) as { sender_id: string } | null;
     if (sender?.sender_id) return sender.sender_id;
   }
-  return chatId.slice(0, 16);
-}
 
-/** Fetch chat names from Feishu API via Board proxy, populate cache */
-async function fetchChatNames(chatIds: string[]): Promise<void> {
-  const boardPort = process.env.REMI_BOARD_PORT ?? "8090";
-  for (const chatId of chatIds) {
-    if (chatNameCache.has(chatId)) continue;
-    try {
-      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/chat-name/${chatId}`);
-      if (resp.ok) {
-        const data = await resp.json() as { name: string };
-        if (data.name) chatNameCache.set(chatId, data.name);
-      }
-    } catch {}
-  }
+  return chatId.slice(0, 16);
 }
 
 export function registerConversationsHandlers(app: Hono, _data: RemiData) {
@@ -72,10 +76,6 @@ export function registerConversationsHandlers(app: Hono, _data: RemiData) {
       GROUP BY chat_id
       ORDER BY msg_count DESC
     `).all() as { chat_id: string; msg_count: number; conv_count: number; session_count: number; has_no_thread: number }[];
-
-    // Fetch group chat names from Feishu API (async, cached)
-    const groupChatIds = rows.filter(r => !(r.has_no_thread === 1 && r.conv_count <= 1)).map(r => r.chat_id);
-    await fetchChatNames(groupChatIds);
 
     const chats = rows.map(r => {
       const isP2P = r.has_no_thread === 1 && r.conv_count <= 1;
