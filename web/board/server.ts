@@ -92,7 +92,7 @@ export function createBoardApp(deps: BoardDeps): Hono {
     const { missionId, step } = await c.req.json();
     if (!missionId || !step) return c.json({ error: "missionId and step required" }, 400);
     if (!deps.enqueueMission) return c.json({ error: "enqueue not available" }, 503);
-    await deps.enqueueMission({ missionId, step });
+    deps.enqueueMission({ missionId, step }).catch(() => {});
     return c.json({ ok: true, missionId, step });
   });
 
