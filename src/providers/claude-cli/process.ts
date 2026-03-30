@@ -194,7 +194,7 @@ export class ClaudeProcessManager {
       // Content timeout: kill if no actual content arrives for too long
       // (rate_limit events alone should NOT prevent this from firing)
       let lastContentAt = Date.now();
-      const CONTENT_TIMEOUT_MS = 10 * 60 * 1000; // 10 min without content = stuck
+      const CONTENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 min without content = stuck
 
       while (true) {
         const line = await this._readline(this._dynamicTimeoutMs);
