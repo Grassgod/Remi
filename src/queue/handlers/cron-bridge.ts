@@ -315,14 +315,14 @@ ${missionEntries.join("\n\n")}
 ${gitStats || "(无统计信息)"}
 
 ## 输出要求
-生成一条飞书群通知消息，纯文本 Markdown 格式，要求：
-1. 标题行：🚀 **{项目名} v{版本} 已发布**，紧接一条分隔线 ---。项目名用 PascalCase 展示（如 lark_parser → LarkParser）
-2. 分类展示功能（✨ 新功能 / 🐛 修复 / ⚡ 优化），从 Mission 标题推断分类
-3. 每个 Mission 一行：· 功能一句话描述 + MR 编号 + 耗时（如 "41 min"）
-4. 底部用分隔线，统计行：Mission 总数 + 总耗时 + "全流程 Pipeline 自动执行（需求 → RFC → 代码 → 测试 → MR）"
-5. 统计行不要用 📊，用 ▸ 或粗体文字代替
+生成飞书卡片内的 Markdown 内容（不含标题，标题由卡片 header 提供），要求：
+1. 分类展示功能（✨ 新功能 / 🐛 修复 / ⚡ 优化），从 Mission 标题推断分类
+2. 每个 Mission 一行：· 功能一句话描述 + MR 编号 + 耗时（如 "41 min"）
+3. 底部分隔线后统计行：▸ Mission 总数 + 总耗时 + "全流程 Pipeline 自动执行（需求 → RFC → 代码 → 测试 → MR）"
+4. 项目名用 PascalCase（如 lark_parser → LarkParser）
+5. 排版紧凑，分类标题和条目之间不要空行，只在分类之间留一个空行
 6. 保持简洁有冲击力，让读者第一眼 get 到新功能，第二眼 get 到自动化能力
-7. 只输出通知消息本身，不要输出其他说明文字`;
+7. 只输出卡片 body 的 Markdown 内容，不要输出其他说明文字`;
 
   // ── 5. Generate via AI provider ──
   const provider = remi._getProvider();
@@ -333,15 +333,30 @@ ${gitStats || "(无统计信息)"}
     throw new Error(`Release notes generation failed: ${text?.slice(0, 100)}`);
   }
 
-  // ── 6. Deliver to Feishu ──
+  // ── 6. Deliver to Feishu as card ──
   if (pushTargets?.length > 0) {
-    const connectors = remi["_connectors"] as Connector[];
-    const feishu = connectors.find((c) => c.name === "feishu");
-    if (feishu) {
+    try {
+      const { createFeishuClient } = await import("../../connectors/feishu/client.js");
+      const { sendCardFeishu } = await import("../../connectors/feishu/send.js");
+      const { loadConfig: loadCfg } = await import("../../config.js");
+      const cfg = loadCfg();
+      const client = createFeishuClient({ appId: cfg.feishu.appId, appSecret: cfg.feishu.appSecret, domain: cfg.feishu.domain });
+
+      const card = {
+        schema: "2.0",
+        header: {
+          title: { tag: "plain_text" as const, content: `${projectName} v${version} Released` },
+          template: "turquoise" as const,
+        },
+        config: { width_mode: "fill" },
+        body: { elements: [{ tag: "markdown", content: text }] },
+      };
       for (const target of pushTargets) {
-        await feishu.reply(target, { text });
-        log.info(`[release-notes] Pushed to ${target}`);
+        await sendCardFeishu(client, target, card);
+        log.info(`[release-notes] Card pushed to ${target}`);
       }
+    } catch (e) {
+      log.warn(`[release-notes] Card delivery failed: ${e}`);
     }
   }
 
