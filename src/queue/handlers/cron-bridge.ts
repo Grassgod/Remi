@@ -350,58 +350,22 @@ ${gitStats || "(无统计信息)"}
   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
   writeFileSync(join(outputDir, `${projectId}-v${version}.md`), text, "utf-8");
 
-  // ── 7. Sync linked QA project knowledge ──
+  // ── 7. Trigger linked QA knowledge sync (reuse existing maintain skill) ──
   try {
-    const { ProjectStore } = await import("../../project/store.js");
-    const projectStore = new ProjectStore();
-    // Convention: QA project id contains the source project id
-    const allProjects = projectStore.list();
-    const qaProject = allProjects.find((p: any) =>
-      p.id !== projectId && p.id.includes(projectId.replace(/_/g, "")) && p.cwd,
-    ) ?? allProjects.find((p: any) =>
-      p.id !== projectId && p.id.includes("qa") && p.cwd &&
-      existsSync(join(p.cwd, projectId.replace(/[_-]/g, "").toLowerCase())),
+    const remiConfig = remi.config;
+    const maintainJob = remiConfig.cron?.jobs?.find(
+      (j: any) => j.handlerConfig?.skillName?.includes(projectId.replace(/_/g, "")),
     );
-
-    if (qaProject?.cwd) {
-      const { execSync: exec } = await import("child_process");
-      const qaCwd = qaProject.cwd as string;
-      const knowledgePath = join(qaCwd, "knowledge.md");
-
-      // Append release notes to knowledge.md
-      if (existsSync(knowledgePath)) {
-        const today = new Date().toISOString().slice(0, 10);
-        const section = `\n\n## v${version} 更新 (${today})\n\n${text}\n`;
-        appendFileSync(knowledgePath, section, "utf-8");
-        log.info(`[release-notes] Appended to ${knowledgePath}`);
-      }
-
-      // Update submodule if exists
-      const submoduleDirs = [projectId, projectId.replace(/_/g, "-")];
-      for (const subDir of submoduleDirs) {
-        if (existsSync(join(qaCwd, subDir, ".git")) || existsSync(join(qaCwd, ".gitmodules"))) {
-          try {
-            exec(`git submodule update --remote ${subDir}`, { cwd: qaCwd, encoding: "utf-8", timeout: 30000 });
-            log.info(`[release-notes] Updated submodule ${subDir} in ${qaCwd}`);
-          } catch (e) {
-            log.warn(`[release-notes] Submodule update failed: ${e}`);
-          }
-          break;
-        }
-      }
-
-      // Commit changes
-      try {
-        exec(`git add -A && git commit -m "chore: sync knowledge for v${version} release"`, {
-          cwd: qaCwd, encoding: "utf-8", timeout: 15000,
-        });
-        log.info(`[release-notes] QA project committed`);
-      } catch {
-        // No changes or commit failed — ok
-      }
+    if (maintainJob) {
+      await remi.queue.enqueueCron({
+        jobId: `${maintainJob.id}-release-sync`,
+        handler: maintainJob.handler,
+        handlerConfig: maintainJob.handlerConfig,
+      });
+      log.info(`[release-notes] Triggered QA maintain skill: ${maintainJob.id}`);
     }
   } catch (e) {
-    log.warn(`[release-notes] QA sync failed: ${e}`);
+    log.warn(`[release-notes] QA sync trigger failed: ${e}`);
   }
 
   log.info(`[release-notes] Done: ${projectName} v${version}`);
