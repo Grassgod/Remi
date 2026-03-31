@@ -312,7 +312,7 @@ function ReleaseSection({
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ newBranch: string; newVersion: string } | null>(null);
 
-  const version = releaseBranch.replace(/^release\//, "v");
+  const version = releaseBranch.replace(/^release\//, "").replace(/^(?!v)/, "v");
 
   const handleCreatePR = async () => {
     setStep("creating");
