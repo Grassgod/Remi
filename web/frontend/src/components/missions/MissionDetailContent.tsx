@@ -353,7 +353,7 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
               ) : (
                 <button
                   onClick={() => setShowReviewInput(true)}
-                  className="w-full rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
+                  className="w-full rounded-md border border-zinc-600 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-700 hover:text-white transition-colors"
                 >
                   Request Changes
                 </button>
@@ -361,9 +361,9 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
               <button
                 onClick={handleMarkDone}
                 disabled={doneLoading}
-                className="w-full rounded-md border border-emerald-500/60 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
               >
-                {doneLoading ? "Completing..." : "Mark Done"}
+                {doneLoading ? "Completing..." : "Approve"}
               </button>
             </div>
           ) : (
