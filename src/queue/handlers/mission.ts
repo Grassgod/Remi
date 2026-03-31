@@ -87,8 +87,12 @@ export async function handleMissionJob(
     const label = STEP_LABEL[step] ?? step;
     let prompt: string;
 
-    if (userMessage) {
-      // Intake multi-turn: user's reply is the prompt directly
+    if (userMessage && step === "intake") {
+      // Intake first message: wrap user's original message with skill guidance
+      prompt = buildPipelinePrompt(mission, step as PipelineStep, evalFailureInfo);
+      prompt += `\n\n## 用户原始消息\n${userMessage}`;
+    } else if (userMessage) {
+      // Other multi-turn: user's reply is the prompt directly
       prompt = userMessage;
     } else {
       prompt = buildPipelinePrompt(mission, step as PipelineStep, evalFailureInfo);

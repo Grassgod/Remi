@@ -48,6 +48,10 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
   const [msgLoading, setMsgLoading] = useState(false);
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
   const [reEnqueueLoading, setReEnqueueLoading] = useState(false);
+  const [reviewComments, setReviewComments] = useState("");
+  const [showReviewInput, setShowReviewInput] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [doneLoading, setDoneLoading] = useState(false);
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -121,6 +125,28 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
       await refreshMission();
     } catch {}
     setReEnqueueLoading(false);
+  };
+
+  const handleRequestChanges = async () => {
+    if (!mission || reviewLoading || !reviewComments.trim()) return;
+    setReviewLoading(true);
+    try {
+      await api.requestChanges(mission.id, reviewComments.trim());
+      setReviewComments("");
+      setShowReviewInput(false);
+      await refreshMission();
+    } catch {}
+    setReviewLoading(false);
+  };
+
+  const handleMarkDone = async () => {
+    if (!mission || doneLoading) return;
+    setDoneLoading(true);
+    try {
+      await api.markDone(mission.id);
+      await refreshMission();
+    } catch {}
+    setDoneLoading(false);
   };
 
   const toggleCase = (caseId: string) => {
@@ -297,15 +323,60 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
             </span>
           </SidebarSection>
 
-          <button
-            onClick={handleReEnqueue}
-            disabled={reEnqueueLoading}
-            className="w-full rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-          >
-            {reEnqueueLoading
-              ? "Enqueueing..."
-              : `Re-enqueue ${STEP_LABELS[mission.currentStep] ?? mission.currentStep}`}
-          </button>
+          {mission.status === "in_review" ? (
+            <div className="space-y-2">
+              {showReviewInput ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={reviewComments}
+                    onChange={(e) => setReviewComments(e.target.value)}
+                    placeholder="Review 意见..."
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    rows={3}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleRequestChanges}
+                      disabled={reviewLoading || !reviewComments.trim()}
+                      className="flex-1 rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                    >
+                      {reviewLoading ? "Submitting..." : "Submit"}
+                    </button>
+                    <button
+                      onClick={() => setShowReviewInput(false)}
+                      className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowReviewInput(true)}
+                  className="w-full rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 transition-colors"
+                >
+                  Request Changes
+                </button>
+              )}
+              <button
+                onClick={handleMarkDone}
+                disabled={doneLoading}
+                className="w-full rounded-md border border-emerald-500/60 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+              >
+                {doneLoading ? "Completing..." : "Mark Done"}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleReEnqueue}
+              disabled={reEnqueueLoading}
+              className="w-full rounded-md border border-orange-500/60 bg-orange-500/10 px-3 py-1.5 text-xs font-medium text-orange-400 hover:bg-orange-500/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            >
+              {reEnqueueLoading
+                ? "Enqueueing..."
+                : `Re-enqueue ${STEP_LABELS[mission.currentStep] ?? mission.currentStep}`}
+            </button>
+          )}
 
           <SidebarSection label="Current Step">
             <span className="text-sm text-foreground">

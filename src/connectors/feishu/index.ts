@@ -308,6 +308,25 @@ export class FeishuConnector implements Connector {
       return;
     }
 
+    // ── Mission auto-creation: only for NEW threads in mission-enabled groups ──
+    // Messages WITH rootId (follow-up in thread) skip this and go through normal chat.
+    if (msg.chatType === "group" && this._enqueueMission && !msg.rootId) {
+      try {
+        const result = await this._resolveMissionForThread(msg, msg.messageId);
+        if (result && result.isNew) {
+          await this._enqueueMission({
+            missionId: result.mission.id,
+            step: "intake",
+            userMessage: msg.rawContent,
+          });
+          log.info(`New mission ${result.mission.id} created, intake enqueued (thread=${msg.messageId})`);
+          return; // intake handler will streamToThread with skill guidance
+        }
+      } catch (err) {
+        log.warn(`resolveMissionForThread failed: ${err}`);
+      }
+    }
+
     // Request-scoped logger with traceId = feishu messageId
     const _log = log.child({ traceId: msg.messageId });
 

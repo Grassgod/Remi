@@ -140,6 +140,46 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     return c.json({ ok: true });
   });
 
+  // POST /api/v1/missions/:id/request-changes — Review feedback → re-execute
+  app.post("/api/v1/missions/:id/request-changes", async (c) => {
+    const id = c.req.param("id");
+    const mission = store.getById(id);
+    if (!mission) return c.json({ error: "Mission not found" }, 404);
+    if (mission.status !== "in_review") return c.json({ error: "Mission is not in review" }, 400);
+
+    const body = await c.req.json();
+    const comments = body.comments as string || "";
+
+    store.updateStatus(id, "in_progress");
+    store.updateStep(id, "execute");
+    store.recordFeedback(id, "eval" as PipelineStep, "review", "review_revision", comments);
+
+    // Notify thread and enqueue execute with review feedback
+    try {
+      const { sendToThread } = await import("../../src/connectors/feishu/thread.js");
+      if (mission.chatId && mission.threadId) {
+        await sendToThread(mission.chatId, mission.threadId, `── **Review 意见** ──\n\n${comments}`);
+      }
+    } catch {}
+
+    enqueueViaBoard(id, "execute");
+    log.info(`Mission ${id} request-changes: re-enqueue execute with review feedback`);
+
+    return c.json({ ok: true });
+  });
+
+  // POST /api/v1/missions/:id/done — Mark mission complete
+  app.post("/api/v1/missions/:id/done", async (c) => {
+    const id = c.req.param("id");
+    const mission = store.getById(id);
+    if (!mission) return c.json({ error: "Mission not found" }, 404);
+
+    store.updateStatus(id, "done");
+    log.info(`Mission ${id} marked done`);
+
+    return c.json({ ok: true });
+  });
+
   // POST /api/internal/enqueue-intake — Proxy to Board server for re-enqueue
   app.post("/api/internal/enqueue-intake", async (c) => {
     const body = await c.req.json();

@@ -399,3 +399,14 @@ export const reEnqueueStep = (missionId: string, step: string) =>
     method: "POST",
     body: JSON.stringify({ missionId, step }),
   });
+
+export const requestChanges = (missionId: string, comments: string) =>
+  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/request-changes`, {
+    method: "POST",
+    body: JSON.stringify({ comments }),
+  });
+
+export const markDone = (missionId: string) =>
+  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/done`, {
+    method: "POST",
+  });
