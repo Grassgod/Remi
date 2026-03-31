@@ -188,8 +188,9 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
         timeout: 30000,
       });
 
-      // Tag the merge point
-      execSync(`git tag v${newVersion} main && git push origin v${newVersion}`, {
+      // Tag current release version on main (triggers Luban deploy via v* tag)
+      const currentVersion = releaseBranch.replace(/^release\//, "");
+      execSync(`git tag v${currentVersion} main && git push origin v${currentVersion}`, {
         cwd: project.cwd,
         encoding: "utf-8",
         timeout: 15000,
@@ -200,7 +201,6 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
       store.updatePipelineConfig(id, updatedConfig);
 
       // Enqueue AI-generated release notes (async, non-blocking)
-      const currentVersion = releaseBranch.replace(/^release\//, "");
       const pushTargets: string[] =
         cfg?.notifications?.dailyChangelog?.targets?.length
           ? cfg.notifications.dailyChangelog.targets
