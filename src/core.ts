@@ -304,8 +304,14 @@ export class Remi {
     const abortController = new AbortController();
     this._activeAborts.set(sessionKey, abortController);
 
+    // Inject chat metadata into system prompt so agent can access chatId/senderInfo
+    const chatMeta = `\n[chat_context] chatId=${msg.chatId} sender=${msg.sender} senderOpenId=${msg.metadata?.senderOpenId ?? "unknown"}`;
+    const effectiveSystemPrompt = groupConfig?.systemPrompt
+      ? groupConfig.systemPrompt + chatMeta
+      : chatMeta;
+
     const streamOptions = {
-      systemPrompt: groupConfig?.systemPrompt || undefined,
+      systemPrompt: effectiveSystemPrompt,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,

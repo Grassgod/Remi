@@ -73,13 +73,26 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
   // POST /api/v1/missions — Create mission
   app.post("/api/v1/missions", async (c) => {
     const body = await c.req.json();
-    const { title, projectId, chatId, threadId, description } = body;
+    const { title, projectId, threadId, description, createdBy, createdByName } = body;
+    let { chatId } = body;
 
-    if (!title || !projectId || !chatId) {
+    if (!title || !projectId) {
       return c.json(
-        { error: "title, projectId, and chatId are required" },
+        { error: "title and projectId are required" },
         400,
       );
+    }
+
+    // Auto-resolve chatId from project if not provided
+    if (!chatId) {
+      try {
+        const { ProjectStore } = require("../../src/project/store.js");
+        const project = new ProjectStore().getById(projectId);
+        chatId = project?.chatId;
+      } catch {}
+    }
+    if (!chatId) {
+      return c.json({ error: "chatId required (not found on project either)" }, 400);
     }
 
     const mission = await store.createWithThread({
@@ -88,6 +101,8 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
       chatId,
       threadId,
       description,
+      createdBy,
+      createdByName,
     });
 
     // Trigger intake pipeline step (cross-process via HTTP to remi daemon)
