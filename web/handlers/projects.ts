@@ -132,8 +132,23 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
           ).trim();
         } catch (mrErr: any) {
           if (mrErr.message?.includes("AlreadyExists")) {
-            // MR already exists — return the MR list page
-            result = `https://code.byted.org/${repoName}/-/merge_requests`;
+            // MR already exists — find existing MR number via bytedcli
+            try {
+              // Try recent MR numbers (newest first) to find the one matching our source branch
+              for (let n = 30; n >= 1; n--) {
+                try {
+                  const info = execSync(
+                    `bytedcli codebase get-merge-request ${n} --repo-name "${repoName}" 2>&1`,
+                    { cwd: project.cwd, encoding: "utf-8", timeout: 10000 },
+                  );
+                  if (info.includes(releaseBranch) && info.includes("open")) {
+                    result = `https://code.byted.org/${repoName}/merge_requests/${n}`;
+                    break;
+                  }
+                } catch { continue; }
+              }
+            } catch {}
+            if (!result) result = `MR already exists for ${releaseBranch}`;
           } else {
             throw mrErr;
           }
