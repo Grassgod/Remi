@@ -136,6 +136,8 @@ export function buildFinalCard(opts: {
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
   planReview?: { actionId: string; planContent?: string };
+  /** Suffix appended to card header name (e.g. " · msn_xxx"). */
+  nameSuffix?: string;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -343,7 +345,7 @@ export function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    header: buildCardHeader(opts.sessionId, opts.displayName),
+    header: buildCardHeader(opts.sessionId, opts.displayName, opts.nameSuffix),
     config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
     body: { elements },
   };
@@ -395,6 +397,7 @@ export class FeishuStreamingSession {
   // Timeline: thinking + steps interleaved
   private _steps: StepInfo[] = [];
   private _fullThinking = "";
+  private _nameSuffix: string | undefined;
 
   constructor(
     client: Client,
@@ -422,6 +425,7 @@ export class FeishuStreamingSession {
     options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string },
   ): Promise<void> {
     if (this.state) return;
+    this._nameSuffix = options?.nameSuffix;
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
@@ -1102,6 +1106,7 @@ export class FeishuStreamingSession {
         displayName,
         askQuestions,
         planReview,
+        nameSuffix: this._nameSuffix,
       });
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
@@ -1124,6 +1129,7 @@ export class FeishuStreamingSession {
           sessionId,
           askQuestions,
           planReview,
+          nameSuffix: this._nameSuffix,
         });
         await this.client.im.message.patch({
           path: { message_id: this.state.messageId },

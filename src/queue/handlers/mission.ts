@@ -171,6 +171,7 @@ export async function handleMissionJob(
           systemPromptOverride: systemPrompt,
           missionSessionId: existingSessionId,
           missionCwd: projectCwd,
+          missionSessionType: sessionType ?? step,
           // rootId is needed by core._resolveSessionKey to isolate session per thread
           rootId: mission.threadId,
           chatType: "group",

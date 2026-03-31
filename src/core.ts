@@ -314,7 +314,11 @@ export class Remi {
 
     const streamOptions = {
       systemPrompt: (msg.metadata?.systemPromptOverride as string) || groupConfig?.systemPrompt || undefined,
-      chatId: this._resolveSessionKey(msg),
+      chatId: (() => {
+        const base = this._resolveSessionKey(msg);
+        const mst = msg.metadata?.missionSessionType as string | undefined;
+        return mst ? `${base}:${mst}` : base;
+      })(),
       sessionId: existingSessionId,
       cwd: missionCwd || cwd || undefined,
       media: msg.media,
