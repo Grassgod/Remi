@@ -187,23 +187,27 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
       // Verify the release branch has been merged into main
       execSync("git fetch origin", { cwd: project.cwd, encoding: "utf-8", timeout: 30000 });
 
-      // Check if release branch is merged into main
-      const merged = execSync(
+      // Check if release branch is merged into main (supports squash merge)
+      const branchMerged = execSync(
         `git branch -r --merged origin/main | grep "origin/${releaseBranch}" || true`,
         { cwd: project.cwd, encoding: "utf-8" },
       ).trim();
+      const squashMerged = branchMerged ? true : execSync(
+        `git log origin/main --oneline -20 | grep -i "${releaseBranch.replace(/\//g, "\\/")}" || true`,
+        { cwd: project.cwd, encoding: "utf-8" },
+      ).trim();
 
-      if (!merged) {
+      if (!branchMerged && !squashMerged) {
         return c.json({ error: `${releaseBranch} has not been merged into main yet` }, 400);
       }
 
-      // Bump version: release/1.2.0 → release/1.2.1
-      const versionMatch = releaseBranch.match(/release\/(\d+)\.(\d+)\.(\d+)/);
+      // Bump version: release/v2.0.7 → release/v2.0.8, release/1.2.0 → release/1.2.1
+      const versionMatch = releaseBranch.match(/release\/(v?)(\d+)\.(\d+)\.(\d+)/);
       if (!versionMatch) return c.json({ error: "Cannot parse version from branch name" }, 400);
 
-      const [, major, minor, patch] = versionMatch;
+      const [, prefix, major, minor, patch] = versionMatch;
       const newVersion = `${major}.${minor}.${Number(patch) + 1}`;
-      const newBranch = `release/${newVersion}`;
+      const newBranch = `release/${prefix}${newVersion}`;
 
       // Create new release branch from main
       execSync(`git checkout main && git pull origin main && git checkout -b ${newBranch} && git push origin ${newBranch}`, {
