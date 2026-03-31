@@ -435,6 +435,7 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
   const [addDirs, setAddDirs] = useState(initial?.addDirs?.join(", ") ?? "");
   const [cwd, setCwd] = useState(initial?.cwd ?? "");
   const [launchCommand, setLaunchCommand] = useState(initial?.launchCommand ?? "");
+  const [injectChatContext, setInjectChatContext] = useState(initial?.injectChatContext ?? false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   return (
@@ -468,6 +469,10 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
         <label className="flex items-center gap-2 text-sm text-zinc-400">
           <input type="checkbox" checked={missionEnabled} onChange={(e) => setMissionEnabled(e.target.checked)} className="rounded" />
           Mission Pipeline
+        </label>
+        <label className="flex items-center gap-2 text-sm text-zinc-400">
+          <input type="checkbox" checked={injectChatContext} onChange={(e) => setInjectChatContext(e.target.checked)} className="rounded" />
+          Inject Chat Context
         </label>
         <select
           className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
@@ -549,6 +554,7 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
           addDirs: addDirs ? addDirs.split(",").map((s) => s.trim()).filter(Boolean) : [],
           cwd: cwd || undefined,
           launchCommand: launchCommand || undefined,
+          injectChatContext,
         })}>
           {initial ? "Save" : "Create"}
         </Button>
