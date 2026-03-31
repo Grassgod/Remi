@@ -1,9 +1,10 @@
 /**
- * Mission queue handler — unified pipeline execution.
+ * Mission queue handler — pipeline step execution.
  *
  * All steps (intake through summary) go through BunQueue.
- * Each step: resolve session → append-system-prompt pointing to skill → streamToThread → save session.
- * Eval result is handled by model calling mission-advance script directly.
+ * Each step sends a normal user message to the mission's Feishu thread,
+ * instructing the CLI to read and follow the corresponding SKILL.md.
+ * This reuses the thread's existing CLI session — no new process per step.
  */
 
 import type { Remi } from "../../core.js";
@@ -15,7 +16,8 @@ import { sendToThread } from "../../connectors/feishu/thread.js";
 import { insertConversationProcessing, completeConversation } from "../../db/index.js";
 import { createLogger } from "../../logger.js";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 
 const log = createLogger("mission");
 
@@ -47,9 +49,6 @@ const STEP_LABEL: Record<string, string> = {
   eval: "Contract 验证",
   summary: "总结",
 };
-
-/** All steps share one session per mission */
-const MISSION_SESSION_KEY = "pipeline";
 
 /** Step flow: current → next */
 const STEP_FLOW: Record<string, PipelineStep | null> = {
@@ -84,57 +83,18 @@ export async function handleMissionJob(
   }
 
   try {
-    const projectCwd = resolveProjectCwd(remi, mission.projectId);
-
-    // ── 1. Resolve session (single session for entire pipeline) ──
-    const existingSessionId = mission.sessions[MISSION_SESSION_KEY] ?? null;
-
-    // ── 2. Build prompt ──
+    // ── 1. Build prompt (user message that instructs CLI to use skill) ──
+    const label = STEP_LABEL[step] ?? step;
     let prompt: string;
+
     if (userMessage) {
-      // Intake multi-turn: user's reply is the prompt
+      // Intake multi-turn: user's reply is the prompt directly
       prompt = userMessage;
     } else {
-      prompt = buildStepPrompt(mission, step as PipelineStep);
-      if (step === "execute" && evalFailureInfo) {
-        prompt += `\n\n## 上次 Eval 失败详情\n${evalFailureInfo}`;
-      }
+      prompt = buildPipelinePrompt(mission, step as PipelineStep, evalFailureInfo);
     }
 
-    // ── 3. Build append-system-prompt ──
-    const skillDir = STEP_SKILL_DIR[step];
-    const label = STEP_LABEL[step] ?? step;
-    const outputFile = STEP_OUTPUT_FILE[step] ? `${mission.outputDir}/${STEP_OUTPUT_FILE[step]}` : null;
-    let systemPrompt = `执行 Mission Pipeline 的 ${label} 阶段。阅读并严格遵循 .claude/skills/${skillDir}/SKILL.md 的指示。\n\nMission ID: ${missionId}\n产出目录: ${mission.outputDir}`;
-    // Force worktree for rfc/execute steps (code isolation)
-    if (step === "rfc" || step === "execute") {
-      systemPrompt += `\n\n必须先调用 superpowers:using-git-worktrees 创建隔离工作区，再进行任何代码探索或修改。不要在主分支上直接工作。`;
-    }
-    if (outputFile) {
-      systemPrompt += `\n\n重要：本阶段的产出文件必须写到 ${outputFile}，不要写到其他位置（如 docs/superpowers/）。`;
-    }
-    // Inject pipeline config (release branch, test command, etc.)
-    if (step === "execute" || step === "rfc") {
-      try {
-        const { ProjectStore } = require("../../project/store.js");
-        const project = new ProjectStore().getById(mission.projectId);
-        const pc = project?.pipelineConfig as any;
-        if (pc?.pipeline?.releaseBranch) {
-          systemPrompt += `\nMR 目标分支: ${pc.pipeline.releaseBranch}（功能分支合入此分支）`;
-        }
-        if (pc?.pipeline?.testCommand) {
-          systemPrompt += `\n测试命令: ${pc.pipeline.testCommand}`;
-        }
-        if (pc?.pipeline?.lintCommand) {
-          systemPrompt += `\nLint 命令: ${pc.pipeline.lintCommand}`;
-        }
-      } catch {}
-    }
-    if (step !== "intake") {
-      systemPrompt += `\n\n此阶段完全自动化。禁止使用 AskUserQuestion。禁止使用 EnterPlanMode。所有决策自主完成。`;
-    }
-
-    // ── 4. Stream to Feishu thread ──
+    // ── 2. Stream to Feishu thread (normal chat flow, reuses thread session) ──
     let result: AgentResponse;
     const feishu = remi.getFeishuConnector();
 
@@ -148,19 +108,13 @@ export async function handleMissionJob(
         }
       }
 
+      // Normal IncomingMessage — no special metadata, reuses thread's existing session
       const incoming: import("../../connectors/base.js").IncomingMessage = {
         text: prompt,
         chatId: mission.chatId,
         sender: "mission-pipeline",
         connectorName: "feishu",
         metadata: {
-          missionId,
-          pipelineStep: step,
-          systemPromptOverride: systemPrompt,
-          missionSessionId: existingSessionId,
-          missionCwd: projectCwd,
-          missionSessionType: MISSION_SESSION_KEY,
-          // rootId is needed by core._resolveSessionKey to isolate session per thread
           rootId: mission.threadId,
           chatType: "group",
         },
@@ -173,22 +127,12 @@ export async function handleMissionJob(
       if (!provider) throw new Error("No provider available");
       result = await provider.send(prompt, {
         chatId: `mission-${missionId}`,
-        sessionId: existingSessionId,
-        cwd: projectCwd,
-        systemPrompt,
       });
     }
 
     log.info(`Mission ${missionId} step ${step} completed (${result.text?.length ?? 0} chars)`);
 
-    // ── 5. Save session ID ──
-    if (result.sessionId) {
-      const sessions = { ...mission.sessions, [MISSION_SESSION_KEY]: result.sessionId };
-      store.updateSessions(missionId, sessions);
-      log.info(`Saved session ${MISSION_SESSION_KEY}=${result.sessionId} for mission ${missionId}`);
-    }
-
-    // ── 6. Record conversation + accumulate stats ──
+    // ── 3. Record conversation + accumulate stats ──
     recordMissionConversation(mission, step as PipelineStep, prompt, result);
     if (result.inputTokens || result.outputTokens || result.costUsd || result.durationMs) {
       try {
@@ -212,24 +156,20 @@ export async function handleMissionJob(
       } catch {}
     }
 
-    // ── 7. Write output file ──
+    // ── 4. Write output file ──
     writeStepOutput(mission.outputDir, step as PipelineStep, result.text);
 
-    // ── 8. Validate output ──
+    // ── 5. Validate output ──
     if (step !== "eval" && step !== "intake") {
-      // eval: model calls mission-advance, handler doesn't judge
-      // intake: multi-turn, description.md may not exist yet
-      const outputFile = STEP_OUTPUT_FILE[step];
-      if (outputFile && mission.outputDir && !existsSync(join(mission.outputDir, outputFile))) {
-        log.warn(`Mission ${missionId} step ${step} did not produce expected output: ${outputFile}`);
-        // Don't block — the text output was still captured
+      const outFile = STEP_OUTPUT_FILE[step];
+      if (outFile && mission.outputDir && !existsSync(join(mission.outputDir, outFile))) {
+        log.warn(`Mission ${missionId} step ${step} did not produce expected output: ${outFile}`);
       }
     }
 
-    // ── 9. Step-specific post-processing ──
+    // ── 6. Step-specific post-processing ──
 
     if (step === "intake") {
-      // Check if intake produced description.md → send approval card
       if (mission.outputDir && existsSync(join(mission.outputDir, "description.md"))) {
         try {
           const { sendApprovalCard } = await import("../../mission/approval.js");
@@ -240,13 +180,10 @@ export async function handleMissionJob(
           log.warn(`Failed to send approval card for ${missionId}: ${err}`);
         }
       }
-      // Don't auto-advance — wait for user approval or next message
       return;
     }
 
     if (step === "eval") {
-      // Model should call mission-advance script to advance state.
-      // Handler does nothing — state transition is script's responsibility.
       log.info(`Mission ${missionId} eval step completed, awaiting mission-advance script`);
       return;
     }
@@ -256,7 +193,6 @@ export async function handleMissionJob(
     if (nextStep) {
       await remi.queue.enqueueMission({ missionId, step: nextStep, attempt });
     } else {
-      // Pipeline complete (summary finished)
       const current = store.getById(missionId);
       if (current?.status !== "done") {
         store.updateStatus(missionId, "in_review");
@@ -273,20 +209,64 @@ export async function handleMissionJob(
 
 // ── Prompt Building ──
 
-function buildStepPrompt(
-  mission: { title: string; description: string | null; outputDir: string | null; contract: Contract | null; id: string },
+/**
+ * Build a user message that instructs the CLI to read and follow the pipeline skill.
+ * All context (mission info, pipeline config, constraints) is embedded in the message,
+ * so no append-system-prompt is needed.
+ */
+function buildPipelinePrompt(
+  mission: { title: string; description: string | null; outputDir: string | null; contract: Contract | null; id: string; projectId: string },
   step: PipelineStep,
+  evalFailureInfo?: string,
 ): string {
+  const skillDir = STEP_SKILL_DIR[step];
+  const label = STEP_LABEL[step] ?? step;
+  const skillPath = resolve(homedir(), `.remi/pipeline/skills/${skillDir}/SKILL.md`);
+  const outputFile = STEP_OUTPUT_FILE[step] ? `${mission.outputDir}/${STEP_OUTPUT_FILE[step]}` : null;
+
   const parts: string[] = [];
 
-  parts.push(`# Mission: ${mission.title}`);
-  if (mission.description) parts.push(`\n## 需求描述\n${mission.description}`);
-  if (mission.outputDir) parts.push(`\n## 产出目录\n${mission.outputDir}`);
-  parts.push(`\n## Mission ID\n${mission.id}`);
+  // Skill instruction
+  parts.push(`请阅读文件 ${skillPath}，严格遵循其中的指示完成 Mission Pipeline 的「${label}」阶段。`);
 
-  // Inject contract for eval and execute steps
+  // Mission context
+  parts.push(`\n# Mission: ${mission.title}`);
+  parts.push(`## Mission ID\n${mission.id}`);
+  if (mission.description) parts.push(`## 需求描述\n${mission.description}`);
+  if (mission.outputDir) parts.push(`## 产出目录\n${mission.outputDir}`);
+
+  // Output file constraint
+  if (outputFile) {
+    parts.push(`\n**重要**：本阶段的产出文件必须写到 ${outputFile}，不要写到其他位置。`);
+  }
+
+  // Contract for eval and execute steps
   if (mission.contract && (step === "eval" || step === "execute")) {
     parts.push(`\n## Contract Cases\n\`\`\`json\n${JSON.stringify(mission.contract, null, 2)}\n\`\`\``);
+  }
+
+  // Eval failure info for execute retries
+  if (step === "execute" && evalFailureInfo) {
+    parts.push(`\n## 上次 Eval 失败详情\n${evalFailureInfo}`);
+  }
+
+  // Worktree for code-touching steps
+  if (step === "rfc" || step === "execute") {
+    parts.push(`\n必须先创建 git worktree 隔离工作区，再进行任何代码探索或修改。不要在主分支上直接工作。`);
+    // Inject pipeline config
+    try {
+      const { ProjectStore } = require("../../project/store.js");
+      const project = new ProjectStore().getById(mission.projectId);
+      const pc = project?.pipelineConfig as any;
+      if (pc?.pipeline?.releaseBranch) parts.push(`MR 目标分支: ${pc.pipeline.releaseBranch}`);
+      if (pc?.pipeline?.testCommand) parts.push(`测试命令: ${pc.pipeline.testCommand}`);
+      if (pc?.pipeline?.lintCommand) parts.push(`Lint 命令: ${pc.pipeline.lintCommand}`);
+    } catch {}
+  }
+
+  // Automation constraint (no user interaction for non-intake steps)
+  if (step !== "intake") {
+    parts.push(`\n此阶段完全自动化。禁止使用 AskUserQuestion。禁止使用 EnterPlanMode。所有决策自主完成。`);
   }
 
   return parts.join("\n");

@@ -217,7 +217,7 @@ export class RemiQueueManager {
       { embedded: true, concurrency: 5 },
     );
 
-    // Mission Worker — pipeline step execution (concurrency 3: different missions may target different projects)
+    // Mission Worker — pipeline step execution (concurrency 1: reuses thread session, avoid API contention)
     const missionWorker = new Worker<MissionJobData>(
       QUEUES.MISSION,
       async (job) => {
@@ -225,7 +225,7 @@ export class RemiQueueManager {
         const { handleMissionJob } = await import("./handlers/mission.js");
         await handleMissionJob(job, self.remi);
       },
-      { embedded: true, concurrency: 3 },
+      { embedded: true, concurrency: 1 },
     );
 
     this.workers = [convWorker, memWorker, cronWorker, missionWorker];

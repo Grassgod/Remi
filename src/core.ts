@@ -296,31 +296,19 @@ export class Remi {
     const cwd = groupConfig?.cwd || groupConfig?.projectCwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
 
     const sessRow = sessDb.getSession(sessionKey);
-    // Mission pipeline can pass a specific sessionId to resume (real Claude UUID)
-    // When missionSessionId is explicitly provided (even if null), use it exclusively —
-    // don't fall back to sessRow (which would mix sessions across pipeline steps)
-    const isMissionPipeline = msg.metadata?.pipelineStep !== undefined;
-    const missionSessionId = msg.metadata?.missionSessionId as string | undefined;
-    const existingSessionId = isMissionPipeline ? (missionSessionId || undefined) : (sessRow?.session_id || undefined);
-    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}${missionSessionId ? " [mission-session]" : ""}`);
+    const existingSessionId = sessRow?.session_id || undefined;
+    _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
     const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
-
-    // Mission pipeline can override CWD to the project directory
-    const missionCwd = msg.metadata?.missionCwd as string | undefined;
 
     // AbortController for /esc — allows immediate readline interruption
     const abortController = new AbortController();
     this._activeAborts.set(sessionKey, abortController);
 
     const streamOptions = {
-      systemPrompt: (msg.metadata?.systemPromptOverride as string) || groupConfig?.systemPrompt || undefined,
-      chatId: (() => {
-        const base = this._resolveSessionKey(msg);
-        const mst = msg.metadata?.missionSessionType as string | undefined;
-        return mst ? `${base}:${mst}` : base;
-      })(),
+      systemPrompt: groupConfig?.systemPrompt || undefined,
+      chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
-      cwd: missionCwd || cwd || undefined,
+      cwd: cwd ?? undefined,
       media: msg.media,
       allowedTools: groupConfig?.allowedTools?.length ? groupConfig.allowedTools : undefined,
       addDirs: groupConfig?.addDirs?.length ? groupConfig.addDirs : undefined,
