@@ -3,14 +3,14 @@
  * mission-advance — Model calls this script to advance pipeline state after eval.
  *
  * Usage:
- *   mission-advance <missionId> pass
+ *   mission-advance <missionId> pass [mrUrl]
  *   mission-advance <missionId> fail "reason"
  */
 
 const BOARD_PORT = process.env.REMI_BOARD_PORT ?? "8090";
 const DB_PATH = `${process.env.HOME}/.remi/remi.db`;
 
-const [missionId, verdict, reason] = process.argv.slice(2);
+const [missionId, verdict, reasonOrMrUrl] = process.argv.slice(2);
 
 if (!missionId || !verdict) {
   console.error("Usage: mission-advance <missionId> pass|fail [reason]");
@@ -40,20 +40,13 @@ if (mission.current_step !== "eval") {
 }
 
 if (v === "pass") {
-  db.run("UPDATE missions SET status = 'in_review', updated_at = datetime('now') WHERE id = ?", [missionId]);
-  console.log(`✅ Mission ${missionId} eval PASSED → in_review`);
-
-  // Enqueue summary step via Board internal API
-  try {
-    await fetch(`http://127.0.0.1:${BOARD_PORT}/api/internal/enqueue-intake`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ missionId, step: "summary" }),
-    });
-    console.log(`📋 Summary step enqueued`);
-  } catch (err) {
-    console.error(`Failed to enqueue summary: ${err}`);
+  const mrUrl = reasonOrMrUrl ?? null;
+  if (mrUrl) {
+    db.run("UPDATE missions SET status = 'in_review', mr_url = ?, mr_status = 'open', updated_at = datetime('now') WHERE id = ?", [mrUrl, missionId]);
+  } else {
+    db.run("UPDATE missions SET status = 'in_review', updated_at = datetime('now') WHERE id = ?", [missionId]);
   }
+  console.log(`✅ Mission ${missionId} eval PASSED → in_review${mrUrl ? ` (MR: ${mrUrl})` : ""}`);
 } else {
   // Check attempt count from skill_feedbacks
   const feedbacks = db.query(
@@ -70,14 +63,14 @@ if (v === "pass") {
     const fbId = `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     db.run(
       "INSERT INTO skill_feedbacks (id, mission_id, step, skill_name, feedback_type, detail) VALUES (?, ?, 'eval', 'contract-eval', 'contract_fail', ?)",
-      [fbId, missionId, reason ?? "eval failed"],
+      [fbId, missionId, reasonOrMrUrl ?? "eval failed"],
     );
     // Enqueue execute retry
     try {
       await fetch(`http://127.0.0.1:${BOARD_PORT}/api/internal/enqueue-intake`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ missionId, step: "execute", attempt: attempts, evalFailureInfo: reason }),
+        body: JSON.stringify({ missionId, step: "execute", attempt: attempts, evalFailureInfo: reasonOrMrUrl }),
       });
       console.log(`🔄 Execute retry enqueued`);
     } catch (err) {

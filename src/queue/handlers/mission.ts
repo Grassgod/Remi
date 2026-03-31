@@ -225,7 +225,8 @@ function buildPipelinePrompt(
 ): string {
   const skillDir = STEP_SKILL_DIR[step];
   const label = STEP_LABEL[step] ?? step;
-  const skillPath = resolve(homedir(), `.remi/pipeline/skills/${skillDir}/SKILL.md`);
+  const projectCwd = resolveProjectCwd(null as any, mission.projectId);
+  const skillPath = resolve(projectCwd, `.claude/skills/${skillDir}/SKILL.md`);
   const outputFile = STEP_OUTPUT_FILE[step] ? `${mission.outputDir}/${STEP_OUTPUT_FILE[step]}` : null;
 
   const parts: string[] = [];

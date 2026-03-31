@@ -175,7 +175,8 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     if (!mission) return c.json({ error: "Mission not found" }, 404);
 
     store.updateStatus(id, "done");
-    log.info(`Mission ${id} marked done`);
+    log.info(`Mission ${id} marked done, enqueuing summary`);
+    enqueueViaBoard(id, "summary");
 
     return c.json({ ok: true });
   });
