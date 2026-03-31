@@ -2,10 +2,13 @@ import { PIPELINE_STEPS, STEP_LABELS } from "./mission-constants";
 
 interface PipelineProgressProps {
   currentStep: string;
+  status?: string;
 }
 
-export function PipelineProgress({ currentStep }: PipelineProgressProps) {
-  const currentIndex = PIPELINE_STEPS.indexOf(currentStep as any);
+export function PipelineProgress({ currentStep, status }: PipelineProgressProps) {
+  // in_review is a status, not a pipeline step — map it to the pipeline visualization
+  const effectiveStep = status === "in_review" ? "in_review" : status === "done" && currentStep === "summary" ? "summary" : currentStep;
+  const currentIndex = PIPELINE_STEPS.indexOf(effectiveStep as any);
 
   return (
     <div className="flex items-center gap-0">

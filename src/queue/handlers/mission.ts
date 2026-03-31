@@ -77,8 +77,8 @@ export async function handleMissionJob(
   log.info(`Executing mission ${missionId} step: ${step} (attempt ${attempt})`);
 
   store.updateStep(missionId, step as PipelineStep);
-  // Intake stays "inbox"; post-intake steps go "in_progress"
-  if (step !== "intake" && mission.status !== "in_progress") {
+  // Intake stays "inbox"; summary keeps "done"; other post-intake steps go "in_progress"
+  if (step !== "intake" && step !== "summary" && mission.status !== "in_progress") {
     store.updateStatus(missionId, "in_progress");
   }
 
@@ -255,17 +255,21 @@ function buildPipelinePrompt(
     parts.push(`\n## 上次 Eval 失败详情\n${evalFailureInfo}`);
   }
 
-  // Worktree for code-touching steps
-  if (step === "rfc" || step === "execute") {
-    parts.push(`\n必须先创建 git worktree 隔离工作区，再进行任何代码探索或修改。不要在主分支上直接工作。`);
-    // Inject pipeline config
+  // Inject project config for code-touching steps and eval (for MR creation)
+  if (step === "rfc" || step === "execute" || step === "eval") {
+    if (step === "rfc" || step === "execute") {
+      parts.push(`\n必须先创建 git worktree 隔离工作区，再进行任何代码探索或修改。不要在主分支上直接工作。`);
+    }
     try {
       const { ProjectStore } = require("../../project/store.js");
       const project = new ProjectStore().getById(mission.projectId);
       const pc = project?.pipelineConfig as any;
       if (pc?.pipeline?.releaseBranch) parts.push(`MR 目标分支: ${pc.pipeline.releaseBranch}`);
-      if (pc?.pipeline?.testCommand) parts.push(`测试命令: ${pc.pipeline.testCommand}`);
-      if (pc?.pipeline?.lintCommand) parts.push(`Lint 命令: ${pc.pipeline.lintCommand}`);
+      if (step === "rfc" || step === "execute") {
+        if (pc?.pipeline?.testCommand) parts.push(`测试命令: ${pc.pipeline.testCommand}`);
+        if (pc?.pipeline?.lintCommand) parts.push(`Lint 命令: ${pc.pipeline.lintCommand}`);
+      }
+      if (project?.repoUrl) parts.push(`仓库地址: ${project.repoUrl}`);
     } catch {}
   }
 

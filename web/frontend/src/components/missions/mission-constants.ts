@@ -26,10 +26,11 @@ export const STEP_LABELS: Record<string, string> = {
   rfc: "RFC",
   execute: "Execute",
   eval: "Eval",
+  in_review: "In Review",
   summary: "Summary",
 };
 
-export const PIPELINE_STEPS = ["intake", "rfc", "execute", "eval", "summary"] as const;
+export const PIPELINE_STEPS = ["intake", "rfc", "execute", "eval", "in_review", "summary"] as const;
 
 export function getStatusConfig(status: string): StatusConfig {
   return STATUS_ORDER.find(s => s.key === status) ?? STATUS_ORDER[2]; // default to inbox

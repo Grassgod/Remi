@@ -186,7 +186,7 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
             <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Pipeline
             </div>
-            <PipelineProgress currentStep={mission.currentStep} />
+            <PipelineProgress currentStep={mission.currentStep} status={mission.status} />
           </div>
 
           {/* Contract Cases */}
