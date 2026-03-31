@@ -352,9 +352,10 @@ ${gitStats || "(无统计信息)"}
 
   // ── 7. Trigger linked QA knowledge sync (reuse existing maintain skill) ──
   try {
-    const remiConfig = remi.config;
-    const maintainJob = remiConfig.cron?.jobs?.find(
-      (j: any) => j.handlerConfig?.skillName?.includes(projectId.replace(/_/g, "")),
+    const cronJobs = remi.config.cronJobs ?? [];
+    const keyword = projectId.replace(/_/g, "");
+    const maintainJob = cronJobs.find(
+      (j: any) => j.handlerConfig?.skillName?.includes(keyword),
     );
     if (maintainJob) {
       await remi.queue.enqueueCron({
@@ -363,6 +364,8 @@ ${gitStats || "(无统计信息)"}
         handlerConfig: maintainJob.handlerConfig,
       });
       log.info(`[release-notes] Triggered QA maintain skill: ${maintainJob.id}`);
+    } else {
+      log.info(`[release-notes] No linked QA skill found for "${keyword}"`);
     }
   } catch (e) {
     log.warn(`[release-notes] QA sync trigger failed: ${e}`);
