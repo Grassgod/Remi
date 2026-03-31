@@ -72,12 +72,16 @@ export async function createThread(chatId: string, title: string): Promise<{ thr
 
   const threadId = res.data?.thread_id;
   const messageId = res.data?.message_id;
-  if (!threadId) {
-    throw new Error("No thread_id returned — is the group in topic mode?");
+  if (!threadId && !messageId) {
+    throw new Error("No thread_id or message_id returned");
   }
 
-  log.info(`created thread ${threadId} (root=${messageId}) in ${chatId}: ${title}`);
-  return { threadId, messageId: messageId ?? threadId };
+  if (!threadId) {
+    log.info(`created message ${messageId} in ${chatId} (non-topic group): ${title}`);
+  } else {
+    log.info(`created thread ${threadId} (root=${messageId}) in ${chatId}: ${title}`);
+  }
+  return { threadId: threadId ?? messageId, messageId: messageId ?? threadId };
 }
 
 /**
