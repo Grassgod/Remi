@@ -217,7 +217,7 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
       });
 
       // Tag current release version on main (triggers Luban deploy via v* tag)
-      const currentVersion = releaseBranch.replace(/^release\//, "");
+      const currentVersion = releaseBranch.replace(/^release\/v?/, "");
       execSync(`git tag v${currentVersion} main && git push origin v${currentVersion}`, {
         cwd: project.cwd,
         encoding: "utf-8",
