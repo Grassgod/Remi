@@ -308,28 +308,6 @@ export class FeishuConnector implements Connector {
       return;
     }
 
-    // ── Mission thread routing ──
-    // Detect mission thread → enqueue to BunQueue. Connector is pure router.
-    if (msg.chatType === "group" && this._enqueueMission) {
-      const threadId = msg.rootId || msg.messageId;
-      try {
-        const result = await this._resolveMissionForThread(msg, threadId);
-        if (result) {
-          const { mission } = result;
-          // Route ALL mission thread messages to BunQueue
-          await this._enqueueMission({
-            missionId: mission.id,
-            step: mission.currentStep,
-            userMessage: msg.rawContent,
-          });
-          log.info(`Mission ${mission.id} message routed to BunQueue (step=${mission.currentStep}, thread=${threadId})`);
-          return; // BunQueue handles it, connector done
-        }
-      } catch (err) {
-        log.warn(`resolveMissionForThread failed: ${err}`);
-      }
-    }
-
     // Request-scoped logger with traceId = feishu messageId
     const _log = log.child({ traceId: msg.messageId });
 
