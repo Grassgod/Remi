@@ -1,18 +1,18 @@
 ---
 name: rfc
-description: 技术方案生成 — 分析项目代码库，产出 RFC 技术提案。Mission 审批通过后由 BunQueue 自动触发。与 decompose 共享同一个 agent session。完全自动化，无用户交互。
+description: 技术方案 + 任务拆解 — 分析项目代码库，产出 RFC 技术提案和可执行任务列表。Mission 审批通过后由 BunQueue 自动触发。完全自动化，无用户交互。
 ---
 
-# RFC 技术方案 Skill
+# RFC 技术方案 + 任务拆解 Skill
 
 ## 目标
 
-分析项目代码库，产出将需求映射到具体实现方案的技术提案（RFC）。此 skill 与 Decompose 共享同一个 BunQueue 阶段 — RFC 完成后，Decompose 在同一个 agent session 中继续执行，复用代码库理解。
+分析项目代码库，产出将需求映射到具体实现方案的技术提案（RFC），并将方案拆解为有序的、可执行的任务列表。此 skill 同时完成方案设计和任务拆解，产出 `RFC.md` 和 `tasks.md`。
 
 ## 基座
 
 1. 调用 `superpowers:using-git-worktrees` — 在任何探索之前创建隔离工作区
-2. 调用 `superpowers:writing-plans` — 使用其代码分析和方案设计方法论
+2. 调用 `superpowers:writing-plans` — 使用其代码分析、方案设计和任务拆解方法论
 
 ## 自动模式
 
@@ -21,7 +21,7 @@ description: 技术方案生成 — 分析项目代码库，产出 RFC 技术提
 ## 触发条件
 
 - Owner 批准 Mission（状态: approved）
-- BunQueue 启动 RFC+Decompose 阶段
+- BunQueue 启动 RFC 阶段
 
 ## 输入
 
@@ -53,6 +53,26 @@ description: 技术方案生成 — 分析项目代码库，产出 RFC 技术提
 ### 阶段三：撰写 RFC
 
 7. 按以下格式生成 `RFC.md`
+
+### 阶段四：任务拆解
+
+8. 从 RFC 中提取所有"变更文件"和设计决策
+9. 将变更分组为逻辑工作单元：
+   - 每个单元应可独立提交
+   - 每个单元应有明确的完成条件
+   - 优先小单元（1-3 个文件）
+10. 确定执行顺序：
+    - 数据模型/类型变更优先
+    - 核心逻辑其次
+    - 集成/连接第三
+    - 测试伴随每个变更（TDD 风格）
+11. 标记任务间的依赖关系
+12. 估算每个任务：
+    - **S**（< 30 分钟）：单文件，直接明了
+    - **M**（30-60 分钟）：2-3 个文件，需要一些决策
+    - **L**（> 60 分钟）：考虑进一步拆分
+13. 验证覆盖率：每个 RFC 设计点和每个 Contract Case 必须被至少一个任务覆盖
+14. 生成 `tasks.md`
 
 ## 产出格式
 
@@ -95,19 +115,46 @@ description: 技术方案生成 — 分析项目代码库，产出 RFC 技术提
 | case-1 | {此设计如何满足此 Case} |
 ```
 
+### tasks.md
+
+```markdown
+# 任务列表: {Mission 标题}
+
+## 任务 1: {简短祈使句标题}
+- **大小**: S / M / L
+- **文件**: path/to/file1.ts, path/to/file2.ts
+- **描述**: {做什么 — 祈使句、具体、自包含}
+- **完成条件**: {可客观验证的条件}
+- **依赖**: — (或 任务 N)
+
+## 任务 2: {简短祈使句标题}
+...
+
+## 任务 N: 验证 Contract Case
+- **大小**: S
+- **文件**: tests/...
+- **描述**: 运行 Contract 评估验证所有 Case 通过
+- **完成条件**: 所有 Contract Case 通过，lint/test/build 绿灯
+- **依赖**: 所有前序任务
+```
+
+每个任务描述必须自包含 — Execute agent 在没有 RFC 探索上下文的情况下读取 tasks.md，因此需包含足够细节可直接执行。
+
 ## 产出位置
 
 - 将 `RFC.md` 写入 `.missions/{missionId}/RFC.md`
-- 在飞书话题发送 RFC 摘要
-- 可选：创建飞书文档（lark_render）并在话题中链接
+- 将 `tasks.md` 写入 `.missions/{missionId}/tasks.md`
+- 在飞书话题发送 RFC 摘要 + 任务列表概览
 
 ## 约束
 
 - 此阶段不写实现代码
 - 每个 Contract Case 必须出现在 Contract 对齐表中
 - 如果变更很简单（< 50 行，单文件），保持 RFC 精简并标记可能跳步
-- 不退出 agent session — Decompose 在同一个 session 中继续
+- 最后一个任务必须是"验证 Contract Case"
+- 如果只需要 1 个任务，那就 1 个 — 不要凑数
+- 如果某个任务是 L 级别，努力进一步拆分
 
 ## 退出条件
 
-RFC 完成 → 立即进入 Decompose skill（同一个 agent，同一个 worktree）。
+RFC.md + tasks.md 完成 → agent session 结束。BunQueue 自动推进到 Execute 阶段。
