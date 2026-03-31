@@ -32,6 +32,15 @@ export function createBoardApp(deps: BoardDeps): Hono {
   // CORS for dev
   app.use("/api/*", cors());
 
+  // ── Internal: cross-process mission enqueue (must register BEFORE shared handlers to avoid shadowing) ──
+  app.post("/api/internal/enqueue-intake", async (c) => {
+    const { missionId, step } = await c.req.json();
+    if (!missionId || !step) return c.json({ error: "missionId and step required" }, 400);
+    if (!deps.enqueueMission) return c.json({ error: "enqueue not available" }, 503);
+    deps.enqueueMission({ missionId, step }).catch(() => {});
+    return c.json({ ok: true, missionId, step });
+  });
+
   // ── Reuse Dashboard API handlers ──
   registerMissionsHandlers(app, data);
   registerConversationsHandlers(app, data);
@@ -87,14 +96,7 @@ export function createBoardApp(deps: BoardDeps): Hono {
     }
   });
 
-  // ── Internal: cross-process mission enqueue (called by remi-web) ──
-  app.post("/api/internal/enqueue-intake", async (c) => {
-    const { missionId, step } = await c.req.json();
-    if (!missionId || !step) return c.json({ error: "missionId and step required" }, 400);
-    if (!deps.enqueueMission) return c.json({ error: "enqueue not available" }, 503);
-    deps.enqueueMission({ missionId, step }).catch(() => {});
-    return c.json({ ok: true, missionId, step });
-  });
+  // (enqueue-intake endpoint registered above, before shared handlers)
 
   // ── Health ──
   app.get("/api/health", (c) => c.json({ ok: true, service: "mission-board" }));
