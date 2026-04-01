@@ -125,10 +125,19 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
         const repoName = remoteUrl
           .replace(/.*code\.byted\.org[:/]/, "")
           .replace(/\.git$/, "");
-        result = execSync(
-          `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${releaseBranch} --target-branch main --title "Release ${version}" --description "Merge ${releaseBranch} into main." --squash-commits --remove-source-branch`,
-          { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
-        ).trim();
+        try {
+          result = execSync(
+            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${releaseBranch} --target-branch main --title "Release ${version}" --description "Merge ${releaseBranch} into main." --squash-commits --remove-source-branch`,
+            { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+          ).trim();
+        } catch (mrErr: any) {
+          if (mrErr.message?.includes("AlreadyExists")) {
+            // MR already exists — return the existing MR URL
+            result = `https://code.byted.org/${repoName}/-/merge_requests?scope=all&state=opened&source_branch=${encodeURIComponent(releaseBranch)}`;
+          } else {
+            throw mrErr;
+          }
+        }
       } else {
         // GitHub — use gh CLI
         result = execSync(
