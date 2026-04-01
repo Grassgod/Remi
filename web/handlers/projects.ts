@@ -110,8 +110,8 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
     if (!releaseBranch) return c.json({ error: "releaseBranch not configured" }, 400);
 
     try {
-      // Extract version from branch name (e.g., "release/1.2.0" → "v1.2.0")
-      const version = releaseBranch.replace(/^release\//, "v");
+      // Extract version from branch name (e.g., "release/v2.0.7" → "v2.0.7", "release/1.2.0" → "v1.2.0")
+      const version = releaseBranch.replace(/^release\//, "").replace(/^(?!v)/, "v");
 
       const remoteUrl = execSync("git remote get-url origin", {
         cwd: project.cwd,
