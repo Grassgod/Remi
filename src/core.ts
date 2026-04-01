@@ -304,8 +304,8 @@ export class Remi {
     const abortController = new AbortController();
     this._activeAborts.set(sessionKey, abortController);
 
-    // Inject chat metadata only for QA groups that need chatId for mission creation
-    const chatMeta = groupConfig?.projectId === "larkparser-qa"
+    // Inject chat metadata for groups with injectChatContext enabled
+    const chatMeta = groupConfig?.injectChatContext
       ? `\n[chat_context] chatId=${msg.chatId} sender=${msg.sender} senderOpenId=${msg.metadata?.senderOpenId ?? "unknown"}`
       : "";
     const effectiveSystemPrompt = groupConfig?.systemPrompt

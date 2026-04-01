@@ -17,6 +17,7 @@ export interface GroupConfig {
   provider?: string;
   cwd?: string;
   launchCommand?: string;
+  injectChatContext: boolean;
   createdAt: string;
   updatedAt: string;
   /** Joined from projects table — not stored in group_configs */
@@ -37,4 +38,5 @@ export interface GroupConfigInput {
   provider?: string;
   cwd?: string;
   launchCommand?: string;
+  injectChatContext?: boolean;
 }

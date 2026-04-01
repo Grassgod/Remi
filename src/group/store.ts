@@ -77,8 +77,8 @@ export class GroupConfigStore {
     const now = new Date().toISOString();
     this.db.run(
       `INSERT INTO group_configs
-        (chat_id, project_id, name, monitor, mission_enabled, reply_mode, system_prompt, allowed_tools, allowed_mcps, add_dirs, provider, cwd, launch_command, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (chat_id, project_id, name, monitor, mission_enabled, reply_mode, system_prompt, allowed_tools, allowed_mcps, add_dirs, provider, cwd, launch_command, inject_chat_context, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(chat_id) DO UPDATE SET
         project_id = excluded.project_id,
         name = excluded.name,
@@ -92,6 +92,7 @@ export class GroupConfigStore {
         provider = excluded.provider,
         cwd = excluded.cwd,
         launch_command = excluded.launch_command,
+        inject_chat_context = excluded.inject_chat_context,
         updated_at = excluded.updated_at`,
       [
         input.chatId,
@@ -107,6 +108,7 @@ export class GroupConfigStore {
         input.provider ?? null,
         input.cwd ?? null,
         input.launchCommand ?? null,
+        input.injectChatContext ? 1 : 0,
         now,
         now,
       ],
@@ -133,6 +135,7 @@ export class GroupConfigStore {
     if (fields.provider !== undefined) { sets.push("provider = ?"); vals.push(fields.provider || null); }
     if (fields.cwd !== undefined) { sets.push("cwd = ?"); vals.push(fields.cwd || null); }
     if (fields.launchCommand !== undefined) { sets.push("launch_command = ?"); vals.push(fields.launchCommand || null); }
+    if (fields.injectChatContext !== undefined) { sets.push("inject_chat_context = ?"); vals.push(fields.injectChatContext ? 1 : 0); }
 
     if (sets.length === 0) return true;
     sets.push("updated_at = datetime('now')");
@@ -181,6 +184,7 @@ export class GroupConfigStore {
       provider: (row.provider as string) || undefined,
       cwd: (row.cwd as string) || undefined,
       launchCommand: (row.launch_command as string) || undefined,
+      injectChatContext: !!(row.inject_chat_context as number),
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
       projectCwd: (row.project_cwd as string) || undefined,

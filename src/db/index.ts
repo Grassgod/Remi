@@ -244,6 +244,7 @@ export function getDb(): Database {
       if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
       if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
       if (!gcColNames.has("mission_enabled")) db.exec("ALTER TABLE group_configs ADD COLUMN mission_enabled INTEGER DEFAULT 0");
+      if (!gcColNames.has("inject_chat_context")) db.exec("ALTER TABLE group_configs ADD COLUMN inject_chat_context INTEGER DEFAULT 0");
     }
   } catch {}
 
