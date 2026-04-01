@@ -15,7 +15,7 @@ import type { AgentResponse } from "../../providers/base.js";
 import { sendToThread } from "../../connectors/feishu/thread.js";
 import { insertConversationProcessing, completeConversation } from "../../db/index.js";
 import { createLogger } from "../../logger.js";
-import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -188,7 +188,26 @@ export async function handleMissionJob(
     }
 
     if (step === "eval") {
-      log.info(`Mission ${missionId} eval step completed, awaiting mission-advance script`);
+      // Check if mission-advance was called (status would be in_review or blocked)
+      const postEval = store.getById(missionId);
+      if (postEval && postEval.status === "in_progress") {
+        // mission-advance was NOT called — auto-detect from eval-report
+        const evalReportPath = mission.outputDir ? join(mission.outputDir, "eval-report.md") : null;
+        if (evalReportPath && existsSync(evalReportPath)) {
+          const report = readFileSync(evalReportPath, "utf-8");
+          if (/结果.*PASS|PASS.*通过率.*\d+\/\d+/i.test(report) && !/FAIL/i.test(report)) {
+            log.warn(`Mission ${missionId} eval PASSED but mission-advance not called — auto-advancing to in_review`);
+            store.updateStatus(missionId, "in_review");
+          } else {
+            log.warn(`Mission ${missionId} eval FAILED but mission-advance not called — auto-retrying execute`);
+            await remi.queue.enqueueMission({ missionId, step: "execute", attempt: attempt + 1 });
+          }
+        } else {
+          log.info(`Mission ${missionId} eval step completed, awaiting mission-advance script`);
+        }
+      } else {
+        log.info(`Mission ${missionId} eval step completed, mission-advance already called (status: ${postEval?.status})`);
+      }
       return;
     }
 
