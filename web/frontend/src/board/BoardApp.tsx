@@ -2,6 +2,7 @@ import { Route, Switch, Router, Redirect } from "wouter";
 import { BoardPage } from "./BoardPage";
 import { BoardMissionDetail } from "./BoardMissionDetail";
 import { BoardLayout } from "./BoardLayout";
+import { HomePage } from "./HomePage";
 
 function NotFound() {
   return (
@@ -20,6 +21,7 @@ export function BoardApp() {
   return (
     <Router>
       <Switch>
+        <Route path="/" component={HomePage} />
         <Route path="/mission/:slug/issue/:id" component={BoardMissionDetail} />
         <Route path="/mission/:slug" component={BoardPage} />
         <Route component={NotFound} />

@@ -98,6 +98,41 @@ export function createBoardApp(deps: BoardDeps): Hono {
 
   // (enqueue-intake endpoint registered above, before shared handlers)
 
+  // ── Pages: serve static HTML from ~/tasks/:slug/ ──
+  const tasksDir = join(require("node:os").homedir(), "tasks");
+  try { require("node:fs").mkdirSync(tasksDir, { recursive: true }); } catch {}
+
+  // List available pages
+  app.get("/api/v1/pages", (c) => {
+    const { existsSync, readdirSync, statSync } = require("node:fs");
+    if (!existsSync(tasksDir)) return c.json([]);
+    const entries = readdirSync(tasksDir)
+      .filter((name: string) => {
+        const p = join(tasksDir, name);
+        return statSync(p).isDirectory() && existsSync(join(p, "index.html"));
+      })
+      .map((name: string) => {
+        const stat = statSync(join(tasksDir, name, "index.html"));
+        return { slug: name, updatedAt: stat.mtime.toISOString() };
+      })
+      .sort((a: any, b: any) => b.updatedAt.localeCompare(a.updatedAt));
+    return c.json(entries);
+  });
+
+  // Serve pages from ~/tasks/:slug/
+  app.get("/p/:slug{.+}", async (c) => {
+    const { existsSync } = require("node:fs");
+    const fullPath = c.req.path;
+    const match = fullPath.match(/^\/p\/([^/]+)(\/.*)?$/);
+    if (!match) return c.json({ error: "not found" }, 404);
+    const slug = match[1];
+    const rest = match[2]?.slice(1) || "index.html"; // strip leading /
+    if (slug.includes("..") || rest.includes("..")) return c.json({ error: "forbidden" }, 403);
+    const filePath = join(tasksDir, slug, rest);
+    if (!existsSync(filePath)) return c.json({ error: "not found" }, 404);
+    return new Response(Bun.file(filePath));
+  });
+
   // ── Health ──
   app.get("/api/health", (c) => c.json({ ok: true, service: "mission-board" }));
 
