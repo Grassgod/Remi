@@ -342,10 +342,12 @@ ${gitStats || "(无统计信息)"}
       const cfg = loadCfg();
       const client = createFeishuClient({ appId: cfg.feishu.appId, appSecret: cfg.feishu.appSecret, domain: cfg.feishu.domain });
 
+      // PascalCase: lark_parser → LarkParser
+      const displayName = projectName.replace(/(^|[_-])(\w)/g, (_: string, __: string, c: string) => c.toUpperCase());
       const card = {
         schema: "2.0",
         header: {
-          title: { tag: "plain_text" as const, content: `${projectName} v${version} Released` },
+          title: { tag: "plain_text" as const, content: `🚀 ${displayName} v${version} 已发布` },
           template: "turquoise" as const,
         },
         config: { width_mode: "fill" },
