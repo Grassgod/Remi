@@ -112,6 +112,27 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
     try {
       // Extract version from branch name (e.g., "release/v2.0.7" → "v2.0.7", "release/1.2.0" → "v1.2.0")
       const version = releaseBranch.replace(/^release\//, "").replace(/^(?!v)/, "v");
+      const semver = version.replace(/^v/, ""); // "2.0.7"
+
+      // Bump version in pyproject.toml on release branch before creating MR
+      try {
+        execSync(`git checkout ${releaseBranch} && git pull origin ${releaseBranch}`, {
+          cwd: project.cwd, encoding: "utf-8", timeout: 15000,
+        });
+        const pyprojectPath = require("node:path").join(project.cwd!, "pyproject.toml");
+        if (require("node:fs").existsSync(pyprojectPath)) {
+          const content = require("node:fs").readFileSync(pyprojectPath, "utf-8");
+          const updated = content.replace(/^version\s*=\s*"[^"]*"/m, `version = "${semver}"`);
+          if (updated !== content) {
+            require("node:fs").writeFileSync(pyprojectPath, updated, "utf-8");
+            execSync(`git add pyproject.toml && git commit -m "chore: bump version to ${semver}" && git push origin ${releaseBranch}`, {
+              cwd: project.cwd, encoding: "utf-8", timeout: 15000,
+            });
+          }
+        }
+      } catch {
+        // Non-blocking: version bump failure shouldn't prevent MR creation
+      }
 
       const remoteUrl = execSync("git remote get-url origin", {
         cwd: project.cwd,
