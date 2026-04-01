@@ -106,4 +106,7 @@ description: Mission 需求澄清 — 通过批量提问收集需求细节和 Co
 
 ## 退出条件
 
-Mission 状态 → `inbox`，等待 Owner 审批。
+Mission 状态 → `inbox`，等待审批。
+
+产出完成后，在飞书话题里发送最终消息，**必须包含以下引导**：
+> 需求已整理完成，请前往看板审批后自动进入开发流程 👉 http://n37-066-008.byted.org:8090/mission/lark_parser
