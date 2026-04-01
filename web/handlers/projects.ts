@@ -132,8 +132,8 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
           ).trim();
         } catch (mrErr: any) {
           if (mrErr.message?.includes("AlreadyExists")) {
-            // MR already exists — return the existing MR URL
-            result = `https://code.byted.org/${repoName}/-/merge_requests?scope=all&state=opened&source_branch=${encodeURIComponent(releaseBranch)}`;
+            // MR already exists — return the MR list page
+            result = `https://code.byted.org/${repoName}/-/merge_requests`;
           } else {
             throw mrErr;
           }
