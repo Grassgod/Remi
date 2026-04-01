@@ -113,13 +113,32 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
       // Extract version from branch name (e.g., "release/1.2.0" → "v1.2.0")
       const version = releaseBranch.replace(/^release\//, "v");
 
-      const result = execSync(
-        `gh pr create --base main --head ${releaseBranch} --title "Release ${version}" --body "$(cat <<'PREOF'\n## Release ${version}\n\nMerge ${releaseBranch} into main.\nPREOF\n)"`,
-        { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
-      ).trim();
+      const remoteUrl = execSync("git remote get-url origin", {
+        cwd: project.cwd,
+        encoding: "utf-8",
+      }).trim();
 
-      // gh pr create returns the PR URL
-      const prUrl = result;
+      let result: string;
+
+      if (remoteUrl.includes("code.byted.org")) {
+        // ByteDance GitLab — use bytedcli
+        const repoName = remoteUrl
+          .replace(/.*code\.byted\.org[:/]/, "")
+          .replace(/\.git$/, "");
+        result = execSync(
+          `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${releaseBranch} --target-branch main --title "Release ${version}" --description "Merge ${releaseBranch} into main." --squash-commits --remove-source-branch`,
+          { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+        ).trim();
+      } else {
+        // GitHub — use gh CLI
+        result = execSync(
+          `gh pr create --base main --head ${releaseBranch} --title "Release ${version}" --body "$(cat <<'PREOF'\n## Release ${version}\n\nMerge ${releaseBranch} into main.\nPREOF\n)"`,
+          { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+        ).trim();
+      }
+
+      const urlMatch = result.match(/https:\/\/[^\s)]+/);
+      const prUrl = urlMatch ? urlMatch[0] : result;
       const prMatch = prUrl.match(/\/(\d+)$/);
       const prNumber = prMatch ? Number(prMatch[1]) : 0;
 
@@ -130,7 +149,7 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
   });
 
   // Confirm release merge: verify PR merged, create new release branch
-  app.post("/api/v1/projects/:id/release/confirm", (c) => {
+  app.post("/api/v1/projects/:id/release/confirm", async (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const project = store.getById(id);
     if (!project) return c.json({ error: "not found" }, 404);
@@ -179,6 +198,34 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
       // Update config with new release branch
       const updatedConfig = { ...cfg, pipeline: { ...cfg.pipeline, releaseBranch: newBranch } };
       store.updatePipelineConfig(id, updatedConfig);
+
+      // Enqueue AI-generated release notes (async, non-blocking)
+      const currentVersion = releaseBranch.replace(/^release\//, "");
+      const pushTargets: string[] =
+        cfg?.notifications?.dailyChangelog?.targets?.length
+          ? cfg.notifications.dailyChangelog.targets
+          : project.chatId ? [project.chatId] : [];
+
+      if (pushTargets.length > 0) {
+        const BOARD_PORT = process.env.REMI_BOARD_PORT ?? "8090";
+        fetch(`http://127.0.0.1:${BOARD_PORT}/api/internal/enqueue-cron`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jobId: `release-notes-${id}-v${currentVersion}`,
+            handler: "release-notes:generate",
+            handlerConfig: {
+              projectId: id,
+              projectName: project.name,
+              cwd: project.cwd,
+              version: currentVersion,
+              releaseBranch,
+              newBranch,
+              pushTargets,
+            },
+          }),
+        }).catch(() => {}); // Fire-and-forget
+      }
 
       return c.json({ newBranch, newVersion });
     } catch (e: any) {

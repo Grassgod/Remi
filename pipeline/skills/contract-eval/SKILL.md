@@ -73,7 +73,17 @@ MR_URL=$(gh pr create --base {releaseBranch} --head {executeBranch} --title "Mis
 
 **GitLab** (code.byted.org 等)：
 ```bash
-MR_URL=$(git push -o merge_request.create -o merge_request.target={releaseBranch} -o merge_request.title="Mission: {missionTitle}" origin {executeBranch} 2>&1 | grep -o 'https://[^ ]*')
+# 先 push 分支，再用 bytedcli 创建 MR
+git push origin {executeBranch}
+REPO_NAME=$(git remote get-url origin | sed 's|.*code.byted.org[:/]||;s|\.git$||')
+MR_URL=$(bytedcli codebase create-mr \
+  --repo-name "$REPO_NAME" \
+  --source-branch {executeBranch} \
+  --target-branch {releaseBranch} \
+  --title "Mission: {missionTitle}" \
+  --description "Contract 验证通过，请审核合入。" \
+  --squash-commits \
+  --remove-source-branch 2>&1 | grep -o 'https://[^ ]*')
 ```
 
 2. 在飞书话题告知用户 MR 链接，提示进入 Review 阶段。

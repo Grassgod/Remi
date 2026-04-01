@@ -244,6 +244,169 @@ handlers.set("skill:push", async (remi, config) => {
   }
 });
 
+// ── Release Notes generation ──────────────────────────────────────
+
+handlers.set("release-notes:generate", async (remi, config) => {
+  if (!config?.projectId) throw new Error("Missing handlerConfig.projectId");
+
+  const { projectId, projectName, cwd, version, releaseBranch, newBranch, pushTargets } = config as {
+    projectId: string; projectName: string; cwd: string;
+    version: string; releaseBranch: string; newBranch: string;
+    pushTargets: string[];
+  };
+
+  log.info(`[release-notes] Generating for ${projectName} v${version}`);
+
+  // ── 1. Query completed missions ──
+  const { MissionStore } = await import("../../mission/store.js");
+  const store = new MissionStore();
+  const missions = store.listByProject(projectId)
+    .filter((m) => m.status === "done");
+
+  if (missions.length === 0) {
+    log.info("[release-notes] No completed missions, skipping");
+    return;
+  }
+
+  // ── 2. Build mission context ──
+  const missionEntries: string[] = [];
+  for (const m of missions) {
+    let description = "";
+    if (m.outputDir) {
+      const descPath = join(m.outputDir, "description.md");
+      if (existsSync(descPath)) {
+        const raw = readFileSync(descPath, "utf-8").trim();
+        // Take first meaningful paragraph (skip headings)
+        description = raw.split("\n").filter((l) => l.trim() && !l.startsWith("#")).slice(0, 3).join(" ");
+      }
+    }
+    const durMin = m.totalDuration ? (m.totalDuration / 60000).toFixed(0) : "?";
+    const mrNum = m.mrUrl?.match(/\/(\d+)$/)?.[1] ?? "";
+    missionEntries.push(
+      `- 标题: ${m.title}\n  描述: ${description || "(无)"}\n  MR: ${mrNum ? `!${mrNum}` : "(无)"} ${m.mrUrl ?? ""}\n  AI 执行耗时: ${durMin} min\n  创建: ${m.createdAt?.slice(0, 10)} 完成: ${m.completedAt?.slice(0, 10) ?? "?"}`,
+    );
+  }
+
+  // ── 3. Git stats ──
+  let gitStats = "";
+  if (cwd) {
+    try {
+      const { execSync } = await import("child_process");
+      gitStats = execSync(
+        `git diff --stat origin/main...origin/${releaseBranch} 2>/dev/null | tail -1`,
+        { cwd, encoding: "utf-8", timeout: 10000 },
+      ).trim();
+    } catch { /* ignore */ }
+  }
+
+  // ── 4. Build prompt ──
+  const prompt = `你是一个版本发布通知助手。根据以下数据生成一条简洁的飞书群通知消息。
+
+## 项目信息
+- 项目名: ${projectName}
+- 版本: v${version}
+- Release 分支: ${releaseBranch}
+- 下一版本分支: ${newBranch}
+
+## 已完成的 Mission（共 ${missions.length} 个）
+${missionEntries.join("\n\n")}
+
+## Git 统计
+${gitStats || "(无统计信息)"}
+
+## 输出要求
+生成一条飞书群通知消息，纯文本 Markdown 格式，要求：
+1. 标题行：🚀 **{项目名} v{版本} 已发布**，紧接一条分隔线 ---。项目名用 PascalCase 展示（如 lark_parser → LarkParser）
+2. 分类展示功能（✨ 新功能 / 🐛 修复 / ⚡ 优化），从 Mission 标题推断分类
+3. 每个 Mission 一行：· 功能一句话描述 + MR 编号 + 耗时（如 "41 min"）
+4. 底部用分隔线，统计行：Mission 总数 + 总耗时 + "全流程 Pipeline 自动执行（需求 → RFC → 代码 → 测试 → MR）"
+5. 统计行不要用 📊，用 ▸ 或粗体文字代替
+6. 保持简洁有冲击力，让读者第一眼 get 到新功能，第二眼 get 到自动化能力
+7. 只输出通知消息本身，不要输出其他说明文字`;
+
+  // ── 5. Generate via AI provider ──
+  const provider = remi._getProvider();
+  const response = await provider.send(prompt);
+  const text = response.text?.trim();
+
+  if (!text || text.startsWith("[Provider error")) {
+    throw new Error(`Release notes generation failed: ${text?.slice(0, 100)}`);
+  }
+
+  // ── 6. Deliver to Feishu ──
+  if (pushTargets?.length > 0) {
+    const connectors = remi["_connectors"] as Connector[];
+    const feishu = connectors.find((c) => c.name === "feishu");
+    if (feishu) {
+      for (const target of pushTargets) {
+        await feishu.reply(target, { text });
+        log.info(`[release-notes] Pushed to ${target}`);
+      }
+    }
+  }
+
+  // Save report
+  const outputDir = join(homedir(), ".remi", "skill-reports", "release-notes");
+  if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+  writeFileSync(join(outputDir, `${projectId}-v${version}.md`), text, "utf-8");
+
+  // ── 7. Sync linked QA project knowledge ──
+  try {
+    const { ProjectStore } = await import("../../project/store.js");
+    const projectStore = new ProjectStore();
+    // Convention: QA project id contains the source project id
+    const allProjects = projectStore.list();
+    const qaProject = allProjects.find((p: any) =>
+      p.id !== projectId && p.id.includes(projectId.replace(/_/g, "")) && p.cwd,
+    ) ?? allProjects.find((p: any) =>
+      p.id !== projectId && p.id.includes("qa") && p.cwd &&
+      existsSync(join(p.cwd, projectId.replace(/[_-]/g, "").toLowerCase())),
+    );
+
+    if (qaProject?.cwd) {
+      const { execSync: exec } = await import("child_process");
+      const qaCwd = qaProject.cwd as string;
+      const knowledgePath = join(qaCwd, "knowledge.md");
+
+      // Append release notes to knowledge.md
+      if (existsSync(knowledgePath)) {
+        const today = new Date().toISOString().slice(0, 10);
+        const section = `\n\n## v${version} 更新 (${today})\n\n${text}\n`;
+        appendFileSync(knowledgePath, section, "utf-8");
+        log.info(`[release-notes] Appended to ${knowledgePath}`);
+      }
+
+      // Update submodule if exists
+      const submoduleDirs = [projectId, projectId.replace(/_/g, "-")];
+      for (const subDir of submoduleDirs) {
+        if (existsSync(join(qaCwd, subDir, ".git")) || existsSync(join(qaCwd, ".gitmodules"))) {
+          try {
+            exec(`git submodule update --remote ${subDir}`, { cwd: qaCwd, encoding: "utf-8", timeout: 30000 });
+            log.info(`[release-notes] Updated submodule ${subDir} in ${qaCwd}`);
+          } catch (e) {
+            log.warn(`[release-notes] Submodule update failed: ${e}`);
+          }
+          break;
+        }
+      }
+
+      // Commit changes
+      try {
+        exec(`git add -A && git commit -m "chore: sync knowledge for v${version} release"`, {
+          cwd: qaCwd, encoding: "utf-8", timeout: 15000,
+        });
+        log.info(`[release-notes] QA project committed`);
+      } catch {
+        // No changes or commit failed — ok
+      }
+    }
+  } catch (e) {
+    log.warn(`[release-notes] QA sync failed: ${e}`);
+  }
+
+  log.info(`[release-notes] Done: ${projectName} v${version}`);
+});
+
 // ── Mission Board handlers ──────────────────────────────────────
 
 handlers.set("builtin:mr-poll", async (remi) => {

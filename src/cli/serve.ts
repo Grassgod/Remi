@@ -72,6 +72,7 @@ export async function runServe(_args: string[]): Promise<void> {
       authToken: process.env.REMI_WEB_AUTH_TOKEN,
       feishuClient,
       enqueueMission: (data) => remi.queue.enqueueMission(data),
+      enqueueCron: (data) => remi.queue.enqueueCron(data),
     });
 
     // Register mission approve/reject handler for Feishu card buttons

@@ -66,6 +66,15 @@ export class RemiQueueManager {
     });
   }
 
+  /** Enqueue a one-shot cron job (e.g. release-notes generation). */
+  async enqueueCron(data: CronJobData): Promise<void> {
+    await this.cronQueue.add("cron", data, {
+      attempts: 2,
+      backoff: { type: "fixed", delay: 30_000 },
+      removeOnComplete: { age: 86400 },
+    });
+  }
+
   // ══════════════════════════════════════════════════════════
   //  Enqueue methods (called from hot path, must be fast)
   // ══════════════════════════════════════════════════════════

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { RemiData } from "../remi-data.js";
 import { registerMissionsHandlers } from "../handlers/missions.js";
 import { registerConversationsHandlers } from "../handlers/conversations.js";
+import { registerEvalHandlers } from "../handlers/eval.js";
 
 export interface BoardDeps {
   config: any;
@@ -23,6 +24,7 @@ export interface BoardDeps {
   authToken?: string;
   feishuClient?: any;        // Lark.Client for image proxy
   enqueueMission?: (data: { missionId: string; step: string }) => Promise<void>;
+  enqueueCron?: (data: { jobId: string; handler: string; handlerConfig?: Record<string, any> }) => Promise<void>;
 }
 
 export function createBoardApp(deps: BoardDeps): Hono {
@@ -41,9 +43,22 @@ export function createBoardApp(deps: BoardDeps): Hono {
     return c.json({ ok: true, missionId, step });
   });
 
+  // ── Internal: enqueue one-shot cron job (e.g. release-notes generation) ──
+  app.post("/api/internal/enqueue-cron", async (c) => {
+    const { jobId, handler, handlerConfig } = await c.req.json();
+    if (!jobId || !handler) return c.json({ error: "jobId and handler required" }, 400);
+    if (!deps.enqueueCron) return c.json({ error: "enqueue not available" }, 503);
+    deps.enqueueCron({ jobId, handler, handlerConfig }).catch(() => {});
+    return c.json({ ok: true, jobId, handler });
+  });
+
   // ── Reuse Dashboard API handlers ──
   registerMissionsHandlers(app, data);
   registerConversationsHandlers(app, data);
+
+  // ── Eval handlers ──
+  const evalRoot = process.env.AIDEN_EVAL_ROOT || join(require("node:os").homedir(), "project", "aiden-server-plugin-lab", "aiden-eval");
+  registerEvalHandlers(app, evalRoot);
 
   // ── Projects API (from DB, same format as Dashboard) ──
   app.get("/api/v1/projects", (c) => {
