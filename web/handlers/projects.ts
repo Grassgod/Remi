@@ -148,7 +148,7 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
           .replace(/\.git$/, "");
         try {
           result = execSync(
-            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${releaseBranch} --target-branch main --title "Release ${version}" --description "Merge ${releaseBranch} into main." --squash-commits --remove-source-branch`,
+            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${releaseBranch} --target-branch main --title "Release ${version}" --description "Merge ${releaseBranch} into main." --squash-commits --remove-source-branch --reviewer-ids "hehuajie"`,
             { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
           ).trim();
         } catch (mrErr: any) {

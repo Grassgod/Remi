@@ -83,7 +83,8 @@ MR_URL=$(bytedcli codebase create-mr \
   --title "Mission: {missionTitle}" \
   --description "Contract 验证通过，请审核合入。" \
   --squash-commits \
-  --remove-source-branch 2>&1 | grep -o 'https://[^ ]*')
+  --remove-source-branch \
+  --reviewer-ids "hehuajie" 2>&1 | grep -o 'https://[^ ]*')
 ```
 
 2. 在飞书话题告知用户 MR 链接，提示进入 Review 阶段。
