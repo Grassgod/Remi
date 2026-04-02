@@ -4,6 +4,7 @@ import { MissionStore } from "../../src/mission/store.js";
 import type { Mission, MissionStatus, PipelineStep } from "../../src/mission/model.js";
 import { createLogger } from "../../src/logger.js";
 import { getDb } from "../../src/db/index.js";
+import { execSync } from "child_process";
 
 const store = new MissionStore();
 const log = createLogger("missions-handler");
@@ -183,11 +184,97 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
     return c.json({ ok: true });
   });
 
-  // POST /api/v1/missions/:id/done — Mark mission complete
+  // POST /api/v1/missions/:id/create-mr — Create MR for mission
+  app.post("/api/v1/missions/:id/create-mr", (c) => {
+    const id = c.req.param("id");
+    const mission = store.getById(id);
+    if (!mission) return c.json({ error: "Mission not found" }, 404);
+    if (mission.status !== "in_review") return c.json({ error: "Mission is not in review" }, 400);
+    if (mission.mrUrl) return c.json({ mrUrl: mission.mrUrl }); // Already created
+
+    const { ProjectStore } = require("../../src/project/store.js");
+    const project = new ProjectStore().getById(mission.projectId);
+    if (!project?.cwd) return c.json({ error: "Project has no cwd" }, 400);
+
+    const cfg = (project.pipelineConfig as any) ?? {};
+    const releaseBranch = cfg?.pipeline?.releaseBranch as string;
+    if (!releaseBranch) return c.json({ error: "releaseBranch not configured" }, 400);
+
+    const sourceBranch = `mission/${id}`;
+
+    try {
+      // Push the mission branch
+      execSync(`git push origin ${sourceBranch}`, {
+        cwd: project.cwd, encoding: "utf-8", timeout: 30000,
+      });
+
+      const remoteUrl = execSync("git remote get-url origin", {
+        cwd: project.cwd, encoding: "utf-8",
+      }).trim();
+
+      let result: string;
+
+      if (remoteUrl.includes("code.byted.org")) {
+        const repoName = remoteUrl
+          .replace(/.*code\.byted\.org[:/]/, "")
+          .replace(/\.git$/, "");
+        try {
+          result = execSync(
+            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${sourceBranch} --target-branch ${releaseBranch} --title "Mission: ${mission.title}" --description "Contract 验证通过，请审核合入。" --squash-commits --remove-source-branch --reviewer-ids "hehuajie"`,
+            { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+          ).trim();
+        } catch (mrErr: any) {
+          if (mrErr.message?.includes("AlreadyExists")) {
+            // Find existing MR by scanning recent MRs
+            for (let n = 50; n >= 1; n--) {
+              try {
+                const info = execSync(
+                  `bytedcli codebase get-merge-request ${n} --repo-name "${repoName}" 2>&1`,
+                  { cwd: project.cwd, encoding: "utf-8", timeout: 10000 },
+                );
+                if (info.includes(sourceBranch) && (info.includes("open") || info.includes("Open"))) {
+                  result = `https://code.byted.org/${repoName}/merge_requests/${n}`;
+                  break;
+                }
+              } catch { continue; }
+            }
+            result ??= `MR already exists for ${sourceBranch}`;
+          } else {
+            throw mrErr;
+          }
+        }
+      } else {
+        result = execSync(
+          `gh pr create --base ${releaseBranch} --head ${sourceBranch} --title "Mission: ${mission.title}" --body "Contract 验证通过，请审核合入。"`,
+          { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
+        ).trim();
+      }
+
+      const urlMatch = result.match(/https:\/\/[^\s)]+/);
+      const mrUrl = urlMatch ? urlMatch[0] : result;
+
+      store.updateMR(id, mrUrl, "open");
+      log.info(`Mission ${id} MR created: ${mrUrl}`);
+
+      return c.json({ mrUrl });
+    } catch (e: any) {
+      return c.json({ error: e.message || "Failed to create MR" }, 500);
+    }
+  });
+
+  // POST /api/v1/missions/:id/done — Confirm MR merged, mark mission complete
   app.post("/api/v1/missions/:id/done", async (c) => {
     const id = c.req.param("id");
     const mission = store.getById(id);
     if (!mission) return c.json({ error: "Mission not found" }, 404);
+
+    // If MR exists and not yet merged, verify merge status
+    if (mission.mrUrl && mission.mrStatus === "open") {
+      const { checkMRMerged } = await import("../../src/mission/github.js");
+      const merged = await checkMRMerged(mission.mrUrl);
+      if (!merged) return c.json({ error: "MR has not been merged yet" }, 400);
+      store.updateMR(id, mission.mrUrl, "merged");
+    }
 
     store.updateStatus(id, "done");
     log.info(`Mission ${id} marked done, enqueuing summary`);

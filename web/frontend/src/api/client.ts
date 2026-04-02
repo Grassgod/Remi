@@ -406,7 +406,60 @@ export const requestChanges = (missionId: string, comments: string) =>
     body: JSON.stringify({ comments }),
   });
 
-export const markDone = (missionId: string) =>
+export const createMissionMR = (missionId: string) =>
+  request<{ mrUrl: string }>(`/api/v1/missions/${missionId}/create-mr`, {
+    method: "POST",
+  });
+
+export const confirmMissionDone = (missionId: string) =>
   request<{ ok: boolean }>(`/api/v1/missions/${missionId}/done`, {
     method: "POST",
+  });
+
+// ── Eval ──
+export const getEvalOverview = () =>
+  request<import("./types").EvalOverview>("/api/v1/eval/overview");
+
+export const getEvalCases = () =>
+  request<import("./types").EvalCase[]>("/api/v1/eval/cases");
+
+export const getEvalCase = (id: string) =>
+  request<import("./types").EvalCaseDetail>("/api/v1/eval/cases/" + id);
+
+export const getEvalBaseline = () =>
+  request<import("./types").EvalBaseline>("/api/v1/eval/baseline");
+
+export const getEvalRuns = () =>
+  request<import("./types").EvalRunSummary[]>("/api/v1/eval/runs");
+
+export const getEvalRun = (id: string) =>
+  request<import("./types").EvalRunResult>("/api/v1/eval/runs/" + id);
+
+export const triggerEvalRun = (opts: { type: string; cases: string[] }) =>
+  request<{ ok: boolean; message?: string }>("/api/v1/eval/run", {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+
+export const triggerEvalPrepare = (opts: { action: string; caseId?: string }) =>
+  request<{ ok: boolean }>("/api/v1/eval/prepare", {
+    method: "POST",
+    body: JSON.stringify(opts),
+  });
+
+export const createEvalCase = (data: Partial<import("./types").EvalCase>) =>
+  request<{ ok: boolean; id: string }>("/api/v1/eval/cases", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateEvalCase = (id: string, patch: Partial<import("./types").EvalCase>) =>
+  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+
+export const deleteEvalCase = (id: string) =>
+  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
+    method: "DELETE",
   });

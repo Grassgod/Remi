@@ -52,6 +52,8 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
   const [showReviewInput, setShowReviewInput] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [doneLoading, setDoneLoading] = useState(false);
+  const [mrLoading, setMrLoading] = useState(false);
+  const [mrError, setMrError] = useState("");
   const conversationBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -139,13 +141,29 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
     setReviewLoading(false);
   };
 
-  const handleMarkDone = async () => {
+  const handleCreateMR = async () => {
+    if (!mission || mrLoading) return;
+    setMrLoading(true);
+    setMrError("");
+    try {
+      const res = await api.createMissionMR(mission.id);
+      await refreshMission();
+    } catch (e: any) {
+      setMrError(e.message || "Failed to create MR");
+    }
+    setMrLoading(false);
+  };
+
+  const handleConfirmDone = async () => {
     if (!mission || doneLoading) return;
     setDoneLoading(true);
+    setMrError("");
     try {
-      await api.markDone(mission.id);
+      await api.confirmMissionDone(mission.id);
       await refreshMission();
-    } catch {}
+    } catch (e: any) {
+      setMrError(e.message || "MR has not been merged yet");
+    }
     setDoneLoading(false);
   };
 
@@ -325,6 +343,9 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
 
           {mission.status === "in_review" ? (
             <div className="space-y-2">
+              {mrError && (
+                <div className="rounded bg-destructive/10 px-3 py-2 text-xs text-destructive">{mrError}</div>
+              )}
               {showReviewInput ? (
                 <div className="space-y-2">
                   <textarea
@@ -358,13 +379,34 @@ export function MissionDetailContent({ id, onBack, backLabel = "Back" }: Mission
                   Request Changes
                 </button>
               )}
-              <button
-                onClick={handleMarkDone}
-                disabled={doneLoading}
-                className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-              >
-                {doneLoading ? "Completing..." : "Approve"}
-              </button>
+              {!mission.mrUrl ? (
+                <button
+                  onClick={handleCreateMR}
+                  disabled={mrLoading}
+                  className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                >
+                  {mrLoading ? "Creating MR..." : "Create MR"}
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <a
+                    href={mission.mrUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    {mission.mrUrl}
+                  </a>
+                  <button
+                    onClick={handleConfirmDone}
+                    disabled={doneLoading}
+                    className="w-full rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+                  >
+                    {doneLoading ? "Verifying..." : "确认已合入"}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <button

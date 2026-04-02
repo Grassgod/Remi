@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { GitPullRequest, User, Clock, CheckCircle, XCircle, MessageSquare, Send } from "lucide-react";
+import { GitPullRequest, User, Clock, CheckCircle, XCircle, Send } from "lucide-react";
 import { ScrollArea } from "../ui/scroll-area";
 import type { MissionItem } from "../../api/types";
 import * as api from "../../api/client";
@@ -154,8 +154,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                   col.items.map(mission => {
                     const isUpdating = updating === mission.id;
                     const isInbox = col.key === "inbox";
-                    const isReview = col.key === "in_review";
-                    const showActions = isInbox || isReview;
+                    const showActions = isInbox;
                     const hasPending = pending?.missionId === mission.id;
 
                     return (
@@ -213,31 +212,20 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                           <div className="mt-2.5 flex items-center gap-1.5 border-t border-border/50 pt-2.5">
                             <button
                               disabled={isUpdating}
-                              onClick={e => startAction(e, mission.id, isInbox ? "approved" : "done", "Approve")}
+                              onClick={e => startAction(e, mission.id, "approved", "Approve")}
                               className="flex flex-1 items-center justify-center gap-1 rounded-md border border-emerald-800 bg-emerald-950/50 px-2 py-1 text-[10px] font-medium text-emerald-400 transition-colors hover:bg-emerald-900/50 disabled:opacity-50"
                             >
                               <CheckCircle className="h-3 w-3" />
                               Approve
                             </button>
-                            {isInbox ? (
-                              <button
-                                disabled={isUpdating}
-                                onClick={e => startAction(e, mission.id, "rejected", "Reject")}
-                                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-red-800 bg-red-950/50 px-2 py-1 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/50 disabled:opacity-50"
-                              >
-                                <XCircle className="h-3 w-3" />
-                                Reject
-                              </button>
-                            ) : (
-                              <button
-                                disabled={isUpdating}
-                                onClick={e => startAction(e, mission.id, "in_progress", "Request Changes")}
-                                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-amber-800 bg-amber-950/50 px-2 py-1 text-[10px] font-medium text-amber-400 transition-colors hover:bg-amber-900/50 disabled:opacity-50"
-                              >
-                                <MessageSquare className="h-3 w-3" />
-                                Request Changes
-                              </button>
-                            )}
+                            <button
+                              disabled={isUpdating}
+                              onClick={e => startAction(e, mission.id, "rejected", "Reject")}
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-red-800 bg-red-950/50 px-2 py-1 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/50 disabled:opacity-50"
+                            >
+                              <XCircle className="h-3 w-3" />
+                              Reject
+                            </button>
                           </div>
                         )}
 
