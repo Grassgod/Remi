@@ -3,6 +3,11 @@ import { BoardPage } from "./BoardPage";
 import { BoardMissionDetail } from "./BoardMissionDetail";
 import { BoardLayout } from "./BoardLayout";
 import { HomePage } from "./HomePage";
+import { EvalDashboard } from "./eval/EvalDashboard";
+import { EvalCases } from "./eval/EvalCases";
+import { EvalCaseDetail } from "./eval/EvalCaseDetail";
+import { EvalRun } from "./eval/EvalRun";
+import { EvalRunDetail } from "./eval/EvalRunDetail";
 
 function NotFound() {
   return (
@@ -22,6 +27,11 @@ export function BoardApp() {
     <Router>
       <Switch>
         <Route path="/" component={HomePage} />
+        <Route path="/eval" component={EvalDashboard} />
+        <Route path="/eval/cases/:id" component={EvalCaseDetail} />
+        <Route path="/eval/cases" component={EvalCases} />
+        <Route path="/eval/run/:runId" component={EvalRunDetail} />
+        <Route path="/eval/run" component={EvalRun} />
         <Route path="/mission/:slug/issue/:id" component={BoardMissionDetail} />
         <Route path="/mission/:slug" component={BoardPage} />
         <Route component={NotFound} />

@@ -283,6 +283,41 @@ export function HomePage() {
           </div>
         </section>
 
+        {/* ── Eval Center ── */}
+        <section className="px-6 pb-20 sm:px-12 lg:px-20">
+          <div className="mx-auto max-w-5xl">
+            <div
+              className="mb-8 flex items-center gap-4"
+              style={{ animation: "fade-in 0.5s ease-out 200ms both" }}
+            >
+              <div className="h-px flex-1 bg-gradient-to-r from-gray-200 to-transparent" />
+              <h2 className="flex-shrink-0 font-mono text-[12px] tracking-widest text-gray-400 uppercase">
+                Eval Center
+              </h2>
+              <div className="h-px flex-1 bg-gradient-to-l from-gray-200 to-transparent" />
+            </div>
+
+            <button
+              onClick={() => navigate("/eval")}
+              className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-6 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-gray-200/50"
+              style={{ animation: "fade-in 0.5s ease-out 300ms both" }}
+            >
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 to-sky-400 opacity-80" />
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-[16px] font-semibold text-gray-900 group-hover:text-gray-700">
+                    Aiden Server Eval
+                  </h3>
+                  <p className="mt-1 text-[13px] text-gray-400">
+                    Clarify + RFC evaluation dashboard
+                  </p>
+                </div>
+                <ArrowRight className="mt-1 h-4 w-4 flex-shrink-0 text-gray-300 transition-all duration-200 group-hover:translate-x-1 group-hover:text-gray-500" />
+              </div>
+            </button>
+          </div>
+        </section>
+
         {/* ── Pages ── */}
         {pages.length > 0 && (
           <section className="px-6 pb-20 sm:px-12 lg:px-20">
