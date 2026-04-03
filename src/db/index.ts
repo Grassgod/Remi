@@ -257,6 +257,17 @@ export function getDb(): Database {
     }
   } catch {}
 
+  // Missions table migration — add released_at column
+  try {
+    const msnCols2 = db.query("PRAGMA table_info(missions)").all() as Array<{ name: string }>;
+    const msnColNames2 = new Set(msnCols2.map((c) => c.name));
+    if (msnColNames2.size > 0 && !msnColNames2.has("released_at")) {
+      db.exec("ALTER TABLE missions ADD COLUMN released_at TEXT");
+      // Backfill: mark all existing done missions as released
+      db.exec("UPDATE missions SET released_at = completed_at WHERE status = 'done' AND completed_at IS NOT NULL");
+    }
+  } catch {}
+
   // Projects table migration — add deleted column
   try {
     const projCols = db.query("PRAGMA table_info(projects)").all() as Array<{ name: string }>;

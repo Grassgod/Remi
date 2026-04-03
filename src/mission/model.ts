@@ -75,6 +75,7 @@ export interface Mission {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+  releasedAt: string | null;
 
   // 统计
   totalTokens: number;

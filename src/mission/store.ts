@@ -167,6 +167,16 @@ export class MissionStore {
     this.db.run(`UPDATE missions SET ${sets.join(", ")} WHERE id = ?`, values);
   }
 
+  markReleased(ids: string[]): void {
+    if (ids.length === 0) return;
+    const now = new Date().toISOString();
+    const placeholders = ids.map(() => "?").join(",");
+    this.db.run(
+      `UPDATE missions SET released_at = ?, updated_at = ? WHERE id IN (${placeholders})`,
+      [now, now, ...ids],
+    );
+  }
+
   // ── Delete ──
 
   delete(id: string): void {
@@ -244,6 +254,7 @@ export class MissionStore {
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
       completedAt: (row.completed_at as string) ?? null,
+      releasedAt: (row.released_at as string) ?? null,
       totalTokens: (row.total_tokens as number) ?? 0,
       totalCost: (row.total_cost as number) ?? 0,
       totalDuration: (row.total_duration as number) ?? 0,

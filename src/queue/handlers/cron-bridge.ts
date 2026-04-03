@@ -261,7 +261,7 @@ handlers.set("release-notes:generate", async (remi, config) => {
   const { MissionStore } = await import("../../mission/store.js");
   const store = new MissionStore();
   const missions = store.listByProject(projectId)
-    .filter((m) => m.status === "done");
+    .filter((m) => m.status === "done" && !m.releasedAt);
 
   if (missions.length === 0) {
     log.info("[release-notes] No completed missions, skipping");
@@ -362,10 +362,11 @@ ${gitStats || "(无统计信息)"}
     }
   }
 
-  // Save report
+  // Save report & mark missions as released
   const outputDir = join(homedir(), ".remi", "skill-reports", "release-notes");
   if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
   writeFileSync(join(outputDir, `${projectId}-v${version}.md`), text, "utf-8");
+  store.markReleased(missions.map((m) => m.id));
 
   // ── 7. Trigger linked QA knowledge sync (reuse existing maintain skill) ──
   try {
