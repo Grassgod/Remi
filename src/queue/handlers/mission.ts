@@ -191,19 +191,44 @@ export async function handleMissionJob(
       // Check if mission-advance was called (status would be in_review or blocked)
       const postEval = store.getById(missionId);
       if (postEval && postEval.status === "in_progress") {
-        // mission-advance was NOT called — auto-detect from eval-report
-        const evalReportPath = mission.outputDir ? join(mission.outputDir, "eval-report.md") : null;
-        if (evalReportPath && existsSync(evalReportPath)) {
-          const report = readFileSync(evalReportPath, "utf-8");
-          if (/结果.*PASS|PASS.*通过率.*\d+\/\d+/i.test(report) && !/FAIL/i.test(report)) {
-            log.warn(`Mission ${missionId} eval PASSED but mission-advance not called — auto-advancing to in_review`);
-            store.updateStatus(missionId, "in_review");
+        // mission-advance was NOT called — auto-detect verdict
+        let passed = false;
+        let detected = false;
+
+        // 1. Prefer eval-verdict file (structured, reliable)
+        const verdictPath = mission.outputDir ? join(mission.outputDir, "eval-verdict") : null;
+        if (verdictPath && existsSync(verdictPath)) {
+          const verdict = readFileSync(verdictPath, "utf-8").trim().toUpperCase();
+          passed = verdict === "PASS";
+          detected = true;
+          log.info(`Mission ${missionId} eval-verdict file: ${verdict}`);
+        }
+
+        // 2. Fallback: parse eval-report.md (legacy compat)
+        if (!detected) {
+          const evalReportPath = mission.outputDir ? join(mission.outputDir, "eval-report.md") : null;
+          if (evalReportPath && existsSync(evalReportPath)) {
+            const report = readFileSync(evalReportPath, "utf-8");
+            passed = /[结結]果[\s\S]{0,30}PASS|PASS[\s\S]{0,60}通过率/i.test(report) && !/FAIL/i.test(report);
+            detected = true;
+          }
+        }
+
+        if (!detected) {
+          log.info(`Mission ${missionId} eval step completed, no verdict found — awaiting mission-advance`);
+        } else if (passed) {
+          log.warn(`Mission ${missionId} eval PASSED — auto-advancing to in_review`);
+          store.updateStatus(missionId, "in_review");
+        } else {
+          // Max retry guard
+          const MAX_EVAL_RETRIES = 3;
+          if (attempt >= MAX_EVAL_RETRIES) {
+            log.error(`Mission ${missionId} eval failed ${attempt} times — blocking`);
+            store.updateStatus(missionId, "blocked");
           } else {
-            log.warn(`Mission ${missionId} eval FAILED but mission-advance not called — auto-retrying execute`);
+            log.warn(`Mission ${missionId} eval FAILED (attempt ${attempt}) — retrying execute`);
             await remi.queue.enqueueMission({ missionId, step: "execute", attempt: attempt + 1 });
           }
-        } else {
-          log.info(`Mission ${missionId} eval step completed, awaiting mission-advance script`);
         }
       } else {
         log.info(`Mission ${missionId} eval step completed, mission-advance already called (status: ${postEval?.status})`);
