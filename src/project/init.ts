@@ -152,35 +152,34 @@ export async function runProjectInit(
   });
   if (!step2) return;
 
-  // Copy pipeline skills template to project directory (non-critical, don't block init)
-  try {
-    const cwd = store.getById(projectId)?.cwd;
-    if (cwd) {
-      const srcSkillsDir = join(import.meta.dir, "../../pipeline/skills");
-      const destSkillsDir = join(cwd, ".claude", "skills");
-
-      if (existsSync(srcSkillsDir)) {
-        for (const stepDir of readdirSync(srcSkillsDir)) {
-          const srcDir = join(srcSkillsDir, stepDir);
-          const destDir = join(destSkillsDir, stepDir);
-          // Copy SKILL.md
-          const srcSkill = join(srcDir, "SKILL.md");
-          if (existsSync(srcSkill)) {
-            mkdirSync(destDir, { recursive: true });
-            copyFileSync(srcSkill, join(destDir, "SKILL.md"));
-          }
-          // Copy mission-advance script (for eval step)
-          const srcScript = join(srcDir, "mission-advance");
-          if (existsSync(srcScript)) {
-            copyFileSync(srcScript, join(destDir, "mission-advance"));
-            try { chmodSync(join(destDir, "mission-advance"), 0o755); } catch {}
-          }
-        }
-      }
-    }
-  } catch (err) {
-    log.warn(`Failed to copy pipeline skills: ${err}`);
-  }
+  // [DISABLED] Pipeline skills now referenced directly from /pipeline/skills/ (single source of truth).
+  // Copy logic kept for reference — re-enable when per-project customization is needed.
+  // try {
+  //   const cwd = store.getById(projectId)?.cwd;
+  //   if (cwd) {
+  //     const srcSkillsDir = join(import.meta.dir, "../../pipeline/skills");
+  //     const destSkillsDir = join(cwd, ".claude", "skills");
+  //
+  //     if (existsSync(srcSkillsDir)) {
+  //       for (const stepDir of readdirSync(srcSkillsDir)) {
+  //         const srcDir = join(srcSkillsDir, stepDir);
+  //         const destDir = join(destSkillsDir, stepDir);
+  //         const srcSkill = join(srcDir, "SKILL.md");
+  //         if (existsSync(srcSkill)) {
+  //           mkdirSync(destDir, { recursive: true });
+  //           copyFileSync(srcSkill, join(destDir, "SKILL.md"));
+  //         }
+  //         const srcScript = join(srcDir, "mission-advance");
+  //         if (existsSync(srcScript)) {
+  //           copyFileSync(srcScript, join(destDir, "mission-advance"));
+  //           try { chmodSync(join(destDir, "mission-advance"), 0o755); } catch {}
+  //         }
+  //       }
+  //     }
+  //   }
+  // } catch (err) {
+  //   log.warn(`Failed to copy pipeline skills: ${err}`);
+  // }
 
   // Step 3: Register complete
   await runStep(store, projectId, "register_complete", async () => {

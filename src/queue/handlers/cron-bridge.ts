@@ -90,17 +90,16 @@ handlers.set("agent:memory-audit", async (remi) => {
   }
 });
 
-/** Resolve skill path: cwd/.claude/skills/{name} → ~/.remi/.claude/skills/{name} */
+/** Resolve skill path: cwd → ~/.remi → /pipeline/skills/ */
 function resolveSkillPath(skillName: string, cwd?: string): string {
   if (cwd) {
     const p = join(cwd, ".claude", "skills", skillName, "SKILL.md");
     if (existsSync(p)) return p;
   }
-  const p = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
-  if (existsSync(p)) return p;
-  // Pipeline skills (built-in, shipped with Remi source)
-  const p2 = join(import.meta.dir, "../../../pipeline/skills", skillName, "SKILL.md");
-  if (existsSync(p2)) return p2;
+  const userSkill = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
+  if (existsSync(userSkill)) return userSkill;
+  const builtIn = join(import.meta.dir, "../../../pipeline/skills", skillName, "SKILL.md");
+  if (existsSync(builtIn)) return builtIn;
   throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.remi, pipeline/)`);
 }
 

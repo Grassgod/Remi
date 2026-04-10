@@ -269,8 +269,7 @@ function buildPipelinePrompt(
 ): string {
   const skillDir = STEP_SKILL_DIR[step];
   const label = STEP_LABEL[step] ?? step;
-  const projectCwd = resolveProjectCwd(null as any, mission.projectId);
-  const skillPath = resolve(projectCwd, `.claude/skills/${skillDir}/SKILL.md`);
+  const skillPath = resolve(import.meta.dir, `../../../pipeline/skills/${skillDir}/SKILL.md`);
   const outputFile = STEP_OUTPUT_FILE[step] ? `${mission.outputDir}/${STEP_OUTPUT_FILE[step]}` : null;
 
   const parts: string[] = [];
@@ -370,11 +369,3 @@ function writeStepOutput(outputDir: string | null, step: PipelineStep, text: str
   log.info(`Wrote step output: ${outputDir}/${filename}`);
 }
 
-// ── Helpers ──
-
-function resolveProjectCwd(_remi: Remi, projectId: string): string {
-  const { ProjectStore } = require("../../project/store.js");
-  const store = new ProjectStore();
-  const project = store.getById(projectId);
-  return project?.cwd ?? process.env.HOME ?? "~";
-}
