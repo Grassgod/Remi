@@ -1108,11 +1108,9 @@ export class FeishuStreamingSession {
         planReview,
         nameSuffix: this._nameSuffix,
       });
-      const finalCardJson = JSON.stringify(finalCard);
-      this.log(`Final card JSON size: ${finalCardJson.length} bytes, text length: ${(text || "").length}`);
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
-        data: { content: finalCardJson },
+        data: { content: JSON.stringify(finalCard) },
       });
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
