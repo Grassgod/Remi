@@ -98,9 +98,63 @@ export function buildCardHeader(sessionId?: string | null, displayName?: string 
 /** Feishu image marker pattern: ![alt](feishu-image:img_key) */
 const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
 
+/** Fenced code block: ```lang\n...\n``` */
+const CODE_BLOCK_RE = /^(`{3,})(\w*)\n([\s\S]*?)\n\1\s*$/gm;
+const CODE_BLOCK_COLLAPSE_THRESHOLD = 8;
+
 /**
- * Split markdown text into card elements, extracting feishu-image markers into img elements.
- * Returns an array of markdown and img elements ready for card body.
+ * Expand markdown text into card elements:
+ * - feishu-image markers → img elements
+ * - Long code blocks → collapsible_panel elements (Feishu card code block expand is broken)
+ * - Everything else → markdown elements
+ */
+function expandMarkdownSegment(text: string): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(CODE_BLOCK_RE)) {
+    const before = text.slice(lastIndex, match.index);
+    if (before.trim()) elements.push({ tag: "markdown", content: before.trim() });
+
+    const lang = match[2] || "";
+    const code = match[3];
+    const lineCount = code.split("\n").length;
+
+    if (lineCount > CODE_BLOCK_COLLAPSE_THRESHOLD) {
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        border: { color: "grey-300", corner_radius: "6px" },
+        header: {
+          title: {
+            tag: "plain_text",
+            content: `${lang || "code"} (${lineCount} lines)`,
+            text_color: "grey",
+            text_size: "notation",
+          },
+          icon: { tag: "standard_icon", token: "code_outlined", color: "grey" },
+          icon_position: "right",
+          icon_expanded_angle: 90,
+        },
+        vertical_spacing: "2px",
+        elements: [{ tag: "markdown", content: match[0] }],
+      });
+    } else {
+      elements.push({ tag: "markdown", content: match[0] });
+    }
+
+    lastIndex = match.index! + match[0].length;
+  }
+
+  const after = text.slice(lastIndex);
+  if (after.trim()) elements.push({ tag: "markdown", content: after.trim() });
+
+  return elements;
+}
+
+/**
+ * Split markdown text into card elements, extracting feishu-image markers into img elements
+ * and wrapping long code blocks in collapsible panels.
  */
 export function buildContentElements(text: string): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
@@ -109,7 +163,7 @@ export function buildContentElements(text: string): Array<Record<string, unknown
   for (const match of text.matchAll(FEISHU_IMAGE_RE)) {
     const before = text.slice(lastIndex, match.index);
     if (before.trim()) {
-      elements.push({ tag: "markdown", content: before.trim() });
+      elements.push(...expandMarkdownSegment(before.trim()));
     }
     elements.push({
       tag: "img",
@@ -121,10 +175,9 @@ export function buildContentElements(text: string): Array<Record<string, unknown
 
   const after = text.slice(lastIndex);
   if (after.trim()) {
-    elements.push({ tag: "markdown", content: after.trim() });
+    elements.push(...expandMarkdownSegment(after.trim()));
   }
 
-  // Fallback: if no elements (empty text), add empty markdown
   if (elements.length === 0) {
     elements.push({ tag: "markdown", content: "" });
   }
