@@ -48,6 +48,7 @@ export function generateEcosystem(config: RemiConfig): string {
       autorestart: true,
       max_restarts: 10,
       restart_delay: 3000,
+      kill_timeout: 15000,
       ...(config.proxy.http ? { env: buildProxyEnv(config) } : {}),
     },
   ];

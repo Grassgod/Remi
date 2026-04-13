@@ -274,7 +274,7 @@ export class ByteDanceSSOAdapter implements AuthAdapter {
       value: data.access_token,
       expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 - 5 * 60 * 1000,
       refreshToken: data.refresh_token ?? entry.refreshToken,
-      refreshExpiresAt: entry.refreshExpiresAt,
+      refreshExpiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
     };
 
     this._tokens.set("access", newEntry);

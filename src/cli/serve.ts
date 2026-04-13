@@ -33,7 +33,7 @@ export async function runServe(_args: string[]): Promise<void> {
     try {
       await Promise.race([
         (async () => { await remi.queue.stop(); await remi.stop(); })(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("shutdown timeout")), 1200)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("shutdown timeout")), 10_000)),
       ]);
     } catch {
       log.warn("Shutdown timed out, forcing exit");

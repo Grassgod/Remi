@@ -6,6 +6,7 @@
  */
 
 import type { Subprocess } from "bun";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,6 +30,23 @@ import {
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("claude-proc");
+
+function getDescendantPids(pid: number): number[] {
+  const result: number[] = [];
+  const stack = [pid];
+  while (stack.length > 0) {
+    const p = stack.pop()!;
+    try {
+      const children = readFileSync(`/proc/${p}/task/${p}/children`, "utf-8")
+        .trim().split(/\s+/).filter(Boolean).map(Number);
+      for (const child of children) {
+        result.push(child);
+        stack.push(child);
+      }
+    } catch {}
+  }
+  return result;
+}
 
 /** Tool handler: async (ToolUseRequest) -> string (custom tool) or null (built-in, not handled). */
 export type ToolHandler = (request: ToolUseRequest) => Promise<string | null>;
@@ -529,10 +547,14 @@ export class ClaudeProcessManager {
     if (!this._process) return;
 
     if (this.isAlive) {
+      const pid = this._process.pid;
+      const descendants = getDescendantPids(pid);
       try {
         this._process.stdin.end();
-        // Wait up to 5s for graceful exit
         const timeout = setTimeout(() => {
+          for (const dpid of descendants.reverse()) {
+            try { process.kill(dpid, "SIGKILL"); } catch {}
+          }
           if (this._process && !this._process.killed) {
             this._process.kill();
           }
@@ -543,6 +565,10 @@ export class ClaudeProcessManager {
         if (this._process && !this._process.killed) {
           this._process.kill();
         }
+      }
+      // Kill any remaining descendants (MCP servers, etc.)
+      for (const dpid of descendants.reverse()) {
+        try { process.kill(dpid, "SIGTERM"); } catch {}
       }
     }
 
