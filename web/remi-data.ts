@@ -1516,7 +1516,7 @@ export class RemiData {
     const remiDir = this.skillsDir;
     if (existsSync(remiDir)) {
       const count = readdirSync(remiDir, { withFileTypes: true })
-        .filter(e => e.isDirectory() && !e.name.startsWith(".")).length;
+        .filter(e => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith(".")).length;
       if (count > 0) scopes.push({ scope: "remi-global", label: "Remi Global", path: remiDir, count });
     }
 
@@ -1565,7 +1565,7 @@ export class RemiData {
 
     const entries = readdirSync(dir, { withFileTypes: true });
     return entries
-      .filter(e => e.isDirectory() && !e.name.startsWith("."))
+      .filter(e => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith("."))
       .map(e => {
         const name = e.name;
         const skillMd = join(dir, name, "SKILL.md");
