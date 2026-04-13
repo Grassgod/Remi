@@ -1045,6 +1045,7 @@ export class FeishuStreamingSession {
     // Send final element updates BEFORE setting this.closed
     // (_updateElementRaw checks this.closed and bails out if true)
     if (text && text !== this.state.currentText) {
+      this.log(`Final element update: content length=${text.length}, first 200c: ${text.slice(0, 200)}`);
       await this._updateElementRaw("content", text);
     }
     // process_content removed — steps are now individual div elements appended to process_panel
@@ -1109,11 +1110,13 @@ export class FeishuStreamingSession {
         nameSuffix: this._nameSuffix,
       });
       const finalCardJson = JSON.stringify(finalCard);
-      this.log(`Final card JSON size: ${finalCardJson.length} bytes, text length: ${(text || "").length}`);
-      await this.client.im.message.patch({
+      const codeBlockMatch = (text || "").match(/```[\s\S]*?```/);
+      this.log(`Final card: json=${finalCardJson.length}B text=${(text || "").length}c codeBlock=${codeBlockMatch ? codeBlockMatch[0].length + "c" : "none"}`);
+      const patchRes = await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
         data: { content: finalCardJson },
       });
+      this.log(`Final card patch response: ${JSON.stringify(patchRes?.data || patchRes).slice(0, 500)}`);
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
       this.log(`Final card patch failed: ${String(e)} ${detail}`);
