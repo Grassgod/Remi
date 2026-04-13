@@ -87,8 +87,12 @@ export class FeishuAuthAdapter implements AuthAdapter {
         log.debug(
           `feishu/${type} token restored (expires in ${Math.round((entry.expiresAt - Date.now()) / 1000)}s)`,
         );
+      } else if (entry.refreshToken) {
+        // access_token expired but refresh_token still available — load it for on-demand refresh
+        this._tokens.set(type, entry);
+        log.info(`feishu/${type} access_token expired, refresh_token preserved for on-demand refresh`);
       } else {
-        log.info(`feishu/${type} persisted token expired, will refresh on demand`);
+        log.info(`feishu/${type} persisted token expired, no refresh_token available`);
       }
     }
   }
