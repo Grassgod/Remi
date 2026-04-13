@@ -98,30 +98,9 @@ export function buildCardHeader(sessionId?: string | null, displayName?: string 
 /** Feishu image marker pattern: ![alt](feishu-image:img_key) */
 const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
 
-/** Fenced code block pattern (3+ backticks). */
-const CODE_BLOCK_RE = /^(`{3,})(\w*)\n[\s\S]*?\n\1\s*$/gm;
-
-/** Split markdown text at fenced code block boundaries into separate segments. */
-function splitAtCodeBlocks(text: string): string[] {
-  const segments: string[] = [];
-  let lastIndex = 0;
-
-  for (const match of text.matchAll(CODE_BLOCK_RE)) {
-    const before = text.slice(lastIndex, match.index);
-    if (before.trim()) segments.push(before.trim());
-    segments.push(match[0]);
-    lastIndex = match.index! + match[0].length;
-  }
-
-  const after = text.slice(lastIndex);
-  if (after.trim()) segments.push(after.trim());
-
-  return segments;
-}
-
 /**
- * Split markdown text into card elements, extracting feishu-image markers into img elements
- * and splitting at code block boundaries so each block is its own element.
+ * Split markdown text into card elements, extracting feishu-image markers into img elements.
+ * Returns an array of markdown and img elements ready for card body.
  */
 export function buildContentElements(text: string): Array<Record<string, unknown>> {
   const elements: Array<Record<string, unknown>> = [];
@@ -130,9 +109,7 @@ export function buildContentElements(text: string): Array<Record<string, unknown
   for (const match of text.matchAll(FEISHU_IMAGE_RE)) {
     const before = text.slice(lastIndex, match.index);
     if (before.trim()) {
-      for (const seg of splitAtCodeBlocks(before.trim())) {
-        elements.push({ tag: "markdown", content: seg });
-      }
+      elements.push({ tag: "markdown", content: before.trim() });
     }
     elements.push({
       tag: "img",
@@ -144,11 +121,10 @@ export function buildContentElements(text: string): Array<Record<string, unknown
 
   const after = text.slice(lastIndex);
   if (after.trim()) {
-    for (const seg of splitAtCodeBlocks(after.trim())) {
-      elements.push({ tag: "markdown", content: seg });
-    }
+    elements.push({ tag: "markdown", content: after.trim() });
   }
 
+  // Fallback: if no elements (empty text), add empty markdown
   if (elements.length === 0) {
     elements.push({ tag: "markdown", content: "" });
   }
