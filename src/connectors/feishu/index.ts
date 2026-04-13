@@ -479,6 +479,7 @@ export class FeishuConnector implements Connector {
     const client = createFeishuClient(creds);
     const session = new FeishuStreamingSession(client, creds, {
       tokenProvider: this._tokenProvider ?? undefined,
+      log: (msg: string) => slog.info(msg),
     });
 
     // Register active session for /esc abort (keyed by sessionKey to isolate topics)
