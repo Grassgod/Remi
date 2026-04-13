@@ -110,7 +110,7 @@ function buildSummary(text: string): string {
     .trim();
 }
 
-import { buildCardHeader, buildContentElements, unfenceCodeBlocks } from "./send.js";
+import { buildCardHeader, buildContentElements } from "./send.js";
 
 /**
  * Build the final static card JSON.
@@ -705,7 +705,7 @@ export class FeishuStreamingSession {
   // ── Public update methods (fire-and-forget, don't block caller) ──
 
   async update(text: string): Promise<void> {
-    this._throttledUpdate("content", unfenceCodeBlocks(text), "currentText");
+    this._throttledUpdate("content", text, "currentText");
   }
 
   async updateThinking(text: string): Promise<void> {
