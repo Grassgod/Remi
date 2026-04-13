@@ -99,40 +99,38 @@ export function buildCardHeader(sessionId?: string | null, displayName?: string 
 const FEISHU_IMAGE_RE = /!\[([^\]]*)\]\(feishu-image:(img_[a-zA-Z0-9_-]+)\)/g;
 
 /** Fenced code block pattern (3+ backticks). */
-const CODE_BLOCK_RE = /^(`{3,})(\w*)\n[\s\S]*?\n\1\s*$/gm;
+const CODE_BLOCK_RE = /^(`{3,})(\w*)\n([\s\S]*?)\n\1\s*$/gm;
 
-/** Split markdown text at fenced code block boundaries into separate segments. */
-function splitAtCodeBlocks(text: string): string[] {
-  const segments: string[] = [];
-  let lastIndex = 0;
-
-  for (const match of text.matchAll(CODE_BLOCK_RE)) {
-    const before = text.slice(lastIndex, match.index);
-    if (before.trim()) segments.push(before.trim());
-    segments.push(match[0]);
-    lastIndex = match.index! + match[0].length;
-  }
-
-  const after = text.slice(lastIndex);
-  if (after.trim()) segments.push(after.trim());
-
-  return segments;
+/**
+ * Convert fenced code blocks to per-line inline code to avoid
+ * Feishu card's automatic code block collapsing.
+ */
+export function unfenceCodeBlocks(text: string): string {
+  return text.replace(CODE_BLOCK_RE, (_match, _fence, _lang, code: string) => {
+    const lines = code.split("\n");
+    return lines
+      .map((line) => {
+        if (!line) return "\u200B";
+        const escaped = line.includes("`") ? `\`\` ${line} \`\`` : `\`${line}\``;
+        return escaped;
+      })
+      .join("\n");
+  });
 }
 
 /**
- * Split markdown text into card elements, extracting feishu-image markers into img elements
- * and splitting at code block boundaries so each block is its own element.
+ * Split markdown text into card elements, extracting feishu-image markers into img elements.
+ * Code blocks are converted to inline code lines to prevent Feishu's auto-collapse.
  */
 export function buildContentElements(text: string): Array<Record<string, unknown>> {
+  const processed = unfenceCodeBlocks(text);
   const elements: Array<Record<string, unknown>> = [];
   let lastIndex = 0;
 
-  for (const match of text.matchAll(FEISHU_IMAGE_RE)) {
-    const before = text.slice(lastIndex, match.index);
+  for (const match of processed.matchAll(FEISHU_IMAGE_RE)) {
+    const before = processed.slice(lastIndex, match.index);
     if (before.trim()) {
-      for (const seg of splitAtCodeBlocks(before.trim())) {
-        elements.push({ tag: "markdown", content: seg });
-      }
+      elements.push({ tag: "markdown", content: before.trim() });
     }
     elements.push({
       tag: "img",
@@ -142,11 +140,9 @@ export function buildContentElements(text: string): Array<Record<string, unknown
     lastIndex = match.index! + match[0].length;
   }
 
-  const after = text.slice(lastIndex);
+  const after = processed.slice(lastIndex);
   if (after.trim()) {
-    for (const seg of splitAtCodeBlocks(after.trim())) {
-      elements.push({ tag: "markdown", content: seg });
-    }
+    elements.push({ tag: "markdown", content: after.trim() });
   }
 
   if (elements.length === 0) {
