@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { BottomNav } from "./BottomNav";
 import { Header } from "./Header";
@@ -13,6 +13,13 @@ interface LayoutProps {
 
 export function Layout({ title, subtitle, actions, children }: LayoutProps) {
   const status = useAppStore(s => s.status);
+  const fetchStatus = useAppStore(s => s.fetchStatus);
+
+  // Fetch daemon status on mount so the indicator is correct on every page,
+  // not only when Dashboard happens to be the landing page.
+  useEffect(() => {
+    if (!status) fetchStatus();
+  }, [status, fetchStatus]);
 
   return (
     <div className="relative z-[1] flex h-dvh">
