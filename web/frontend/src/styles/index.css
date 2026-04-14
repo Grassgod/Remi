@@ -123,6 +123,11 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
 
+/* ═══ Mission cards ═══ */
+.mission-card { border: none !important; box-shadow: none; }
+.mission-card:hover { filter: brightness(0.97); }
+.dark .mission-card:hover { filter: brightness(1.12); }
+
 /* ═══ Animation ═══ */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }

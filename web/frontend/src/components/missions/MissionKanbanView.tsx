@@ -1,6 +1,17 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useLocation } from "wouter";
 import { GitPullRequest, User, Clock, CheckCircle, XCircle, Send } from "lucide-react";
+
+function useIsDark() {
+  return useSyncExternalStore(
+    (cb) => {
+      const obs = new MutationObserver(cb);
+      obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      return () => obs.disconnect();
+    },
+    () => document.documentElement.classList.contains("dark"),
+  );
+}
 import { ScrollArea } from "../ui/scroll-area";
 import type { MissionItem } from "../../api/types";
 import * as api from "../../api/client";
@@ -27,6 +38,7 @@ type PendingAction = {
 const STORAGE_KEY = "remi_approver_email";
 
 export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: MissionKanbanViewProps) {
+  const isDark = useIsDark();
   const [, navigate] = useLocation();
   const [updating, setUpdating] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -84,9 +96,9 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
 
     const isDestructive = pending.targetStatus === "rejected" || pending.targetStatus === "blocked";
     const isChanges = pending.targetStatus === "in_progress";
-    const borderColor = isDestructive ? "border-red-800" : isChanges ? "border-amber-800" : "border-emerald-800";
-    const bgColor = isDestructive ? "bg-red-950/50" : isChanges ? "bg-amber-950/50" : "bg-emerald-950/50";
-    const textColor = isDestructive ? "text-red-400" : isChanges ? "text-amber-400" : "text-emerald-400";
+    const borderColor = "border-border hover:border-primary/30";
+    const bgColor = "bg-card";
+    const textColor = isDestructive ? "text-red-500 dark:text-red-400" : isChanges ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400";
 
     return (
       <div className="mt-2 space-y-2 rounded-md border border-border bg-background p-2.5" onClick={e => e.stopPropagation()}>
@@ -132,22 +144,21 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
     <div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
         {columns.map(col => (
-          <div key={col.key} className="rounded-lg border border-border bg-card">
-            <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
+          <div key={col.key} className="rounded-lg bg-muted/40 dark:bg-muted/20">
+            <div className="flex items-center gap-2 border-b border-border/30 px-3 py-2.5">
               <span
-                className="h-[7px] w-[7px] rounded-full"
-                style={{ background: col.color }}
-              />
-              <span className="text-[12px] font-medium" style={{ color: col.color }}>
+                className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+                style={{ background: isDark ? col.bgColor : col.lightBg, color: isDark ? col.textColor : col.lightText }}
+              >
                 {col.label}
               </span>
-              <span className="ml-auto rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <span className="ml-auto text-[11px] font-medium text-muted-foreground">
                 {col.items.length}
               </span>
             </div>
 
-            <ScrollArea className="max-h-[500px]">
-              <div className="space-y-1.5 p-2">
+            <ScrollArea className="max-h-[calc(100vh-200px)]">
+              <div className="space-y-2 p-2.5">
                 {col.items.length === 0 ? (
                   <div className="py-8 text-center text-[10px] text-muted-foreground">Empty</div>
                 ) : (
@@ -161,7 +172,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                       <div
                         key={mission.id}
                         onClick={() => onMissionClick ? onMissionClick(mission) : navigate(`/missions/${mission.id}`)}
-                        className="cursor-pointer rounded-md border border-border bg-card p-3 transition-all hover:border-primary/30 hover:bg-accent/30"
+                        className="mission-card cursor-pointer rounded-lg bg-card p-3 transition-all"
                       >
                         <div className="line-clamp-2 text-[13px] font-medium text-foreground">
                           {mission.title}
@@ -178,11 +189,11 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                           </span>
                           {mission.mrUrl && (
                             <span
-                              className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium"
-                              style={{
-                                background: mission.mrStatus === "merged" ? "#052e16" : "#422006",
-                                color: mission.mrStatus === "merged" ? "#4ade80" : "#fbbf24",
-                              }}
+                              className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium ${
+                                mission.mrStatus === "merged"
+                                  ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
+                                  : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400"
+                              }`}
                             >
                               <GitPullRequest className="h-2.5 w-2.5" />
                               {mission.mrStatus ?? "MR"}
@@ -213,7 +224,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                             <button
                               disabled={isUpdating}
                               onClick={e => startAction(e, mission.id, "approved", "Approve")}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-emerald-800 bg-emerald-950/50 px-2 py-1 text-[10px] font-medium text-emerald-400 transition-colors hover:bg-emerald-900/50 disabled:opacity-50"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[10px] font-medium text-emerald-600 transition-all hover:border-emerald-400/50 hover:bg-emerald-50/50 dark:text-emerald-400 dark:hover:border-emerald-700/50 dark:hover:bg-emerald-950/30 disabled:opacity-50"
                             >
                               <CheckCircle className="h-3 w-3" />
                               Approve
@@ -221,7 +232,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                             <button
                               disabled={isUpdating}
                               onClick={e => startAction(e, mission.id, "rejected", "Reject")}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-red-800 bg-red-950/50 px-2 py-1 text-[10px] font-medium text-red-400 transition-colors hover:bg-red-900/50 disabled:opacity-50"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[10px] font-medium text-red-500 transition-all hover:border-red-400/50 hover:bg-red-50/50 dark:text-red-400 dark:hover:border-red-700/50 dark:hover:bg-red-950/30 disabled:opacity-50"
                             >
                               <XCircle className="h-3 w-3" />
                               Reject

@@ -22,7 +22,7 @@ type ViewMode = "list" | "kanban";
 export function Missions() {
   const [missions, setMissions] = useState<MissionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<ViewMode>("list");
+  const [view, setView] = useState<ViewMode>("kanban");
   const [projectId, setProjectId] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
 
