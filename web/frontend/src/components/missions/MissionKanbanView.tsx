@@ -144,7 +144,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
     <div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
         {columns.map(col => (
-          <div key={col.key} className="rounded-lg bg-muted/40 dark:bg-muted/20">
+          <div key={col.key} className="rounded-lg border border-border dark:border-transparent bg-muted/40 dark:bg-muted/20">
             <div className="flex items-center gap-2 px-3 pb-1 pt-2.5">
               <span
                 className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
