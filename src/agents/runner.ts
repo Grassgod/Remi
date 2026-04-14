@@ -98,8 +98,8 @@ export class AgentRunner {
       "--dangerously-skip-permissions",
       "--model", config.model,
     ];
-    if (config.mcp !== false) {
-      cmd.push("--mcp-config", join(homedir(), ".mcp.json"));
+    if (config.mcp === false) {
+      cmd.push("--mcp-config", "/dev/null");
     }
     cmd.push("-p", prompt);
     return cmd;
