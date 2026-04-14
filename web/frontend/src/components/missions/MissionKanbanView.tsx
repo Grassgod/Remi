@@ -145,7 +145,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
         {columns.map(col => (
           <div key={col.key} className="rounded-lg bg-muted/40 dark:bg-muted/20">
-            <div className="flex items-center gap-2 border-b border-border/30 px-3 py-2.5">
+            <div className="flex items-center gap-2 px-3 pb-1 pt-2.5">
               <span
                 className="rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
                 style={{ background: isDark ? col.bgColor : col.lightBg, color: isDark ? col.textColor : col.lightText }}
