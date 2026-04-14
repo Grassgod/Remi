@@ -184,7 +184,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                           </div>
                         )}
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground border border-border/50">
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
                             {STEP_LABELS[mission.currentStep] ?? mission.currentStep}
                           </span>
                           {mission.mrUrl && (
@@ -220,11 +220,11 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
 
                         {/* Actions */}
                         {showActions && !hasPending && (
-                          <div className="mt-2.5 flex items-center gap-1.5 border-t border-border/50 pt-2.5">
+                          <div className="mt-2.5 flex items-center gap-1.5 pt-2.5">
                             <button
                               disabled={isUpdating}
                               onClick={e => startAction(e, mission.id, "approved", "Approve")}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[10px] font-medium text-emerald-600 transition-all hover:border-emerald-400/50 hover:bg-emerald-50/50 dark:text-emerald-400 dark:hover:border-emerald-700/50 dark:hover:bg-emerald-950/30 disabled:opacity-50"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md bg-muted px-2 py-1.5 text-[10px] font-medium text-emerald-600 transition-all hover:border-emerald-400/50 hover:bg-emerald-50/50 dark:text-emerald-400 dark:hover:border-emerald-700/50 dark:hover:bg-emerald-950/30 disabled:opacity-50"
                             >
                               <CheckCircle className="h-3 w-3" />
                               Approve
@@ -232,7 +232,7 @@ export function MissionKanbanView({ missions, onMissionClick, onStatusChange }: 
                             <button
                               disabled={isUpdating}
                               onClick={e => startAction(e, mission.id, "rejected", "Reject")}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[10px] font-medium text-red-500 transition-all hover:border-red-400/50 hover:bg-red-50/50 dark:text-red-400 dark:hover:border-red-700/50 dark:hover:bg-red-950/30 disabled:opacity-50"
+                              className="flex flex-1 items-center justify-center gap-1 rounded-md bg-muted px-2 py-1.5 text-[10px] font-medium text-red-500 transition-all hover:border-red-400/50 hover:bg-red-50/50 dark:text-red-400 dark:hover:border-red-700/50 dark:hover:bg-red-950/30 disabled:opacity-50"
                             >
                               <XCircle className="h-3 w-3" />
                               Reject
