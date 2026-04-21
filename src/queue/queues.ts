@@ -22,6 +22,7 @@ export interface MemoryJobData {
   contentHash: string;
   roundCount: number;
   timestamp: string;
+  cwd?: string;
 }
 
 /** remi:cron — 定时任务（Phase 2） */

@@ -51,14 +51,63 @@ handlers.set("builtin:heartbeat", async (remi) => {
 
 // ── Agent handlers ────────────────────────────────────────────
 
-handlers.set("agent:wiki-curate", async () => {
+/**
+ * Push an agent's "--- 汇报 ---" narrative section to configured push targets.
+ * Targets come from the cron job's handler_config.pushTargets (preferred) or
+ * handler_config.delivery.pushTargets (same shape as skill:run/skill:push).
+ * Connector name defaults to "feishu".
+ */
+async function pushAgentReport(
+  remi: Remi,
+  config: Record<string, any> | undefined,
+  stdout: string,
+  exitCode: number,
+  title: string,
+  tag: string,
+): Promise<void> {
+  if (exitCode !== 0 || !stdout.includes("--- 汇报 ---")) return;
+  const report = stdout.split("--- 汇报 ---")[1]?.trim();
+  if (!report) return;
+
+  // Accept both top-level and nested delivery.{pushTargets,connectorName}
+  const delivery = (config?.delivery as Record<string, any> | undefined) ?? {};
+  const pushTargets: string[] =
+    (config?.pushTargets as string[]) ?? (delivery.pushTargets as string[]) ?? [];
+  const connectorName: string =
+    (config?.connectorName as string) ?? (delivery.connectorName as string) ?? "feishu";
+
+  if (pushTargets.length === 0) {
+    log.debug(`[${tag}] No pushTargets configured, skipping push`);
+    return;
+  }
+
+  const connectors = remi["_connectors"] as Connector[];
+  const connector = connectors.find((c) => c.name === connectorName);
+  if (!connector) {
+    log.warn(`[${tag}] Connector "${connectorName}" not found, skipping push`);
+    return;
+  }
+
+  const msg = { text: `${title}\n\n${report}` };
+  for (const target of pushTargets) {
+    try {
+      await connector.reply(target, msg);
+      log.info(`[${tag}] Report pushed to ${target}`);
+    } catch (e) {
+      log.warn(`[${tag}] Failed to push to ${target}: ${e}`);
+    }
+  }
+}
+
+handlers.set("agent:wiki-curate", async (remi, config) => {
   const { AgentRunner } = await import("../../agents/index.js");
   const runner = new AgentRunner();
   const prompt = `执行今日 Wiki 维护。扫描所有项目的 memory 和 wiki 目录，综合记忆碎片生成/更新 Wiki L0/L1/L2。`;
-  await runner.run("wiki-curate", prompt);
+  const result = await runner.run("wiki-curate", prompt);
+  await pushAgentReport(remi, config, result.stdout, result.exitCode, "📚 Wiki 维护日报", "agent:wiki-curate");
 });
 
-handlers.set("agent:memory-audit", async (remi) => {
+handlers.set("agent:memory-audit", async (remi, config) => {
   const { AgentRunner } = await import("../../agents/index.js");
   const runner = new AgentRunner();
   const prompt = `执行今日统一记忆维护（9 阶段）：
@@ -72,22 +121,7 @@ handlers.set("agent:memory-audit", async (remi) => {
 8. CLEANUP — 清理 >30 天 dailies 和 >50 条 versions
 9. REPORT — 汇总昨日所有 agent 运行日志`;
   const result = await runner.run("memory-audit", prompt);
-
-  // Push audit report via connector if configured
-  if (result.exitCode === 0 && result.stdout.includes("--- 汇报 ---")) {
-    const report = result.stdout.split("--- 汇报 ---")[1]?.trim();
-    if (report) {
-      const connectors = remi["_connectors"] as any[];
-      const feishu = connectors.find((c: any) => c.name === "feishu");
-      if (feishu) {
-        const pushTarget = remi.config.ownerId;
-        if (pushTarget) {
-          await feishu.reply(pushTarget, { text: `📋 记忆维护日报\n\n${report}` });
-          log.info("[agent:memory-audit] Report pushed to owner");
-        }
-      }
-    }
-  }
+  await pushAgentReport(remi, config, result.stdout, result.exitCode, "📋 记忆维护日报", "agent:memory-audit");
 });
 
 /** Resolve skill path: cwd → ~/.remi → /pipeline/skills/ */

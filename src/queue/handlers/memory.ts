@@ -45,16 +45,20 @@ export async function handleMemoryJob(
   job: Job<MemoryJobData>,
   memory: MemoryStore,
 ): Promise<void> {
-  const { aggregatedText, sessionKey, roundCount, contentHash } = job.data;
+  const { aggregatedText, sessionKey, roundCount, contentHash, cwd } = job.data;
 
   log.info(
-    `Processing memory extraction: session=${sessionKey}, rounds=${roundCount}, hash=${contentHash}`,
+    `Processing memory extraction: session=${sessionKey}, rounds=${roundCount}, hash=${contentHash}, cwd=${cwd ?? "none"}`,
   );
+
+  const projectContext = cwd
+    ? `\n## 项目上下文\nCWD: ${cwd}\n→ 项目特定事实（架构、配置、约定）请用 remember({scope: "project", cwd: "${cwd}", ...})\n→ 人/组织/跨项目决策仍用 scope: "personal"\n`
+    : `\n## 项目上下文\n无明确 cwd → 默认使用 scope: "personal"\n`;
 
   const prompt = `
 ## 当前记忆结构
 ${describeMemoryStructure(memory)}
-
+${projectContext}
 ## 对话上下文
 Session: ${sessionKey}
 
