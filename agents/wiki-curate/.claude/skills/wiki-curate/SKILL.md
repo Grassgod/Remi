@@ -104,7 +104,32 @@ Migrate valuable content to `{topic}/overview.md` + `{topic}/details.md`, delete
 
 Exception: `directory-architecture.md` and similar design docs referenced by other systems may stay as standalone files.
 
-### Step 5: Reference Check
+### Step 5: Backlinks 章节维护（Obsidian 式）
+
+对 `~/.remi/memory/entities/` 和 `~/.remi/projects/*/memory/entities/` 下每个 entity markdown 文件：
+
+1. 调用 `mcp__remi-memory__backlinks({entity: "实体名"})`
+2. 如果返回空（"暂无反向链接"）：
+   - 若该文件已有 `## Backlinks` 章节 → 删除
+   - 否则跳过
+3. 如果返回入链列表：
+   - 在文件末尾找 `## Backlinks`，有则完整替换内容，没有则在文件末追加一个新章节
+   - 格式：
+     ```markdown
+     ## Backlinks
+     - [[source-entity]] — "上下文片段..."
+     - [[another-source]] — "另一段上下文..."
+     ```
+   - 按 source 字母序（稳定顺序便于 git diff）
+
+每次操作输出 `[BACKLINKS] entity-name — N incoming links` 或 `[BACKLINKS:CLEAR] entity-name — removed stale section`。
+
+**注意**：
+- 只改动 `## Backlinks` 章节，不动文件其他部分
+- Backlinks 章节始终放在文件最末尾
+- Wiki 文件（wiki/ 下的 overview.md/details.md）暂不自动加 backlinks — 它们用 "## Related" 章节手动维护
+
+### Step 6: Reference Check
 
 Read `~/.remi/projects/-data00-home-hehuajie/wiki/directory-architecture.md` for canonical directory layout conventions.
 
@@ -245,7 +270,9 @@ Use entity `related` fields in frontmatter as hints, but verify actual relations
 
 ## Output Format
 
-After completing all operations, output a structured summary:
+After completing all operations, output a structured summary **followed by a natural-language daily report**.
+
+The structured log lines come first (for machine parsing and audit trails), then a `--- 汇报 ---` marker, then 2-4 lines of plain Chinese summary for Jack to skim in Feishu.
 
 ```
 ## Wiki Curate Summary
@@ -260,9 +287,27 @@ After completing all operations, output a structured summary:
 [DELETE] home/old-topic — superseded by project wiki entry
 [NOOP] 字节跳动 (3 observations) — below threshold
 [NOOP] 45 other entities — below 5-observation threshold
+
+--- 汇报 ---
+
+今日 Wiki 维护：为 markone 新建了项目目录；larkparser 知识从 home 迁移到项目 wiki 并去重。
+在 remi 下创建了 memory-v3 专题（L0+L1+L2），与 architecture 互相建立了引用。
+larkparser 项目 overview 更新了 v2.0.3 发布节点和新协作者信息。
+45 个实体 observations 不足 5 条，本轮跳过。
 ```
+
+**汇报段写作规范**：
+- 2-4 行中文，每行一个要点
+- 重点：新建/迁移/删除/合并了什么，为什么（如果非显然）
+- 不包含 [NOOP] 类的常规跳过统计（那些在日志段已有）
+- 如果当天没有任何改动，汇报段写 "今日无新 entity 达到阈值，Wiki 保持稳定。"
+- **必须保留 `--- 汇报 ---` 分隔符**，cron bridge 会扫描此标记并把后面的内容推送到 Feishu
 
 If nothing needed:
 ```
 [NOOP] — All Wiki entries are current, no new entities meet the threshold.
+
+--- 汇报 ---
+
+今日无新 entity 达到阈值，Wiki 保持稳定。
 ```

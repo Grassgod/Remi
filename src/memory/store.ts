@@ -24,6 +24,7 @@ import { join, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
 import type { VectorStore } from "../db/vector-store.js";
+import { LinkGraph, type Backlink, safeReadFile, entityNameFromPath } from "./link-graph.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("memory");
@@ -66,12 +67,17 @@ export class MemoryStore {
   root: string;
   private _index = new Map<string, IndexEntry>();
   private _vectorStore: VectorStore | null = null;
+  private _linkGraph: LinkGraph;
 
   constructor(root: string, vectorStore?: VectorStore | null) {
     this.root = root;
     this._vectorStore = vectorStore ?? null;
+    this._linkGraph = new LinkGraph({
+      resolve: (rawTarget: string) => this._resolveEntityName(rawTarget),
+    });
     this._ensureInitialized();
     this._buildIndex();
+    this._rebuildLinkGraph();
   }
 
   // ── 2.1 Initialization ────────────────────────────────────
@@ -146,6 +152,52 @@ export class MemoryStore {
             : ((meta.last_accessed as string) ?? ""),
       accessCount: (meta.access_count as number) ?? 0,
     });
+    this._rebuildLinkGraph();
+  }
+
+  // ── Link Graph (Obsidian-style [[wikilink]]) ────────────────
+
+  /**
+   * Resolve a raw wikilink target to the canonical entity name.
+   * Checks exact-match against entity names first, then aliases.
+   * Case-insensitive. Returns null if no match.
+   */
+  private _resolveEntityName(rawTarget: string): string | null {
+    const needle = rawTarget.trim().toLowerCase();
+    if (!needle) return null;
+    // First pass: exact name match
+    for (const entry of this._index.values()) {
+      if (entry.name.toLowerCase() === needle) return entry.name;
+    }
+    // Second pass: alias match
+    for (const entry of this._index.values()) {
+      for (const alias of entry.aliases) {
+        if (alias.toLowerCase() === needle) return entry.name;
+      }
+    }
+    return null;
+  }
+
+  private _rebuildLinkGraph(): void {
+    const files: Array<{ entityName: string; path: string; content: string }> = [];
+    for (const [path, entry] of this._index) {
+      files.push({
+        entityName: entry.name || entityNameFromPath(path),
+        path,
+        content: safeReadFile(path),
+      });
+    }
+    this._linkGraph.rebuild(files);
+  }
+
+  /** Public API: list all entities that link TO the given entity. */
+  getBacklinks(entityName: string): Backlink[] {
+    return this._linkGraph.getBacklinks(entityName);
+  }
+
+  /** Public API: list all entities the given entity links OUT TO. */
+  getForwardLinks(entityName: string): string[] {
+    return this._linkGraph.getForwardLinks(entityName);
   }
 
   _parseFrontmatter(path: string): Record<string, unknown> {

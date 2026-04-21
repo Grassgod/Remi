@@ -121,6 +121,22 @@ const TOOLS = [
       required: ["entity", "type", "observation"],
     },
   },
+  {
+    name: "backlinks",
+    description:
+      "查询某个实体的反向链接（Obsidian 式）：所有用 [[实体名]] 语法提到该实体的其他文件，" +
+      "每条返回来源实体名和上下文片段。常用于了解某个实体被哪些其他实体关联。",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        entity: {
+          type: "string",
+          description: "目标实体名（如 Alice-Chen, Remi, larkparser）",
+        },
+      },
+      required: ["entity"],
+    },
+  },
 ];
 
 // ── JSON-RPC 2.0 helpers ─────────────────────────────────────
@@ -195,6 +211,23 @@ async function handleRequest(req: JsonRpcRequest): Promise<Record<string, unknow
         }
         return jsonRpcResult(req.id, {
           content: [{ type: "text", text: result }],
+        });
+      }
+
+      if (toolName === "backlinks") {
+        const entity = args.entity as string;
+        mcpLog(`backlinks entity="${entity}"`);
+        const backs = store.getBacklinks(entity);
+        if (backs.length === 0) {
+          return jsonRpcResult(req.id, {
+            content: [{ type: "text", text: `(${entity} 暂无反向链接)` }],
+          });
+        }
+        const lines = backs.map(
+          (b) => `- [[${b.source}]] — "${b.snippet}"`,
+        );
+        return jsonRpcResult(req.id, {
+          content: [{ type: "text", text: `## Backlinks for ${entity}\n\n${lines.join("\n")}` }],
         });
       }
 

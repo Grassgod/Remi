@@ -124,7 +124,51 @@ Output: `[PRUNE] MEMORY.md — archived N sections (XXX → YYY lines)`
 
 Output: `[CLEANUP] removed N dailies, M versions`
 
-## Phase 9: REPORT — Summarize yesterday's operations
+## Phase 9: UNLINKED_MENTIONS — Detect and fix missing wikilinks (Obsidian-style)
+
+Many entity files contain plain-text references to other entities that should be `[[wikilinks]]`. This phase scans for them and fixes high-confidence cases, reports ambiguous ones.
+
+### Detection algorithm
+
+1. Build a lookup table from the in-memory index:
+   - For each entity: `{ name, aliases }` → `canonicalName`
+   - Only include entities with name length ≥ 3 (avoid false positives on short names like "X")
+2. For each markdown file in `~/.remi/memory/entities/**/*.md`, `~/.remi/memory/daily/*.md`, and `~/.remi/memory/MEMORY.md`:
+   a. Read content
+   b. Remove code blocks (\`\`\`...\`\`\` and indented code)
+   c. Remove YAML frontmatter (between `---` markers)
+   d. Remove content already inside `[[...]]`
+   e. Scan remaining text for word-boundary matches of entity names/aliases
+3. For each match, check:
+   - Is the match inside a URL (http://, file://)? → skip
+   - Is the match in a heading? → skip (don't edit headings)
+   - Is the match in the `## Backlinks` section? → skip (that section is managed by wiki-curate)
+
+### Auto-fix rules (high confidence only)
+
+Replace plain-text occurrence with `[[canonical-name]]` when ALL of these hold:
+- ✅ The matched string is the **exact canonical name** (not an alias)
+- ✅ The match is NOT in a URL, heading, or code
+- ✅ The entity name is unambiguous (not a common word like "Remi" when "remi" could also mean the agent/tool context)
+
+**Do NOT auto-fix** (report as `[UNLINKED]`) when:
+- ❌ Match is an alias (might refer to a different entity)
+- ❌ Entity name also matches a common word in context
+- ❌ Match is in a Chinese sentence where segmentation is ambiguous
+
+### Output
+
+- `[LINK_FIX] file-path — auto-linked N mentions of "entity-name"` — high confidence replacements done
+- `[UNLINKED] file-path:Line — "plain-text" could link to [[entity-name]] (reason: ambiguous alias / CJK context)` — manual review needed
+
+### Constraints
+
+- **Idempotent**: running twice should produce zero new fixes on the second run
+- **Do not touch wiki/ directory** — that's wiki-curate's responsibility
+- **Do not modify `## Backlinks` sections** — also wiki-curate's territory
+- **Batch by file**: one pass per file, write back once
+
+## Phase 10: REPORT — Summarize yesterday's operations
 
 1. Use `Glob` to find all log files in `~/.remi/agents/*/runs/` from yesterday
 2. Also check `~/.remi/cron/runs/*.jsonl` for yesterday's cron job logs
@@ -148,6 +192,8 @@ Emit all actions first, then the report:
 [COMPRESS] daily/2026-02-01.md..2026-02-07.md → daily/weekly-2026-W05.md
 [PRUNE] MEMORY.md — archived N sections (683 → 180 lines)
 [CLEANUP] removed N dailies, M versions
+[LINK_FIX] entities/people/Alice-Chen.md — auto-linked 3 mentions of "Remi"
+[UNLINKED] daily/2026-04-18.md:12 — "Alice" could link to [[Alice-Chen]] (ambiguous alias)
 [REVIEW] entity-name — uncertain: reason
 
 --- 汇报 ---

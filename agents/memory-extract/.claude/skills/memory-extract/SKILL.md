@@ -70,6 +70,25 @@ Refer to `~/.remi/projects/-data00-home-hehuajie/wiki/directory-architecture.md`
 - Projects/software: use the canonical name (e.g., "larkparser", "Remi"), lowercase for project names
 - Avoid creating near-duplicate entities — if "LarkParser" exists, don't create "lark_parser"
 
+## Wikilink 语法（[[entity]]）
+
+写 observation 时，如果提到**已确认存在**的其他实体，使用 `[[entity-name]]` 语法。这样会建立实体间的双向链接，让 wiki-curate 自动生成 Backlinks 章节。
+
+**规则**：
+- 先用 `recall` 确认实体存在，再用 `[[]]` 链接
+- `[[entity-name]]` 引用实体的规范名
+- `[[entity-name|显示文本]]` 可以指定另一个显示文本（如 `[[Alice-Chen|小陈]]`）
+- **未知实体不要随意用 `[[]]`**（会产生 broken link）— 如果是新实体，先 remember 创建它，再引用
+
+**示例**：
+- ❌ "Alice 在做 Remi，使用 larkparser 处理文档"
+- ✅ "[[Alice-Chen]] 在做 [[Remi]]，使用 [[larkparser]] 处理文档"
+
+**不用 `[[]]` 的场景**：
+- 代码片段、错误信息、URL
+- 通用概念（"React"、"SQLite"，除非已作为实体存在）
+- 人名首次出现且还未记入记忆时（先记下，下次再链接）
+
 ## Output Format
 
 After processing, output one line per operation:
