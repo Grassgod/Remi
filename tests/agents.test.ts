@@ -7,11 +7,10 @@ import { join, resolve } from "node:path";
 const PROJECT_ROOT = resolve(join(import.meta.dir, ".."));
 
 describe("AgentRegistry", () => {
-  it("has all 4 agents registered", () => {
+  it("has all 3 agents registered", () => {
     expect(Object.keys(AGENTS)).toEqual([
       "memory-extract",
       "memory-audit",
-      "memory-rerank",
       "wiki-curate",
     ]);
   });
@@ -26,11 +25,6 @@ describe("AgentRegistry", () => {
     expect(AGENTS["memory-audit"].model).toBe("opus");
     expect(AGENTS["memory-audit"].trigger).toBe("cron");
     expect(AGENTS["memory-audit"].cron).toBe("0 3 * * *");
-  });
-
-  it("memory-rerank is on-demand", () => {
-    expect(AGENTS["memory-rerank"].trigger).toBe("on-demand");
-    expect(AGENTS["memory-rerank"].timeoutMs).toBe(30_000);
   });
 
   it("wiki-curate uses opus with cron", () => {

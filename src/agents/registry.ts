@@ -20,13 +20,6 @@ export const AGENTS: Record<string, AgentConfig> = {
     cron: "0 3 * * *",
     timeoutMs: 7_200_000, // 2 hours — unified maintenance (9 phases)
   },
-  "memory-rerank": {
-    name: "memory-rerank",
-    model: "haiku",
-    trigger: "on-demand",
-    timeoutMs: 120_000,
-    mcp: false,
-  },
   "wiki-curate": {
     name: "wiki-curate",
     model: "opus",
