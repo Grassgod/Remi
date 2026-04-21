@@ -11,7 +11,7 @@ export const AGENTS: Record<string, AgentConfig> = {
     model: "haiku",
     trigger: "debounce",
     debounce_ms: 300_000, // 5 minutes
-    timeoutMs: 120_000,
+    timeoutMs: 300_000, // 5 min — Haiku + recall/remember MCP calls can take ~60-120s per session
   },
   "memory-audit": {
     name: "memory-audit",
