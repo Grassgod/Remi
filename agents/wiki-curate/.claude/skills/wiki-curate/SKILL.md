@@ -28,15 +28,72 @@ Wiki is the **product** — polished, structured, current-state knowledge. Memor
 
 Before any content work, ensure the infrastructure is correct.
 
-**0a. Bootstrap missing project directories:**
+**0a. Bootstrap missing project directories AND minimal README:**
 
 1. Glob `~/.remi/memory/entities/projects/*.md` to find all known projects
 2. For each project entity, read the file to extract the code path (look for paths like `~/project/xxx` or `/data00/home/hehuajie/project/xxx`)
 3. Compute the project hash: replace `/` with `-` in the absolute path (e.g., `/data00/home/hehuajie/project/markone` → `-data00-home-hehuajie-project-markone`)
 4. If `~/.remi/projects/{hash}/` doesn't exist, create it with `wiki/` and `memory/` subdirectories
-5. Output: `[BOOTSTRAP] {hash} — created project directory for {project-name}`
+5. **Always ensure `~/.remi/wiki/projects/{name}/README.md` exists** (create the directory if missing, write a minimal README below if the file is absent). The project name is the entity's `name` field (lowercase for project types, preserving casing for personal entities).
+6. Output: `[BOOTSTRAP] {hash} — created project directory for {project-name}` / `[BOOTSTRAP:README] {name} — wrote stub (obs={n})`
 
-This ensures every known project has a wiki destination. Without it, project-specific knowledge gets stranded in the home wiki because there's nowhere to route it.
+### Minimal README template
+
+Even if a project has 0-4 observations (below the CREATE threshold, see Step 2), it still gets a README stub so it's visible in the projects index. Format:
+
+```markdown
+# {project-name}
+
+**Status**: {status}
+**Observations**: {n}
+**Last activity**: {YYYY-MM-DD}
+{summary-line-if-available}
+
+> Wiki topics will be generated once {name} has ≥5 observations.
+
+## Sources
+- `entity/{Entity-Name}` (~/.remi/memory/entities/projects/{Entity-Name}.md)
+```
+
+Where:
+- `{status}` = `🌱 emerging` if obs < 3, `🌿 active` if 3-4, else this README is just the index and full wiki topics exist
+- `{summary-line-if-available}` = the entity's `summary` frontmatter field, if set; otherwise omit the line
+
+If the entity's observation count later crosses the threshold, Step 3 CREATE path rewrites the README with the proper topic list (don't overwrite; merge topics + keep the stub's "Sources" section).
+
+This ensures every known project has a wiki destination. Without it, project-specific knowledge gets stranded in the home wiki because there's nowhere to route it, and low-activity projects become completely invisible.
+
+**0a.1. Refresh the home wiki's projects index:**
+
+After per-project bootstrap, regenerate `~/.remi/projects/-data00-home-hehuajie/wiki/projects/README.md` as the master project index. Format:
+
+```markdown
+# Projects
+
+All projects Remi has bootstrapped, sorted by activity.
+
+## 🌳 Mature (wiki-ready)
+- [**larkparser**](larkparser/README.md) — Feishu/Lark document parsing SDK (obs=24)
+- [**remi**](remi/README.md) — Hub-and-spoke AI orchestrator (obs=36)
+- ...
+
+## 🌿 Active (sub-threshold)
+- [**knowledge_gateway**](knowledge_gateway/README.md) — Backend gateway (obs=3)
+- ...
+
+## 🌱 Emerging (new)
+- [**dorado-git**](dorado-git/README.md) — git-style CLI for Dorado tasks (obs=2)
+- ...
+```
+
+Rules:
+- **Mature** = obs ≥ 5 (has full wiki topics)
+- **Active** = obs 3-4 (has stub README only)
+- **Emerging** = obs 1-2 (has stub README only)
+- Each entry links to the project's stub or full README at `{name}/README.md`
+- Summaries come from the entity's `summary` frontmatter field; fallback to "" if missing
+
+Output: `[INDEX] projects/README.md — refreshed with N projects`
 
 **0b. Route audit:**
 
