@@ -2,8 +2,22 @@
  * Project Init Orchestrator — runs 4-step init pipeline with SSE event emission.
  */
 
-import { existsSync, mkdirSync, copyFileSync, readdirSync, chmodSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  copyFileSync,
+  readdirSync,
+  chmodSync,
+  lstatSync,
+  readlinkSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat, setupProjectChat } from "../connectors/feishu/chat.js";
@@ -181,13 +195,83 @@ export async function runProjectInit(
   //   log.warn(`Failed to copy pipeline skills: ${err}`);
   // }
 
-  // Step 3: Register complete
+  // Step 3: Link project CLAUDE.md to Remi wiki README (single source of truth at ~/.remi/)
+  const step3 = await runStep(store, projectId, "link_claude_md", async () => {
+    const cwd = store.getById(projectId)?.cwd;
+    if (!cwd || !existsSync(cwd)) return "Skipped (no cwd)";
+    return linkProjectClaudeMd(cwd, projectId);
+  });
+  if (!step3) return;
+
+  // Step 4: Register complete
   await runStep(store, projectId, "register_complete", async () => {
     store.updateInitStatus(projectId, "completed");
     return "Project ready";
   });
 
   emit(projectId, { type: "done", data: { status: "completed" } });
+}
+
+/**
+ * Ensure {cwd}/CLAUDE.md is a symlink pointing to
+ * ~/.remi/wiki/projects/{alias}/README.md, making Remi's wiki the single
+ * source of truth. Both CC (when running in cwd) and the Remi dashboard
+ * show the same content.
+ *
+ * Handles four cases:
+ *   1. cwd/CLAUDE.md already a symlink to the wiki README → no-op
+ *   2. cwd/CLAUDE.md is a real file → migrate content to wiki README
+ *      (if wiki README empty), back up the original to CLAUDE.md.bak,
+ *      replace with symlink
+ *   3. cwd/CLAUDE.md doesn't exist + wiki README exists → symlink
+ *   4. Neither exists → write a minimal stub README, symlink
+ */
+function linkProjectClaudeMd(cwd: string, alias: string): string {
+  const wikiDir = join(homedir(), ".remi", "wiki", "projects", alias);
+  const wikiReadme = join(wikiDir, "README.md");
+  const cwdClaudeMd = join(cwd, "CLAUDE.md");
+
+  // Ensure wiki dir exists
+  if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
+
+  // Case 1: cwd/CLAUDE.md is already the right symlink → idempotent no-op
+  try {
+    const st = lstatSync(cwdClaudeMd);
+    if (st.isSymbolicLink()) {
+      const target = readlinkSync(cwdClaudeMd);
+      if (target === wikiReadme) return `Already linked: ${cwdClaudeMd} → ${wikiReadme}`;
+      // Symlink pointing elsewhere — replace
+      unlinkSync(cwdClaudeMd);
+    } else if (st.isFile()) {
+      // Case 2: real file — migrate / back up
+      const existingContent = readFileSync(cwdClaudeMd, "utf-8");
+      if (!existsSync(wikiReadme)) {
+        // Wiki side empty → take the project's CLAUDE.md as the new canonical README
+        writeFileSync(wikiReadme, existingContent, "utf-8");
+      } else {
+        // Both exist — don't destroy either; back up the project's to .bak
+        const backupPath = join(cwd, "CLAUDE.md.bak");
+        renameSync(cwdClaudeMd, backupPath);
+      }
+      // After either branch, cwdClaudeMd should no longer exist as a regular file
+      if (existsSync(cwdClaudeMd)) unlinkSync(cwdClaudeMd);
+    }
+  } catch (e) {
+    // lstat failed → file doesn't exist; fall through to create-symlink path
+  }
+
+  // Case 3 & 4: ensure wiki README exists
+  if (!existsSync(wikiReadme)) {
+    writeFileSync(
+      wikiReadme,
+      `# ${alias}\n\n(Remi-managed README. Edit via wiki-curate or directly at ~/.remi/wiki/projects/${alias}/README.md)\n`,
+      "utf-8",
+    );
+  }
+
+  // Create the symlink: {cwd}/CLAUDE.md → wiki README
+  symlinkSync(wikiReadme, cwdClaudeMd);
+  return `Linked: ${cwdClaudeMd} → ${wikiReadme}`;
 }
 
 /**
