@@ -154,24 +154,27 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
       }
     }
 
-    // Projects — from remi.toml, each with wiki content + CLAUDE.md
+    // Projects — scan ~/.remi/wiki/projects/ filesystem (ground truth).
+    // Previously only iterated over DB-registered projects, missing any
+    // entity-only project that wiki-curate had bootstrapped a README for.
     const projectChildren: TreeNode[] = [];
-    for (const [alias, projectPath] of Object.entries(projects).sort(([a], [b]) => a.localeCompare(b))) {
-      const wikiDir = join(WIKI_PROJECTS_DIR, alias);
-      const children: TreeNode[] = [];
+    if (existsSync(WIKI_PROJECTS_DIR)) {
+      const aliases = readdirSync(WIKI_PROJECTS_DIR, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b));
 
-      // Wiki content
-      if (existsSync(wikiDir)) {
-        children.push(...scanDir(wikiDir, `projects/${alias}`));
-      }
-
-      if (children.length > 0) {
-        projectChildren.push({
-          name: alias,
-          path: `projects/${alias}`,
-          type: "directory",
-          children,
-        });
+      for (const alias of aliases) {
+        const wikiDir = join(WIKI_PROJECTS_DIR, alias);
+        const children = scanDir(wikiDir, `projects/${alias}`);
+        if (children.length > 0) {
+          projectChildren.push({
+            name: alias,
+            path: `projects/${alias}`,
+            type: "directory",
+            children,
+          });
+        }
       }
     }
     if (projectChildren.length > 0) {
