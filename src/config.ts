@@ -16,6 +16,8 @@ export interface ProviderConfig {
   allowedTools: string[];
   model: string | null;
   timeout: number;
+  apiKey: string | null;
+  baseUrl: string | null;
 }
 
 export interface FeishuConfig {
@@ -327,6 +329,8 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       allowedTools: (providerData.allowed_tools as string[]) ?? [],
       model: env.REMI_MODEL ?? (providerData.model as string) ?? null,
       timeout: parseInt(env.REMI_TIMEOUT ?? String(providerData.timeout ?? 300), 10),
+      apiKey: env.REMI_API_KEY ?? (providerData.api_key as string) ?? null,
+      baseUrl: env.REMI_BASE_URL ?? (providerData.base_url as string) ?? null,
     },
     feishu: {
       appId: env.FEISHU_APP_ID ?? (feishuData.app_id as string) ?? "",

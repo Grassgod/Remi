@@ -51,6 +51,8 @@ export class ClaudeCLIProvider implements Provider {
   systemPrompt: string | null;
   cwd: string | null;
   mcpConfig: Record<string, unknown> | null;
+  apiKey: string | null;
+  baseUrl: string | null;
 
   private _pool = new Map<string, ClaudeProcessManager>();
   private _lastUsed = new Map<string, number>();
@@ -70,6 +72,8 @@ export class ClaudeCLIProvider implements Provider {
     systemPrompt?: string | null;
     cwd?: string | null;
     mcpConfig?: Record<string, unknown> | null;
+    apiKey?: string | null;
+    baseUrl?: string | null;
   } = {}) {
     this.allowedTools = options.allowedTools ?? [];
     this.model = options.model ?? null;
@@ -77,6 +81,8 @@ export class ClaudeCLIProvider implements Provider {
     this.systemPrompt = options.systemPrompt ?? null;
     this.cwd = options.cwd ?? null;
     this.mcpConfig = options.mcpConfig ?? null;
+    this.apiKey = options.apiKey ?? null;
+    this.baseUrl = options.baseUrl ?? null;
   }
 
   get name(): string {
@@ -335,6 +341,8 @@ export class ClaudeCLIProvider implements Provider {
       cwd: cwd ?? this.cwd,
       resumeSessionId: sessionId,
       permissionMode: overrides?.permissionMode ?? null,
+      apiKey: this.apiKey,
+      baseUrl: this.baseUrl,
     });
     await mgr.start();
 

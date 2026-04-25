@@ -6,7 +6,7 @@
  */
 
 import type { Subprocess } from "bun";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -84,6 +84,8 @@ export class ClaudeProcessManager {
   cwd: string | null;
   resumeSessionId: string | null;
   permissionMode: string | null;
+  apiKey: string | null;
+  baseUrl: string | null;
 
   private _process: Subprocess | null = null;
   private _sessionId: string | null = null;
@@ -105,6 +107,8 @@ export class ClaudeProcessManager {
     cwd?: string | null;
     resumeSessionId?: string | null;
     permissionMode?: string | null;
+    apiKey?: string | null;
+    baseUrl?: string | null;
   } = {}) {
     this.model = options.model ?? null;
     this.allowedTools = options.allowedTools ?? [];
@@ -113,6 +117,8 @@ export class ClaudeProcessManager {
     this.cwd = options.cwd ?? null;
     this.resumeSessionId = options.resumeSessionId ?? null;
     this.permissionMode = options.permissionMode ?? null;
+    this.apiKey = options.apiKey ?? null;
+    this.baseUrl = options.baseUrl ?? null;
   }
 
   get isAlive(): boolean {
@@ -165,11 +171,28 @@ export class ClaudeProcessManager {
     delete env.CLAUDECODE;
     delete env.CLAUDE_CODE_ENTRYPOINT;
 
+    // Inject API credentials from config (avoids auth conflict with personal Max token)
+    if (this.apiKey) {
+      env.ANTHROPIC_API_KEY = this.apiKey;
+      delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    if (this.baseUrl) {
+      env.ANTHROPIC_BASE_URL = this.baseUrl;
+    }
+
+    // Resolve symlinks so Claude Code's session storage path is canonical.
+    // Without this, /home/hehuajie and /data00/home/hehuajie produce two separate
+    // ~/.claude/projects/ dirs and resume can't find sessions across them.
+    let resolvedCwd: string | undefined = this.cwd ?? undefined;
+    if (resolvedCwd) {
+      try { resolvedCwd = realpathSync(resolvedCwd); } catch { /* keep original on failure */ }
+    }
+
     this._process = Bun.spawn(cmd, {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      cwd: this.cwd ?? undefined,
+      cwd: resolvedCwd,
       env,
     });
 
