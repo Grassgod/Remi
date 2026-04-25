@@ -216,6 +216,33 @@ export class FeishuConnector implements Connector {
     return msg.chatId;
   }
 
+  /**
+   * Augment rawContent with media metadata for mission intake.
+   * Images: inject {image_key, message_id} JSON so skills can fetch via resource API.
+   * Files/audio/video: persist to tmp and inline the path. Stickers ignored.
+   */
+  private _buildUserMessageWithMedia(msg: ParsedFeishuMessage): string {
+    let userMessage = msg.rawContent;
+    for (const m of msg.media) {
+      if (m.placeholder === "<media:image>" && m.imageKey) {
+        userMessage += `\n{"image_key":"${m.imageKey}","message_id":"${msg.messageId}"}`;
+      } else if (m.placeholder !== "<media:sticker>") {
+        try {
+          const dir = join(tmpdir(), "remi-media", msg.chatId.slice(0, 16));
+          mkdirSync(dir, { recursive: true });
+          const name = m.fileName ?? `${Date.now()}.bin`;
+          const filePath = join(dir, name);
+          writeFileSync(filePath, m.buffer);
+          userMessage += `\n[文件已保存: ${filePath}]`;
+          log.info(`saved mission intake media to ${filePath} (${m.buffer.length} bytes)`);
+        } catch (err) {
+          log.warn(`failed to save mission intake media: ${String(err)}`);
+        }
+      }
+    }
+    return userMessage;
+  }
+
   /** Load IntakeSkill SKILL.md with mission context appended. */
   /** Register a handler that kills the CLI process for a given sessionKey. */
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
@@ -317,7 +344,7 @@ export class FeishuConnector implements Connector {
           await this._enqueueMission({
             missionId: result.mission.id,
             step: "intake",
-            userMessage: msg.rawContent,
+            userMessage: this._buildUserMessageWithMedia(msg),
           });
           log.info(`New mission ${result.mission.id} created, intake enqueued (thread=${msg.messageId})`);
           return; // intake handler will streamToThread with skill guidance
