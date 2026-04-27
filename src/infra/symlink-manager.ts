@@ -1,9 +1,22 @@
 /**
- * SymlinkManager — 3-layer symlink centralization for Remi
+ * SymlinkManager — keeps Remi's data centralized under ~/.remi while CC
+ * still finds it under ~/.claude.
  *
- * Layer 1: ~/.claude/projects/{hash} → ~/.remi/projects/{hash}  (project dirs)
- * Layer 2: projects/{hash}/memory    → ~/.remi/memory/[projects/{alias}]  (memory centralization)
- * Layer 3: projects/{hash}/wiki      → ~/.remi/wiki/[projects/{alias}]    (wiki centralization)
+ * Globals:        ~/.claude/CLAUDE.md           → ~/.remi/soul.md
+ *                 ~/.claude/skills (if present) → ~/.remi/skills
+ * Projects root:  ~/.claude/projects            → ~/.remi/projects   (single symlink)
+ *
+ * Why a single projects-root symlink rather than per-project links?
+ *   Claude Code 2.1.119+ enumerates ~/.claude/projects/ via fs.readdir
+ *   and filters with Dirent.isDirectory(), which returns false for
+ *   symlink entries. Per-project symlinks were silently skipped, so
+ *   /resume showed "No conversations found" for every project.
+ *   A single root-level symlink resolves once during readdir and the
+ *   entries Node sees are real directories — isDirectory() returns true.
+ *
+ * Memory and wiki are NOT mirrored into project hash dirs — the dashboard
+ * reads ~/.remi/memory and ~/.remi/wiki directly, and CC loads project
+ * context via {cwd}/CLAUDE.md (handled by project init.ts).
  */
 
 import {
@@ -18,13 +31,12 @@ import {
   cpSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("symlink");
 
 // ── Constants ──────────────────────────────────────────────────
-
-import { homedir } from "node:os";
 
 const HOME = homedir();
 const CLAUDE_HOME = join(HOME, ".claude");
@@ -32,16 +44,6 @@ const REMI_HOME = join(HOME, ".remi");
 
 const CLAUDE_PROJECTS = join(CLAUDE_HOME, "projects");
 const REMI_PROJECTS = join(REMI_HOME, "projects");
-const REMI_MEMORY = join(REMI_HOME, "memory");
-const REMI_WIKI = join(REMI_HOME, "wiki");
-
-// Home directory hashes — these get special treatment
-const HOME_HASH = HOME.replace(/\//g, "-");
-const HOME_HASHES = new Set([
-  HOME_HASH,
-  "-data00-home-hehuajie",
-  "-home-hehuajie",
-]);
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -58,7 +60,7 @@ export interface MappingStatus {
   target: string;
   type: "dir" | "file";
   status: LinkStatus;
-  category: "soul" | "global" | "memory" | "wiki" | "project";
+  category: "soul" | "global" | "project";
   projectAlias: string | null;
   parentHash: string | null;
 }
@@ -67,12 +69,6 @@ export interface MappingStatus {
 
 export class SymlinkManager {
   private verified = new Set<string>();
-  private _projects: Record<string, string> = {};
-
-  /** Register known projects (id → cwd mapping). */
-  setProjects(projects: Record<string, string>): void {
-    this._projects = projects;
-  }
 
   /** Convert a filesystem path to CC's hash format. */
   pathToHash(path: string): string {
@@ -80,20 +76,12 @@ export class SymlinkManager {
   }
 
   /**
-   * Convert a hash to a readable alias.
-   * Priority: remi.toml alias > path-derived name > raw hash.
-   * Returns null for home hashes.
+   * Convert a hash to a readable alias for display purposes.
+   * Returns null for hashes that don't look like project paths.
    */
   hashToAlias(hash: string): string | null {
-    if (HOME_HASHES.has(hash)) return null;
-    // Check remi.toml registered projects
-    for (const [alias, path] of Object.entries(this._projects)) {
-      if (this.pathToHash(path) === hash) return alias;
-    }
-    // Derive from hash: extract after "-project-"
     const projectMatch = hash.match(/-project-(.+)$/);
     if (projectMatch) return projectMatch[1];
-    // Tasks: extract after "-tasks-"
     const tasksMatch = hash.match(/-tasks-(.+)$/);
     if (tasksMatch) return tasksMatch[1];
     return hash;
@@ -103,7 +91,6 @@ export class SymlinkManager {
    * Register and ensure a single symlink mapping.
    */
   ensureOne(source: string, target: string, type: "dir" | "file"): EnsureResult {
-    // Ensure target exists
     if (type === "dir") {
       if (!existsSync(target)) {
         mkdirSync(target, { recursive: true });
@@ -118,7 +105,6 @@ export class SymlinkManager {
       }
     }
 
-    // Source doesn't exist → create symlink
     if (!existsSync(source) && !this._isSymlink(source)) {
       const sourceDir = dirname(source);
       if (!existsSync(sourceDir)) {
@@ -130,7 +116,6 @@ export class SymlinkManager {
       return { action: "created", source, target };
     }
 
-    // Source is a symlink
     if (this._isSymlink(source)) {
       const currentTarget = readlinkSync(source);
       if (currentTarget === target) {
@@ -144,7 +129,6 @@ export class SymlinkManager {
       return { action: "fixed", source, target };
     }
 
-    // Source is a real dir/file → migrate
     if (type === "dir") {
       this._migrateDir(source, target);
     } else {
@@ -156,84 +140,64 @@ export class SymlinkManager {
   }
 
   /**
-   * Layer 1: Scan ~/.claude/projects/ and ensure all project dirs are symlinked.
+   * Ensure ~/.claude/projects is a single symlink to ~/.remi/projects.
+   *
+   * Idempotent. On a fresh install creates the link directly. If the
+   * source exists as something else (real dir, wrong-target symlink),
+   * refuses to touch it — operator must migrate manually to avoid losing
+   * sessions. See docs/symlink-migration.md (or the commit introducing
+   * this) for the one-shot migration recipe.
+   */
+  ensureProjectsRoot(): EnsureResult {
+    if (this.verified.has(CLAUDE_PROJECTS)) {
+      return { action: "ok", source: CLAUDE_PROJECTS, target: REMI_PROJECTS };
+    }
+
+    if (!existsSync(REMI_PROJECTS)) {
+      mkdirSync(REMI_PROJECTS, { recursive: true });
+    }
+
+    if (!existsSync(CLAUDE_PROJECTS) && !this._isSymlink(CLAUDE_PROJECTS)) {
+      mkdirSync(CLAUDE_HOME, { recursive: true });
+      symlinkSync(REMI_PROJECTS, CLAUDE_PROJECTS);
+      this.verified.add(CLAUDE_PROJECTS);
+      log.info(`created ${CLAUDE_PROJECTS} → ${REMI_PROJECTS}`);
+      return { action: "created", source: CLAUDE_PROJECTS, target: REMI_PROJECTS };
+    }
+
+    if (this._isSymlink(CLAUDE_PROJECTS)) {
+      const currentTarget = readlinkSync(CLAUDE_PROJECTS);
+      if (currentTarget === REMI_PROJECTS) {
+        this.verified.add(CLAUDE_PROJECTS);
+        return { action: "ok", source: CLAUDE_PROJECTS, target: REMI_PROJECTS };
+      }
+      log.warn(
+        `${CLAUDE_PROJECTS} is a symlink to ${currentTarget}, expected ${REMI_PROJECTS} — leaving alone`,
+      );
+      return { action: "wrong-target", source: CLAUDE_PROJECTS, target: REMI_PROJECTS };
+    }
+
+    log.warn(
+      `${CLAUDE_PROJECTS} is a real directory; refusing to convert to symlink (would lose data). ` +
+        `Migrate manually: move contents into ${REMI_PROJECTS}, rmdir ${CLAUDE_PROJECTS}, then restart.`,
+    );
+    return { action: "needs-migration", source: CLAUDE_PROJECTS, target: REMI_PROJECTS };
+  }
+
+  /**
+   * Backwards-compatible alias for the old per-project bulk routine.
+   * Now collapses to a single root-level link.
    */
   ensureAllProjects(): EnsureResult[] {
-    const results: EnsureResult[] = [];
-
-    if (!existsSync(CLAUDE_PROJECTS)) {
-      mkdirSync(CLAUDE_PROJECTS, { recursive: true });
-      return results;
-    }
-
-    for (const name of readdirSync(CLAUDE_PROJECTS)) {
-      const source = join(CLAUDE_PROJECTS, name);
-      if (this.verified.has(source)) continue;
-
-      try {
-        const stat = lstatSync(source);
-        if (!stat.isDirectory() && !stat.isSymbolicLink()) continue;
-      } catch { continue; }
-
-      const target = join(REMI_PROJECTS, name);
-      const result = this.ensureOne(source, target, "dir");
-      results.push(result);
-    }
-
-    // Home memory → ~/.remi/memory/
-    this._ensureHomeMemoryLinks();
-
-    log.info(
-      `ensureAllProjects: ${results.length} processed (${results.filter((r) => r.action !== "ok").length} changed)`,
-    );
-    return results;
+    return [this.ensureProjectsRoot()];
   }
 
-  /** Home memory symlinks → ~/.remi/memory/ */
-  private _ensureHomeMemoryLinks(): void {
-    for (const hash of HOME_HASHES) {
-      const memDir = join(REMI_PROJECTS, hash, "memory");
-      if (!existsSync(join(REMI_PROJECTS, hash))) continue;
-
-      if (this._isSymlink(memDir)) {
-        const target = readlinkSync(memDir);
-        if (target === REMI_MEMORY) continue;
-      }
-
-      // Real dir → migrate from_*.md, then replace
-      if (existsSync(memDir) && !this._isSymlink(memDir)) {
-        try {
-          for (const f of readdirSync(memDir)) {
-            if (f.startsWith("from_")) {
-              const src = join(memDir, f);
-              const dst = join(REMI_MEMORY, f);
-              if (!existsSync(dst)) cpSync(src, dst);
-            }
-          }
-          rmSync(memDir, { recursive: true, force: true });
-        } catch (e) {
-          log.warn(`failed to migrate home memory ${hash}: ${e}`);
-          continue;
-        }
-      }
-
-      try {
-        mkdirSync(join(REMI_PROJECTS, hash), { recursive: true });
-        symlinkSync(REMI_MEMORY, memDir);
-        log.info(`home memory linked: ${hash}/memory/ → ~/.remi/memory/`);
-      } catch (e) {
-        log.warn(`failed to link home memory ${hash}: ${e}`);
-      }
-    }
-  }
-
-  /** Ensure symlink for a specific cwd. */
-  ensureForCwd(cwd: string): void {
-    const hash = this.pathToHash(cwd);
-    const source = join(CLAUDE_PROJECTS, hash);
-    if (this.verified.has(source)) return;
-    const target = join(REMI_PROJECTS, hash);
-    this.ensureOne(source, target, "dir");
+  /**
+   * Ensure CC will find the project dir for a given cwd. With the
+   * root-level symlink in place, this is a no-op once verified.
+   */
+  ensureForCwd(_cwd: string): void {
+    this.ensureProjectsRoot();
   }
 
   /** Ensure global symlinks: CLAUDE.md → soul.md, skills/ */
@@ -243,134 +207,6 @@ export class SymlinkManager {
     const remiSkills = join(REMI_HOME, "skills");
     if (existsSync(remiSkills)) {
       this.ensureOne(join(CLAUDE_HOME, "skills"), remiSkills, "dir");
-    }
-  }
-
-  /**
-   * Layer 2: Project memory centralization.
-   * projects/{hash}/memory → ~/.remi/memory/projects/{alias}
-   */
-  ensureProjectMemoryLinks(): void {
-    mkdirSync(join(REMI_MEMORY, "projects"), { recursive: true });
-
-    if (!existsSync(REMI_PROJECTS)) return;
-
-    for (const name of readdirSync(REMI_PROJECTS)) {
-      if (HOME_HASHES.has(name)) continue; // home handled separately
-
-      const projectDir = join(REMI_PROJECTS, name);
-      try {
-        const stat = lstatSync(projectDir);
-        if (!stat.isDirectory() && !stat.isSymbolicLink()) continue;
-      } catch { continue; }
-
-      const memDir = join(projectDir, "memory");
-      const alias = this.hashToAlias(name);
-      if (!alias) continue;
-
-      const centralTarget = join(REMI_MEMORY, "projects", alias);
-
-      // Already correct symlink → skip
-      if (this._isSymlink(memDir)) {
-        const current = readlinkSync(memDir);
-        if (current === centralTarget) continue;
-        // Don't touch home memory symlinks
-        if (current === REMI_MEMORY || current === "../../memory") continue;
-        unlinkSync(memDir);
-      }
-
-      // Real directory → migrate, then symlink
-      if (existsSync(memDir) && !this._isSymlink(memDir)) {
-        mkdirSync(centralTarget, { recursive: true });
-        try {
-          for (const item of readdirSync(memDir)) {
-            const src = join(memDir, item);
-            const dst = join(centralTarget, item);
-            if (!existsSync(dst) && !this._isSymlink(src)) {
-              cpSync(src, dst, { recursive: true });
-            }
-          }
-          rmSync(memDir, { recursive: true, force: true });
-        } catch (e) {
-          log.warn(`failed to migrate memory ${name}: ${e}`);
-          continue;
-        }
-      }
-
-      // Create symlink
-      if (!existsSync(memDir)) {
-        mkdirSync(centralTarget, { recursive: true });
-        try {
-          symlinkSync(centralTarget, memDir);
-          log.info(`memory linked: ${name}/memory/ → ${centralTarget}`);
-        } catch (e) {
-          log.warn(`failed to link memory ${name}: ${e}`);
-        }
-      }
-    }
-  }
-
-  /**
-   * Layer 3: Wiki centralization.
-   * Home: projects/{home}/wiki → ~/.remi/wiki
-   * Projects: projects/{hash}/wiki → ~/.remi/wiki/projects/{alias}
-   */
-  ensureWikiCentralization(): void {
-    mkdirSync(REMI_WIKI, { recursive: true });
-    mkdirSync(join(REMI_WIKI, "projects"), { recursive: true });
-
-    if (!existsSync(REMI_PROJECTS)) return;
-
-    for (const name of readdirSync(REMI_PROJECTS)) {
-      const projectDir = join(REMI_PROJECTS, name);
-      try {
-        const stat = lstatSync(projectDir);
-        if (!stat.isDirectory() && !stat.isSymbolicLink()) continue;
-      } catch { continue; }
-
-      const wikiDir = join(projectDir, "wiki");
-      const isHome = HOME_HASHES.has(name);
-      const alias = this.hashToAlias(name);
-
-      const centralTarget = isHome ? REMI_WIKI : alias ? join(REMI_WIKI, "projects", alias) : null;
-      if (!centralTarget) continue;
-
-      // Already correct symlink → skip
-      if (this._isSymlink(wikiDir)) {
-        const current = readlinkSync(wikiDir);
-        if (current === centralTarget) continue;
-        unlinkSync(wikiDir);
-      }
-
-      // Real directory → migrate content, then symlink
-      if (existsSync(wikiDir) && !this._isSymlink(wikiDir)) {
-        mkdirSync(centralTarget, { recursive: true });
-        try {
-          for (const item of readdirSync(wikiDir)) {
-            if (item === "wiki.md") continue; // skip broken wiki.md
-            const src = join(wikiDir, item);
-            const dst = join(centralTarget, item);
-            if (!existsSync(dst) && !this._isSymlink(src)) {
-              cpSync(src, dst, { recursive: true });
-            }
-          }
-          rmSync(wikiDir, { recursive: true, force: true });
-        } catch (e) {
-          log.warn(`failed to migrate wiki ${name}: ${e}`);
-          continue;
-        }
-      }
-
-      // Create symlink
-      if (!existsSync(wikiDir)) {
-        mkdirSync(centralTarget, { recursive: true });
-        try {
-          symlinkSync(centralTarget, wikiDir);
-          log.info(`wiki linked: ${name}/wiki/ → ${centralTarget}`);
-        } catch (e) {
-          log.warn(`failed to link wiki ${name}: ${e}`);
-        }
-      }
     }
   }
 
@@ -470,73 +306,24 @@ export class SymlinkManager {
 
   /** Collect all known mappings with category metadata. */
   private _collectKnownMappings(): Array<Omit<MappingStatus, "status">> {
-    const pairs: Array<Omit<MappingStatus, "status">> = [];
-
-    // Soul
-    pairs.push({
-      source: join(CLAUDE_HOME, "CLAUDE.md"),
-      target: join(REMI_HOME, "soul.md"),
-      type: "file",
-      category: "soul",
-      projectAlias: null,
-      parentHash: null,
-    });
-
-    // Project dirs + sub-mappings
-    if (existsSync(REMI_PROJECTS)) {
-      for (const name of readdirSync(REMI_PROJECTS)) {
-        const isHome = HOME_HASHES.has(name);
-        const alias = this.hashToAlias(name);
-
-        // Project/Global dir mapping
-        pairs.push({
-          source: join(CLAUDE_PROJECTS, name),
-          target: join(REMI_PROJECTS, name),
-          type: "dir",
-          category: isHome ? "global" : "project",
-          projectAlias: isHome ? "~ (home)" : alias,
-          parentHash: null,
-        });
-
-        // Memory sub-mapping
-        const memDir = join(REMI_PROJECTS, name, "memory");
-        if (existsSync(memDir) || this._isSymlink(memDir)) {
-          const memTarget = isHome
-            ? REMI_MEMORY
-            : alias ? join(REMI_MEMORY, "projects", alias) : null;
-          if (memTarget) {
-            pairs.push({
-              source: memDir,
-              target: memTarget,
-              type: "dir",
-              category: "memory",
-              projectAlias: isHome ? "~ (home)" : alias,
-              parentHash: name,
-            });
-          }
-        }
-
-        // Wiki sub-mapping
-        const wikiDir = join(REMI_PROJECTS, name, "wiki");
-        if (existsSync(wikiDir) || this._isSymlink(wikiDir)) {
-          const wikiTarget = isHome
-            ? REMI_WIKI
-            : alias ? join(REMI_WIKI, "projects", alias) : null;
-          if (wikiTarget) {
-            pairs.push({
-              source: wikiDir,
-              target: wikiTarget,
-              type: "dir",
-              category: "wiki",
-              projectAlias: isHome ? "~ (home)" : alias,
-              parentHash: name,
-            });
-          }
-        }
-      }
-    }
-
-    return pairs;
+    return [
+      {
+        source: join(CLAUDE_HOME, "CLAUDE.md"),
+        target: join(REMI_HOME, "soul.md"),
+        type: "file",
+        category: "soul",
+        projectAlias: null,
+        parentHash: null,
+      },
+      {
+        source: CLAUDE_PROJECTS,
+        target: REMI_PROJECTS,
+        type: "dir",
+        category: "global",
+        projectAlias: "projects (root)",
+        parentHash: null,
+      },
+    ];
   }
 }
 
