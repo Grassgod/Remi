@@ -56,6 +56,7 @@ export class ClaudeCLIProvider implements Provider {
 
   private _pool = new Map<string, ClaudeProcessManager>();
   private _lastUsed = new Map<string, number>();
+  private _activeStreaming = new Set<string>();
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _tools = new Map<string, ToolDefinition>();
   private _preHooks: PreToolHook[] = [];
@@ -171,6 +172,8 @@ export class ClaudeCLIProvider implements Provider {
     let gotResult = false;
     const poolKey = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
 
+    this._activeStreaming.add(poolKey);
+    try {
     for await (const msg of mgr.sendAndStream(
       message,
       this._handleToolCall.bind(this),
@@ -264,6 +267,9 @@ export class ClaudeCLIProvider implements Provider {
         kind: "result",
         response: createAgentResponse({ text: fullText, thinking, toolCalls }),
       };
+    }
+    } finally {
+      this._activeStreaming.delete(poolKey);
     }
   }
 
@@ -370,7 +376,7 @@ export class ClaudeCLIProvider implements Provider {
     const toRemove: string[] = [];
 
     for (const [key, lastUsed] of this._lastUsed) {
-      if (now - lastUsed > ClaudeCLIProvider.IDLE_TIMEOUT_MS) {
+      if (now - lastUsed > ClaudeCLIProvider.IDLE_TIMEOUT_MS && !this._activeStreaming.has(key)) {
         toRemove.push(key);
       }
     }
@@ -403,30 +409,35 @@ export class ClaudeCLIProvider implements Provider {
     const toolCalls: Array<Record<string, unknown>> = [];
     let resultMsg: ResultMessage | null = null;
 
-    for await (const msg of mgr.sendAndStream(
-      prompt,
-      this._handleToolCall.bind(this),
-      options?.media,
-    )) {
-      // Keep process alive in idle cleanup while actively streaming
-      this._lastUsed.set(poolKey, Date.now());
+    this._activeStreaming.add(poolKey);
+    try {
+      for await (const msg of mgr.sendAndStream(
+        prompt,
+        this._handleToolCall.bind(this),
+        options?.media,
+      )) {
+        // Keep process alive in idle cleanup while actively streaming
+        this._lastUsed.set(poolKey, Date.now());
 
-      if (msg.kind === "thinking_delta") {
-        thinkingParts.push((msg as ThinkingDelta).thinking);
-      } else if (msg.kind === "content_delta") {
-        textParts.push((msg as ContentDelta).text);
-      } else if (msg.kind === "tool_use") {
-        const tu = msg as ToolUseRequest;
-        toolCalls.push({
-          id: tu.toolUseId,
-          name: tu.name,
-          input: tu.input,
-        });
-      } else if (msg.kind === "tool_result") {
-        // Non-streaming path — tool_result not needed for final AgentResponse
-      } else if (msg.kind === "result") {
-        resultMsg = msg as ResultMessage;
+        if (msg.kind === "thinking_delta") {
+          thinkingParts.push((msg as ThinkingDelta).thinking);
+        } else if (msg.kind === "content_delta") {
+          textParts.push((msg as ContentDelta).text);
+        } else if (msg.kind === "tool_use") {
+          const tu = msg as ToolUseRequest;
+          toolCalls.push({
+            id: tu.toolUseId,
+            name: tu.name,
+            input: tu.input,
+          });
+        } else if (msg.kind === "tool_result") {
+          // Non-streaming path — tool_result not needed for final AgentResponse
+        } else if (msg.kind === "result") {
+          resultMsg = msg as ResultMessage;
+        }
       }
+    } finally {
+      this._activeStreaming.delete(poolKey);
     }
 
     const fullText = textParts.join("");

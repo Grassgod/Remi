@@ -249,7 +249,7 @@ export class ClaudeProcessManager {
               this._process.kill();
               // Wait briefly for process to fully exit
               await new Promise((r) => setTimeout(r, 500));
-              const exitCode = this._process.exitCode;
+              const exitCode = this._process?.exitCode ?? null;
               const stderr = await this._readStderr();
               log.error(`CLI process crashed (EOF, exitCode=${exitCode}, pid=${pid})${stderr ? ` stderr: ${stderr}` : ""}`);
               yield {
