@@ -214,13 +214,17 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
 
       let result: string;
 
-      if (remoteUrl.includes("code.byted.org")) {
+      const gitlabHost = process.env.REMI_GITLAB_HOST ?? "code.byted.org";
+      if (remoteUrl.includes(gitlabHost)) {
+        const hostEsc = gitlabHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const repoName = remoteUrl
-          .replace(/.*code\.byted\.org[:/]/, "")
+          .replace(new RegExp(`.*${hostEsc}[:/]`), "")
           .replace(/\.git$/, "");
+        const reviewers = process.env.REMI_GITLAB_REVIEWERS ?? "";
+        const reviewerArg = reviewers ? ` --reviewer-ids "${reviewers}"` : "";
         try {
           result = execSync(
-            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${sourceBranch} --target-branch ${releaseBranch} --title "Mission: ${mission.title}" --description "Contract 验证通过，请审核合入。" --squash-commits --remove-source-branch --reviewer-ids "hehuajie"`,
+            `bytedcli codebase create-mr --repo-name "${repoName}" --source-branch ${sourceBranch} --target-branch ${releaseBranch} --title "Mission: ${mission.title}" --description "Contract 验证通过，请审核合入。" --squash-commits --remove-source-branch${reviewerArg}`,
             { cwd: project.cwd, encoding: "utf-8", timeout: 30000 },
           ).trim();
         } catch (mrErr: any) {
@@ -233,7 +237,7 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
                   { cwd: project.cwd, encoding: "utf-8", timeout: 10000 },
                 );
                 if (info.includes(sourceBranch) && (info.includes("open") || info.includes("Open"))) {
-                  result = `https://code.byted.org/${repoName}/merge_requests/${n}`;
+                  result = `https://${gitlabHost}/${repoName}/merge_requests/${n}`;
                   break;
                 }
               } catch { continue; }

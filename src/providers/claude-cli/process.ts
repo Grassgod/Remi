@@ -181,8 +181,8 @@ export class ClaudeProcessManager {
     }
 
     // Resolve symlinks so Claude Code's session storage path is canonical.
-    // Without this, /home/hehuajie and /data00/home/hehuajie produce two separate
-    // ~/.claude/projects/ dirs and resume can't find sessions across them.
+    // Symlinked home directories would otherwise produce divergent
+    // ~/.claude/projects/ dirs and resume couldn't find sessions across them.
     let resolvedCwd: string | undefined = this.cwd ?? undefined;
     if (resolvedCwd) {
       try { resolvedCwd = realpathSync(resolvedCwd); } catch { /* keep original on failure */ }

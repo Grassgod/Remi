@@ -115,7 +115,7 @@ function InitDialog({ open, onClose, onDone }: {
   const [name, setName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [dirMode, setDirMode] = useState<"clone" | "existing">("existing");
-  const [parentDir, setParentDir] = useState("/data00/home/hehuajie/project");
+  const [parentDir, setParentDir] = useState("");
   const [existingPath, setExistingPath] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<"parent" | "existing">("existing");
@@ -292,7 +292,7 @@ function InitDialog({ open, onClose, onDone }: {
                 {dirMode === "existing" && (
                   <div className="flex items-center gap-1.5">
                     <Input
-                      placeholder="/data00/home/..."
+                      placeholder="/path/to/project"
                       value={existingPath}
                       onChange={e => setExistingPath(e.target.value)}
                       className="h-8 flex-1 text-xs"

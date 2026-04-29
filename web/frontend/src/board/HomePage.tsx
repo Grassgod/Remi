@@ -35,16 +35,16 @@ type IconComponent = React.FC<{ className?: string }>;
    PLACEHOLDER CONFIG — edit these values
    ════════════════════════════════════════════ */
 const PROFILE = {
-  name: "贺华杰",
-  nameEn: "Jack Ho",
+  name: "Owner",
+  nameEn: "Owner",
   title: "AI Agent Engineer",
-  org: "ByteDance · Shanghai",
+  org: "",
   bio: "Building intelligent tools that augment human capability. Interested in AI agents, developer experience, and systems that learn.",
   avatar: "", // URL or leave empty for initials
   links: [
-    { icon: "github", label: "GitHub", href: "https://github.com/hehuajie" },
+    { icon: "github", label: "GitHub", href: "https://github.com/" },
     { icon: "twitter", label: "X", href: "https://x.com/" },
-    { icon: "email", label: "Email", href: "mailto:hehuajie@example.com" },
+    { icon: "email", label: "Email", href: "mailto:owner@example.com" },
   ],
 };
 /* ════════════════════════════════════════════ */
@@ -166,7 +166,7 @@ export function HomePage() {
   }, []);
 
   return (
-    <div className="relative min-h-dvh overflow-y-auto bg-[#fafafa]">
+    <div className="relative h-dvh overflow-y-auto bg-[#fafafa]">
       {/* ── Background ── */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute -right-[15%] -top-[20%] h-[600px] w-[600px] rounded-full bg-blue-200/30 blur-[100px]" />
@@ -297,24 +297,51 @@ export function HomePage() {
               <div className="h-px flex-1 bg-gradient-to-l from-gray-200 to-transparent" />
             </div>
 
-            <button
-              onClick={() => navigate("/eval")}
-              className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-6 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-gray-200/50"
-              style={{ animation: "fade-in 0.5s ease-out 300ms both" }}
-            >
-              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 to-sky-400 opacity-80" />
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-[16px] font-semibold text-gray-900 group-hover:text-gray-700">
-                    Aiden Server Eval
-                  </h3>
-                  <p className="mt-1 text-[13px] text-gray-400">
-                    Clarify + RFC evaluation dashboard
-                  </p>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <button
+                onClick={() => navigate("/eval")}
+                className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-6 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-gray-200/50"
+                style={{ animation: "fade-in 0.5s ease-out 300ms both" }}
+              >
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 to-sky-400 opacity-80" />
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-[16px] font-semibold text-gray-900 group-hover:text-gray-700">
+                      Aiden Server Eval
+                    </h3>
+                    <p className="mt-1 text-[13px] text-gray-400">
+                      Clarify + RFC evaluation dashboard
+                    </p>
+                  </div>
+                  <ArrowRight className="mt-1 h-4 w-4 flex-shrink-0 text-gray-300 transition-all duration-200 group-hover:translate-x-1 group-hover:text-gray-500" />
                 </div>
-                <ArrowRight className="mt-1 h-4 w-4 flex-shrink-0 text-gray-300 transition-all duration-200 group-hover:translate-x-1 group-hover:text-gray-500" />
-              </div>
-            </button>
+              </button>
+
+              <a
+                href={
+                  typeof window !== "undefined"
+                    ? `${window.location.protocol}//${window.location.hostname}:8091/`
+                    : "http://localhost:8091/"
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group relative flex w-full flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-6 text-left shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-gray-200/50"
+                style={{ animation: "fade-in 0.5s ease-out 350ms both" }}
+              >
+                <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-400 opacity-80" />
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-[16px] font-semibold text-gray-900 group-hover:text-gray-700">
+                      LarkParser Eval (LEAPS)
+                    </h3>
+                    <p className="mt-1 text-[13px] text-gray-400">
+                      飞书文档 → Markdown 解析评测 · goldset 50 samples
+                    </p>
+                  </div>
+                  <ExternalLink className="mt-1 h-4 w-4 flex-shrink-0 text-gray-300 transition-all duration-200 group-hover:text-gray-500" />
+                </div>
+              </a>
+            </div>
           </div>
         </section>
 

@@ -1,8 +1,26 @@
 {
   "name": "remi",
   "version": "0.2.0",
-  "description": "Remi - Personal AI Assistant",
+  "description": "Remi - Personal AI assistant with persistent memory, multi-connector messaging (CLI, Lark/Feishu), and Claude Code integration.",
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/user/remi",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/remi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/user/remi/issues"
+  },
+  "keywords": [
+    "ai-assistant",
+    "personal-ai",
+    "claude",
+    "memory-system",
+    "feishu",
+    "lark",
+    "bun"
+  ],
   "bin": {
     "remi": "./src/main.ts"
   },
@@ -10,8 +28,7 @@
     "start": "bun run src/main.ts",
     "serve": "bun run src/main.ts serve",
     "test": "bun test",
-    "build": "bun run scripts/build.ts",
-    "build:dev": "bun run scripts/build.ts --skip-obfuscate"
+    "build": "bun run scripts/build.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
@@ -22,7 +39,6 @@
     "sqlite-vec": "^0.1.7-alpha.2"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "javascript-obfuscator": "^4.1.1"
+    "@types/bun": "latest"
   }
 }

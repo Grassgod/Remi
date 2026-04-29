@@ -15,6 +15,12 @@ domain = "feishu"
 # http = "http://proxy:8118"
 # no_proxy = "localhost,127.0.0.1"
 
+# ── ByteDance SSO (optional, ByteDance employees only) ───
+# Only used inside ByteDance — leave commented out for public/open-source use.
+# Run `bun run src/main.ts auth bytedance-sso` after configuring.
+# [bytedance_sso]
+# client_id = ""
+
 # ── Image Generation (optional) ──────────────────────────
 # [google]
 # api_key = ""

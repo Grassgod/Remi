@@ -79,7 +79,7 @@ interface ProjectInitInput {
 
 - 调用飞书 Open API `POST /open-apis/im/v1/chats`
 - 群名：`[Remi] {name}`（如 `[Remi] LarkParser TS`）
-- 成员：Remi Bot (通过 app 身份自动在群内) + Jack (`ou_f4ed0b435518ee382e7e06c147a9db9f`)
+- 成员：Remi Bot (通过 app 身份自动在群内) + Owner (open_id 来自 `feishu.trigger_user_ids[0]`)
 - 产出：`chatId`
 - 幂等：执行前查 DB，若 `chat_id` 已存在则跳过
 

@@ -116,7 +116,6 @@ export function Skills() {
 
   const currentSkill = skills.find(s => s.name === selected);
   const fullPath = selected && basePath ? `${basePath}/${selected}/${selectedFile}` : "";
-  // Shorten for display: replace /home/hehuajie with ~
   const displayPath = fullPath.replace(/^\/home\/[^/]+/, "~");
 
   return (

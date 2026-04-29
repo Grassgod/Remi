@@ -18,6 +18,7 @@ import { stripContextTags } from "../src/conversation/parser.js";
 import { getDb } from "../src/db/index.js";
 import { readLogEntries, type LogEntry } from "../src/logger.js";
 import { MemoryStore, type RecallDebugResult } from "../src/memory/store.js";
+import { ProjectStore } from "../src/project/store.js";
 import { Cron } from "croner";
 
 // ── Types ──────────────────────────────────────────────
@@ -189,8 +190,16 @@ export class RemiData {
     memoryMdSize: number;
     files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }>;
   }> {
-    const projectsDir = join(this.root, "projects");
-    if (!existsSync(projectsDir)) return [];
+    const projectsMemoryDir = join(this.memoryDir, "projects");
+    if (!existsSync(projectsMemoryDir)) return [];
+
+    // Resolve alias → cwd from DB so we can show the source path in the UI
+    const aliasToCwd = new Map<string, string>();
+    try {
+      for (const p of new ProjectStore().list()) {
+        if (p.cwd) aliasToCwd.set(p.id, p.cwd);
+      }
+    } catch { /* DB unavailable — projectPath stays empty */ }
 
     const results: Array<{
       projectId: string;
@@ -201,34 +210,14 @@ export class RemiData {
       files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }>;
     }> = [];
 
-    // Resolve global memoryDir real path to detect symlink duplicates
-    const globalMemoryReal = realpathSync(this.memoryDir);
+    for (const alias of readdirSync(projectsMemoryDir)) {
+      const memoryDir = join(projectsMemoryDir, alias);
+      if (!statSync(memoryDir).isDirectory()) continue;
 
-    for (const projectDir of readdirSync(projectsDir)) {
-      const memoryDir = join(projectsDir, projectDir, "memory");
-      if (!existsSync(memoryDir) || !statSync(memoryDir).isDirectory()) continue;
-
-      // Skip directories that are symlinks to the global memory (e.g. -home-hehuajie)
-      try {
-        if (realpathSync(memoryDir) === globalMemoryReal) continue;
-      } catch { /* if realpath fails, include it */ }
-
-      // Derive human-readable project name from path-encoded dir name
-      // e.g. "-data00-home-hehuajie-project-larkparser" → "larkparser"
-      const parts = projectDir.split("-project-");
-      const projectName = parts.length > 1
-        ? parts[parts.length - 1].replace(/-/g, "_")
-        : projectDir;
-
-      // Derive original filesystem path
-      const projectPath = "/" + projectDir.replace(/^-/, "").replace(/-/g, "/");
-
-      // Check for MEMORY.md
       const memoryMdPath = join(memoryDir, "MEMORY.md");
       const hasMemoryMd = existsSync(memoryMdPath);
       const memoryMdSize = hasMemoryMd ? statSync(memoryMdPath).size : 0;
 
-      // Scan all .md files in memory dir (recursively one level)
       const files: Array<{ name: string; type: string; summary: string; path: string; updatedAt: string }> = [];
       const scanDir = (dir: string, prefix: string) => {
         if (!existsSync(dir)) return;
@@ -263,9 +252,15 @@ export class RemiData {
       };
       scanDir(memoryDir, "");
 
-      // Only include projects that have actual content
       if (files.length > 0 || hasMemoryMd) {
-        results.push({ projectId: projectDir, projectName, projectPath, hasMemoryMd, memoryMdSize, files });
+        results.push({
+          projectId: alias,
+          projectName: alias,
+          projectPath: aliasToCwd.get(alias) ?? "",
+          hasMemoryMd,
+          memoryMdSize,
+          files,
+        });
       }
     }
 
@@ -273,7 +268,7 @@ export class RemiData {
   }
 
   readProjectMemoryFile(projectId: string, filePath: string): string {
-    const fp = join(this.root, "projects", projectId, "memory", filePath);
+    const fp = join(this.memoryDir, "projects", projectId, filePath);
     return existsSync(fp) ? readFileSync(fp, "utf-8") : "";
   }
 

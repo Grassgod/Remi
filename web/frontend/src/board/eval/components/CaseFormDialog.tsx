@@ -240,7 +240,7 @@ export function CaseFormDialog({ open, onClose, onSaved, editCase }: CaseFormDia
                       className={inputClass}
                       value={mr}
                       onChange={(e) => handleMrChange(i, e.target.value)}
-                      placeholder="https://code.byted.org/..."
+                      placeholder="https://gitlab.example.com/..."
                     />
                     <button
                       type="button"

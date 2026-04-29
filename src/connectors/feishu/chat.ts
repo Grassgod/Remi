@@ -115,8 +115,16 @@ export async function updateChat(chatId: string, opts: {
 /** Default Remi group avatar key (from the manually set remi · Remi group). */
 export const REMI_AVATAR_KEY = "v3_00109_804c22d4-047c-4a29-b2cd-b4c5e9bbf13g";
 
-/** Base URL for the Board app (mission board). */
-export const BOARD_BASE_URL = "http://n37-066-008.byted.org:8090";
+/**
+ * Resolve the Board app base URL.
+ * Priority: REMI_BOARD_URL env var > localhost fallback.
+ */
+export function getBoardBaseUrl(): string {
+  return process.env.REMI_BOARD_URL ?? "http://localhost:8090";
+}
+
+/** @deprecated Use getBoardBaseUrl() instead — kept for backwards compat. */
+export const BOARD_BASE_URL = getBoardBaseUrl();
 
 /**
  * Add a Chat Tab (群标签页) to a group, linking to the project's mission board.
@@ -128,7 +136,7 @@ export async function addChatTab(chatId: string, projectId: string): Promise<boo
     const baseUrl = getBaseUrl(config.feishu.domain);
     const token = await getTenantToken(config.feishu.appId, config.feishu.appSecret, baseUrl);
 
-    const tabUrl = `${BOARD_BASE_URL}/mission/${projectId}`;
+    const tabUrl = `${getBoardBaseUrl()}/mission/${projectId}`;
     const res = await fetch(`${baseUrl}/im/v1/chats/${chatId}/chat_tabs`, {
       method: "POST",
       headers: {

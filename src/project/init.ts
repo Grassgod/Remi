@@ -22,9 +22,13 @@ import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat, setupProjectChat } from "../connectors/feishu/chat.js";
 import { GroupConfigStore } from "../group/store.js";
+import { loadConfig } from "../config.js";
 
-// Jack's hardcoded open_id — only group member besides Remi Bot
-const OWNER_OPEN_ID = "ou_f4ed0b435518ee382e7e06c147a9db9f";
+/** Resolve the project owner's Feishu open_id from config. */
+function getOwnerOpenId(): string {
+  const config = loadConfig();
+  return config.feishu.triggerUserIds[0] ?? "";
+}
 
 // ── SSE Event System ──
 
@@ -108,7 +112,11 @@ export async function runProjectInit(
     let chatId = existing?.chatId;
 
     if (!chatId) {
-      chatId = await createProjectChat(input.name, OWNER_OPEN_ID);
+      const ownerOpenId = getOwnerOpenId();
+      if (!ownerOpenId) {
+        throw new Error("No owner open_id configured. Set feishu.trigger_user_ids in remi.toml.");
+      }
+      chatId = await createProjectChat(input.name, ownerOpenId);
       store.updateField(projectId, "chat_id", chatId);
     }
 

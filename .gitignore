@@ -36,3 +36,35 @@ remi-jarvis-*.png
 
 .claude/CLAUDE.md
 .claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Remi runtime & secrets — never commit.
+# Remi 运行时数据与敏感信息,严禁入库。
+# ---------------------------------------------------------------------------
+
+# Active config (use remi.toml.example as template)
+remi.toml
+!remi.toml.example
+
+# Auth tokens
+auth/
+*.tokens.json
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Runtime logs
+log/
+logs/
+
+# Feishu image cache
+lark_image/
+
+# Per-user runtime directory (sessions, memory snapshots, etc.)
+.remi/
+
+# Personal soul prompt (use soul.md.example as template)
+soul.md
+!soul.md.example

@@ -349,7 +349,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] text-muted-foreground/60">{date} {time}</span>
         <span className="text-xs font-medium text-muted-foreground font-mono">
-          {!message.senderId ? "User" : message.senderId === "ou_f4ed0b435518ee382e7e06c147a9db9f" ? "Jack" : message.senderId}
+          {!message.senderId ? "User" : message.senderId}
         </span>
       </div>
       <div className="max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed bg-accent">

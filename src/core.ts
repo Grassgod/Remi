@@ -948,17 +948,11 @@ export class Remi {
       });
     }
 
-    // 4. SymlinkManager — 3-layer centralization
+    // 4. SymlinkManager — Globals + Layer 1 (project hash dirs)
     const { symlinkManager } = require("./infra/symlink-manager");
     remi._symlinkManager = symlinkManager;
-    const pStore = new ProjectStore();
-    const projectMap: Record<string, string> = {};
-    for (const p of pStore.list()) { if (p.cwd) projectMap[p.id] = p.cwd; }
-    symlinkManager.setProjects(projectMap);
     symlinkManager.ensureAllProjects();
     symlinkManager.ensureGlobals();
-    symlinkManager.ensureProjectMemoryLinks();
-    symlinkManager.ensureWikiCentralization();
 
     // 5. Restart handler
     remi.onRestart((info) => remi._handleRestart(info));
@@ -974,6 +968,8 @@ export class Remi {
         timeout: config.provider.timeout,
         allowedTools: config.provider.allowedTools,
         cwd: homedir(),
+        apiKey: config.provider.apiKey,
+        baseUrl: config.provider.baseUrl,
       });
     }
     if (n === "aiden_cli") {

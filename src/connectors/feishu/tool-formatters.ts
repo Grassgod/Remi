@@ -293,11 +293,17 @@ function truncate(s: string, max: number): string {
 /** Shorten a file path for display — replace home dir with ~/, keep relative. */
 export function shortPath(path: string): string {
   if (!path) return "";
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const home = process.env.HOME || "/home";
-  return path
-    .replace(new RegExp(`^${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`), "~/")
-    .replace(/^\/data00\/home\/hehuajie\//, "~/")
-    .replace(/^\/home\/hehuajie\//, "~/");
+  let out = path.replace(new RegExp(`^${escapeRe(home)}/`), "~/");
+
+  // Some platforms expose two equivalent home roots (e.g. /data00/home/<user>
+  // vs /home/<user>). Normalize the alternate root if present.
+  const homeAlt = process.env.HOME_ALT;
+  if (homeAlt) {
+    out = out.replace(new RegExp(`^${escapeRe(homeAlt)}/`), "~/");
+  }
+  return out;
 }
 
 function formatResultPreview(resultPreview: string): string {
