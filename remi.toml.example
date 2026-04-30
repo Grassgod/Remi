@@ -1,0 +1,390 @@
+# Remi Configuration Example
+# Copy this file to `remi.toml` (or `~/.remi/remi.toml`) and fill in your own values.
+# 复制此文件为 `remi.toml`(或 `~/.remi/remi.toml`)，并填入你自己的值。
+#
+# Search order (优先级): ./remi.toml > ~/.remi/remi.toml > defaults
+# Sensitive fields (api_key, app_secret, client_id, etc.) MUST never be committed.
+# 敏感字段(api_key、app_secret、client_id 等)严禁提交到代码仓库。
+
+# ---------------------------------------------------------------------------
+# [provider] — Default AI backend.
+# 默认 AI 后端配置。
+# Remi defaults to ClaudeCLIProvider (uses your local Claude Code subscription,
+# no API key needed). Uncomment below to use a remote OpenAI-compatible endpoint.
+# Remi 默认使用 ClaudeCLIProvider(基于本地 Claude Code 订阅，无需 API key)。
+# 如需使用远程 OpenAI 兼容端点，取消下方注释。
+# ---------------------------------------------------------------------------
+[provider]
+# model = "claude-opus-4-7"
+# api_key = "your-provider-api-key-here"
+# base_url = "http://localhost:3000"
+
+# ---------------------------------------------------------------------------
+# [feishu] — Feishu/Lark bot connector.
+# 飞书/Lark 机器人连接器配置。
+# Create an app at https://open.feishu.cn (or https://open.larksuite.com).
+# 在 https://open.feishu.cn 创建应用获取 app_id 和 app_secret。
+# `domain`: "feishu" for China cloud, "lark" for international.
+# `domain`: 国内版填 "feishu"，国际版填 "lark"。
+# `trigger_user_ids`: open_id list of users authorized to trigger sensitive
+# scheduled jobs (e.g. memory audit). Get yours via Feishu API.
+# `trigger_user_ids`: 被授权触发敏感定时任务的用户 open_id 列表。
+# ---------------------------------------------------------------------------
+[feishu]
+app_id = "your-feishu-app-id-here"
+app_secret = "your-feishu-app-secret-here"
+domain = "feishu"
+trigger_user_ids = [ "your-feishu-open-id-here" ]
+
+# ---------------------------------------------------------------------------
+# [[services]] — PM2-style long-running services launched by `remi serve`.
+# 由 `remi serve` 启动的常驻服务(PM2 风格)。
+# Use relative paths or `~` so the config is portable across machines.
+# 推荐使用相对路径或 `~`,以便配置在不同机器间通用。
+# ---------------------------------------------------------------------------
+[[services]]
+name = "remi-web"
+script = "web/server.ts"
+interpreter = "bun"
+cwd = "."
+build = "cd web/frontend && bun run build"
+port = 6120
+
+# ---------------------------------------------------------------------------
+# [bot_menu] — Feishu bot menu definition.
+# 飞书机器人菜单定义。
+# Synced to Feishu via menu-sync on startup. Each top-level entry is a menu
+# group; `children` are clickable items that send the configured message.
+# 启动时通过 menu-sync 同步到飞书。每个顶层条目是一个菜单组；
+# `children` 是点击后发送配置消息的子项。
+# ---------------------------------------------------------------------------
+[[bot_menu.default]]
+name = "Commands"
+
+[bot_menu.default.i18n_name]
+en_us = "Commands"
+zh_cn = "命令"
+
+[bot_menu.default.icon]
+token = "menu_outlined"
+color = "green"
+
+[[bot_menu.default.children]]
+name = "/clear"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/status"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/sessions"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/context"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/restart"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/esc"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/compact"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default]]
+name = "Switch"
+
+[bot_menu.default.i18n_name]
+en_us = "Switch"
+zh_cn = "切换"
+
+[bot_menu.default.icon]
+token = "switch_outlined"
+color = "blue"
+
+[[bot_menu.default.children]]
+name = "/switch claude:bypass"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/switch claude:plan"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/switch claude:auto"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default]]
+name = "Projects"
+
+[bot_menu.default.i18n_name]
+en_us = "Projects"
+zh_cn = "项目"
+
+[bot_menu.default.icon]
+token = "folder_outlined"
+color = "orange"
+
+[[bot_menu.default.children]]
+name = "/project remi"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/project reset"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default]]
+name = "Skills"
+
+[bot_menu.default.i18n_name]
+en_us = "Skills"
+zh_cn = "技能"
+
+[bot_menu.default.icon]
+token = "app_outlined"
+color = "turquoise"
+
+[[bot_menu.default.children]]
+name = "/ai-daily-briefing"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/memory-research"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/repo-update"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/image"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default]]
+name = "Navigate"
+
+[bot_menu.default.i18n_name]
+en_us = "Navigate"
+zh_cn = "导航"
+
+[bot_menu.default.icon]
+token = "home_outlined"
+color = "purple"
+
+[[bot_menu.default.children]]
+name = "Dashboard"
+
+[[bot_menu.default.children.behaviors]]
+type = "target"
+url = "http://localhost:6120"
+
+# ---------------------------------------------------------------------------
+# [proxy] — HTTP proxy used for outbound requests (LLM APIs, Feishu, etc.).
+# 出站请求使用的 HTTP 代理(LLM API、飞书等)。
+# Leave empty if you don't need a proxy. `no_proxy` is a comma-separated
+# list of hosts/CIDRs that bypass the proxy.
+# 如不需要代理可留空。`no_proxy` 是逗号分隔的绕过代理的主机/网段列表。
+# ---------------------------------------------------------------------------
+[proxy]
+http = "http://127.0.0.1:7890"
+no_proxy = "localhost,127.0.0.1,::1"
+
+# ---------------------------------------------------------------------------
+# [tracing] — LangSmith tracing (optional).
+# LangSmith 追踪(可选)。
+# Sign up at https://smith.langchain.com to capture LLM traces.
+# 在 https://smith.langchain.com 注册以采集 LLM 调用链路。
+# ---------------------------------------------------------------------------
+[tracing]
+langsmith_api_key = "your-langsmith-api-key-here"
+langsmith_project = "Remi"
+
+# ---------------------------------------------------------------------------
+# [bytedance_sso] — ByteDance internal SSO (optional, for ByteDance employees).
+# 字节跳动内部 SSO(可选,仅对字节员工有效)。
+# Used by token_sync below to refresh bytedcli credentials.
+# 配合下方 token_sync 用于刷新 bytedcli 凭证。
+# ---------------------------------------------------------------------------
+[bytedance_sso]
+client_id = "your-bytedance-sso-client-id-here"
+
+# ---------------------------------------------------------------------------
+# [[token_sync]] — Mirror auth tokens from Remi's auth store to other tools.
+# 将 Remi auth store 中的认证 token 镜像到其他工具的存储位置。
+# `source`: glob/path inside Remi's auth store.
+# `target`: file path the consuming tool reads (use `~` for $HOME).
+# `format`: "mirror" | "bytedcli_token" | "json_kv".
+# `source`: Remi auth store 内的路径或 glob。
+# `target`: 目标工具读取的文件路径(支持 `~`)。
+# `format`: 输出格式,可选 mirror / bytedcli_token / json_kv。
+# ---------------------------------------------------------------------------
+[[token_sync]]
+name = "lark-mcp-server"
+source = "feishu/*"
+target = "~/.lark_auth/tokens.json"
+format = "mirror"
+
+# Optional ByteDance-specific token sync (remove if not applicable).
+# 字节专用 token 同步(如不适用请删除)。
+# [[token_sync]]
+# name = "bytedcli-sso"
+# source = "bytedance-sso/access"
+# target = "~/.local/share/bytedcli/data/token.json"
+# format = "bytedcli_token"
+#
+# [[token_sync]]
+# name = "bytedcli-jwt"
+# source = "bytedance-sso/jwt"
+# target = "~/.local/share/bytedcli/data/jwt_override.json"
+# format = "json_kv"
+# key = "token"
+
+# ---------------------------------------------------------------------------
+# [[cron.jobs]] — Scheduled jobs (cron expression or interval).
+# 定时任务(支持 cron 表达式或 every 间隔)。
+# `handler`: builtin:* | agent:<name> | skill:run | cli-ingest
+# `cron`: 5-field cron expression (UTC by default).
+# `every`: shorthand for fixed interval (e.g. "300s").
+# `handler_config.delivery.pushTargets`: open_id list to push results to.
+# `handler`: 任务处理器类型。
+# `cron`: 5 字段 cron 表达式(默认 UTC 时区)。
+# `every`: 固定间隔的简写(如 "300s")。
+# `handler_config.delivery.pushTargets`: 推送结果的 open_id 列表。
+# ---------------------------------------------------------------------------
+[[cron.jobs]]
+id = "builtin:heartbeat"
+name = "Heartbeat"
+handler = "builtin:heartbeat"
+every = "300s"
+
+[[cron.jobs]]
+id = "agent:memory-audit"
+name = "Memory Audit Agent"
+handler = "agent:memory-audit"
+cron = "0 3 * * *"
+
+[cron.jobs.handler_config]
+connectorName = "feishu"
+pushTargets = [ "your-feishu-open-id-here" ]
+
+[[cron.jobs]]
+id = "agent:wiki-curate"
+name = "Wiki Curate Agent"
+handler = "agent:wiki-curate"
+cron = "45 3 * * *"
+
+[cron.jobs.handler_config]
+connectorName = "feishu"
+pushTargets = [ "your-feishu-open-id-here" ]
+
+[[cron.jobs]]
+id = "cli-ingest"
+name = "Claude Code CLI Ingestion"
+handler = "cli-ingest"
+cron = "17 * * * *"
+
+[[cron.jobs]]
+id = "skill:ai-daily-briefing"
+name = "AI Daily Briefing"
+handler = "skill:run"
+cron = "15 10 * * *"
+
+[cron.jobs.handler_config]
+skillName = "ai-daily-briefing"
+outputDir = "~/.remi/tasks/briefing"
+
+[cron.jobs.handler_config.delivery]
+connectorName = "feishu"
+pushTargets = [ "your-feishu-open-id-here" ]
+maxPushLength = 4000
+
+[[cron.jobs]]
+id = "skill:memory-research"
+name = "Memory Research"
+handler = "skill:run"
+cron = "45 10 * * *"
+
+[cron.jobs.handler_config]
+skillName = "memory-research"
+outputDir = "~/.remi/tasks/memory-research"
+
+[cron.jobs.handler_config.delivery]
+connectorName = "feishu"
+pushTargets = [ "your-feishu-open-id-here" ]
+maxPushLength = 4000
+
+[[cron.jobs]]
+id = "skill:repo-update"
+name = "Repo Update"
+handler = "skill:run"
+cron = "0 4 * * *"
+
+[cron.jobs.handler_config]
+skillName = "repo-update"
+outputDir = "~/.remi/tasks/repo-updates"
+
+[cron.jobs.handler_config.delivery]
+connectorName = "feishu"
+pushTargets = [ "your-feishu-open-id-here" ]
+maxPushLength = 4000
+
+# ---------------------------------------------------------------------------
+# [google] — Google Gemini API (used by `/image` skill via Nano Banana).
+# Google Gemini API(由 `/image` 技能通过 Nano Banana 使用)。
+# Get a key at https://aistudio.google.com/apikey.
+# 在 https://aistudio.google.com/apikey 申请 API key。
+# ---------------------------------------------------------------------------
+[google]
+api_key = "your-google-api-key-here"
+model = "gemini-3.1-flash-image-preview"
+
+# ---------------------------------------------------------------------------
+# [embedding] — Embedding provider for memory semantic search.
+# 记忆语义搜索的 embedding 服务。
+# `provider`: "voyage" | "openai" | ...
+# Get a Voyage AI key at https://www.voyageai.com.
+# `provider` 可选 voyage / openai 等;
+# 在 https://www.voyageai.com 申请 Voyage AI key。
+# ---------------------------------------------------------------------------
+[embedding]
+provider = "voyage"
+api_key = "your-embedding-api-key-here"
+model = "voyage-3.5-lite"

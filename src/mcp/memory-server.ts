@@ -1,0 +1,288 @@
+#!/usr/bin/env bun
+/**
+ * MCP Server for Remi memory tools (recall + remember).
+ *
+ * Runs as a standalone stdio MCP server so Claude Code CLI can
+ * natively discover and call these tools.
+ *
+ * Protocol: JSON-RPC 2.0 over stdio (Content-Length framing, like LSP).
+ *
+ * Usage:
+ *   bun run src/mcp/memory-server.ts
+ *
+ * Register in ~/.claude/.mcp.json:
+ *   { "mcpServers": { "remi-memory": { "command": "bun", "args": ["run", "<path>/memory-server.ts"] } } }
+ */
+
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { MemoryStore } from "../memory/store.js";
+
+// ── Constants ────────────────────────────────────────────────
+
+const MEMORY_ROOT = join(homedir(), ".remi", "memory");
+const SERVER_NAME = "remi-memory";
+
+// ── File-based logger (stderr not captured by PM2) ────────────
+
+const LOG_DIR = join(homedir(), ".remi", "logs");
+if (!existsSync(LOG_DIR)) mkdirSync(LOG_DIR, { recursive: true });
+
+function mcpLog(msg: string): void {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] [${SERVER_NAME}] ${msg}\n`;
+  process.stderr.write(line);
+  try {
+    const today = ts.slice(0, 10);
+    appendFileSync(join(LOG_DIR, `mcp-memory-${today}.log`), line, "utf-8");
+  } catch { /* ignore */ }
+}
+const SERVER_VERSION = "1.0.0";
+const PROTOCOL_VERSION = "2024-11-05";
+
+// ── MemoryStore singleton (with optional VectorStore) ────────
+
+let store: MemoryStore;
+try {
+  // Try to load embedding config from remi.toml
+  let vectorStore = null;
+  try {
+    const tomlPath = join(homedir(), ".remi", "remi.toml");
+    if (existsSync(tomlPath)) {
+      const toml = readFileSync(tomlPath, "utf-8");
+      const apiKeyMatch = toml.match(/\[embedding\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
+      if (apiKeyMatch?.[1]) {
+        const { VectorStore } = require("../db/vector-store.js");
+        vectorStore = new VectorStore({
+          provider: "voyage",
+          apiKey: apiKeyMatch[1],
+        });
+        process.stderr.write(`[${SERVER_NAME}] VectorStore initialized\n`);
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`[${SERVER_NAME}] VectorStore unavailable: ${e}\n`);
+  }
+  store = new MemoryStore(MEMORY_ROOT, vectorStore);
+} catch (e) {
+  process.stderr.write(`[${SERVER_NAME}] Failed to init MemoryStore: ${e}\n`);
+  process.exit(1);
+}
+
+// ── Tool definitions ─────────────────────────────────────────
+
+const TOOLS = [
+  {
+    name: "recall",
+    description:
+      "搜索 Remi 记忆系统。可搜索联系人、项目记忆、历史日志等所有记忆源。" +
+      "精确匹配实体名或别名返回全文，模糊匹配返回摘要列表。",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "搜索关键词（实体名、别名、日期、或任意文本）",
+        },
+        cwd: {
+          type: "string",
+          description: "当前工作目录（可选，用于搜索项目级记忆）",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "remember",
+    description:
+      "即时保存重要信息到 Remi 记忆系统。" +
+      "当用户告知生日、偏好、决策等值得长期保存的内容时调用。" +
+      "实体不存在则自动创建，已存在则追加为新观察。",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        entity: { type: "string", description: "实体名称" },
+        type: {
+          type: "string",
+          description: "实体类型（person/organization/project/decision/software/platform/...）",
+        },
+        observation: { type: "string", description: "要记住的信息" },
+        scope: {
+          type: "string",
+          enum: ["personal", "project"],
+          description: "存储范围：personal=个人记忆（默认），project=项目记忆",
+        },
+        cwd: {
+          type: "string",
+          description: "当前工作目录（scope=project 时必填）",
+        },
+      },
+      required: ["entity", "type", "observation"],
+    },
+  },
+  {
+    name: "backlinks",
+    description:
+      "查询某个实体的反向链接（Obsidian 式）：所有用 [[实体名]] 语法提到该实体的其他文件，" +
+      "每条返回来源实体名和上下文片段。常用于了解某个实体被哪些其他实体关联。",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        entity: {
+          type: "string",
+          description: "目标实体名（如 Alice-Chen, Remi, larkparser）",
+        },
+      },
+      required: ["entity"],
+    },
+  },
+];
+
+// ── JSON-RPC 2.0 helpers ─────────────────────────────────────
+
+interface JsonRpcRequest {
+  jsonrpc: string;
+  id?: string | number | null;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+function jsonRpcResult(id: string | number | null | undefined, result: unknown) {
+  return { jsonrpc: "2.0", id: id ?? null, result };
+}
+
+function jsonRpcError(id: string | number | null | undefined, code: number, message: string) {
+  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+}
+
+// ── Request handler ──────────────────────────────────────────
+
+async function handleRequest(req: JsonRpcRequest): Promise<Record<string, unknown> | null> {
+  // Notifications (no id) — don't send response
+  if (req.id === undefined || req.id === null) {
+    if (req.method === "notifications/initialized") {
+      process.stderr.write(`[${SERVER_NAME}] Client initialized\n`);
+    }
+    return null;
+  }
+
+  switch (req.method) {
+    case "initialize":
+      return jsonRpcResult(req.id, {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: { tools: {} },
+        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+      });
+
+    case "tools/list":
+      return jsonRpcResult(req.id, { tools: TOOLS });
+
+    case "tools/call": {
+      const params = req.params as { name: string; arguments?: Record<string, unknown> };
+      const toolName = params?.name;
+      const args = params?.arguments ?? {};
+
+      if (toolName === "recall") {
+        const query = args.query as string;
+        mcpLog(`recall query="${query}"`);
+        const result = await store.recall(query, {
+          cwd: (args.cwd as string) || null,
+        });
+        mcpLog(`recall result: ${result ? result.length + " chars" : "empty"}`);
+        return jsonRpcResult(req.id, {
+          content: [{ type: "text", text: result || "(无匹配结果)" }],
+        });
+      }
+
+      if (toolName === "remember") {
+        const result = store.remember(
+          args.entity as string,
+          args.type as string,
+          args.observation as string,
+          (args.scope as "personal" | "project") || "personal",
+          (args.cwd as string) || null,
+        );
+        // Regenerate bridge so Claude Code's next session sees updated memory
+        try {
+          store.regenerateBridge();
+        } catch (e) {
+          process.stderr.write(`[${SERVER_NAME}] Bridge regeneration failed: ${e}\n`);
+        }
+        return jsonRpcResult(req.id, {
+          content: [{ type: "text", text: result }],
+        });
+      }
+
+      if (toolName === "backlinks") {
+        const entity = args.entity as string;
+        mcpLog(`backlinks entity="${entity}"`);
+        const backs = store.getBacklinks(entity);
+        if (backs.length === 0) {
+          return jsonRpcResult(req.id, {
+            content: [{ type: "text", text: `(${entity} 暂无反向链接)` }],
+          });
+        }
+        const lines = backs.map(
+          (b) => `- [[${b.source}]] — "${b.snippet}"`,
+        );
+        return jsonRpcResult(req.id, {
+          content: [{ type: "text", text: `## Backlinks for ${entity}\n\n${lines.join("\n")}` }],
+        });
+      }
+
+      return jsonRpcResult(req.id, {
+        content: [{ type: "text", text: `Unknown tool: ${toolName}` }],
+        isError: true,
+      });
+    }
+
+    default:
+      return jsonRpcError(req.id, -32601, `Method not found: ${req.method}`);
+  }
+}
+
+// ── Stdio transport (NDJSON) ─────────────────────────────────
+
+function sendMessage(msg: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(msg) + "\n");
+}
+
+async function main(): Promise<void> {
+  process.stderr.write(`[${SERVER_NAME}] Starting (memory_root=${MEMORY_ROOT})\n`);
+
+  const reader = Bun.stdin.stream().getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let newlineIdx: number;
+    while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, newlineIdx).trim();
+      buffer = buffer.slice(newlineIdx + 1);
+      if (!line) continue;
+
+      try {
+        const req = JSON.parse(line) as JsonRpcRequest;
+        process.stderr.write(`[${SERVER_NAME}] <- ${req.method}\n`);
+        const response = await handleRequest(req);
+        if (response) {
+          sendMessage(response);
+        }
+      } catch (e) {
+        process.stderr.write(`[${SERVER_NAME}] Parse error: ${e}\n`);
+      }
+    }
+  }
+
+  process.stderr.write(`[${SERVER_NAME}] stdin closed, exiting\n`);
+}
+
+main().catch((e) => {
+  process.stderr.write(`[${SERVER_NAME}] Fatal: ${e}\n`);
+  process.exit(1);
+});

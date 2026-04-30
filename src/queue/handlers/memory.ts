@@ -1,0 +1,84 @@
+/**
+ * Memory extraction Worker handler.
+ *
+ * Receives aggregated conversation text, runs the memory-extract agent
+ * (Haiku via CC CLI) to extract entities/decisions/observations.
+ */
+
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import type { Job } from "bunqueue/client";
+import type { MemoryJobData } from "../queues.js";
+import type { MemoryStore } from "../../memory/store.js";
+import { AgentRunner } from "../../agents/index.js";
+import { createLogger } from "../../logger.js";
+
+const log = createLogger("queue:memory");
+
+/**
+ * Describe current memory structure for the agent prompt context.
+ */
+function describeMemoryStructure(store: MemoryStore): string {
+  const lines: string[] = [];
+  const entitiesDir = join(store.root, "entities");
+  if (existsSync(entitiesDir)) {
+    for (const entry of readdirSync(entitiesDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        const count = readdirSync(join(entitiesDir, entry.name)).filter((f) =>
+          f.endsWith(".md"),
+        ).length;
+        lines.push(`  entities/${entry.name}/: ${count} files`);
+      }
+    }
+  }
+
+  const dailyDir = join(store.root, "daily");
+  if (existsSync(dailyDir)) {
+    const count = readdirSync(dailyDir).filter((f) => f.endsWith(".md")).length;
+    lines.push(`  daily/: ${count} files`);
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "  (empty)";
+}
+
+export async function handleMemoryJob(
+  job: Job<MemoryJobData>,
+  memory: MemoryStore,
+): Promise<void> {
+  const { aggregatedText, sessionKey, roundCount, contentHash, cwd } = job.data;
+
+  log.info(
+    `Processing memory extraction: session=${sessionKey}, rounds=${roundCount}, hash=${contentHash}, cwd=${cwd ?? "none"}`,
+  );
+
+  const projectContext = cwd
+    ? `\n## 项目上下文\nCWD: ${cwd}\n→ 项目特定事实（架构、配置、约定）请用 remember({scope: "project", cwd: "${cwd}", ...})\n→ 人/组织/跨项目决策仍用 scope: "personal"\n`
+    : `\n## 项目上下文\n无明确 cwd → 默认使用 scope: "personal"\n`;
+
+  const prompt = `
+## 当前记忆结构
+${describeMemoryStructure(memory)}
+${projectContext}
+## 对话上下文
+Session: ${sessionKey}
+
+## 对话内容（最近部分）
+${aggregatedText.slice(0, 8000)}
+
+请分析以上对话，提取值得长期记忆的信息。使用 recall 工具检查已有记忆避免重复，使用 remember 工具写入新信息。
+`;
+
+  const runner = new AgentRunner();
+  const result = await runner.run("memory-extract", prompt);
+
+  if (result.exitCode !== 0) {
+    log.error(
+      `memory-extract agent failed (exit=${result.exitCode}): ${result.stderr.slice(0, 500)}`,
+    );
+    throw new Error(`memory-extract agent failed with exit code ${result.exitCode}`);
+  }
+
+  log.info(
+    `Memory extraction complete: session=${sessionKey}, duration=${result.durationMs}ms`,
+  );
+}

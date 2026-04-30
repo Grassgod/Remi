@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Remi Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════
+   REMI — J.A.R.V.I.S. Style HUD Dashboard
+   ═══════════════════════════════════════════ */
+
+:root {
+  --bg-void: #030810;
+  --bg-surface: rgba(8, 18, 35, 0.85);
+  --bg-panel: rgba(10, 24, 48, 0.6);
+  --bg-hover: rgba(20, 50, 90, 0.4);
+
+  --glow-primary: #00e5ff;
+  --glow-primary-rgb: 0, 229, 255;
+  --glow-secondary: #4fc3f7;
+  --glow-accent: #00bcd4;
+  --glow-warm: #ff9100;
+  --glow-warm-rgb: 255, 145, 0;
+  --glow-green: #00e676;
+  --glow-green-rgb: 0, 230, 118;
+  --glow-red: #ff1744;
+  --glow-red-rgb: 255, 23, 68;
+  --glow-amber: #ffab00;
+  --glow-amber-rgb: 255, 171, 0;
+  --glow-purple: #b388ff;
+
+  --border-glow: rgba(0, 229, 255, 0.15);
+  --border-bright: rgba(0, 229, 255, 0.35);
+
+  --text-bright: #e0f7fa;
+  --text-primary: #b0bec5;
+  --text-muted: #546e7a;
+  --text-dim: #37474f;
+
+  --font-display: 'Orbitron', sans-serif;
+  --font-body: 'Rajdhani', sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+
+  --sidebar-width: 200px;
+  --header-height: 52px;
+  --bottom-nav-height: 60px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-void);
+  color: var(--text-primary);
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+/* ═══ BACKGROUND GRID ═══ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(rgba(0,229,255,0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,255,0.02) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(0,229,255,0.04) 0%, transparent 60%),
+              radial-gradient(ellipse at 80% 80%, rgba(0,188,212,0.03) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,229,255,0.2); border-radius: 2px; }
+
+/* ═══ HUD Corner Brackets ═══ */
+.hud-bracket {
+  position: relative;
+}
+
+.hud-bracket::before,
+.hud-bracket::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.hud-bracket::before {
+  top: 0; left: 0;
+  border-top: 1.5px solid var(--glow-primary);
+  border-left: 1.5px solid var(--glow-primary);
+}
+
+.hud-bracket::after {
+  bottom: 0; right: 0;
+  border-bottom: 1.5px solid var(--glow-primary);
+  border-right: 1.5px solid var(--glow-primary);
+}
+
+/* ═══════════════════════════════════════════
+   LAYOUT
+   ═══════════════════════════════════════════ */
+
+.app {
+  display: flex;
+  height: 100dvh;
+  position: relative;
+  z-index: 1;
+}
+
+/* ═══ SIDEBAR ═══ */
+.sidebar {
+  width: var(--sidebar-width);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-glow);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  backdrop-filter: blur(20px);
+}
+
+.sidebar-brand {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-glow);
+  gap: 10px;
+}
+
+.brand-ring {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid var(--glow-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  box-shadow: 0 0 12px rgba(var(--glow-primary-rgb), 0.3), inset 0 0 8px rgba(var(--glow-primary-rgb), 0.1);
+  animation: ring-pulse 3s ease-in-out infinite;
+}
+
+@keyframes ring-pulse {
+  0%, 100% { box-shadow: 0 0 12px rgba(var(--glow-primary-rgb), 0.3), inset 0 0 8px rgba(var(--glow-primary-rgb), 0.1); }
+  50% { box-shadow: 0 0 20px rgba(var(--glow-primary-rgb), 0.5), inset 0 0 12px rgba(var(--glow-primary-rgb), 0.2); }
+}
+
+.brand-ring::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--glow-primary-rgb), 0.3);
+}
+
+.brand-letter {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--glow-primary);
+  letter-spacing: 1px;
+}
+
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--glow-primary);
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+
+.brand-ver {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* Nav */
+.sidebar-nav {
+  flex: 1;
+  padding: 8px 6px;
+  overflow-y: auto;
+}
+
+.nav-group {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 14px 12px 5px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-glow);
+}
+
+.nav-item.active {
+  color: var(--glow-primary);
+  background: rgba(var(--glow-primary-rgb), 0.06);
+  border-color: rgba(var(--glow-primary-rgb), 0.2);
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 16px;
+  background: var(--glow-primary);
+  box-shadow: 0 0 8px rgba(var(--glow-primary-rgb), 0.6);
+  border-radius: 0 1px 1px 0;
+}
+
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.nav-item.active .nav-icon { opacity: 1; }
+
+.nav-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(var(--glow-primary-rgb), 0.08);
+  color: var(--text-muted);
+  border: 1px solid var(--border-glow);
+}
+
+.nav-badge.live {
+  color: var(--glow-green);
+  background: rgba(var(--glow-green-rgb), 0.08);
+  border-color: rgba(var(--glow-green-rgb), 0.2);
+  animation: live-blink 2s ease-in-out infinite;
+}
+
+@keyframes live-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Sidebar footer */
+.sidebar-footer {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-glow);
+}
+
+.daemon-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.daemon-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--glow-green);
+  box-shadow: 0 0 8px rgba(var(--glow-green-rgb), 0.6);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 8px rgba(var(--glow-green-rgb), 0.6); }
+  50% { box-shadow: 0 0 16px rgba(var(--glow-green-rgb), 0.8); }
+}
+
+/* ═══ MAIN ═══ */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-glow);
+  background: var(--bg-surface);
+  backdrop-filter: blur(20px);
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-bright);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.header-sep {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.header-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 1px;
+}
+
+.header-spacer { flex: 1; }
+
+.header-clock {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--glow-primary);
+  letter-spacing: 1.5px;
+  text-shadow: 0 0 10px rgba(var(--glow-primary-rgb), 0.3);
+}
+
+.header-indicators {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.h-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.h-dot.on {
+  background: var(--glow-green);
+  box-shadow: 0 0 6px rgba(var(--glow-green-rgb), 0.5);
+}
+
+.h-dot.warn {
+  background: var(--glow-amber);
+  box-shadow: 0 0 6px rgba(var(--glow-amber-rgb), 0.5);
+}
+
+/* Content */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* ═══════════════════════════════════════════
+   DASHBOARD — HUD PANELS
+   ═══════════════════════════════════════════ */
+
+/* Status Arc Cards */
+.status-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.arc-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glow);
+  border-radius: 6px;
+  padding: 16px 18px;
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.arc-card:hover {
+  border-color: var(--border-bright);
+  box-shadow: 0 0 20px rgba(var(--glow-primary-rgb), 0.05);
+}
+
+/* Top glow line */
+.arc-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+}
+
+.arc-card.cyan::before { background: linear-gradient(90deg, transparent, var(--glow-primary), transparent); box-shadow: 0 0 12px rgba(var(--glow-primary-rgb), 0.4); }
+.arc-card.green::before { background: linear-gradient(90deg, transparent, var(--glow-green), transparent); box-shadow: 0 0 12px rgba(var(--glow-green-rgb), 0.4); }
+.arc-card.amber::before { background: linear-gradient(90deg, transparent, var(--glow-amber), transparent); box-shadow: 0 0 12px rgba(var(--glow-amber-rgb), 0.4); }
+
+/* Corner accents */
+.arc-card::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  border-bottom: 1px solid rgba(var(--glow-primary-rgb), 0.15);
+  border-right: 1px solid rgba(var(--glow-primary-rgb), 0.15);
+  border-radius: 0;
+}
+
+.arc-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.arc-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 6px;
+  letter-spacing: 1px;
+}
+
+.arc-value.cyan { color: var(--glow-primary); text-shadow: 0 0 20px rgba(var(--glow-primary-rgb), 0.3); }
+.arc-value.green { color: var(--glow-green); text-shadow: 0 0 20px rgba(var(--glow-green-rgb), 0.3); }
+.arc-value.amber { color: var(--glow-amber); text-shadow: 0 0 20px rgba(var(--glow-amber-rgb), 0.3); }
+
+.arc-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+/* Panels Grid */
+.panels-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 14px;
+}
+
+.right-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* HUD Panel */
+.hud-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glow);
+  border-radius: 6px;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+  position: relative;
+}
+
+.hud-panel::before,
+.hud-panel::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.hud-panel::before {
+  top: -1px; left: -1px;
+  border-top: 1.5px solid rgba(var(--glow-primary-rgb), 0.5);
+  border-left: 1.5px solid rgba(var(--glow-primary-rgb), 0.5);
+}
+
+.hud-panel::after {
+  bottom: -1px; right: -1px;
+  border-bottom: 1.5px solid rgba(var(--glow-primary-rgb), 0.5);
+  border-right: 1.5px solid rgba(var(--glow-primary-rgb), 0.5);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-glow);
+}
+
+.panel-label {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--glow-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-label-icon {
+  width: 13px;
+  height: 13px;
+  opacity: 0.6;
+}
+
+.panel-action {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--glow-primary);
+  padding: 3px 10px;
+  border: 1px solid rgba(var(--glow-primary-rgb), 0.2);
+  border-radius: 3px;
+  background: rgba(var(--glow-primary-rgb), 0.04);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.panel-action:hover {
+  background: rgba(var(--glow-primary-rgb), 0.1);
+  border-color: rgba(var(--glow-primary-rgb), 0.4);
+  box-shadow: 0 0 10px rgba(var(--glow-primary-rgb), 0.15);
+}
+
+.panel-body {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ═══ Activity Feed ═══ */
+.feed-item {
+  display: flex;
+  padding: 9px 16px;
+  gap: 12px;
+  align-items: baseline;
+  transition: background 0.15s;
+  border-left: 2px solid transparent;
+}
+
+.feed-item:hover {
+  background: rgba(var(--glow-primary-rgb), 0.03);
+  border-left-color: rgba(var(--glow-primary-rgb), 0.2);
+}
+
+.feed-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  min-width: 36px;
+  flex-shrink: 0;
+}
+
+.feed-tag {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 2px;
+  border: 1px solid rgba(var(--glow-primary-rgb), 0.2);
+  color: var(--glow-accent);
+  flex-shrink: 0;
+}
+
+.feed-msg {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Scan line effect on feed */
+.feed-scan {
+  position: relative;
+  overflow: hidden;
+}
+
+.feed-scan::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(var(--glow-primary-rgb), 0.15), transparent);
+  animation: scan-line 4s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes scan-line {
+  0% { top: 0; opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ═══ Token Status ═══ */
+.token-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  padding: 10px 16px;
+  gap: 10px;
+  transition: background 0.15s;
+}
+
+.token-row:hover {
+  background: rgba(var(--glow-primary-rgb), 0.03);
+}
+
+.token-svc {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: 0.5px;
+}
+
+.token-type {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.token-ttl {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: right;
+}
+
+.token-ttl.ok { color: var(--glow-green); text-shadow: 0 0 6px rgba(var(--glow-green-rgb), 0.3); }
+.token-ttl.warn { color: var(--glow-amber); }
+
+.token-chip {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 2px;
+}
+
+.token-chip.valid {
+  border: 1px solid rgba(var(--glow-green-rgb), 0.3);
+  color: var(--glow-green);
+  background: rgba(var(--glow-green-rgb), 0.06);
+}
+
+/* ═══ Entities ═══ */
+.entity-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  gap: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.entity-row:hover {
+  background: rgba(var(--glow-primary-rgb), 0.03);
+}
+
+.entity-type {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+  min-width: 56px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.entity-type.person { border: 1px solid rgba(96,165,250,0.3); color: #60a5fa; background: rgba(96,165,250,0.06); }
+.entity-type.project { border: 1px solid rgba(var(--glow-green-rgb),0.3); color: var(--glow-green); background: rgba(var(--glow-green-rgb),0.06); }
+.entity-type.service { border: 1px solid rgba(179,136,255,0.3); color: var(--glow-purple); background: rgba(179,136,255,0.06); }
+.entity-type.platform { border: 1px solid rgba(var(--glow-primary-rgb),0.3); color: var(--glow-primary); background: rgba(var(--glow-primary-rgb),0.06); }
+.entity-type.org { border: 1px solid rgba(var(--glow-amber-rgb),0.3); color: var(--glow-amber); background: rgba(var(--glow-amber-rgb),0.06); }
+
+.entity-name {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-bright);
+  flex: 1;
+  letter-spacing: 0.3px;
+}
+
+.entity-date {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+/* ═══ Scheduler ═══ */
+.job-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  padding: 9px 16px;
+  gap: 8px;
+}
+
+.job-row:hover { background: rgba(var(--glow-primary-rgb), 0.03); }
+
+.job-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.job-dot.green { background: var(--glow-green); box-shadow: 0 0 6px rgba(var(--glow-green-rgb), 0.5); }
+.job-dot.cyan { background: var(--glow-primary); box-shadow: 0 0 6px rgba(var(--glow-primary-rgb), 0.5); }
+.job-dot.amber { background: var(--glow-amber); box-shadow: 0 0 6px rgba(var(--glow-amber-rgb), 0.5); }
+
+.job-name {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-bright);
+  letter-spacing: 0.3px;
+}
+
+.job-freq {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-left: 4px;
+}
+
+.job-ago {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.job-btn {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 2px;
+  border: 1px solid var(--border-glow);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.job-btn:hover {
+  border-color: rgba(var(--glow-primary-rgb), 0.4);
+  color: var(--glow-primary);
+  box-shadow: 0 0 8px rgba(var(--glow-primary-rgb), 0.1);
+}
+
+/* ═══ BOTTOM NAV (Mobile) ═══ */
+.bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--bottom-nav-height);
+  padding-bottom: var(--safe-bottom);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-glow);
+  backdrop-filter: blur(20px);
+  z-index: 30;
+}
+
+.bottom-nav-inner {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: space-around;
+}
+
+.bnav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.bnav-item.active { color: var(--glow-primary); }
+.bnav-item:active { color: var(--text-bright); }
+
+.bnav-icon { width: 20px; height: 20px; }
+
+.bnav-label {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* ═══════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════ */
+
+@keyframes hud-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.arc-card { animation: hud-in 0.4s ease-out both; }
+.arc-card:nth-child(1) { animation-delay: 0s; }
+.arc-card:nth-child(2) { animation-delay: 0.06s; }
+.arc-card:nth-child(3) { animation-delay: 0.12s; }
+.arc-card:nth-child(4) { animation-delay: 0.18s; }
+
+.hud-panel { animation: hud-in 0.5s ease-out both; animation-delay: 0.24s; }
+.right-stack .hud-panel:nth-child(1) { animation-delay: 0.3s; }
+.right-stack .hud-panel:nth-child(2) { animation-delay: 0.36s; }
+.right-stack .hud-panel:nth-child(3) { animation-delay: 0.42s; }
+
+/* ═══════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .bottom-nav { display: block; }
+
+  .content {
+    padding: 14px;
+    padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 14px);
+  }
+
+  .header { padding: 0 14px; }
+
+  .status-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .arc-card { padding: 12px 14px; }
+  .arc-value { font-size: 22px; }
+
+  .panels-grid { grid-template-columns: 1fr; }
+
+  .feed-tag { display: none; }
+}
+
+@media (max-width: 360px) {
+  .status-row { grid-template-columns: 1fr; }
+}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-ring"><span class="brand-letter">R</span></div>
+      <span class="brand-name">Remi</span>
+      <span class="brand-ver">0.1.0</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-group">Core</div>
+      <div class="nav-item active">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </div>
+
+      <div class="nav-group">Data</div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+        Memory
+        <span class="nav-badge">5</span>
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Sessions
+        <span class="nav-badge">4</span>
+      </div>
+
+      <div class="nav-group">System</div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Auth
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Scheduler
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+        Tools
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        Config
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        Monitor
+        <span class="nav-badge live">LIVE</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="daemon-status">
+        <div class="daemon-dot"></div>
+        <span>DAEMON PID 1669484</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ MAIN ═══ -->
+  <div class="main">
+    <header class="header">
+      <span class="header-title">Dashboard</span>
+      <span class="header-sep">/</span>
+      <span class="header-sub">SYSTEM OVERVIEW</span>
+      <div class="header-spacer"></div>
+      <span class="header-clock" id="clock">2026.03.01 — 19:42:08</span>
+      <div class="header-indicators">
+        <div class="h-dot on" title="Daemon"></div>
+        <div class="h-dot on" title="Tenant Token"></div>
+        <div class="h-dot on" title="User Token"></div>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- Status Cards -->
+      <div class="status-row">
+        <div class="arc-card cyan">
+          <div class="arc-label">Daemon Status</div>
+          <div class="arc-value cyan">ONLINE</div>
+          <div class="arc-sub">PID 1669484 · UPTIME 3D 12H</div>
+        </div>
+        <div class="arc-card cyan">
+          <div class="arc-label">Active Sessions</div>
+          <div class="arc-value cyan">4</div>
+          <div class="arc-sub">1 MAIN · 3 THREADS</div>
+        </div>
+        <div class="arc-card green">
+          <div class="arc-label">Auth Tokens</div>
+          <div class="arc-value green">2/2</div>
+          <div class="arc-sub">NEXT EXPIRY 47M</div>
+        </div>
+        <div class="arc-card cyan">
+          <div class="arc-label">Memory Entities</div>
+          <div class="arc-value cyan">5</div>
+          <div class="arc-sub">PERSON · PROJECT · SVC · PLATFORM · ORG</div>
+        </div>
+      </div>
+
+      <!-- Panels -->
+      <div class="panels-grid">
+
+        <!-- Activity Feed -->
+        <div class="hud-panel">
+          <div class="panel-head">
+            <div class="panel-label">
+              <svg class="panel-label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              Activity Stream
+            </div>
+            <button class="panel-action">View All</button>
+          </div>
+          <div class="panel-body feed-scan">
+            <div class="feed-item">
+              <span class="feed-time">16:44</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">请求深度调研 Dashboard 实施方案</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">15:32</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">讨论 Web 服务与 Core 解耦架构</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">14:21</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">要求设计移动端 + 飞书 H5 兼容方案</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">12:08</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">讨论 skill 体系集成和注册机制</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">10:47</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">提交代码：fix thinking 面板流式输出默认折叠</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">10:32</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">把你的代码仓库发我</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">10:31</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">OAuth CLI 授权获取 user_access_token</span>
+            </div>
+            <div class="feed-item">
+              <span class="feed-time">09:15</span>
+              <span class="feed-tag">feishu</span>
+              <span class="feed-msg">feat: 1Passport 统一鉴权管理</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column -->
+        <div class="right-stack">
+
+          <!-- Tokens -->
+          <div class="hud-panel">
+            <div class="panel-head">
+              <div class="panel-label">
+                <svg class="panel-label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                Auth Tokens
+              </div>
+              <button class="panel-action">Refresh</button>
+            </div>
+            <div class="panel-body">
+              <div class="token-row">
+                <div>
+                  <div class="token-svc">Feishu</div>
+                  <div class="token-type">tenant_access_token</div>
+                </div>
+                <span class="token-ttl ok">47m</span>
+                <span class="token-chip valid">VALID</span>
+              </div>
+              <div class="token-row">
+                <div>
+                  <div class="token-svc">Feishu</div>
+                  <div class="token-type">user_access_token</div>
+                </div>
+                <span class="token-ttl ok">1h 02m</span>
+                <span class="token-chip valid">VALID</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Entities -->
+          <div class="hud-panel">
+            <div class="panel-head">
+              <div class="panel-label">
+                <svg class="panel-label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+                Memory Entities
+              </div>
+              <button class="panel-action">Manage</button>
+            </div>
+            <div class="panel-body">
+              <div class="entity-row">
+                <span class="entity-type person">person</span>
+                <span class="entity-name">贺华杰</span>
+                <span class="entity-date">02-27</span>
+              </div>
+              <div class="entity-row">
+                <span class="entity-type project">project</span>
+                <span class="entity-name">Remi</span>
+                <span class="entity-date">02-27</span>
+              </div>
+              <div class="entity-row">
+                <span class="entity-type service">service</span>
+                <span class="entity-name">Claude Code</span>
+                <span class="entity-date">02-27</span>
+              </div>
+              <div class="entity-row">
+                <span class="entity-type platform">platform</span>
+                <span class="entity-name">飞书/Lark</span>
+                <span class="entity-date">02-27</span>
+              </div>
+              <div class="entity-row">
+                <span class="entity-type org">org</span>
+                <span class="entity-name">NBA</span>
+                <span class="entity-date">02-27</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Scheduler -->
+          <div class="hud-panel">
+            <div class="panel-head">
+              <div class="panel-label">
+                <svg class="panel-label-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Scheduler
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="job-row">
+                <div class="job-info">
+                  <div class="job-dot green"></div>
+                  <span class="job-name">Heartbeat</span>
+                  <span class="job-freq">5m</span>
+                </div>
+                <span class="job-ago">2m ago</span>
+                <button class="job-btn">RUN</button>
+              </div>
+              <div class="job-row">
+                <div class="job-info">
+                  <div class="job-dot cyan"></div>
+                  <span class="job-name">Compaction</span>
+                  <span class="job-freq">03:00</span>
+                </div>
+                <span class="job-ago">18h ago</span>
+                <button class="job-btn">RUN</button>
+              </div>
+              <div class="job-row">
+                <div class="job-info">
+                  <div class="job-dot amber"></div>
+                  <span class="job-name">Cleanup</span>
+                  <span class="job-freq">post</span>
+                </div>
+                <span class="job-ago">18h ago</span>
+                <button class="job-btn">RUN</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Bottom Nav -->
+<div class="bottom-nav">
+  <div class="bottom-nav-inner">
+    <div class="bnav-item active">
+      <svg class="bnav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="bnav-label">Home</span>
+    </div>
+    <div class="bnav-item">
+      <svg class="bnav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+      <span class="bnav-label">Memory</span>
+    </div>
+    <div class="bnav-item">
+      <svg class="bnav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span class="bnav-label">Sessions</span>
+    </div>
+    <div class="bnav-item">
+      <svg class="bnav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2"/></svg>
+      <span class="bnav-label">System</span>
+    </div>
+    <div class="bnav-item">
+      <svg class="bnav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      <span class="bnav-label">Monitor</span>
+    </div>
+  </div>
+</div>
+
+<script>
+// Clock with seconds
+function updateClock() {
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  document.getElementById('clock').textContent =
+    `${now.getFullYear()}.${p(now.getMonth()+1)}.${p(now.getDate())} — ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// Nav
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+  });
+});
+document.querySelectorAll('.bnav-item').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.bnav-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+  });
+});
+</script>
+</body>
+</html>

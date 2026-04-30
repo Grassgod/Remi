@@ -1,0 +1,32 @@
+import type { Hono } from "hono";
+import type { RemiData } from "../remi-data.js";
+
+export function registerTracesHandlers(app: Hono, data: RemiData) {
+  // Stats (server-side aggregation)
+  app.get("/api/v1/traces/stats", (c) => {
+    const date = c.req.query("date") ?? new Date().toISOString().slice(0, 10);
+    return c.json(data.getTraceStats(date));
+  });
+
+  // List (flat rows with pagination + search)
+  app.get("/api/v1/traces", (c) => {
+    const date = c.req.query("date") ?? new Date().toISOString().slice(0, 10);
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+    const offset = parseInt(c.req.query("offset") ?? "0", 10);
+    const status = c.req.query("status") || undefined;
+    const search = c.req.query("search") || undefined;
+    return c.json(data.getTraces({ date, limit, offset, status, search }));
+  });
+
+  // Detail (DB meta + JSONL tool calls)
+  app.get("/api/v1/traces/:id/detail", (c) => {
+    const idParam = c.req.param("id");
+    // Support both numeric conversations.id and string message_id (om_xxx)
+    const numId = parseInt(idParam, 10);
+    const detail = isNaN(numId)
+      ? data.getTraceDetailByMessageId(idParam)
+      : data.getTraceDetail(numId);
+    if (!detail) return c.json({ error: "Trace not found" }, 404);
+    return c.json(detail);
+  });
+}
