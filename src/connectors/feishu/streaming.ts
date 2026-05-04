@@ -185,25 +185,26 @@ export function buildFinalCard(opts: {
     }
 
     if (panelElements.length > 0) {
-      const stepCount = opts.toolCount ?? opts.steps?.length ?? panelElements.length;
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: false,
-        border: { color: "grey-300", corner_radius: "6px" },
-        header: {
-          title: {
-            tag: "plain_text",
-            content: `Show ${stepCount} steps`,
-            text_color: "grey",
-            text_size: "notation",
+      const stepCount = opts.toolCount ?? opts.steps?.length ?? (hasTools ? panelElements.length : 0);
+      if (stepCount > 0 || hasTools || hasSteps) {
+        elements.push({
+          tag: "collapsible_panel",
+          expanded: false,
+          border: { color: "grey-300", corner_radius: "6px" },
+          header: {
+            title: {
+              tag: "plain_text",
+              content: `Show ${stepCount} steps`,
+              text_color: "grey",
+              text_size: "notation",
+            },
+            icon: { tag: "standard_icon", token: "list-check_outlined", color: "grey" },
+            icon_position: "right",
+            icon_expanded_angle: 90,
           },
-          icon: { tag: "standard_icon", token: "list-check_outlined", color: "grey" },
-          icon_position: "right",
-          icon_expanded_angle: 90,
-        },
-        vertical_spacing: "2px",
-        elements: panelElements,
-      });
+          elements: panelElements,
+        });
+      }
     }
   }
 
@@ -272,7 +273,6 @@ export function buildFinalCard(opts: {
           title: { tag: "plain_text", content: "Implementation Plan" },
         },
         border: { color: "grey" },
-        vertical_spacing: "default",
         elements: [{ tag: "markdown", content: planText }],
       });
     }
@@ -458,7 +458,6 @@ export class FeishuStreamingSession {
               icon_position: "right",
               icon_expanded_angle: 90,
             },
-            vertical_spacing: "2px",
             element_id: "process_panel",
             elements: [],
           },
@@ -738,6 +737,14 @@ export class FeishuStreamingSession {
   }
 
   /** Update the last pending step with its duration. */
+  updateStepDesc(desc: string): void {
+    const step = this._steps.findLast((s) => !s.durationMs);
+    if (!step) return;
+    const stepIndex = this._steps.indexOf(step);
+    step.desc = desc;
+    this._updateElementRaw(`step_${stepIndex}`, desc);
+  }
+
   updateStepDuration(durationMs: number): void {
     const step = this._steps.findLast((s) => !s.durationMs);
     if (!step) return;

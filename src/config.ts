@@ -18,6 +18,8 @@ export interface ProviderConfig {
   timeout: number;
   apiKey: string | null;
   baseUrl: string | null;
+  /** Path to ACP agent executable (for name="acp"). */
+  executable: string | null;
 }
 
 export interface FeishuConfig {
@@ -232,6 +234,9 @@ function defaultProviderConfig(): ProviderConfig {
     allowedTools: [],
     model: null,
     timeout: 300,
+    apiKey: null,
+    baseUrl: null,
+    executable: null,
   };
 }
 
@@ -331,6 +336,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       timeout: parseInt(env.REMI_TIMEOUT ?? String(providerData.timeout ?? 300), 10),
       apiKey: env.REMI_API_KEY ?? (providerData.api_key as string) ?? null,
       baseUrl: env.REMI_BASE_URL ?? (providerData.base_url as string) ?? null,
+      executable: (providerData.executable as string) ?? null,
     },
     feishu: {
       appId: env.FEISHU_APP_ID ?? (feishuData.app_id as string) ?? "",

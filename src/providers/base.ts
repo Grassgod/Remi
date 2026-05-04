@@ -18,7 +18,7 @@ export type StreamEvent =
   | { kind: "thinking_delta"; text: string }
   | { kind: "content_delta"; text: string }
   | { kind: "tool_use"; name: string; toolUseId: string; input?: Record<string, unknown> }
-  | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number }
+  | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number; input?: Record<string, unknown> }
   | { kind: "rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string }
   | { kind: "error"; error: string; code?: string }
   | { kind: "result"; response: AgentResponse };

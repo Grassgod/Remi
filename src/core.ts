@@ -21,7 +21,7 @@ import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
-import { AidenCLIProvider } from "./providers/aiden-cli/index.js";
+import { AcpProvider } from "./providers/acp/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
@@ -112,7 +112,16 @@ export class Remi {
 
   _getProvider(name?: string | null): Provider {
     const n = name ?? this.config.provider.name;
-    const provider = this._providers.get(n);
+    let provider = this._providers.get(n);
+    if (!provider) {
+      // "acp" → match first "acp:*" variant
+      for (const [key, p] of this._providers) {
+        if (key.startsWith(`${n}:`)) {
+          provider = p;
+          break;
+        }
+      }
+    }
     if (!provider) {
       throw new Error(
         `Provider '${n}' not registered. Available: ${[...this._providers.keys()]}`,
@@ -640,10 +649,9 @@ export class Remi {
           // Show current state + available options
           const switchSessRow = sessDb.getSession(sessionKey);
           const curProvider = switchSessRow?.provider ?? this.config.provider.name;
-          const curMode = switchSessRow?.mode ?? (curProvider === "aiden_cli" ? "agentFull" : "bypass");
-          const curLabel = curProvider === "aiden_cli" ? "Aiden" : "Claude";
+          const curMode = switchSessRow?.mode ?? "bypass";
           const lines = [
-            `当前: **${curLabel} · ${curMode}**`,
+            `当前: **Claude · ${curMode}**`,
             "",
             "可用组合:",
             "  `/switch claude:bypass` — Claude 全权限（默认）",
@@ -651,19 +659,16 @@ export class Remi {
             "  `/switch claude:auto` — Claude Auto 模式",
             "  `/switch claude:default` — Claude 需确认模式",
             "  `/switch claude:acceptEdits` — Claude 自动编辑",
-            "  `/switch aiden:agentFull` — Aiden 全权限（默认）",
-            "  `/switch aiden:plan` — Aiden Plan 模式",
-            "  `/switch aiden:ask` — Aiden 需确认模式",
           ];
           return { text: lines.join("\n") };
         }
 
-        // Parse provider:mode (e.g. "claude:plan", "aiden", "claude")
+        // Parse provider:mode (e.g. "claude:plan", "claude")
         const [rawAlias, modeArg] = args.includes(":") ? args.split(":", 2) : [args, undefined];
         const providerAlias = rawAlias.toLowerCase();
 
         // Resolve provider name
-        const PROVIDER_ALIASES: Record<string, string> = { claude: "claude_cli", aiden: "aiden_cli" };
+        const PROVIDER_ALIASES: Record<string, string> = { claude: "claude_cli" };
         const providerName = PROVIDER_ALIASES[providerAlias] ?? providerAlias;
         if (!this._providers.has(providerName)) {
           const available = Object.keys(PROVIDER_ALIASES).join(", ");
@@ -672,14 +677,12 @@ export class Remi {
 
         // Resolve default mode per provider
         const CLAUDE_MODES = new Set(["bypass", "plan", "auto", "default", "acceptEdits", "bypassPermissions"]);
-        const AIDEN_MODES = new Set(["agentFull", "agent", "plan", "readOnly", "ask", "delegate"]);
-        const isClaude = providerName === "claude_cli";
-        const validModes = isClaude ? CLAUDE_MODES : AIDEN_MODES;
-        const defaultMode = isClaude ? "bypass" : "agentFull";
+        const validModes = CLAUDE_MODES;
+        const defaultMode = "bypass";
 
         // Normalize "bypass" alias
         let mode = modeArg ?? defaultMode;
-        if (isClaude && mode === "bypass") mode = "bypassPermissions";
+        if (mode === "bypass") mode = "bypassPermissions";
 
         if (!validModes.has(mode) && mode !== "bypassPermissions") {
           return { text: `模式 "${modeArg}" 对 ${providerAlias} 不可用。可选: ${[...validModes].join(", ")}` };
@@ -706,13 +709,12 @@ export class Remi {
         }
 
         // Store mode (or clear if default)
-        const isDefaultMode = (isClaude && mode === "bypassPermissions") || (!isClaude && mode === "agentFull");
+        const isDefaultMode = mode === "bypassPermissions";
         sessDb.updateSessionMode(sessionKey, isDefaultMode ? null : mode);
 
-        const providerLabel = isClaude ? "Claude" : "Aiden";
-        const modeLabel = isDefaultMode ? (isClaude ? "Bypass" : "AgentFull") : mode;
+        const modeLabel = isDefaultMode ? "Bypass" : mode;
         const resumeNote = !providerChanged ? "（上下文保留）" : "（新对话）";
-        return { text: `已切换到 **${providerLabel} · ${modeLabel}** ${resumeNote}` };
+        return { text: `已切换到 **Claude · ${modeLabel}** ${resumeNote}` };
       }
       case "restart": {
         // Delay restart so the response gets sent first
@@ -910,16 +912,6 @@ export class Remi {
       }
     }
 
-    // Always try to register aiden_cli as secondary (for /switch support)
-    if (!remi._providers.has("aiden_cli")) {
-      try {
-        const aiden = Remi._buildProvider(config, "aiden_cli");
-        remi.addProvider(aiden);
-        log.info("Aiden CLI provider registered (secondary, for /switch)");
-      } catch (e) {
-        log.debug("Aiden CLI not available:", (e as Error).message);
-      }
-    }
 
     // 3. Feishu connector
     if (hasFeishuCreds) {
@@ -972,11 +964,17 @@ export class Remi {
         baseUrl: config.provider.baseUrl,
       });
     }
-    if (n === "aiden_cli") {
-      return new AidenCLIProvider({
+    if (n === "acp" || n === "acp:claude" || n === "acp:codex") {
+      const agentType = n.includes(":") ? n.split(":")[1] : "claude";
+      return new AcpProvider({
+        agentType,
         model: config.provider.model,
         timeout: config.provider.timeout,
+        allowedTools: config.provider.allowedTools,
         cwd: homedir(),
+        apiKey: config.provider.apiKey,
+        baseUrl: config.provider.baseUrl,
+        executable: config.provider.executable ?? undefined,
       });
     }
     throw new Error(`Unknown provider: ${n}`);

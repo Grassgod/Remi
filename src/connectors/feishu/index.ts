@@ -674,6 +674,14 @@ export class FeishuConnector implements Connector {
                 entry.status = "done";
                 entry.durationMs = event.durationMs;
                 entry.resultPreview = event.resultPreview;
+                // ACP sends real input in tool_call_update; always backfill (initial title may be generic)
+                if (event.input) {
+                  entry.input = event.input;
+                  const newDesc = formatToolStatus(event.name, event.input)
+                    .replace(/\.\.\.$/, "")
+                    .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}️]+\s*/u, "");
+                  session.updateStepDesc(newDesc);
+                }
               }
               // Update step duration in timeline
               if (event.durationMs) session.updateStepDuration(event.durationMs);
@@ -848,9 +856,14 @@ export class FeishuConnector implements Connector {
     }
 
     if (response.inputTokens != null || response.outputTokens != null) {
-      const inTok = response.inputTokens ?? "?";
-      const outTok = response.outputTokens ?? "?";
-      parts.push(`${inTok}→${outTok}`);
+      const inTok = response.inputTokens ?? 0;
+      const outTok = response.outputTokens ?? 0;
+      if (outTok > 0) {
+        parts.push(`${inTok}→${outTok}`);
+      } else if (inTok > 0) {
+        const k = inTok >= 1000 ? `${Math.round(inTok / 1000)}k` : `${inTok}`;
+        parts.push(k);
+      }
     }
 
     if (response.toolCalls && response.toolCalls.length > 0) {
