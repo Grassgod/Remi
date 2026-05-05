@@ -36,6 +36,10 @@ export class ClaudeAdapter implements AgentAdapter {
     // ACP encodes tool info in title/content/locations instead of rawInput.
     // Reconstruct input for Remi's tool formatters.
 
+    // Bash: use title as command fallback (skip generic "Terminal" kind name)
+    if (toolName === "Bash" && update.title && update.title !== "Terminal") {
+      input.command = update.title;
+    }
 
     // Read: title = "Read path (lines)", locations has file_path
     if (toolName === "Read" && update.locations?.length) {
