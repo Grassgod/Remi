@@ -1,5 +1,6 @@
 /**
  * AcpProvider — implements Remi's Provider interface using ACP protocol.
+ * Yields raw ACP SessionUpdate events directly (no translation layer).
  * Agent-specific behavior (Claude/Codex) is delegated to adapters.
  */
 
@@ -8,17 +9,18 @@ import type {
   Provider,
   SendOptions,
   AgentResponse,
-  StreamEvent,
+  ProviderEvent,
 } from "../base.js";
 import { createAgentResponse } from "../base.js";
 import { AcpClient } from "./client.js";
-import { mapSessionUpdate, createMapperState, type MapperState } from "./event-mapper.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import type {
   SessionNotification,
+  SessionUpdate,
   RequestPermissionParams,
   PermissionOutcome,
   PromptResult,
+  UsageUpdate,
 } from "./protocol.js";
 
 export interface AcpProviderOptions {
@@ -43,11 +45,41 @@ export interface AcpProviderOptions {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 
+interface PromptState {
+  promptStartTime: number;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
+    model: string | null;
+    contextWindowSize: number | null;
+  };
+  completedToolCount: number;
+}
+
+function createPromptState(): PromptState {
+  return {
+    promptStartTime: Date.now(),
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+      model: null,
+      contextWindowSize: null,
+    },
+    completedToolCount: 0,
+  };
+}
+
 interface PoolEntry {
   client: AcpClient;
   acpSessionId: string;
   lastUsed: number;
-  mapperState: MapperState;
+  promptState: PromptState;
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
@@ -85,14 +117,22 @@ export class AcpProvider implements Provider {
     let lastResponse: AgentResponse | null = null;
 
     for await (const event of this.sendStream(message, options)) {
-      switch (event.kind) {
-        case "content_delta":
-          text += event.text;
+      switch (event.sessionUpdate) {
+        case "agent_message_chunk": {
+          const blocks = Array.isArray(event.content) ? event.content : [event.content];
+          for (const b of blocks) {
+            if (b.type === "text" && b.text) text += b.text;
+          }
           break;
-        case "thinking_delta":
-          thinking += event.text;
+        }
+        case "agent_thought_chunk": {
+          const blocks = Array.isArray(event.content) ? event.content : [event.content];
+          for (const b of blocks) {
+            if (b.type === "text" && b.text) thinking += b.text;
+          }
           break;
-        case "result":
+        }
+        case "remi:result":
           lastResponse = event.response;
           break;
       }
@@ -102,28 +142,43 @@ export class AcpProvider implements Provider {
     return createAgentResponse({ text, thinking: thinking || null });
   }
 
-  async *sendStream(message: string, options?: SendOptions): AsyncGenerator<StreamEvent> {
+  async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
     const chatId = options?.chatId ?? "__default__";
     const entry = await this._ensureSession(chatId, options);
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
+    entry.promptState = createPromptState();
 
-    const eventQueue: StreamEvent[] = [];
+    const eventQueue: ProviderEvent[] = [];
     let promptDone = false;
     let resolveWaiting: (() => void) | null = null;
 
-    const pushEvent = (evt: StreamEvent) => {
+    const pushEvent = (evt: ProviderEvent) => {
       eventQueue.push(evt);
       resolveWaiting?.();
     };
 
-    // Subscribe to session updates — use adapter for event mapping
+    // Subscribe to session updates — yield raw ACP events directly
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
-      const events = mapSessionUpdate(notification.update, entry.mapperState, this._adapter);
-      for (const evt of events) pushEvent(evt);
+      const update = notification.update;
+
+      // Track usage for AgentResponse
+      if (update.sessionUpdate === "usage_update") {
+        accumulateUsage(entry.promptState, update);
+      }
+
+      // Track completed tool calls for AgentResponse metadata
+      if (update.sessionUpdate === "tool_call_update") {
+        const status = (update as any).status;
+        if (status === "completed" || status === "failed") {
+          entry.promptState.completedToolCount++;
+        }
+      }
+
+      pushEvent(update);
     };
 
     // Start prompt (runs in background)
@@ -132,15 +187,15 @@ export class AcpProvider implements Provider {
       .then((result: PromptResult) => {
         promptDone = true;
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
-          pushEvent({ kind: "error", error: "Cancelled", code: "cancelled" });
+          pushEvent({ sessionUpdate: "remi:error", error: "Cancelled", code: "cancelled" });
         } else {
           const response = buildAgentResponse(entry, result);
-          pushEvent({ kind: "result", response });
+          pushEvent({ sessionUpdate: "remi:result", response });
         }
       })
       .catch((err: Error) => {
         promptDone = true;
-        pushEvent({ kind: "error", error: err.message });
+        pushEvent({ sessionUpdate: "remi:error", error: err.message });
       });
 
     // Yield events as they arrive
@@ -149,14 +204,14 @@ export class AcpProvider implements Provider {
         while (eventQueue.length > 0) {
           const evt = eventQueue.shift()!;
           yield evt;
-          if (evt.kind === "result" || evt.kind === "error") return;
+          if (evt.sessionUpdate === "remi:result" || evt.sessionUpdate === "remi:error") return;
         }
 
         if (promptDone) break;
 
         if (options?.signal?.aborted) {
           await entry.client.cancel(entry.acpSessionId);
-          yield { kind: "error", error: "Cancelled", code: "cancelled" };
+          yield { sessionUpdate: "remi:error" as const, error: "Cancelled", code: "cancelled" };
           return;
         }
 
@@ -210,7 +265,6 @@ export class AcpProvider implements Provider {
     }
     if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
 
-    // Build session meta via adapter (agent-specific options)
     const sessionMeta = this._adapter.buildSessionMeta({
       model: this._options.model,
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
@@ -246,7 +300,7 @@ export class AcpProvider implements Provider {
       client,
       acpSessionId,
       lastUsed: Date.now(),
-      mapperState: createMapperState(),
+      promptState: createPromptState(),
     };
 
     this._pool.set(chatId, entry);
@@ -262,7 +316,6 @@ export class AcpProvider implements Provider {
       (o) => o.kind === "allow_once" || o.kind === "allow_always",
     );
     if (allowOption) return { outcome: "selected", optionId: allowOption.optionId };
-    // No explicit allow option — select the first option available to avoid hard cancel
     const firstOption = params.options[0];
     if (firstOption) return { outcome: "selected", optionId: firstOption.optionId };
     return { outcome: "cancelled" };
@@ -334,17 +387,30 @@ function buildMediaContent(
     }));
 }
 
+function accumulateUsage(state: PromptState, update: SessionUpdate): void {
+  const u = update as Record<string, any>;
+  if (u.inputTokens != null) state.usage.inputTokens = u.inputTokens;
+  if (u.outputTokens != null) state.usage.outputTokens = u.outputTokens;
+  if (u.cacheReadTokens != null) state.usage.cacheReadTokens = u.cacheReadTokens;
+  if (u.cacheWriteTokens != null) state.usage.cacheWriteTokens = u.cacheWriteTokens;
+  if (u.model) state.usage.model = u.model;
+  if (u.costUsd != null) state.usage.costUsd = u.costUsd;
+  if (u.contextWindowSize != null) state.usage.contextWindowSize = u.contextWindowSize;
+  // ACP format: `used` is total tokens consumed
+  if (u.used != null) {
+    state.usage.inputTokens = u.used;
+    state.usage.outputTokens = 0;
+  }
+  if (u.size != null) state.usage.contextWindowSize = u.size;
+  if (u.cost?.amount != null) state.usage.costUsd = u.cost.amount;
+}
+
 function buildAgentResponse(entry: PoolEntry, result: PromptResult): AgentResponse {
-  const usage = entry.mapperState.usage;
-  const durationMs = Date.now() - entry.mapperState.promptStartTime;
-  const toolCalls = entry.mapperState.completedTools.map((t) => ({
-    name: t.name,
-    duration: t.durationMs ?? 0,
-  }));
+  const { usage, promptStartTime, completedToolCount } = entry.promptState;
+  const durationMs = Date.now() - promptStartTime;
 
   // Reset per-prompt state for next prompt
-  entry.mapperState.completedTools = [];
-  entry.mapperState.promptStartTime = Date.now();
+  entry.promptState = createPromptState();
 
   return createAgentResponse({
     text: "",
@@ -356,7 +422,7 @@ function buildAgentResponse(entry: PoolEntry, result: PromptResult): AgentRespon
     cacheReadInputTokens: usage.cacheReadTokens || null,
     contextWindow: usage.contextWindowSize,
     durationMs,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    toolCalls: completedToolCount > 0 ? [{ count: completedToolCount }] : undefined,
     metadata: {
       stopReason: result.stopReason,
       provider: "acp",

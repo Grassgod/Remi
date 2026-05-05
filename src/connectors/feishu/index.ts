@@ -8,7 +8,9 @@
 
 import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
-import type { AgentResponse } from "../../providers/base.js";
+import type { AgentResponse, ProviderEvent } from "../../providers/base.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "../../providers/acp/protocol.js";
+import { createAdapter } from "../../providers/acp/adapters/index.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
 import { createLogger } from "../../logger.js";
@@ -555,25 +557,40 @@ export class FeishuConnector implements Connector {
         return;
       }
 
+      const acpAdapter = createAdapter("claude");
+      const toolStartTimes = new Map<string, number>();
+      const seenInputs = new Set<string>();
+      const acpToolNames = new Map<string, string>();
+
       try {
         for await (const event of stream) {
-          // If safety timeout fired, stop consuming events
           if (session.abortSignal.aborted) {
             slog.warn("Safety timeout aborted stream consumption");
             break;
           }
-          slog.debug(`received event: ${event.kind}`);
-          switch (event.kind) {
-            case "thinking_delta":
-              thinkingText += event.text;
-              currentThinkingSegment += event.text;
+          slog.debug(`received event: ${event.sessionUpdate}`);
+          switch (event.sessionUpdate) {
+            case "agent_thought_chunk": {
+              const blocks = Array.isArray(event.content) ? event.content : [event.content];
+              for (const b of blocks as ContentBlock[]) {
+                if (b.type === "text" && b.text) {
+                  thinkingText += b.text;
+                  currentThinkingSegment += b.text;
+                }
+              }
               if (planTasks.length === 0 && activeAgents.length === 0) {
                 await session.updateStatus("Thinking...");
               }
               await session.updateThinking(thinkingText);
               break;
-            case "content_delta":
-              contentText += event.text;
+            }
+            case "agent_message_chunk": {
+              const blocks = Array.isArray(event.content) ? event.content : [event.content];
+              for (const b of blocks as ContentBlock[]) {
+                if (b.type === "text" && b.text) {
+                  contentText += b.text;
+                }
+              }
               if (!trailingThinkingFlushed && currentThinkingSegment.trim()) {
                 session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
                 trailingThinkingFlushed = true;
@@ -583,12 +600,17 @@ export class FeishuConnector implements Connector {
               }
               await session.update(contentText);
               break;
-            case "tool_use": {
+            }
+            case "tool_call": {
+              const tc = event as ToolCallUpdate;
+              const toolName = acpAdapter.resolveToolName(tc);
+              const input = acpAdapter.extractToolInput(tc);
+              acpToolNames.set(tc.toolCallId, toolName);
+              toolStartTimes.set(tc.toolCallId, Date.now());
               toolCount++;
 
-              // Plan task tracking
-              if (event.name === "TodoWrite" && event.input?.todos) {
-                const todos = event.input.todos as Array<Record<string, unknown>>;
+              if (toolName === "TodoWrite" && input?.todos) {
+                const todos = input.todos as Array<Record<string, unknown>>;
                 planTasks.length = 0;
                 for (const t of todos) {
                   planTasks.push({
@@ -599,124 +621,127 @@ export class FeishuConnector implements Connector {
                 }
                 syncHeartbeatRenderer();
                 await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
-              } else if (event.name === "TaskCreate" && event.input) {
+              } else if (toolName === "TaskCreate" && input) {
                 planTasks.push({
-                  id: `_pending_${event.toolUseId}`,
-                  subject: String(event.input.subject ?? ""),
+                  id: `_pending_${tc.toolCallId}`,
+                  subject: String(input.subject ?? ""),
                   status: "pending",
                 });
                 syncHeartbeatRenderer();
                 await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
-              } else if (event.name === "TaskUpdate" && event.input) {
-                const task = planTasks.find((t) => t.id === String(event.input!.taskId));
+              } else if (toolName === "TaskUpdate" && input) {
+                const task = planTasks.find((t) => t.id === String(input.taskId));
                 if (task) {
-                  if (event.input.status === "deleted") {
+                  if (input.status === "deleted") {
                     const idx = planTasks.indexOf(task);
                     if (idx !== -1) planTasks.splice(idx, 1);
                   } else {
-                    if (event.input.status) task.status = String(event.input.status);
-                    if (event.input.subject) task.subject = String(event.input.subject);
+                    if (input.status) task.status = String(input.status);
+                    if (input.subject) task.subject = String(input.subject);
                   }
                   syncHeartbeatRenderer();
                   await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
                 }
-              } else if (event.name === "Agent") {
+              } else if (toolName === "Agent") {
                 activeAgents.push({
-                  toolUseId: event.toolUseId,
-                  description: String(event.input?.description ?? event.input?.prompt ?? "").slice(0, 60),
+                  toolUseId: tc.toolCallId,
+                  description: String(input?.description ?? input?.prompt ?? "").slice(0, 60),
                   startTime: Date.now(),
                 });
                 syncHeartbeatRenderer();
                 await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()));
-              } else if (!PLAN_TOOLS.has(event.name)) {
-                // Non-plan/non-agent tool: only update status bar if no plan or agents active
+              } else if (!PLAN_TOOLS.has(toolName)) {
                 if (planTasks.length === 0 && activeAgents.length === 0) {
-                  await session.updateStatus(formatToolStatus(event.name, event.input));
+                  await session.updateStatus(formatToolStatus(toolName, input));
                 }
               }
 
-              // Record entry for final card rebuild
               toolEntries.push({
-                name: event.name,
-                input: event.input,
+                name: toolName,
+                input,
                 status: "pending",
                 thinkingBefore: currentThinkingSegment,
               });
-              // Add thinking div before tool step if thinking segment is non-empty
               if (currentThinkingSegment.trim()) {
-                const thinkingSummary = currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n");
-                const thinkingDesc = thinkingSummary;
-                session.addStep("_thinking", thinkingDesc);
+                session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
               }
               currentThinkingSegment = "";
               trailingThinkingFlushed = false;
-              // Don't addStep yet \u2014 wait for tool_input_update with real command.
-              // tool_result will fallback-add if no update arrives.
               break;
             }
-            case "tool_input_update": {
-              // Real input arrived — now we know the command, add the step for the first time
-              const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === event.name);
-              if (pendingEntry && !pendingEntry.stepAdded) {
-                pendingEntry.input = event.input;
-                pendingEntry.stepAdded = true;
-                const stepDesc = `${event.name} ${formatToolInputSummary(event.name, event.input)}`.trim();
-                session.addStep(event.name, stepDesc);
-                if (planTasks.length === 0 && activeAgents.length === 0) {
-                  await session.updateStatus(formatToolStatus(event.name, event.input));
+            case "tool_call_update": {
+              const tc = event as ToolCallProgressUpdate;
+              const toolName = acpToolNames.get(tc.toolCallId) ?? acpAdapter.resolveToolName(tc);
+
+              if (tc.status === "completed" || tc.status === "failed") {
+                const startTime = toolStartTimes.get(tc.toolCallId);
+                const durationMs = startTime ? Date.now() - startTime : undefined;
+                toolStartTimes.delete(tc.toolCallId);
+                acpToolNames.delete(tc.toolCallId);
+                seenInputs.delete(tc.toolCallId);
+                const resultPreview = acpAdapter.extractResultPreview(tc);
+                const resolvedInput = acpAdapter.extractToolInput(tc);
+
+                if (toolName === "TaskCreate" && resultPreview) {
+                  const match = resultPreview.match(/Task #(\S+)/);
+                  if (match) {
+                    const task = planTasks.find((t) => t.id === `_pending_${tc.toolCallId}`);
+                    if (task) task.id = match[1];
+                  }
+                }
+                if (toolName === "Agent") {
+                  const idx = activeAgents.findIndex((a) => a.toolUseId === tc.toolCallId);
+                  if (idx !== -1) activeAgents.splice(idx, 1);
+                  syncHeartbeatRenderer();
+                }
+                const combined = renderCombinedStatus(planTasks, activeAgents, session.getElapsed());
+                await session.updateStatus(combined || "Thinking...");
+
+                const entry = toolEntries.findLast((e) => e.status === "pending");
+                if (entry) {
+                  entry.status = "done";
+                  entry.durationMs = durationMs;
+                  entry.resultPreview = resultPreview;
+                  if (resolvedInput) entry.input = resolvedInput;
+                  if (!entry.stepAdded) {
+                    entry.stepAdded = true;
+                    const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
+                    session.addStep(entry.name, desc);
+                  }
+                }
+                if (durationMs) session.updateStepDuration(durationMs);
+              } else {
+                if (!seenInputs.has(tc.toolCallId)) {
+                  const input = acpAdapter.extractToolInput(tc);
+                  if (input && Object.keys(input).length > 0) {
+                    seenInputs.add(tc.toolCallId);
+                    const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
+                    if (pendingEntry && !pendingEntry.stepAdded) {
+                      pendingEntry.input = input;
+                      pendingEntry.stepAdded = true;
+                      const stepDesc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
+                      session.addStep(toolName, stepDesc);
+                      if (planTasks.length === 0 && activeAgents.length === 0) {
+                        await session.updateStatus(formatToolStatus(toolName, input));
+                      }
+                    }
+                  }
                 }
               }
               break;
             }
-            case "tool_result": {
-              // Fix TaskCreate temp IDs with real IDs from result
-              if (event.name === "TaskCreate" && event.resultPreview) {
-                const match = event.resultPreview.match(/Task #(\S+)/);
-                if (match) {
-                  const task = planTasks.find((t) => t.id === `_pending_${event.toolUseId}`);
-                  if (task) task.id = match[1];
-                }
-              }
-              // Remove completed agent
-              if (event.name === "Agent") {
-                const idx = activeAgents.findIndex((a) => a.toolUseId === event.toolUseId);
-                if (idx !== -1) activeAgents.splice(idx, 1);
-                syncHeartbeatRenderer();
-              }
-              // Update status bar
-              const combined = renderCombinedStatus(planTasks, activeAgents, session.getElapsed());
-              await session.updateStatus(combined || "Thinking...");
-              // Update the matching pending entry
-              const entry = toolEntries.findLast((e) => e.status === "pending");
-              if (entry) {
-                entry.status = "done";
-                entry.durationMs = event.durationMs;
-                entry.resultPreview = event.resultPreview;
-                if (event.input) entry.input = event.input;
-                // Fallback: if step was never added (no tool_input_update fired), add it now
-                if (!entry.stepAdded) {
-                  entry.stepAdded = true;
-                  const fallbackDesc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
-                  session.addStep(entry.name, fallbackDesc);
-                }
-              }
-              // Update step duration in timeline
-              if (event.durationMs) session.updateStepDuration(event.durationMs);
-              break;
-            }
-            case "rate_limit":
-              // status "allowed" = informational quota update, not a real block — skip UI noise
+            case "remi:rate_limit":
               if (event.status !== "allowed") {
                 const secs = ((event.retryAfterMs) / 1000).toFixed(0);
                 await session.updateStatus(`⚠️ Rate limited, retrying in ${secs}s...`);
                 session.addStep("_default", `⚠️ Rate limited, retrying in ${secs}s`);
               }
               break;
-            case "error":
+            case "remi:error":
               contentText += `\n\n**Error:** ${event.error}\n`;
               await session.update(contentText);
               break;
-            case "result":
+            case "remi:result":
               finalResponse = event.response;
               break;
           }

@@ -14,7 +14,7 @@ import type {
   AgentResponse,
   Provider,
   SendOptions,
-  StreamEvent,
+  ProviderEvent,
   ToolDefinition,
 } from "../base.js";
 import { createAgentResponse } from "../base.js";
@@ -151,7 +151,7 @@ export class ClaudeCLIProvider implements Provider {
   async *sendStream(
     message: string,
     options?: SendOptions,
-  ): AsyncGenerator<StreamEvent> {
+  ): AsyncGenerator<ProviderEvent> {
     // Request-scoped logger with traceId for log correlation
     const _log = options?.traceId ? log.child({ traceId: options.traceId }) : log;
 
@@ -186,7 +186,7 @@ export class ClaudeCLIProvider implements Provider {
       // Check wall-clock deadline
       if (Date.now() > deadline) {
         _log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
-        yield { kind: "error", error: `Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).` } as StreamEvent;
+        yield { sessionUpdate: "remi:error" as const, error: `Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).` };
         break;
       }
 
@@ -198,44 +198,42 @@ export class ClaudeCLIProvider implements Provider {
         const text = (msg as ThinkingDelta).thinking;
         thinkingParts.push(text);
         _log.debug(`yield thinking_delta (${text.length} chars)`);
-        yield { kind: "thinking_delta", text } as StreamEvent;
+        yield { sessionUpdate: "agent_thought_chunk" as const, content: [{ type: "text" as const, text }] };
       } else if (msg.kind === "content_delta") {
         const text = (msg as ContentDelta).text;
         textParts.push(text);
         _log.debug(`yield content_delta (${text.length} chars)`);
-        yield { kind: "content_delta", text } as StreamEvent;
+        yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text }] };
       } else if (msg.kind === "tool_use") {
         const tu = msg as ToolUseRequest;
         toolCalls.push({ id: tu.toolUseId, name: tu.name, input: tu.input });
         _log.debug(`yield tool_use: ${tu.name}`);
-
-        yield { kind: "tool_use", name: tu.name, toolUseId: tu.toolUseId, input: tu.input } as StreamEvent;
+        yield { sessionUpdate: "tool_call" as const, toolCallId: tu.toolUseId, title: tu.name, kind: "other" as const, status: "pending" as const, rawInput: tu.input, content: [], locations: [], _meta: { claudeCode: { toolName: tu.name } } };
       } else if (msg.kind === "tool_result") {
         const tr = msg as ToolResultMessage;
         _log.debug(`yield tool_result: ${tr.name} (${tr.durationMs}ms)`);
-        yield { kind: "tool_result", toolUseId: tr.toolUseId, name: tr.name, resultPreview: tr.result, durationMs: tr.durationMs } as StreamEvent;
+        yield { sessionUpdate: "tool_call_update" as const, toolCallId: tr.toolUseId, title: tr.name, status: "completed" as const, rawInput: {}, rawOutput: tr.result, _meta: { claudeCode: { toolName: tr.name } } };
       } else if (msg.kind === "rate_limit") {
         const rl = msg as RateLimitEvent;
         _log.debug(`yield rate_limit: ${rl.retryAfterMs}ms type=${rl.rateLimitType} status=${rl.status}`);
-        yield { kind: "rate_limit", retryAfterMs: rl.retryAfterMs, rateLimitType: rl.rateLimitType, resetsAt: rl.resetsAt, status: rl.status } as StreamEvent;
+        yield { sessionUpdate: "remi:rate_limit" as const, retryAfterMs: rl.retryAfterMs, rateLimitType: rl.rateLimitType, resetsAt: rl.resetsAt, status: rl.status };
       } else if (msg.kind === "error") {
         const err = msg as ErrorEvent;
         _log.debug(`yield error: ${err.error}`);
-        // Remove dead process from pool to ensure respawn on next message
         if (err.code === "process_hang" || err.code === "process_crash" || err.code === "rate_limit_stall") {
           const key = options?.chatId ?? ClaudeCLIProvider.DEFAULT_CHAT_ID;
           this._pool.delete(key);
           this._lastUsed.delete(key);
           _log.warn(`Evicted hung process from pool: chatId="${key}"`);
         }
-        yield { kind: "error", error: err.error, code: err.code } as StreamEvent;
+        yield { sessionUpdate: "remi:error" as const, error: err.error, code: err.code };
       } else if (msg.kind === "result") {
         gotResult = true;
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");
         const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
         yield {
-          kind: "result",
+          sessionUpdate: "remi:result" as const,
           response: createAgentResponse({
             text: fullText || resultMsg.result,
             thinking,
@@ -264,7 +262,7 @@ export class ClaudeCLIProvider implements Provider {
       const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
       _log.warn(`Stream ended without result event, synthesizing fallback (text=${accumulated.length} chars, thinking=${(thinking ?? "").length} chars, tools=${toolCalls.length})`);
       yield {
-        kind: "result",
+        sessionUpdate: "remi:result" as const,
         response: createAgentResponse({ text: fullText, thinking, toolCalls }),
       };
     }

@@ -29,26 +29,27 @@ async function main() {
       signal: controller.signal,
     })) {
       eventCount++;
-      const kind = event.kind;
-      if (kind === "content_delta") {
-        text += (event as any).text;
+      const su = event.sessionUpdate;
+      if (su === "agent_message_chunk") {
+        const blocks = Array.isArray(event.content) ? event.content : [event.content];
+        for (const b of blocks) { if (b.type === "text") text += b.text; }
         process.stdout.write(".");
-      } else if (kind === "thinking_delta") {
+      } else if (su === "agent_thought_chunk") {
         process.stdout.write("t");
-      } else if (kind === "tool_use") {
+      } else if (su === "tool_call") {
         const e = event as any;
-        console.log(`\n  tool_use: ${e.name} input=${JSON.stringify(e.input)}`);
-      } else if (kind === "tool_result") {
+        console.log(`\n  tool_call: ${e.title} rawInput=${JSON.stringify(e.rawInput)?.slice(0, 100)}`);
+      } else if (su === "tool_call_update" && (event as any).status === "completed") {
         const e = event as any;
-        console.log(`  tool_result: ${e.name} (${e.durationMs}ms) preview=${e.resultPreview?.slice(0, 100)}`);
-      } else if (kind === "result") {
+        console.log(`  tool_done: ${e.toolCallId}`);
+      } else if (su === "remi:result") {
         gotResult = true;
         const r = (event as any).response;
-        console.log(`\n  result: session=${r.sessionId} model=${r.model} cost=$${r.costUsd} duration=${r.durationMs}ms tools=${JSON.stringify(r.toolCalls)}`);
-      } else if (kind === "error") {
+        console.log(`\n  result: session=${r.sessionId} model=${r.model} cost=$${r.costUsd} duration=${r.durationMs}ms`);
+      } else if (su === "remi:error") {
         console.log(`\n  ERROR: ${(event as any).error}`);
       } else {
-        console.log(`\n  ${kind}`);
+        // usage_update, plan, etc.
       }
     }
   } catch (err: any) {

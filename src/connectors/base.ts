@@ -2,7 +2,7 @@
  * Connector protocol and shared types.
  */
 
-import type { AgentResponse, StreamEvent } from "../providers/base.js";
+import type { AgentResponse, ProviderEvent } from "../providers/base.js";
 import type { MediaAttachment } from "../providers/claude-cli/protocol.js";
 
 /** A message received from any connector. */
@@ -33,7 +33,7 @@ export interface StreamMeta {
 
 export type StreamingHandler = (
   msg: IncomingMessage,
-  consumer: (stream: AsyncIterable<StreamEvent>, meta: StreamMeta) => Promise<void>,
+  consumer: (stream: AsyncIterable<ProviderEvent>, meta: StreamMeta) => Promise<void>,
 ) => Promise<void>;
 
 /** Protocol that all input connectors must implement. */

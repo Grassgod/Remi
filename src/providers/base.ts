@@ -13,7 +13,7 @@ export interface AskUserQuestion {
   multiSelect?: boolean;
 }
 
-/** Streaming event emitted during real-time generation. */
+/** @deprecated Use ProviderEvent instead. Will be removed after ACP pass-through refactor. */
 export type StreamEvent =
   | { kind: "thinking_delta"; text: string }
   | { kind: "content_delta"; text: string }
@@ -23,6 +23,17 @@ export type StreamEvent =
   | { kind: "rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string }
   | { kind: "error"; error: string; code?: string }
   | { kind: "result"; response: AgentResponse };
+
+/**
+ * Unified stream event type: ACP SessionUpdate (pass-through) + Remi synthetic events.
+ * Discriminated on `sessionUpdate` field. ACP events use standard names,
+ * Remi extensions use `remi:` prefix.
+ */
+export type ProviderEvent =
+  | import("./acp/protocol.js").SessionUpdate
+  | { sessionUpdate: "remi:result"; response: AgentResponse }
+  | { sessionUpdate: "remi:error"; error: string; code?: string }
+  | { sessionUpdate: "remi:rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string };
 
 /** Custom tool that the agent can call, handled within Remi. */
 export interface ToolDefinition {
@@ -88,7 +99,7 @@ export interface Provider {
   sendStream?(
     message: string,
     options?: SendOptions,
-  ): AsyncGenerator<StreamEvent>;
+  ): AsyncGenerator<ProviderEvent>;
 
   healthCheck(): Promise<boolean>;
 }

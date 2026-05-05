@@ -19,7 +19,8 @@ import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
-import { createAgentResponse, type AgentResponse, type Provider, type StreamEvent } from "./providers/base.js";
+import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "./providers/base.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate } from "./providers/acp/protocol.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { AcpProvider } from "./providers/acp/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
@@ -216,7 +217,7 @@ export class Remi {
 
   async handleMessageStream(
     msg: IncomingMessage,
-    consumer: (stream: AsyncIterable<StreamEvent>, meta: import("./connectors/base.js").StreamMeta) => Promise<void>,
+    consumer: (stream: AsyncIterable<ProviderEvent>, meta: import("./connectors/base.js").StreamMeta) => Promise<void>,
   ): Promise<void> {
     const sessionKey = this._resolveSessionKey(msg);
     const lock = this._getLaneLock(sessionKey);
@@ -281,21 +282,21 @@ export class Remi {
     }
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<StreamEvent> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<ProviderEvent> {
     const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
     // Handle slash commands — use rawContent (without speaker prefix) for detection
     const rawContent = (msg.metadata?.rawContent as string) ?? msg.text;
     const cmdResponse = await this._tryCommand(rawContent, msg);
     if (cmdResponse) {
-      yield { kind: "result", response: cmdResponse };
+      yield { sessionUpdate: "remi:result" as const, response: cmdResponse };
       return;
     }
 
     // Handle report detail request
     const reportResponse = this._tryReportDetail(msg.text);
     if (reportResponse) {
-      yield { kind: "result", response: reportResponse };
+      yield { sessionUpdate: "remi:result" as const, response: reportResponse };
       return;
     }
 
@@ -363,58 +364,61 @@ export class Remi {
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
 
     for await (const event of provider.sendStream(msg.text, streamOptions)) {
-      _log.debug(`received event: ${event.kind}`);
+      _log.debug(`received event: ${event.sessionUpdate}`);
 
       // Detect prompt-too-long: suppress and mark for auto-retry
       if (
-        (event.kind === "error" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.error)) ||
-        (event.kind === "result" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.response.text))
+        (event.sessionUpdate === "remi:error" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.error)) ||
+        (event.sessionUpdate === "remi:result" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.response.text))
       ) {
         promptTooLong = true;
-        if (event.kind === "result") resultResponse = event.response;
+        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
         continue;
       }
 
       // Detect stale session resume: "No conversation found with session ID"
       if (
         existingSessionId &&
-        ((event.kind === "error" && /no conversation found/i.test(event.error)) ||
-         (event.kind === "result" && event.response.inputTokens === 0 && event.response.durationMs === 0))
+        ((event.sessionUpdate === "remi:error" && /no conversation found/i.test(event.error)) ||
+         (event.sessionUpdate === "remi:result" && event.response.inputTokens === 0 && event.response.durationMs === 0))
       ) {
         staleSession = true;
-        if (event.kind === "result") resultResponse = event.response;
+        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
         continue;
       }
 
       yield event;
 
-      if (event.kind === "result") {
+      if (event.sessionUpdate === "remi:result") {
         resultResponse = event.response;
-      } else if (event.kind === "rate_limit" && event.rateLimitType) {
+      } else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
         this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
         providerSpan?.addEvent("rate_limit", { type: event.rateLimitType });
-      } else if (event.kind === "tool_use") {
-        toolCallMap.set(event.toolUseId, { name: event.name, toolUseId: event.toolUseId, input: event.input });
+      } else if (event.sessionUpdate === "tool_call") {
+        const tc = event as ToolCallUpdate;
+        const toolName = (tc._meta as any)?.claudeCode?.toolName ?? tc.title ?? "unknown";
+        toolCallMap.set(tc.toolCallId, { name: toolName, toolUseId: tc.toolCallId, input: tc.rawInput as Record<string, unknown> });
         if (providerSpan) {
-          const toolSpan = providerSpan.context().startSpan(`tool.${event.name}`, {
-            "tool.name": event.name,
-            "tool.use_id": event.toolUseId,
-            "tool.input": JSON.stringify(event.input ?? {}).slice(0, 4096),
+          const toolSpan = providerSpan.context().startSpan(`tool.${toolName}`, {
+            "tool.name": toolName,
+            "tool.use_id": tc.toolCallId,
+            "tool.input": JSON.stringify(tc.rawInput ?? {}).slice(0, 4096),
           });
-          toolSpans.set(event.toolUseId, toolSpan);
+          toolSpans.set(tc.toolCallId, toolSpan);
         }
-      } else if (event.kind === "tool_result") {
-        const tc = toolCallMap.get(event.toolUseId);
-        if (tc) {
-          tc.resultPreview = event.resultPreview?.slice(0, 2048);
-          tc.durationMs = event.durationMs;
-        }
-        const toolSpan = toolSpans.get(event.toolUseId);
-        if (toolSpan) {
-          if (event.durationMs != null) toolSpan.setAttribute("tool.duration_ms", event.durationMs);
-          if (event.resultPreview) toolSpan.setAttribute("tool.output", event.resultPreview.slice(0, 4096));
-          toolSpan.end();
-          toolSpans.delete(event.toolUseId);
+      } else if (event.sessionUpdate === "tool_call_update") {
+        const tc = event as ToolCallProgressUpdate;
+        if (tc.status === "completed" || tc.status === "failed") {
+          const existing = toolCallMap.get(tc.toolCallId);
+          if (existing) {
+            existing.resultPreview = tc.rawOutput ? String(tc.rawOutput).slice(0, 2048) : undefined;
+          }
+          const toolSpan = toolSpans.get(tc.toolCallId);
+          if (toolSpan) {
+            if (tc.rawOutput) toolSpan.setAttribute("tool.output", String(tc.rawOutput).slice(0, 4096));
+            toolSpan.end();
+            toolSpans.delete(tc.toolCallId);
+          }
         }
       }
     }
@@ -437,15 +441,14 @@ export class Remi {
       }
 
       // Notify user via card content
-      yield { kind: "content_delta", text: "上下文过长，已自动重置会话。正在重新处理...\n\n" } as StreamEvent;
+      yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "上下文过长，已自动重置会话。正在重新处理...\n\n" }] } as ProviderEvent;
 
-      // Retry with fresh session (no resume)
       const retryOptions = { ...streamOptions, sessionId: undefined };
       resultResponse = null;
       for await (const event of provider.sendStream(msg.text, retryOptions)) {
         yield event;
-        if (event.kind === "result") resultResponse = event.response;
-        else if (event.kind === "rate_limit" && event.rateLimitType) {
+        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
+        else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
           this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
         }
       }
@@ -462,14 +465,14 @@ export class Remi {
         await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
       }
 
-      yield { kind: "content_delta", text: "会话已过期，自动重置。正在重新处理...\n\n" } as StreamEvent;
+      yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "会话已过期，自动重置。正在重新处理...\n\n" }] } as ProviderEvent;
 
       const retryOptions = { ...streamOptions, sessionId: undefined };
       resultResponse = null;
       for await (const event of provider.sendStream(msg.text, retryOptions)) {
         yield event;
-        if (event.kind === "result") resultResponse = event.response;
-        else if (event.kind === "rate_limit" && event.rateLimitType) {
+        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
+        else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
           this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
         }
       }
@@ -507,11 +510,11 @@ export class Remi {
           if (typeof fallback.sendStream === "function") {
             for await (const event of fallback.sendStream(msg.text, streamOptions)) {
               yield event;
-              if (event.kind === "result") resultResponse = event.response;
+              if (event.sessionUpdate === "remi:result") resultResponse = event.response;
             }
           } else {
             resultResponse = await fallback.send(msg.text, streamOptions);
-            yield { kind: "result", response: resultResponse };
+            yield { sessionUpdate: "remi:result" as const, response: resultResponse };
           }
           fallbackSpan?.end();
         }
@@ -601,7 +604,7 @@ export class Remi {
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
     let lastResponse: AgentResponse | null = null;
     for await (const event of this._processStream(msg)) {
-      if (event.kind === "result") {
+      if (event.sessionUpdate === "remi:result") {
         lastResponse = event.response;
       }
     }

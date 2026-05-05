@@ -15,11 +15,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createFeishuClient } from "../src/connectors/feishu/client.js";
 import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
-import { createMapperState, mapSessionUpdate } from "../src/providers/acp/event-mapper.js";
 import { createAdapter } from "../src/providers/acp/adapters/index.js";
 import { formatToolInputSummary } from "../src/connectors/feishu/tool-formatters.js";
-import type { SessionUpdate } from "../src/providers/acp/protocol.js";
-import type { StreamEvent, AgentResponse } from "../src/providers/base.js";
+import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../src/providers/acp/protocol.js";
 
 // ── Parse args ──────────────────────────────────────────────
 
@@ -113,10 +111,9 @@ async function main() {
   await session.start(config.chatId, "open_id", { sessionId: `replay-${fixtureName}` });
   console.log(`🎬 Streaming card created`);
 
-  const state = createMapperState();
   const adapter = createAdapter("claude");
-
   const baseDelay = speed === Infinity ? 0 : Math.round(200 / speed);
+  const startTime = Date.now();
 
   let thinkingText = "";
   let contentText = "";
@@ -131,67 +128,70 @@ async function main() {
     stepAdded?: boolean;
   }
   const toolEntries: ToolEntry[] = [];
+  const toolStartTimes = new Map<string, number>();
+  const seenInputs = new Set<string>();
+  const toolNames = new Map<string, string>();
 
   for (const notification of notifications) {
     const update = (notification as any).params?.update as SessionUpdate | undefined;
     if (!update) continue;
 
-    const events = mapSessionUpdate(update, state, adapter);
-
-    for (const event of events) {
-      switch (event.kind) {
-        case "thinking_delta":
-          thinkingText += event.text;
-          currentThinkingSegment += event.text;
-          await session.updateStatus("Thinking...");
-          console.log(`  💭 thinking: "${event.text.slice(0, 50)}..."`);
-          break;
-
-        case "content_delta":
-          contentText += event.text;
-          if (!trailingThinkingFlushed && currentThinkingSegment.trim()) {
-            session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
-            trailingThinkingFlushed = true;
+    switch (update.sessionUpdate) {
+      case "agent_thought_chunk": {
+        const blocks = Array.isArray(update.content) ? update.content : [update.content];
+        for (const b of blocks) {
+          if (b.type === "text" && b.text) {
+            thinkingText += b.text;
+            currentThinkingSegment += b.text;
           }
-          await session.updateStatus("Writing...");
-          await session.update(contentText);
-          console.log(`  📝 content: "${event.text.slice(0, 50)}..."`);
-          break;
-
-        case "tool_use":
-          toolCount++;
-          toolEntries.push({
-            name: event.name,
-            input: event.input,
-            status: "pending",
-          });
-          if (currentThinkingSegment.trim()) {
-            session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
-          }
-          currentThinkingSegment = "";
-          trailingThinkingFlushed = false;
-          await session.updateStatus(formatToolStatus(event.name, event.input));
-          console.log(`  🔧 tool_use: ${event.name}`);
-          break;
-
-        case "tool_input_update": {
-          const entry = toolEntries.findLast((e) => e.status === "pending" && e.name === event.name);
-          if (entry && !entry.stepAdded) {
-            entry.input = event.input;
-            entry.stepAdded = true;
-            const stepDesc = `${event.name} ${formatToolInputSummary(event.name, event.input)}`.trim();
-            session.addStep(event.name, stepDesc);
-            await session.updateStatus(formatToolStatus(event.name, event.input));
-          }
-          console.log(`  📥 tool_input: ${event.name} ${JSON.stringify(event.input).slice(0, 80)}`);
-          break;
         }
-
-        case "tool_result": {
+        await session.updateStatus("Thinking...");
+        console.log(`  💭 thinking: "${(blocks[0] as any)?.text?.slice(0, 50) ?? ""}"`);
+        break;
+      }
+      case "agent_message_chunk": {
+        const blocks = Array.isArray(update.content) ? update.content : [update.content];
+        for (const b of blocks) {
+          if (b.type === "text" && b.text) contentText += b.text;
+        }
+        if (!trailingThinkingFlushed && currentThinkingSegment.trim()) {
+          session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
+          trailingThinkingFlushed = true;
+        }
+        await session.updateStatus("Writing...");
+        await session.update(contentText);
+        console.log(`  📝 content: "${(blocks[0] as any)?.text?.slice(0, 50) ?? ""}"`);
+        break;
+      }
+      case "tool_call": {
+        const tc = update as ToolCallUpdate;
+        const name = adapter.resolveToolName(tc);
+        const input = adapter.extractToolInput(tc);
+        toolNames.set(tc.toolCallId, name);
+        toolStartTimes.set(tc.toolCallId, Date.now());
+        toolCount++;
+        toolEntries.push({ name, input, status: "pending" });
+        if (currentThinkingSegment.trim()) {
+          session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
+        }
+        currentThinkingSegment = "";
+        trailingThinkingFlushed = false;
+        await session.updateStatus(formatToolStatus(name, input));
+        console.log(`  🔧 tool_call: ${name}`);
+        break;
+      }
+      case "tool_call_update": {
+        const tc = update as ToolCallProgressUpdate;
+        const name = toolNames.get(tc.toolCallId) ?? adapter.resolveToolName(tc);
+        if (tc.status === "completed" || tc.status === "failed") {
+          const st = toolStartTimes.get(tc.toolCallId);
+          const durationMs = st ? Date.now() - st : undefined;
+          toolStartTimes.delete(tc.toolCallId);
           const entry = toolEntries.findLast((e) => e.status === "pending");
           if (entry) {
             entry.status = "done";
-            if (event.input) entry.input = event.input;
+            const resolvedInput = adapter.extractToolInput(tc);
+            if (resolvedInput) entry.input = resolvedInput;
             if (!entry.stepAdded) {
               entry.stepAdded = true;
               const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
@@ -199,22 +199,31 @@ async function main() {
             }
           }
           await session.updateStatus("Thinking...");
-          const dur = event.durationMs ? ` (${(event.durationMs / 1000).toFixed(1)}s)` : "";
-          console.log(`  ✅ tool_result: ${event.name}${dur}`);
-          break;
+          const dur = durationMs ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
+          console.log(`  ✅ tool_done: ${name}${dur}`);
+        } else if (!seenInputs.has(tc.toolCallId)) {
+          const input = adapter.extractToolInput(tc);
+          if (input && Object.keys(input).length > 0) {
+            seenInputs.add(tc.toolCallId);
+            const entry = toolEntries.findLast((e) => e.status === "pending" && e.name === name);
+            if (entry && !entry.stepAdded) {
+              entry.input = input;
+              entry.stepAdded = true;
+              const stepDesc = `${name} ${formatToolInputSummary(name, input)}`.trim();
+              session.addStep(name, stepDesc);
+              await session.updateStatus(formatToolStatus(name, input));
+            }
+            console.log(`  📥 tool_input: ${name} ${JSON.stringify(input).slice(0, 80)}`);
+          }
         }
-
-        case "error":
-          console.log(`  ❌ error: ${event.error}`);
-          break;
+        break;
       }
-
-      if (baseDelay > 0) await Bun.sleep(baseDelay);
     }
+
+    if (baseDelay > 0) await Bun.sleep(baseDelay);
   }
 
-  // Close with final card
-  const elapsed = Math.round((Date.now() - state.promptStartTime) / 1000);
+  const elapsed = Math.round((Date.now() - startTime) / 1000);
   console.log(`\n🏁 Replay complete: ${toolCount} tools, ${elapsed}s elapsed`);
   console.log(`   Thinking: ${thinkingText.length} chars, Content: ${contentText.length} chars`);
 

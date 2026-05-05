@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "../src/config.js";
 import type { IncomingMessage } from "../src/connectors/base.js";
-import type { AgentResponse, Provider, StreamEvent } from "../src/providers/base.js";
+import type { AgentResponse, Provider, ProviderEvent } from "../src/providers/base.js";
 import { createAgentResponse } from "../src/providers/base.js";
 import { Remi } from "../src/core.js";
 import * as sessDb from "../src/db/sessions.js";
@@ -50,11 +50,11 @@ class MockProvider implements Provider {
       context?: string | null;
       chatId?: string | null;
     },
-  ): AsyncGenerator<StreamEvent> {
+  ): AsyncGenerator<ProviderEvent> {
     this.lastMessage = message;
     this.lastContext = options?.context ?? null;
     yield {
-      kind: "result",
+      sessionUpdate: "remi:result" as const,
       response: createAgentResponse({
         text: this._responseText,
         sessionId: "sess-mock",
@@ -87,8 +87,8 @@ class MockFailProvider implements Provider {
       context?: string | null;
       chatId?: string | null;
     },
-  ): AsyncGenerator<StreamEvent> {
-    yield { kind: "result", response: createAgentResponse({ text: "[Provider error: boom]" }) };
+  ): AsyncGenerator<ProviderEvent> {
+    yield { sessionUpdate: "remi:result" as const, response: createAgentResponse({ text: "[Provider error: boom]" }) };
   }
 
   async healthCheck(): Promise<boolean> {
