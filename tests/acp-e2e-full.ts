@@ -306,6 +306,16 @@ async function testPlanMode(client: AcpTestClient) {
   client.saveScenarioFixtures("plan-todo");
 }
 
+async function testAgentBash(client: AcpTestClient) {
+  console.log("\n═══ Test: Agent + Bash (subagent) ═══");
+  const result = await client.prompt(
+    "Use the Agent tool to spawn a subagent with description 'check disk usage' and prompt 'Run `df -h /` and `uptime` using Bash. Reply with a one-line summary.'. Wait for it to complete."
+  );
+  console.log(`  result: ${JSON.stringify(result)}`);
+  console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
+  client.saveScenarioFixtures("agent-bash");
+}
+
 async function testAgentSpawn(client: AcpTestClient) {
   console.log("\n═══ Test: Agent/Subagent Spawn ═══");
   const result = await client.prompt(
@@ -406,6 +416,7 @@ async function main() {
     ["read-tool", testReadTool],
     ["plan-todo", testPlanMode],
     ["agent-spawn", testAgentSpawn],
+    ["agent-bash", testAgentBash],
     ["bash-exec", testBashExecution],
     ["ask-user", testAskUserQuestion],
     ["enter-plan", testEnterPlanMode],
