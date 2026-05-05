@@ -15,7 +15,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
-import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, TOOL_ICONS } from "./tool-formatters.js";
+import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -723,16 +723,8 @@ export class FeishuStreamingSession {
   addStep(toolName: string, desc: string): void {
     const stepIndex = this._steps.length;
     this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
-    const iconToken = TOOL_ICONS[toolName] ?? TOOL_ICONS._default;
-    const element = {
-      tag: "div",
-      element_id: `step_${stepIndex}`,
-      icon: { tag: "standard_icon", token: iconToken, color: "grey" },
-      text: { tag: "plain_text", content: desc, text_color: "grey", text_size: "notation" },
-    };
-    // Update process panel header with step count
+    const element = { ...buildStepDiv(toolName, desc), element_id: `step_${stepIndex}` };
     this._updateProcessHeader();
-    // Append div to process panel — serialized through queue to preserve sequence order
     this.queue = this.queue.then(() =>
       this._appendElement("process_panel", element),
     );
