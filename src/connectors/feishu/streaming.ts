@@ -732,8 +732,10 @@ export class FeishuStreamingSession {
     };
     // Update process panel header with step count
     this._updateProcessHeader();
-    // Append div to process panel (fire-and-forget)
-    this._appendElement("process_panel", element);
+    // Append div to process panel — serialized through queue to preserve sequence order
+    this.queue = this.queue.then(() =>
+      this._appendElement("process_panel", element),
+    );
   }
 
   /** Update the last pending step with its duration. */
