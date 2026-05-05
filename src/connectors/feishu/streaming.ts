@@ -145,38 +145,22 @@ export function buildFinalCard(opts: {
   const hasSteps = opts.steps && opts.steps.length > 0;
   const hasThinking = opts.thinking || hasTools || hasSteps;
 
-  // Max tool entries in final card to avoid Feishu element limits
-  const MAX_FINAL_TOOL_ENTRIES = 20;
-
   if (hasThinking) {
     // Build step elements for the collapsed panel
     const panelElements: Record<string, unknown>[] = [];
 
     if (hasTools) {
-      const entries = opts.toolEntries!;
-      const omitted = Math.max(0, entries.length - MAX_FINAL_TOOL_ENTRIES);
-      const visibleEntries = omitted > 0 ? entries.slice(-MAX_FINAL_TOOL_ENTRIES) : entries;
-      if (omitted > 0) {
-        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
-      }
-      for (const entry of visibleEntries) {
+      for (const entry of opts.toolEntries!) {
         if (entry.thinkingBefore?.trim()) {
           panelElements.push(buildThinkingDiv(entry.thinkingBefore));
         }
         panelElements.push(buildToolDiv(entry));
       }
-      // Trailing thinking after last tool
       if (opts.trailingThinking?.trim()) {
         panelElements.push(buildThinkingDiv(opts.trailingThinking));
       }
     } else if (hasSteps) {
-      const steps = opts.steps!;
-      const omitted = Math.max(0, steps.length - MAX_FINAL_TOOL_ENTRIES);
-      const visibleSteps = omitted > 0 ? steps.slice(-MAX_FINAL_TOOL_ENTRIES) : steps;
-      if (omitted > 0) {
-        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps omitted*</font>` });
-      }
-      for (const step of visibleSteps) {
+      for (const step of opts.steps!) {
         panelElements.push(buildStepDiv(step.tool, step.desc));
       }
     } else if (opts.thinking) {
@@ -1118,7 +1102,7 @@ export class FeishuStreamingSession {
           text,
           thinking: thinkingText,
           toolEntries: undefined, // force lightweight mode
-          steps: this._steps.length > 0 ? this._steps.slice(-20) : undefined,
+          steps: this._steps.length > 0 ? this._steps : undefined,
           trailingThinking,
           toolCount,
           stats,
