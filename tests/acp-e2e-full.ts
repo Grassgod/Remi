@@ -286,6 +286,16 @@ async function testMultiTool(client: AcpTestClient) {
   client.saveScenarioFixtures("multi-tool");
 }
 
+async function testReadTool(client: AcpTestClient) {
+  console.log("\n═══ Test: Read Tool ═══");
+  const result = await client.prompt(
+    "Use the Read tool to read the file src/providers/base.ts and tell me how many lines it has. Be brief."
+  );
+  console.log(`  result: ${JSON.stringify(result)}`);
+  console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
+  client.saveScenarioFixtures("read-tool");
+}
+
 async function testPlanMode(client: AcpTestClient) {
   console.log("\n═══ Test: Plan / TodoWrite ═══");
   const result = await client.prompt(
@@ -393,6 +403,7 @@ async function main() {
   // Run scenarios
   const scenarios = [
     ["multi-tool", testMultiTool],
+    ["read-tool", testReadTool],
     ["plan-todo", testPlanMode],
     ["agent-spawn", testAgentSpawn],
     ["bash-exec", testBashExecution],

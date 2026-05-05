@@ -148,6 +148,8 @@ function mapToolCallUpdate(update: ToolCallProgressUpdate, state: MapperState, a
       const input = adapter.extractToolInput(update);
       if (input && Object.keys(input).length > 0) {
         state.toolInputs.set(update.toolCallId, input);
+        const toolName = state.toolNames.get(update.toolCallId) ?? "unknown";
+        return [{ kind: "tool_input_update", toolUseId: update.toolCallId, name: toolName, input }];
       }
     }
     return [];
@@ -159,7 +161,10 @@ function mapToolCallUpdate(update: ToolCallProgressUpdate, state: MapperState, a
 
   state.toolNames.delete(update.toolCallId);
   state.toolStartTimes.delete(update.toolCallId);
-  const storedInput = state.toolInputs.get(update.toolCallId);
+  let storedInput = state.toolInputs.get(update.toolCallId);
+  if (!storedInput) {
+    storedInput = adapter.extractToolInput(update) ?? undefined;
+  }
   state.toolInputs.delete(update.toolCallId);
   state.completedTools.push({ name: toolName, durationMs });
 

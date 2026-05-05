@@ -23,6 +23,7 @@ import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./st
 import {
   type ToolEntry,
   shortPath,
+  formatToolInputSummary,
 } from "./tool-formatters.js";
 import { registerPendingAction, rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
 import {
@@ -519,6 +520,7 @@ export class FeishuConnector implements Connector {
     // Collect tool entries for final card nested collapsible panels
     const toolEntries: ToolEntry[] = [];
     let currentThinkingSegment = "";
+    let trailingThinkingFlushed = false;
 
     // Plan task tracking for status bar
     const planTasks: PlanTask[] = [];
@@ -572,6 +574,10 @@ export class FeishuConnector implements Connector {
               break;
             case "content_delta":
               contentText += event.text;
+              if (!trailingThinkingFlushed && currentThinkingSegment.trim()) {
+                session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
+                trailingThinkingFlushed = true;
+              }
               if (planTasks.length === 0 && activeAgents.length === 0) {
                 await session.updateStatus("Writing...");
               }
@@ -643,11 +649,23 @@ export class FeishuConnector implements Connector {
                 session.addStep("_thinking", thinkingDesc);
               }
               currentThinkingSegment = "";
-              // Add icon step to process panel (strip emoji prefix from formatToolStatus to avoid double emoji in addStep)
-              const stepDesc = formatToolStatus(event.name, event.input)
-                .replace(/\.\.\.$/, "")
-                .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F]+\s*/u, "");
-              session.addStep(event.name, stepDesc);
+              trailingThinkingFlushed = false;
+              // Don't addStep yet \u2014 wait for tool_input_update with real command.
+              // tool_result will fallback-add if no update arrives.
+              break;
+            }
+            case "tool_input_update": {
+              // Real input arrived — now we know the command, add the step for the first time
+              const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === event.name);
+              if (pendingEntry && !pendingEntry.stepAdded) {
+                pendingEntry.input = event.input;
+                pendingEntry.stepAdded = true;
+                const stepDesc = `${event.name} ${formatToolInputSummary(event.name, event.input)}`.trim();
+                session.addStep(event.name, stepDesc);
+                if (planTasks.length === 0 && activeAgents.length === 0) {
+                  await session.updateStatus(formatToolStatus(event.name, event.input));
+                }
+              }
               break;
             }
             case "tool_result": {
@@ -674,13 +692,12 @@ export class FeishuConnector implements Connector {
                 entry.status = "done";
                 entry.durationMs = event.durationMs;
                 entry.resultPreview = event.resultPreview;
-                // ACP sends real input in tool_call_update; always backfill (initial title may be generic)
-                if (event.input) {
-                  entry.input = event.input;
-                  const newDesc = formatToolStatus(event.name, event.input)
-                    .replace(/\.\.\.$/, "")
-                    .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}️]+\s*/u, "");
-                  session.updateStepDesc(newDesc);
+                if (event.input) entry.input = event.input;
+                // Fallback: if step was never added (no tool_input_update fired), add it now
+                if (!entry.stepAdded) {
+                  entry.stepAdded = true;
+                  const fallbackDesc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
+                  session.addStep(entry.name, fallbackDesc);
                 }
               }
               // Update step duration in timeline
@@ -858,11 +875,18 @@ export class FeishuConnector implements Connector {
     if (response.inputTokens != null || response.outputTokens != null) {
       const inTok = response.inputTokens ?? 0;
       const outTok = response.outputTokens ?? 0;
+      const fmtN = (n: number) =>
+        n >= 1_000_000 ? `${Math.round(n / 1_000_000)}M` :
+        n >= 1_000 ? `${Math.round(n / 1_000)}k` : `${n}`;
       if (outTok > 0) {
         parts.push(`${inTok}→${outTok}`);
       } else if (inTok > 0) {
-        const k = inTok >= 1000 ? `${Math.round(inTok / 1000)}k` : `${inTok}`;
-        parts.push(k);
+        const usedStr = fmtN(inTok);
+        if (response.contextWindow) {
+          parts.push(`${usedStr}/${fmtN(response.contextWindow)}`);
+        } else {
+          parts.push(usedStr);
+        }
       }
     }
 

@@ -79,6 +79,8 @@ export interface ToolEntry {
   status: "pending" | "done";
   /** Thinking text that appeared before this tool call. */
   thinkingBefore: string;
+  /** Whether session.addStep has been called for this entry. */
+  stepAdded?: boolean;
 }
 
 // ── Streaming mode: markdown text for thinking panel ─────
@@ -162,6 +164,7 @@ type ToolFormatter = (input: Record<string, unknown>) => string;
 const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   Read: (input) => {
     const path = shortPath(str(input.file_path));
+    if (!path) return "";
     const offset = input.offset ? ` L${input.offset}` : "";
     const limit = input.limit ? `-${Number(input.offset ?? 1) + Number(input.limit)}` : "";
     return `\`${path}${offset}${limit}\``;
@@ -226,7 +229,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   },
 };
 
-function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
+export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
   const formatter = TOOL_FORMATTERS[name];
   if (formatter) return formatter(input);
