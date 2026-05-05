@@ -182,10 +182,13 @@ export class AcpProvider implements Provider {
     };
 
     // Start prompt (runs in background)
+    const promptStartMs = Date.now();
     entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
         promptDone = true;
+        const elapsed = ((Date.now() - promptStartMs) / 1000).toFixed(1);
+        if (process.env.REMI_DEBUG) console.error(`[AcpProvider] prompt completed in ${elapsed}s: stopReason=${result.stopReason}`);
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
           pushEvent({ sessionUpdate: "remi:error", error: "Cancelled", code: "cancelled" });
         } else {
@@ -195,6 +198,8 @@ export class AcpProvider implements Provider {
       })
       .catch((err: Error) => {
         promptDone = true;
+        const elapsed = ((Date.now() - promptStartMs) / 1000).toFixed(1);
+        console.error(`[AcpProvider] prompt FAILED after ${elapsed}s: ${err.message}`);
         pushEvent({ sessionUpdate: "remi:error", error: err.message });
       });
 

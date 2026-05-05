@@ -743,9 +743,12 @@ export class FeishuConnector implements Connector {
               break;
             case "remi:result":
               finalResponse = event.response;
+              slog.info(`remi:result received: tools=${toolCount} thinking=${thinkingText.length}b content=${contentText.length}b`);
               break;
           }
         }
+
+        slog.info(`Stream ended: gotResult=${!!finalResponse} tools=${toolCount} elapsed=${session.getElapsed()}s`);
 
         // Close streaming card with final content + stats + tool entries
         // @mention is embedded in the final card for group chats (single message)
@@ -831,6 +834,8 @@ export class FeishuConnector implements Connector {
           }
         }
 
+        slog.info(`Closing streaming card...`);
+        const closeStart = Date.now();
         await session.close({
           finalText: contentText || finalResponse?.text,
           thinking: thinkingText || finalResponse?.thinking || null,
@@ -844,6 +849,7 @@ export class FeishuConnector implements Connector {
           askQuestions,
           planReview: planReviewAction,
         });
+        slog.info(`Card closed in ${Date.now() - closeStart}ms`);
 
       } catch (err) {
         slog.error(`streaming error: ${String(err)}`);
