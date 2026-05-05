@@ -12,7 +12,7 @@
 /** Maximum length for tool result preview in display. */
 const MAX_RESULT_PREVIEW = 800;
 /** Maximum length for a tool input display line. */
-const MAX_INPUT_LINE = 200;
+const MAX_INPUT_LINE = 400;
 
 // ── Tool icon mappings ──────────────────────────────────
 
@@ -199,12 +199,12 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   },
 
   WebFetch: (input) => {
-    const url = truncate(str(input.url), 100);
+    const url = truncate(str(input.url), 200);
     return `\`${url}\``;
   },
 
   WebSearch: (input) => {
-    const query = truncate(str(input.query), 100);
+    const query = truncate(str(input.query), 200);
     return `"${query}"`;
   },
 
@@ -219,12 +219,12 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
 
   Agent: (input) => {
     const desc = str(input.description ?? input.prompt ?? "");
-    return desc ? `"${truncate(desc, 80)}"` : "";
+    return desc ? `"${truncate(desc, 200)}"` : "";
   },
 
   Skill: (input) => {
     const skill = str(input.skill);
-    const args = input.args ? ` ${truncate(str(input.args), 60)}` : "";
+    const args = input.args ? ` ${truncate(str(input.args), 120)}` : "";
     return `\`${skill}${args}\``;
   },
 };

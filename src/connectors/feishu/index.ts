@@ -93,7 +93,7 @@ function renderCombinedStatus(planTasks: PlanTask[], activeAgents: ActiveAgent[]
 function formatToolStatus(name: string, input?: Record<string, unknown>): string {
   const s = (v: unknown) => (v == null ? "" : String(v));
   const trunc = (t: string, max: number) => t.length <= max ? t : t.slice(0, max - 3) + "...";
-  const MAX = 200;
+  const MAX = 400;
 
   switch (name) {
     case "Read":
