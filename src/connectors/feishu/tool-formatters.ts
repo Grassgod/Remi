@@ -182,7 +182,6 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
 
   Bash: (input) => {
     const cmd = truncate(shortPath(str(input.command)), MAX_INPUT_LINE);
-    if (!cmd) return "";
     return `\`$ ${cmd}\``;
   },
 

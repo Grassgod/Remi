@@ -714,18 +714,15 @@ export class FeishuConnector implements Connector {
                 if (!seenInputs.has(tc.toolCallId)) {
                   const input = acpAdapter.extractToolInput(tc);
                   if (input && Object.keys(input).length > 0) {
-                    const summary = formatToolInputSummary(toolName, input);
-                    if (summary) {
-                      seenInputs.add(tc.toolCallId);
-                      const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
-                      if (pendingEntry && !pendingEntry.stepAdded) {
-                        pendingEntry.input = input;
-                        pendingEntry.stepAdded = true;
-                        const stepDesc = `${toolName} ${summary}`.trim();
-                        session.addStep(toolName, stepDesc);
-                        if (planTasks.length === 0 && activeAgents.length === 0) {
-                          await session.updateStatus(formatToolStatus(toolName, input));
-                        }
+                    seenInputs.add(tc.toolCallId);
+                    const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
+                    if (pendingEntry && !pendingEntry.stepAdded) {
+                      pendingEntry.input = input;
+                      pendingEntry.stepAdded = true;
+                      const stepDesc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
+                      session.addStep(toolName, stepDesc);
+                      if (planTasks.length === 0 && activeAgents.length === 0) {
+                        await session.updateStatus(formatToolStatus(toolName, input));
                       }
                     }
                   }
