@@ -359,7 +359,6 @@ export class FeishuStreamingSession {
   // Safety timeout: auto-close if no updates for 10 minutes
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private static SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-  private static FETCH_TIMEOUT_MS = 15_000;
 
   // Heartbeat: periodic status update when no events arrive
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -529,7 +528,6 @@ export class FeishuStreamingSession {
           `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`,
           {
             method: "PUT",
-            signal: AbortSignal.timeout(FeishuStreamingSession.FETCH_TIMEOUT_MS),
             headers: {
               Authorization: `Bearer ${await this._getToken()}`,
               "Content-Type": "application/json",
@@ -579,7 +577,6 @@ export class FeishuStreamingSession {
           `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
           {
             method: "POST",
-            signal: AbortSignal.timeout(FeishuStreamingSession.FETCH_TIMEOUT_MS),
             headers: {
               Authorization: `Bearer ${await this._getToken()}`,
               "Content-Type": "application/json",
@@ -956,7 +953,6 @@ export class FeishuStreamingSession {
         `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
         {
           method: "PATCH",
-          signal: AbortSignal.timeout(FeishuStreamingSession.FETCH_TIMEOUT_MS),
           headers: {
             Authorization: `Bearer ${await this._getToken()}`,
             "Content-Type": "application/json; charset=utf-8",
@@ -1047,7 +1043,6 @@ export class FeishuStreamingSession {
         `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
         {
           method: "PATCH",
-          signal: AbortSignal.timeout(FeishuStreamingSession.FETCH_TIMEOUT_MS),
           headers: {
             Authorization: `Bearer ${await this._getToken()}`,
             "Content-Type": "application/json; charset=utf-8",
