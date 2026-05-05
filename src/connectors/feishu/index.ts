@@ -706,24 +706,26 @@ export class FeishuConnector implements Connector {
                   if (!entry.stepAdded) {
                     entry.stepAdded = true;
                     const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
+                    slog.info(`tool_result fallback addStep: tool=${entry.name} inputKeys=[${entry.input ? Object.keys(entry.input) : "none"}] desc="${desc.slice(0, 80)}"`);
                     session.addStep(entry.name, desc);
                   }
                 }
                 if (durationMs) session.updateStepDuration(durationMs);
               } else {
-                if (!seenInputs.has(tc.toolCallId)) {
-                  const input = acpAdapter.extractToolInput(tc);
-                  if (input && Object.keys(input).length > 0) {
-                    seenInputs.add(tc.toolCallId);
-                    const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
-                    if (pendingEntry && !pendingEntry.stepAdded) {
-                      pendingEntry.input = input;
-                      pendingEntry.stepAdded = true;
-                      const stepDesc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
-                      session.addStep(toolName, stepDesc);
-                      if (planTasks.length === 0 && activeAgents.length === 0) {
-                        await session.updateStatus(formatToolStatus(toolName, input));
-                      }
+                const alreadySeen = seenInputs.has(tc.toolCallId);
+                const input = acpAdapter.extractToolInput(tc);
+                const inputKeys = input ? Object.keys(input) : [];
+                slog.info(`tool_call_update(in-progress): tool=${toolName} id=${tc.toolCallId} alreadySeen=${alreadySeen} inputKeys=[${inputKeys}] rawInput=${JSON.stringify(tc.rawInput)?.slice(0, 100)} title="${tc.title ?? ""}" content=${JSON.stringify(tc.content)?.slice(0, 100)}`);
+                if (!alreadySeen && input && inputKeys.length > 0) {
+                  seenInputs.add(tc.toolCallId);
+                  const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
+                  if (pendingEntry && !pendingEntry.stepAdded) {
+                    pendingEntry.input = input;
+                    pendingEntry.stepAdded = true;
+                    const stepDesc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
+                    session.addStep(toolName, stepDesc);
+                    if (planTasks.length === 0 && activeAgents.length === 0) {
+                      await session.updateStatus(formatToolStatus(toolName, input));
                     }
                   }
                 }
