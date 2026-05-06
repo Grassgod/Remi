@@ -378,9 +378,17 @@ export class FeishuStreamingSession {
   private _lastStatusText = "";
   private _heartbeatRenderer: ((elapsed: number) => string) | null = null;
 
-  // Streaming mode renewal: Feishu auto-closes streaming after 10 minutes
+  // Streaming → degraded transition: Feishu auto-closes streaming after 10 minutes
   private _renewTimer: ReturnType<typeof setTimeout> | null = null;
-  private static STREAMING_RENEW_MS = 9 * 60 * 1000; // renew at 9 min, before 10 min hard limit
+  private static STREAMING_RENEW_MS = 9.5 * 60 * 1000; // switch to degraded at 9.5 min, before 10 min hard limit
+
+  // Degraded mode: when CardKit element updates fail (e.g. streaming expired),
+  // fall back to im.message.patch full-card rebuilds
+  private _degraded = false;
+  private _consecutiveFailures = 0;
+  private static DEGRADED_FAILURE_THRESHOLD = 2;
+  private _degradedFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private static DEGRADED_FLUSH_MS = 3000;
 
   // (PROCESS_BUDGET removed — steps are now individual div elements, no markdown accumulation)
 
@@ -553,7 +561,10 @@ export class FeishuStreamingSession {
             }),
           },
         );
-        if (res.ok) return;
+        if (res.ok) {
+          this._consecutiveFailures = 0;
+          return;
+        }
         const body = await res.text().catch(() => "");
         if (attempt === 0 && res.status >= 500) {
           this.log(`Update ${elementId} HTTP ${res.status}, retrying...`);
@@ -562,6 +573,7 @@ export class FeishuStreamingSession {
         this.log(
           `Update ${elementId} HTTP ${res.status}: ${body.slice(0, 300)}`,
         );
+        this._onElementApiFailed();
         return;
       } catch (e) {
         if (attempt === 0) {
@@ -569,6 +581,7 @@ export class FeishuStreamingSession {
           continue;
         }
         this.log(`Update ${elementId} failed: ${String(e)}`);
+        this._onElementApiFailed();
       }
     }
   }
@@ -603,13 +616,17 @@ export class FeishuStreamingSession {
             }),
           },
         );
-        if (res.ok) return;
+        if (res.ok) {
+          this._consecutiveFailures = 0;
+          return;
+        }
         const body = await res.text().catch(() => "");
         if (attempt === 0 && res.status >= 500) {
           this.log(`Append to ${targetElementId} HTTP ${res.status}, retrying...`);
           continue;
         }
         this.log(`Append to ${targetElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+        this._onElementApiFailed();
         return;
       } catch (e) {
         if (attempt === 0) {
@@ -617,6 +634,7 @@ export class FeishuStreamingSession {
           continue;
         }
         this.log(`Append to ${targetElementId} failed: ${String(e)}`);
+        this._onElementApiFailed();
       }
     }
   }
@@ -638,12 +656,95 @@ export class FeishuStreamingSession {
           body: JSON.stringify({ sequence: seq, uuid: `d_${this.state.cardId}_${seq}` }),
         },
       );
-      if (!res.ok) {
+      if (res.ok) {
+        this._consecutiveFailures = 0;
+      } else {
         const body = await res.text().catch(() => "");
         this.log(`Delete ${elementId} HTTP ${res.status}: ${body.slice(0, 200)}`);
+        this._onElementApiFailed();
       }
     } catch (e) {
       this.log(`Delete ${elementId} failed: ${String(e)}`);
+      this._onElementApiFailed();
+    }
+  }
+
+  // ── Degraded mode: fall back to im.message.patch ──────────
+
+  private _onElementApiFailed(): void {
+    this._consecutiveFailures++;
+    if (!this._degraded && this._consecutiveFailures >= FeishuStreamingSession.DEGRADED_FAILURE_THRESHOLD) {
+      this._degraded = true;
+      this._clearRenewTimer();
+      this.log(`Entering degraded mode after ${this._consecutiveFailures} consecutive failures — switching to im.message.patch`);
+    }
+  }
+
+  isDegraded(): boolean {
+    return this._degraded;
+  }
+
+  private _buildCurrentCard(): Record<string, unknown> {
+    const elements: Record<string, unknown>[] = [];
+
+    if (this.state?.currentStatus) {
+      elements.push({ tag: "markdown", content: this.state.currentStatus });
+    }
+
+    if (this._steps.length > 0) {
+      const MAX_VISIBLE = FeishuStreamingSession.MAX_VISIBLE_STEPS;
+      const omitted = Math.max(0, this._steps.length - MAX_VISIBLE);
+      const visible = omitted > 0 ? this._steps.slice(-MAX_VISIBLE) : this._steps;
+      const panelElements: Record<string, unknown>[] = [];
+      if (omitted > 0) {
+        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
+      }
+      for (const step of visible) {
+        panelElements.push(buildStepDiv(step.tool, step.desc));
+      }
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        border: { color: "grey-300", corner_radius: "6px" },
+        header: {
+          title: { tag: "plain_text", content: `steps (${this._steps.length})`, text_color: "grey", text_size: "notation" },
+          icon_position: "right",
+        },
+        elements: panelElements,
+      });
+    }
+
+    elements.push(...buildContentElements(this.state?.currentText || "..."));
+
+    return {
+      schema: "2.0",
+      header: buildCardHeader(undefined, undefined, this._nameSuffix),
+      config: { width_mode: "fill" },
+      body: { elements },
+    };
+  }
+
+  private _scheduleDegradedFlush(): void {
+    if (this._degradedFlushTimer || this.closed || !this.state) return;
+    this._degradedFlushTimer = setTimeout(async () => {
+      this._degradedFlushTimer = null;
+      if (this.closed || !this.state) return;
+      try {
+        const card = this._buildCurrentCard();
+        await this.client.im.message.patch({
+          path: { message_id: this.state.messageId },
+          data: { content: JSON.stringify(card) },
+        });
+      } catch (e) {
+        this.log(`Degraded flush failed: ${String(e)}`);
+      }
+    }, FeishuStreamingSession.DEGRADED_FLUSH_MS);
+  }
+
+  private _clearDegradedFlushTimer(): void {
+    if (this._degradedFlushTimer) {
+      clearTimeout(this._degradedFlushTimer);
+      this._degradedFlushTimer = null;
     }
   }
 
@@ -673,19 +774,23 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) return;
     this._resetSafetyTimer();
     this._resetHeartbeat();
-    // Track last status for heartbeat display context
     if (stateField === "currentStatus") {
       this._lastStatusText = content;
+    }
+
+    this.state[stateField] = content;
+
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+      return;
     }
 
     const throttle = this._getThrottle(elementId);
     const now = Date.now();
 
     if (now - throttle.lastSendTime >= this.throttleMs) {
-      // Enough time passed — send immediately (fire-and-forget)
       throttle.pending = null;
       throttle.lastSendTime = now;
-      this.state[stateField] = content;
       this.queue = this.queue.then(() =>
         this._updateElementRaw(elementId, content),
       );
@@ -703,9 +808,13 @@ export class FeishuStreamingSession {
           throttle.pending = null;
           throttle.lastSendTime = Date.now();
           this.state![stateField] = text;
-          this.queue = this.queue.then(() =>
-            this._updateElementRaw(elementId, text),
-          );
+          if (this._degraded) {
+            this._scheduleDegradedFlush();
+          } else {
+            this.queue = this.queue.then(() =>
+              this._updateElementRaw(elementId, text),
+            );
+          }
         }, delay);
       }
     }
@@ -747,10 +856,15 @@ export class FeishuStreamingSession {
     const stepIndex = this._steps.length;
     this.log(`addStep #${stepIndex}: ${toolName} desc="${desc.slice(0, 80)}"`);
     this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
+
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+      return;
+    }
+
     const element = { ...buildStepDiv(toolName, desc), element_id: `step_${stepIndex}` };
     this._updateProcessHeader();
 
-    // Delete oldest step if exceeding limit, then append new one
     const visibleCount = stepIndex - (this._oldestVisibleStep ?? 0);
     if (visibleCount >= FeishuStreamingSession.MAX_VISIBLE_STEPS) {
       const deleteId = `step_${this._oldestVisibleStep ?? 0}`;
@@ -770,7 +884,11 @@ export class FeishuStreamingSession {
     if (!step) return;
     const stepIndex = this._steps.indexOf(step);
     step.desc = desc;
-    this._updateElementRaw(`step_${stepIndex}`, desc);
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+    } else {
+      this._updateElementRaw(`step_${stepIndex}`, desc);
+    }
   }
 
   updateStepDuration(durationMs: number): void {
@@ -779,8 +897,11 @@ export class FeishuStreamingSession {
     const stepIndex = this._steps.indexOf(step);
     step.durationMs = durationMs;
     const dur = ` (${(durationMs / 1000).toFixed(1)}s)`;
-    // Update the existing div's text via element update
-    this._updateElementRaw(`step_${stepIndex}`, `${step.desc}${dur}`);
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+    } else {
+      this._updateElementRaw(`step_${stepIndex}`, `${step.desc}${dur}`);
+    }
   }
 
   /** Update the process panel header title with current step count. */
@@ -965,10 +1086,14 @@ export class FeishuStreamingSession {
     const heartbeatText = this._heartbeatRenderer
       ? this._heartbeatRenderer(elapsed)
       : `${this._lastStatusText || "Running"} (${elapsed}s)`;
-    // Bypass throttle — heartbeat is already rate-limited by its own timer
-    this.queue = this.queue.then(() =>
-      this._updateElementRaw("status_bar", heartbeatText),
-    );
+    if (this.state) this.state.currentStatus = heartbeatText;
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+    } else {
+      this.queue = this.queue.then(() =>
+        this._updateElementRaw("status_bar", heartbeatText),
+      );
+    }
     // Schedule next heartbeat
     this.heartbeatTimer = setTimeout(() => {
       this._sendHeartbeat();
@@ -998,39 +1123,12 @@ export class FeishuStreamingSession {
     }
   }
 
-  private async _renewStreaming(): Promise<void> {
-    if (!this.state || this.closed) return;
-    const apiBase = resolveApiBase(this.creds.domain);
-    this.state.sequence += 1;
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json; charset=utf-8",
-          },
-          body: JSON.stringify({
-            settings: JSON.stringify({
-              config: { streaming_mode: true },
-            }),
-            sequence: this.state.sequence,
-            uuid: `r_${this.state.cardId}_${this.state.sequence}`,
-          }),
-        },
-      );
-      if (res.ok) {
-        this.log("Streaming mode renewed");
-      } else {
-        const body = await res.text().catch(() => "");
-        this.log(`Streaming renew failed HTTP ${res.status}: ${body.slice(0, 300)}`);
-      }
-    } catch (e) {
-      this.log(`Streaming renew error: ${String(e)}`);
-    }
-    // Schedule next renewal regardless of success
-    this._startRenewTimer();
+  private _renewStreaming(): void {
+    if (!this.state || this.closed || this._degraded) return;
+    this._degraded = true;
+    const elapsed = Math.round((Date.now() - this._startTime) / 1000);
+    this.log(`Entering degraded mode at ${elapsed}s — streaming window expired, switching to im.message.patch`);
+    this._scheduleDegradedFlush();
   }
 
   // ── Close streaming card ───────────────────────────────────
@@ -1041,9 +1139,12 @@ export class FeishuStreamingSession {
     this._clearSafetyTimer();
     this._clearHeartbeat();
     this._clearRenewTimer();
+    this._clearDegradedFlushTimer();
 
     // Flush all pending throttled updates first
-    await this._flushAll();
+    if (!this._degraded) {
+      await this._flushAll();
+    }
 
     // Normalize arguments
     let finalText: string | undefined;
@@ -1077,50 +1178,54 @@ export class FeishuStreamingSession {
     const thinkingText = thinking ?? this.state.currentThinking;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Send final element updates BEFORE setting this.closed
-    // (_updateElementRaw checks this.closed and bails out if true)
-    if (text && text !== this.state.currentText) {
-      await this._updateElementRaw("content", text);
-    }
-    // process_content removed — steps are now individual div elements appended to process_panel
-    if (stats) {
-      await this._updateElementRaw("stats_text", stats);
+    if (!this._degraded) {
+      // Send final element updates BEFORE marking closed (_updateElementRaw checks this.closed)
+      if (text && text !== this.state.currentText) {
+        await this._updateElementRaw("content", text);
+      }
+      if (stats) {
+        await this._updateElementRaw("stats_text", stats);
+      }
     }
 
     // Now mark closed so no further updates slip through
     this.closed = true;
 
-    // Close streaming mode via PATCH /settings
-    this.state.sequence += 1;
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json; charset=utf-8",
-          },
-          body: JSON.stringify({
-            settings: JSON.stringify({
-              config: {
-                streaming_mode: false,
-                summary: { content: buildSummary(text) },
-              },
+    // Close streaming mode via PATCH /settings (skip if degraded — streaming already expired)
+    if (!this._degraded) {
+      this.state.sequence += 1;
+      try {
+        const res = await fetch(
+          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+          {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${await this._getToken()}`,
+              "Content-Type": "application/json; charset=utf-8",
+            },
+            body: JSON.stringify({
+              settings: JSON.stringify({
+                config: {
+                  streaming_mode: false,
+                  summary: { content: buildSummary(text) },
+                },
+              }),
+              sequence: this.state.sequence,
+              uuid: `c_${this.state.cardId}_${this.state.sequence}`,
             }),
-            sequence: this.state.sequence,
-            uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-          }),
-        },
-      );
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);
-      } else {
-        this.log(`Close settings OK (streaming_mode=false)`);
+          },
+        );
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);
+        } else {
+          this.log(`Close settings OK (streaming_mode=false)`);
+        }
+      } catch (e) {
+        this.log(`Close settings failed: ${String(e)}`);
       }
-    } catch (e) {
-      this.log(`Close settings failed: ${String(e)}`);
+    } else {
+      this.log(`Close: skipping settings PATCH (degraded mode)`);
     }
 
     // Extract interactive forms from permission_denials
