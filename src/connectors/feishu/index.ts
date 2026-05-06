@@ -786,7 +786,43 @@ export class FeishuConnector implements Connector {
                 const input = acpAdapter.extractToolInput(tc);
                 const inputKeys = input ? Object.keys(input) : [];
                 slog.info(`tool_call_update(in-progress): tool=${toolName} id=${tc.toolCallId} alreadySeen=${alreadySeen} inputKeys=[${inputKeys}] rawInput=${JSON.stringify(tc.rawInput)?.slice(0, 100)} title="${tc.title ?? ""}" content=${JSON.stringify(tc.content)?.slice(0, 100)}`);
-                if (!alreadySeen && input && inputKeys.length > 0) {
+                // AskUserQuestion / ExitPlanMode: render interactive form and wait
+                if (!alreadySeen && toolName === "AskUserQuestion" && input?.questions) {
+                  seenInputs.add(tc.toolCallId);
+                  const askData = { questions: input.questions as import("../../providers/base.js").AskUserQuestion[] };
+                  const savedStatus = session.getLastStatus();
+                  slog.info(`AskUserQuestion detected: ${askData.questions.length} question(s)`);
+                  try {
+                    const result = await new Promise<unknown>((resolve, reject) => {
+                      const questions = askData.questions.map((q: any) => ({ question: q.question, options: q.options ?? [] }));
+                      const actionId = registerPendingAction(resolve, reject, questions, chatId);
+                      const form = buildAskQuestionForm(actionId, askData);
+                      session.updateStatus("Waiting for input...");
+                      session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm: ${e}`));
+                    });
+                    slog.info(`AskUserQuestion answered: ${JSON.stringify(result)?.slice(0, 100)}`);
+                  } catch (e) {
+                    slog.info(`AskUserQuestion cancelled: ${e}`);
+                  }
+                  await session.updateStatus(savedStatus || "Running...");
+                } else if (!alreadySeen && toolName === "ExitPlanMode" && input?.plan) {
+                  seenInputs.add(tc.toolCallId);
+                  const planContent = String(input.plan);
+                  const savedStatus = session.getLastStatus();
+                  slog.info(`ExitPlanMode detected: plan=${planContent.slice(0, 80)}`);
+                  try {
+                    const result = await new Promise<unknown>((resolve, reject) => {
+                      const actionId = registerPendingAction(resolve, reject, undefined, chatId);
+                      const form = buildPlanReviewForm(actionId, planContent);
+                      session.updateStatus("Waiting for approval...");
+                      session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm: ${e}`));
+                    });
+                    slog.info(`ExitPlanMode result: ${JSON.stringify(result)?.slice(0, 100)}`);
+                  } catch (e) {
+                    slog.info(`ExitPlanMode cancelled: ${e}`);
+                  }
+                  await session.updateStatus(savedStatus || "Running...");
+                } else if (!alreadySeen && input && inputKeys.length > 0) {
                   seenInputs.add(tc.toolCallId);
                   const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
                   if (pendingEntry && !pendingEntry.stepAdded) {
