@@ -145,9 +145,9 @@ export function buildFinalCard(opts: {
   const hasSteps = opts.steps && opts.steps.length > 0;
   const hasThinking = opts.thinking || hasTools || hasSteps;
 
-  // Feishu cards have a 200-element limit. Each div step = ~3 elements.
-  // When steps exceed ~50, fall back to a single markdown element.
-  const MAX_DIV_STEPS = 50;
+  // Feishu cards have a 200-element limit. Each div step = ~4 elements.
+  // Keep at most 40 steps as divs to stay under the limit.
+  const MAX_VISIBLE_STEPS = 40;
 
   if (hasThinking) {
     const panelElements: Record<string, unknown>[] = [];
@@ -156,32 +156,25 @@ export function buildFinalCard(opts: {
     if (hasTools) {
       const entries = opts.toolEntries!;
       stepCount = entries.length;
-      if (stepCount <= MAX_DIV_STEPS) {
-        for (const entry of entries) {
-          if (entry.thinkingBefore?.trim()) panelElements.push(buildThinkingDiv(entry.thinkingBefore));
-          panelElements.push(buildToolDiv(entry));
-        }
-        if (opts.trailingThinking?.trim()) panelElements.push(buildThinkingDiv(opts.trailingThinking));
-      } else {
-        const lines: string[] = [];
-        for (const entry of entries) {
-          if (entry.thinkingBefore?.trim()) lines.push(`🤖 ${entry.thinkingBefore.trim().split("\n")[0].slice(0, 80)}`);
-          const dur = entry.durationMs != null ? ` (${(entry.durationMs / 1000).toFixed(1)}s)` : "";
-          const summary = formatToolInputSummary(entry.name, entry.input);
-          lines.push(`${entry.name} ${summary}${dur}`.trim());
-        }
-        if (opts.trailingThinking?.trim()) lines.push(`🤖 ${opts.trailingThinking.trim().split("\n")[0].slice(0, 80)}`);
-        panelElements.push({ tag: "markdown", content: lines.join("\n") });
+      const omitted = Math.max(0, entries.length - MAX_VISIBLE_STEPS);
+      const visibleEntries = omitted > 0 ? entries.slice(-MAX_VISIBLE_STEPS) : entries;
+      if (omitted > 0) {
+        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps*</font>` });
       }
+      for (const entry of visibleEntries) {
+        if (entry.thinkingBefore?.trim()) panelElements.push(buildThinkingDiv(entry.thinkingBefore));
+        panelElements.push(buildToolDiv(entry));
+      }
+      if (opts.trailingThinking?.trim()) panelElements.push(buildThinkingDiv(opts.trailingThinking));
     } else if (hasSteps) {
       const steps = opts.steps!;
       stepCount = steps.length;
-      if (stepCount <= MAX_DIV_STEPS) {
-        for (const step of steps) panelElements.push(buildStepDiv(step.tool, step.desc));
-      } else {
-        const lines = steps.map((s) => s.desc);
-        panelElements.push({ tag: "markdown", content: lines.join("\n") });
+      const omitted = Math.max(0, steps.length - MAX_VISIBLE_STEPS);
+      const visibleSteps = omitted > 0 ? steps.slice(-MAX_VISIBLE_STEPS) : steps;
+      if (omitted > 0) {
+        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps*</font>` });
       }
+      for (const step of visibleSteps) panelElements.push(buildStepDiv(step.tool, step.desc));
     } else if (opts.thinking) {
       panelElements.push(buildThinkingDiv(opts.thinking));
     }
@@ -625,6 +618,32 @@ export class FeishuStreamingSession {
     }
   }
 
+  private async _deleteElement(elementId: string): Promise<void> {
+    if (!this.state || this.closed) return;
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    const seq = this.state.sequence;
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ sequence: seq, uuid: `d_${this.state.cardId}_${seq}` }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`Delete ${elementId} HTTP ${res.status}: ${body.slice(0, 200)}`);
+      }
+    } catch (e) {
+      this.log(`Delete ${elementId} failed: ${String(e)}`);
+    }
+  }
+
   // ── Per-element throttle helpers ───────────────────────────
 
   private _getThrottle(elementId: string): ElementThrottle {
@@ -718,15 +737,27 @@ export class FeishuStreamingSession {
   /**
    * Add a step to the process panel by appending a div with standard_icon.
    */
+  private static MAX_VISIBLE_STEPS = 40;
+
   addStep(toolName: string, desc: string): void {
     const stepIndex = this._steps.length;
     this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
     const element = { ...buildStepDiv(toolName, desc), element_id: `step_${stepIndex}` };
     this._updateProcessHeader();
+
+    // Delete oldest step if exceeding limit, then append new one
+    const visibleCount = stepIndex - (this._oldestVisibleStep ?? 0);
+    if (visibleCount >= FeishuStreamingSession.MAX_VISIBLE_STEPS) {
+      const deleteId = `step_${this._oldestVisibleStep ?? 0}`;
+      this._oldestVisibleStep = (this._oldestVisibleStep ?? 0) + 1;
+      this.queue = this.queue.then(() => this._deleteElement(deleteId));
+    }
     this.queue = this.queue.then(() =>
       this._appendElement("process_panel", element),
     );
   }
+
+  private _oldestVisibleStep: number | undefined;
 
   /** Update the last pending step with its duration. */
   updateStepDesc(desc: string): void {
