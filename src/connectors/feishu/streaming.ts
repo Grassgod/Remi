@@ -187,7 +187,7 @@ export function buildFinalCard(opts: {
     }
 
     if (panelElements.length > 0) {
-      const displayCount = opts.toolCount ?? stepCount || panelElements.length;
+      const displayCount = opts.toolCount ?? (stepCount || panelElements.length);
       if (displayCount > 0 || hasTools || hasSteps) {
         elements.push({
           tag: "collapsible_panel",
