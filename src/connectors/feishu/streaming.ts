@@ -721,6 +721,7 @@ export class FeishuStreamingSession {
   // ── Public update methods (fire-and-forget, don't block caller) ──
 
   async update(text: string): Promise<void> {
+    if (!text) return;
     this._throttledUpdate("content", text, "currentText");
   }
 
