@@ -528,7 +528,10 @@ export class FeishuStreamingSession {
     elementId: string,
     content: string,
   ): Promise<void> {
-    if (!this.state || this.closed) return;
+    if (!this.state || this.closed) {
+      this.log(`Update ${elementId} skipped (closed=${this.closed})`);
+      return;
+    }
     this.state.sequence += 1;
     const apiBase = resolveApiBase(this.creds.domain);
     const seq = this.state.sequence;
@@ -742,6 +745,7 @@ export class FeishuStreamingSession {
 
   addStep(toolName: string, desc: string): void {
     const stepIndex = this._steps.length;
+    this.log(`addStep #${stepIndex}: ${toolName} desc="${desc.slice(0, 80)}"`);
     this._steps.push({ tool: toolName, desc, thinkingOffset: this._fullThinking.length });
     const element = { ...buildStepDiv(toolName, desc), element_id: `step_${stepIndex}` };
     this._updateProcessHeader();
@@ -1112,9 +1116,11 @@ export class FeishuStreamingSession {
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);
+      } else {
+        this.log(`Close settings OK (streaming_mode=false)`);
       }
     } catch (e) {
-      this.log(`Close failed: ${String(e)}`);
+      this.log(`Close settings failed: ${String(e)}`);
     }
 
     // Extract interactive forms from permission_denials
@@ -1139,10 +1145,13 @@ export class FeishuStreamingSession {
         planReview,
         nameSuffix: this._nameSuffix,
       });
+      const cardJson = JSON.stringify(finalCard);
+      this.log(`Final card patch: msgId=${this.state.messageId} size=${(cardJson.length / 1024).toFixed(1)}KB steps=${this._steps.length}`);
       await this.client.im.message.patch({
         path: { message_id: this.state.messageId },
-        data: { content: JSON.stringify(finalCard) },
+        data: { content: cardJson },
       });
+      this.log(`Final card patch OK`);
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
       this.log(`Final card patch failed: ${String(e)} ${detail}`);

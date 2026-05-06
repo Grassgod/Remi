@@ -612,6 +612,7 @@ export class FeishuConnector implements Connector {
               acpToolNames.set(tc.toolCallId, toolName);
               toolStartTimes.set(tc.toolCallId, Date.now());
               toolCount++;
+              slog.info(`tool_call: tool=${toolName} id=${tc.toolCallId} inputKeys=[${input ? Object.keys(input) : "none"}]`);
 
               if (toolName === "TodoWrite" && input?.todos) {
                 const todos = input.todos as Array<Record<string, unknown>>;
@@ -680,6 +681,7 @@ export class FeishuConnector implements Connector {
               if (tc.status === "completed" || tc.status === "failed") {
                 const startTime = toolStartTimes.get(tc.toolCallId);
                 const durationMs = startTime ? Date.now() - startTime : undefined;
+                slog.info(`tool_call_update(${tc.status}): tool=${toolName} id=${tc.toolCallId} duration=${durationMs ?? "?"}ms hasRawInput=${!!tc.rawInput}`);
                 toolStartTimes.delete(tc.toolCallId);
                 acpToolNames.delete(tc.toolCallId);
                 seenInputs.delete(tc.toolCallId);
@@ -726,7 +728,9 @@ export class FeishuConnector implements Connector {
                   if (pendingEntry && !pendingEntry.stepAdded) {
                     pendingEntry.input = input;
                     pendingEntry.stepAdded = true;
-                    const stepDesc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
+                    const inputSummary = formatToolInputSummary(toolName, input);
+                    const stepDesc = `${toolName} ${inputSummary}`.trim();
+                    slog.info(`addStep(in-progress): tool=${toolName} id=${tc.toolCallId} summary="${inputSummary.slice(0, 80)}" desc="${stepDesc.slice(0, 80)}"`);
                     session.addStep(toolName, stepDesc);
                     if (planTasks.length === 0 && activeAgents.length === 0) {
                       await session.updateStatus(formatToolStatus(toolName, input));
