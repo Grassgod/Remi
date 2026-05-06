@@ -159,7 +159,7 @@ export function buildFinalCard(opts: {
       const omitted = Math.max(0, entries.length - MAX_VISIBLE_STEPS);
       const visibleEntries = omitted > 0 ? entries.slice(-MAX_VISIBLE_STEPS) : entries;
       if (omitted > 0) {
-        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps*</font>` });
+        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
       }
       for (const entry of visibleEntries) {
         if (entry.thinkingBefore?.trim()) panelElements.push(buildThinkingDiv(entry.thinkingBefore));
@@ -172,7 +172,7 @@ export function buildFinalCard(opts: {
       const omitted = Math.max(0, steps.length - MAX_VISIBLE_STEPS);
       const visibleSteps = omitted > 0 ? steps.slice(-MAX_VISIBLE_STEPS) : steps;
       if (omitted > 0) {
-        panelElements.push({ tag: "markdown", content: `<font color='grey'>*+${omitted} earlier steps*</font>` });
+        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
       }
       for (const step of visibleSteps) panelElements.push(buildStepDiv(step.tool, step.desc));
     } else if (opts.thinking) {
