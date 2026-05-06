@@ -1145,30 +1145,6 @@ export class FeishuStreamingSession {
     } catch (e: any) {
       const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
       this.log(`Final card patch failed: ${String(e)} ${detail}`);
-      // Fallback: rebuild with lightweight step divs only (no nested collapsible_panel)
-      try {
-        const fallbackCard = buildFinalCard({
-          text,
-          thinking: thinkingText,
-          toolEntries: undefined, // force lightweight mode
-          steps: this._steps.length > 0 ? this._steps : undefined,
-          trailingThinking,
-          toolCount,
-          stats,
-          mentionOpenId,
-          sessionId,
-          askQuestions,
-          planReview,
-          nameSuffix: this._nameSuffix,
-        });
-        await this.client.im.message.patch({
-          path: { message_id: this.state.messageId },
-          data: { content: JSON.stringify(fallbackCard) },
-        });
-        this.log(`Fallback card patch succeeded`);
-      } catch (e2) {
-        this.log(`Fallback card patch also failed: ${String(e2)}`);
-      }
     }
 
     this.log(`Closed streaming: cardId=${this.state.cardId}`);
