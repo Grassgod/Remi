@@ -35,7 +35,7 @@ export function registerPendingAction(
   questions?: Array<{ question: string; options: Array<{ label: string }> }>,
   chatId?: string,
 ): string {
-  const actionId = `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const actionId = `a${Date.now().toString(36)}`;
 
   const timeoutTimer = setTimeout(() => {
     const action = pendingActions.get(actionId);

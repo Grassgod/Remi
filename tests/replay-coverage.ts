@@ -131,16 +131,10 @@ function processFixture(filePath: string): CoverageResult {
         handled[su] = (handled[su] ?? 0) + 1;
         break;
       case "plan":
-        unhandled[su] = (unhandled[su] ?? 0) + 1;
-        break;
       case "current_mode_update":
-        unhandled[su] = (unhandled[su] ?? 0) + 1;
-        break;
       case "config_option_update":
-        unhandled[su] = (unhandled[su] ?? 0) + 1;
-        break;
       case "session_info_update":
-        unhandled[su] = (unhandled[su] ?? 0) + 1;
+        handled[su] = (handled[su] ?? 0) + 1;
         break;
       case "available_commands_update":
         unhandled[su] = (unhandled[su] ?? 0) + 1;

@@ -1,0 +1,28 @@
+[
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"usage_update","used":5000,"size":200000}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Let me analyze the code structure first."}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call","toolCallId":"tc_read_1","title":"Read src/config.ts","rawInput":{},"_meta":{"claudeCode":{"toolName":"Read"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_read_1","status":"in_progress","title":"Read src/config.ts","rawInput":{"file_path":"src/config.ts"},"_meta":{"claudeCode":{"toolName":"Read"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_read_1","status":"completed","_meta":{"claudeCode":{"toolName":"Read"}}}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"_permission_request","type":"tool_approval","toolName":"Bash","inputSummary":"`$ rm -rf node_modules && bun install`"}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Good, the user approved. Now I'll run the command."}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call","toolCallId":"tc_bash_1","title":"Terminal","rawInput":{},"_meta":{"claudeCode":{"toolName":"Bash"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_bash_1","status":"in_progress","title":"rm -rf node_modules && bun install","rawInput":{"command":"rm -rf node_modules && bun install","description":"Reinstall dependencies"},"content":[{"type":"terminal","terminalId":"tc_bash_1"}],"_meta":{"claudeCode":{"toolName":"Bash"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_bash_1","status":"completed","_meta":{"claudeCode":{"toolName":"Bash"}}}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"_permission_request","type":"ask_question","questions":[{"question":"项目使用哪种包管理器？","options":[{"label":"npm","description":"Node.js 默认"},{"label":"yarn","description":"Facebook 出品"},{"label":"pnpm","description":"高效磁盘利用"},{"label":"bun","description":"速度最快"}]}]}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"The user chose bun. Let me check the plan."}}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"_permission_request","type":"plan_review","planContent":"## Refactoring Plan\n\n1. Split config.ts into modules\n2. Add type validation\n3. Migrate env var reading\n4. Add unit tests\n5. Update documentation"}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Plan approved. Starting implementation."}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call","toolCallId":"tc_edit_1","title":"Edit src/config.ts","rawInput":{},"_meta":{"claudeCode":{"toolName":"Edit"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_edit_1","status":"in_progress","title":"Edit src/config.ts","rawInput":{"file_path":"src/config.ts","old_string":"const x = 1;","new_string":"const x = 2;"},"_meta":{"claudeCode":{"toolName":"Edit"}}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_edit_1","status":"completed","_meta":{"claudeCode":{"toolName":"Edit"}}}}},
+
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Refactoring complete! I've split the config module, added validation, and updated the tests."}}}},
+  {"method":"session/update","params":{"sessionId":"perm-demo","update":{"sessionUpdate":"usage_update","used":25000,"size":200000}}}
+]

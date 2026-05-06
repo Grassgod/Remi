@@ -17,6 +17,7 @@ import { createFeishuClient } from "../src/connectors/feishu/client.js";
 import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
 import { createAdapter } from "../src/providers/acp/adapters/index.js";
 import { formatToolInputSummary } from "../src/connectors/feishu/tool-formatters.js";
+import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../src/connectors/feishu/permission-ui.js";
 import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../src/providers/acp/protocol.js";
 
 // ── Parse args ──────────────────────────────────────────────
@@ -217,6 +218,44 @@ async function main() {
           }
         }
         break;
+      }
+    }
+
+    // Handle synthetic permission request events in fixtures
+    if ((update as any).sessionUpdate === "_permission_request") {
+      const perm = update as any;
+      const permType = perm.type as string; // "tool_approval" | "ask_question" | "plan_review"
+      const actionId = `r${Date.now().toString(36)}`;
+      const showDuration = speed === Infinity ? 3000 : Math.round(8000 / speed);
+
+      if (permType === "tool_approval") {
+        const form = buildToolApprovalForm(actionId, perm.toolName ?? "Bash", perm.inputSummary ?? "`$ echo test`");
+        await session.updateStatus(`Waiting for ${perm.toolName ?? "Bash"} approval...`);
+        await session.appendPermissionForm(form);
+        console.log(`  🔒 permission: tool approval (${perm.toolName ?? "Bash"}) — showing ${showDuration}ms`);
+        await Bun.sleep(showDuration);
+        await session.removePermissionForm(actionId);
+        await session.updateStatus("Running...");
+        console.log(`  ✅ permission: approved (simulated)`);
+      } else if (permType === "ask_question") {
+        const questions = perm.questions ?? [{ question: "Continue?", options: [{ label: "Yes" }, { label: "No" }] }];
+        const form = buildAskQuestionForm(actionId, { questions });
+        await session.updateStatus("Waiting for input...");
+        await session.appendPermissionForm(form);
+        console.log(`  💬 permission: ask question — showing ${showDuration}ms`);
+        await Bun.sleep(showDuration);
+        await session.removePermissionForm(actionId);
+        await session.updateStatus("Running...");
+        console.log(`  ✅ permission: answered (simulated)`);
+      } else if (permType === "plan_review") {
+        const form = buildPlanReviewForm(actionId, perm.planContent ?? "1. Step one\n2. Step two");
+        await session.updateStatus("Waiting for approval...");
+        await session.appendPermissionForm(form);
+        console.log(`  📋 permission: plan review — showing ${showDuration}ms`);
+        await Bun.sleep(showDuration);
+        await session.removePermissionForm(actionId);
+        await session.updateStatus("Running...");
+        console.log(`  ✅ permission: approved (simulated)`);
       }
     }
 

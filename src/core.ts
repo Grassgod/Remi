@@ -264,7 +264,14 @@ export class Remi {
 
     try {
       const existingDisplayName = sessDb.getDisplayName(sessionKey);
-      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), { sessionId: existingSessionId, displayName: existingDisplayName });
+      const groupConfig = this._getGroupConfig(msg.chatId);
+      const sessRow = sessDb.getSession(sessionKey);
+      const providerName = groupConfig?.provider ?? sessRow?.provider ?? null;
+      const provider = this._getProvider(providerName);
+      const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
+        ? (handler: any) => (provider as any).setPermissionHandler(handler)
+        : undefined;
+      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), { sessionId: existingSessionId, displayName: existingDisplayName, setPermissionHandler: setPermHandler });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));

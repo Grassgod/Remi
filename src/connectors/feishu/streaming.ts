@@ -16,6 +16,7 @@ import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
 import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, formatToolInputSummary } from "./tool-formatters.js";
+import type { PermissionFormElements } from "./permission-ui.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -400,6 +401,9 @@ export class FeishuStreamingSession {
   private _fullThinking = "";
   private _nameSuffix: string | undefined;
 
+  // Active permission form (for degraded mode card rebuild)
+  private _pendingPermission: PermissionFormElements | null = null;
+
   constructor(
     client: Client,
     creds: Credentials,
@@ -716,6 +720,13 @@ export class FeishuStreamingSession {
 
     elements.push(...buildContentElements(this.state?.currentText || "..."));
 
+    if (this._pendingPermission) {
+      const pf = this._pendingPermission;
+      elements.push(pf.hr);
+      if (pf.panel) elements.push(pf.panel);
+      elements.push(pf.form);
+    }
+
     return {
       schema: "2.0",
       header: buildCardHeader(undefined, undefined, this._nameSuffix),
@@ -745,6 +756,74 @@ export class FeishuStreamingSession {
     if (this._degradedFlushTimer) {
       clearTimeout(this._degradedFlushTimer);
       this._degradedFlushTimer = null;
+    }
+  }
+
+  // ── Permission form in streaming card ──────────────────────
+
+  async appendPermissionForm(form: PermissionFormElements): Promise<void> {
+    this._pendingPermission = form;
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+      return;
+    }
+    const elements = [form.hr, ...(form.panel ? [form.panel] : []), form.form];
+    for (const el of elements) {
+      await new Promise<void>((resolve) => {
+        this.queue = this.queue
+          .then(() => this._appendElementAfter("content", el))
+          .then(() => resolve());
+      });
+    }
+  }
+
+  async removePermissionForm(actionId: string): Promise<void> {
+    this._pendingPermission = null;
+    if (this._degraded) {
+      this._scheduleDegradedFlush();
+      return;
+    }
+    const ids = [`perm_hr_${actionId}`, `perm_plan_${actionId}`, `perm_${actionId}`];
+    for (const id of ids) {
+      this.queue = this.queue.then(() => this._deleteElement(id).catch(() => {}));
+    }
+  }
+
+  private async _appendElementAfter(
+    afterElementId: string,
+    element: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.state || this.closed) return;
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    const seq = this.state.sequence;
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "insert_after",
+            target_element_id: afterElementId,
+            sequence: seq,
+            elements: JSON.stringify([element]),
+          }),
+        },
+      );
+      if (res.ok) {
+        this._consecutiveFailures = 0;
+      } else {
+        const body = await res.text().catch(() => "");
+        this.log(`InsertAfter ${afterElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+        this._onElementApiFailed();
+      }
+    } catch (e) {
+      this.log(`InsertAfter ${afterElementId} failed: ${String(e)}`);
+      this._onElementApiFailed();
     }
   }
 
@@ -818,6 +897,10 @@ export class FeishuStreamingSession {
         }, delay);
       }
     }
+  }
+
+  getLastStatus(): string {
+    return this._lastStatusText;
   }
 
   /** Register a custom renderer for heartbeat status (e.g. plan/agent mode). */

@@ -9,7 +9,7 @@
 import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse, ProviderEvent } from "../../providers/base.js";
-import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "../../providers/acp/protocol.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock, RequestPermissionParams, PermissionOutcome } from "../../providers/acp/protocol.js";
 import { createAdapter } from "../../providers/acp/adapters/index.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
@@ -28,6 +28,7 @@ import {
   formatToolInputSummary,
 } from "./tool-formatters.js";
 import { registerPendingAction, rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
+import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "./permission-ui.js";
 import {
   startWebSocketListener,
   flushDedupCacheSync,
@@ -565,6 +566,69 @@ export class FeishuConnector implements Connector {
       const seenInputs = new Set<string>();
       const acpToolNames = new Map<string, string>();
 
+      // Register permission handler for interactive approval
+      if (meta.setPermissionHandler) {
+        meta.setPermissionHandler(async (params: RequestPermissionParams): Promise<PermissionOutcome> => {
+          const askData = acpAdapter.extractAskUserQuestion(params.toolCall);
+          const isExitPlan = acpAdapter.isExitPlanMode(params.toolCall);
+          const toolName = acpAdapter.resolveToolName(params.toolCall);
+          const savedStatus = session.getLastStatus();
+
+          const result = await new Promise<unknown>((resolve, reject) => {
+            const questions = askData
+              ? askData.questions.map((q) => ({ question: q.question, options: q.options }))
+              : undefined;
+            const actionId = registerPendingAction(resolve, reject, questions, chatId);
+
+            let form;
+            if (askData) {
+              form = buildAskQuestionForm(actionId, askData);
+              session.updateStatus("Waiting for input...");
+            } else if (isExitPlan) {
+              const planContent = typeof params.toolCall.rawInput === "object" && params.toolCall.rawInput
+                ? String((params.toolCall.rawInput as any).planContent ?? "")
+                : undefined;
+              form = buildPlanReviewForm(actionId, planContent || undefined);
+              session.updateStatus("Waiting for approval...");
+            } else {
+              const inputSummary = formatToolInputSummary(toolName, acpAdapter.extractToolInput(params.toolCall) ?? undefined);
+              form = buildToolApprovalForm(actionId, toolName, inputSummary);
+              session.updateStatus(`Waiting for ${toolName} approval...`);
+            }
+
+            slog.info(`permission request: type=${askData ? "ask" : isExitPlan ? "plan" : "tool"} tool=${toolName} actionId=${actionId}`);
+            session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm failed: ${e}`));
+          });
+
+          // User responded — clean up form
+          const actionIdPrefix = "act_";
+          // Find actionId from the form elements
+          const formId = (typeof result === "object" && result && "_actionId" in (result as any))
+            ? String((result as any)._actionId)
+            : undefined;
+          // Remove form elements (best-effort, may already be gone if /esc)
+          if (formId) {
+            await session.removePermissionForm(formId).catch(() => {});
+          }
+          await session.updateStatus(savedStatus || "Running...");
+
+          if (askData) {
+            const allowOpt = params.options.find((o) => o.kind === "allow_once" || o.kind === "allow_always");
+            return { outcome: "selected", optionId: allowOpt?.optionId ?? params.options[0]?.optionId ?? "" };
+          }
+
+          const resultStr = typeof result === "object" && result ? JSON.stringify(result) : String(result ?? "");
+          const approved = resultStr.includes("approve") || resultStr.includes("Approve") || resultStr.includes("Allow") || resultStr.includes("allow");
+          if (approved) {
+            const allowOpt = params.options.find((o) => o.kind === "allow_once" || o.kind === "allow_always");
+            return { outcome: "selected", optionId: allowOpt?.optionId ?? params.options[0]?.optionId ?? "" };
+          }
+          const denyOpt = params.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always");
+          if (denyOpt) return { outcome: "selected", optionId: denyOpt.optionId };
+          return { outcome: "cancelled" };
+        });
+      }
+
       try {
         try {
         for await (const event of stream) {
@@ -745,6 +809,39 @@ export class FeishuConnector implements Connector {
               if (u.used != null) usageTokens = u.used;
               if (u.size != null) usageContextWindow = u.size;
               if (u.cost?.amount != null) usageCost = u.cost.amount;
+              break;
+            }
+            case "plan": {
+              const planEvent = event as any;
+              if (Array.isArray(planEvent.entries)) {
+                planTasks.length = 0;
+                for (const entry of planEvent.entries) {
+                  planTasks.push({
+                    id: String(entry.id ?? planTasks.length),
+                    subject: String(entry.content ?? ""),
+                    status: String(entry.status ?? "pending"),
+                  });
+                }
+                syncHeartbeatRenderer();
+                await session.updateStatus(renderPlanStatus(planTasks, session.getElapsed()));
+              }
+              break;
+            }
+            case "current_mode_update": {
+              const modeEvent = event as any;
+              slog.info(`mode update: ${modeEvent.currentModeId}`);
+              break;
+            }
+            case "session_info_update": {
+              const infoEvent = event as any;
+              if (infoEvent.title) {
+                slog.info(`session info: title="${infoEvent.title}"`);
+              }
+              break;
+            }
+            case "config_option_update": {
+              const configEvent = event as any;
+              slog.info(`config update: ${configEvent.id}=${JSON.stringify(configEvent.value)?.slice(0, 100)}`);
               break;
             }
           }
