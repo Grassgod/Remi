@@ -708,7 +708,7 @@ export class FeishuConnector implements Connector {
                   entry.status = "done";
                   entry.durationMs = durationMs;
                   entry.resultPreview = resultPreview;
-                  if (resolvedInput) entry.input = resolvedInput;
+                  if (resolvedInput && !entry.input) entry.input = resolvedInput;
                   if (!entry.stepAdded) {
                     entry.stepAdded = true;
                     const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
