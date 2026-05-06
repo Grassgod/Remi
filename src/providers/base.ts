@@ -24,16 +24,8 @@ export type StreamEvent =
   | { kind: "error"; error: string; code?: string }
   | { kind: "result"; response: AgentResponse };
 
-/**
- * Unified stream event type: ACP SessionUpdate (pass-through) + Remi synthetic events.
- * Discriminated on `sessionUpdate` field. ACP events use standard names,
- * Remi extensions use `remi:` prefix.
- */
-export type ProviderEvent =
-  | import("./acp/protocol.js").SessionUpdate
-  | { sessionUpdate: "remi:result"; response: AgentResponse }
-  | { sessionUpdate: "remi:error"; error: string; code?: string }
-  | { sessionUpdate: "remi:rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string };
+/** Stream event type: pure ACP SessionUpdate. */
+export type ProviderEvent = import("./acp/protocol.js").SessionUpdate;
 
 /** Custom tool that the agent can call, handled within Remi. */
 export interface ToolDefinition {
@@ -95,11 +87,14 @@ export interface Provider {
     options?: SendOptions,
   ): Promise<AgentResponse>;
 
-  /** Stream events in real-time. Optional — connectors fall back to send() if absent. */
+  /** Stream ACP events. Generator ends naturally when prompt completes, throws on error. */
   sendStream?(
     message: string,
     options?: SendOptions,
   ): AsyncGenerator<ProviderEvent>;
+
+  /** Get the AgentResponse from the last completed sendStream call. */
+  getLastResponse?(): AgentResponse | null;
 
   healthCheck(): Promise<boolean>;
 }

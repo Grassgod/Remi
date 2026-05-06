@@ -42,12 +42,6 @@ async function main() {
       } else if (su === "tool_call_update" && (event as any).status === "completed") {
         const e = event as any;
         console.log(`  tool_done: ${e.toolCallId}`);
-      } else if (su === "remi:result") {
-        gotResult = true;
-        const r = (event as any).response;
-        console.log(`\n  result: session=${r.sessionId} model=${r.model} cost=$${r.costUsd} duration=${r.durationMs}ms`);
-      } else if (su === "remi:error") {
-        console.log(`\n  ERROR: ${(event as any).error}`);
       } else {
         // usage_update, plan, etc.
       }
@@ -58,6 +52,11 @@ async function main() {
 
   clearTimeout(timeout);
 
+  gotResult = true; // stream ended naturally = success
+  const lastResponse = provider.getLastResponse?.();
+  if (lastResponse) {
+    console.log(`\n  result: session=${lastResponse.sessionId} model=${lastResponse.model} cost=$${lastResponse.costUsd}`);
+  }
   console.log(`\nEvents: ${eventCount}, result: ${gotResult}`);
   console.log(`Text: "${text.slice(0, 100)}"`);
 

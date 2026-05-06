@@ -61,6 +61,7 @@ export class ClaudeCLIProvider implements Provider {
   private _tools = new Map<string, ToolDefinition>();
   private _preHooks: PreToolHook[] = [];
   private _postHooks: PostToolHook[] = [];
+  private _lastResponse: AgentResponse | null = null;
 
   private static DEFAULT_CHAT_ID = "__default__";
   private static IDLE_TIMEOUT_MS = 10 * 60 * 1000;    // 10 minutes
@@ -88,6 +89,10 @@ export class ClaudeCLIProvider implements Provider {
 
   get name(): string {
     return "claude_cli";
+  }
+
+  getLastResponse(): AgentResponse | null {
+    return this._lastResponse;
   }
 
   // ── Tool registration ─────────────────────────────────────
@@ -186,8 +191,7 @@ export class ClaudeCLIProvider implements Provider {
       // Check wall-clock deadline
       if (Date.now() > deadline) {
         _log.error(`Stream exceeded ${deadlineMs / 1000}s deadline, aborting`);
-        yield { sessionUpdate: "remi:error" as const, error: `Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).` };
-        break;
+        throw new Error(`Task timed out (exceeded ${Math.round(deadlineMs / 60_000)} minute limit).`);
       }
 
       if (msg.kind === "system") {
@@ -216,7 +220,7 @@ export class ClaudeCLIProvider implements Provider {
       } else if (msg.kind === "rate_limit") {
         const rl = msg as RateLimitEvent;
         _log.debug(`yield rate_limit: ${rl.retryAfterMs}ms type=${rl.rateLimitType} status=${rl.status}`);
-        yield { sessionUpdate: "remi:rate_limit" as const, retryAfterMs: rl.retryAfterMs, rateLimitType: rl.rateLimitType, resetsAt: rl.resetsAt, status: rl.status };
+        // Rate limit: log only, not part of ACP event stream
       } else if (msg.kind === "error") {
         const err = msg as ErrorEvent;
         _log.debug(`yield error: ${err.error}`);
@@ -226,32 +230,29 @@ export class ClaudeCLIProvider implements Provider {
           this._lastUsed.delete(key);
           _log.warn(`Evicted hung process from pool: chatId="${key}"`);
         }
-        yield { sessionUpdate: "remi:error" as const, error: err.error, code: err.code };
+        throw new Error(err.error);
       } else if (msg.kind === "result") {
         gotResult = true;
         const resultMsg = msg as ResultMessage;
         const fullText = textParts.join("");
         const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
-        yield {
-          sessionUpdate: "remi:result" as const,
-          response: createAgentResponse({
-            text: fullText || resultMsg.result,
-            thinking,
-            sessionId: resultMsg.sessionId,
-            requestId: resultMsg.requestId,
-            costUsd: resultMsg.costUsd,
-            model: resultMsg.model || sessionModel || null,
-            inputTokens: resultMsg.inputTokens,
-            outputTokens: resultMsg.outputTokens,
-            cacheCreateInputTokens: resultMsg.cacheCreateInputTokens,
-            cacheReadInputTokens: resultMsg.cacheReadInputTokens,
-            contextWindow: resultMsg.contextWindow,
-            durationMs: resultMsg.durationMs,
-            toolCalls,
-            metadata: { messageIds: consumeMessageIds() },
-            permissionDenials: resultMsg.permissionDenials.length > 0 ? resultMsg.permissionDenials : undefined,
-          }),
-        };
+        this._lastResponse = createAgentResponse({
+          text: fullText || resultMsg.result,
+          thinking,
+          sessionId: resultMsg.sessionId,
+          requestId: resultMsg.requestId,
+          costUsd: resultMsg.costUsd,
+          model: resultMsg.model || sessionModel || null,
+          inputTokens: resultMsg.inputTokens,
+          outputTokens: resultMsg.outputTokens,
+          cacheCreateInputTokens: resultMsg.cacheCreateInputTokens,
+          cacheReadInputTokens: resultMsg.cacheReadInputTokens,
+          contextWindow: resultMsg.contextWindow,
+          durationMs: resultMsg.durationMs,
+          toolCalls,
+          metadata: { messageIds: consumeMessageIds() },
+          permissionDenials: resultMsg.permissionDenials.length > 0 ? resultMsg.permissionDenials : undefined,
+        });
       }
     }
 
@@ -261,10 +262,7 @@ export class ClaudeCLIProvider implements Provider {
       const fullText = accumulated || "[Task ended without result — the CLI process may have crashed or timed out]";
       const thinking = thinkingParts.length > 0 ? thinkingParts.join("") : null;
       _log.warn(`Stream ended without result event, synthesizing fallback (text=${accumulated.length} chars, thinking=${(thinking ?? "").length} chars, tools=${toolCalls.length})`);
-      yield {
-        sessionUpdate: "remi:result" as const,
-        response: createAgentResponse({ text: fullText, thinking, toolCalls }),
-      };
+      this._lastResponse = createAgentResponse({ text: fullText, thinking, toolCalls });
     }
     } finally {
       this._activeStreaming.delete(poolKey);

@@ -93,6 +93,7 @@ export class AcpProvider implements Provider {
   private _activeStreaming = new Set<string>();
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
+  private _lastResponse: AgentResponse | null = null;
 
   constructor(options: AcpProviderOptions = {}) {
     this._options = options;
@@ -109,37 +110,27 @@ export class AcpProvider implements Provider {
     this._permissionHandler = handler;
   }
 
+  getLastResponse(): AgentResponse | null {
+    return this._lastResponse;
+  }
+
   // ── Provider interface ─────────────────────────────────────────
 
   async send(message: string, options?: SendOptions): Promise<AgentResponse> {
     let text = "";
     let thinking = "";
-    let lastResponse: AgentResponse | null = null;
 
     for await (const event of this.sendStream(message, options)) {
-      switch (event.sessionUpdate) {
-        case "agent_message_chunk": {
-          const blocks = Array.isArray(event.content) ? event.content : [event.content];
-          for (const b of blocks) {
-            if (b.type === "text" && b.text) text += b.text;
-          }
-          break;
-        }
-        case "agent_thought_chunk": {
-          const blocks = Array.isArray(event.content) ? event.content : [event.content];
-          for (const b of blocks) {
-            if (b.type === "text" && b.text) thinking += b.text;
-          }
-          break;
-        }
-        case "remi:result":
-          lastResponse = event.response;
-          break;
+      if (event.sessionUpdate === "agent_message_chunk") {
+        const blocks = Array.isArray(event.content) ? event.content : [event.content];
+        for (const b of blocks) { if (b.type === "text" && b.text) text += b.text; }
+      } else if (event.sessionUpdate === "agent_thought_chunk") {
+        const blocks = Array.isArray(event.content) ? event.content : [event.content];
+        for (const b of blocks) { if (b.type === "text" && b.text) thinking += b.text; }
       }
     }
 
-    if (lastResponse) return lastResponse;
-    return createAgentResponse({ text, thinking: thinking || null });
+    return this._lastResponse ?? createAgentResponse({ text, thinking: thinking || null });
   }
 
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
@@ -149,9 +140,11 @@ export class AcpProvider implements Provider {
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
     entry.promptState = createPromptState();
+    this._lastResponse = null;
 
     const eventQueue: ProviderEvent[] = [];
     let promptDone = false;
+    let promptError: Error | null = null;
     let resolveWaiting: (() => void) | null = null;
 
     const pushEvent = (evt: ProviderEvent) => {
@@ -159,65 +152,51 @@ export class AcpProvider implements Provider {
       resolveWaiting?.();
     };
 
-    // Subscribe to session updates — yield raw ACP events directly
     const originalOnUpdate = entry.client["_options"].onSessionUpdate;
     entry.client["_options"].onSessionUpdate = (notification: SessionNotification) => {
       if (notification.sessionId !== entry.acpSessionId) return;
       const update = notification.update;
-
-      // Track usage for AgentResponse
       if (update.sessionUpdate === "usage_update") {
         accumulateUsage(entry.promptState, update);
       }
-
-      // Track completed tool calls for AgentResponse metadata
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
         if (status === "completed" || status === "failed") {
           entry.promptState.completedToolCount++;
         }
       }
-
       pushEvent(update);
     };
 
-    // Start prompt (runs in background)
     const promptStartMs = Date.now();
     entry.client
       .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
       .then((result: PromptResult) => {
         promptDone = true;
-        const elapsed = ((Date.now() - promptStartMs) / 1000).toFixed(1);
-        if (process.env.REMI_DEBUG) console.error(`[AcpProvider] prompt completed in ${elapsed}s: stopReason=${result.stopReason}`);
+        this._lastResponse = buildAgentResponse(entry, result);
         if (result.stopReason === "cancelled" || result.stopReason === "interrupted") {
-          pushEvent({ sessionUpdate: "remi:error", error: "Cancelled", code: "cancelled" });
-        } else {
-          const response = buildAgentResponse(entry, result);
-          pushEvent({ sessionUpdate: "remi:result", response });
+          promptError = new Error("Cancelled");
         }
+        resolveWaiting?.();
       })
       .catch((err: Error) => {
         promptDone = true;
-        const elapsed = ((Date.now() - promptStartMs) / 1000).toFixed(1);
-        console.error(`[AcpProvider] prompt FAILED after ${elapsed}s: ${err.message}`);
-        pushEvent({ sessionUpdate: "remi:error", error: err.message });
+        promptError = err;
+        console.error(`[AcpProvider] prompt FAILED after ${((Date.now() - promptStartMs) / 1000).toFixed(1)}s: ${err.message}`);
+        resolveWaiting?.();
       });
 
-    // Yield events as they arrive
     try {
       while (true) {
         while (eventQueue.length > 0) {
-          const evt = eventQueue.shift()!;
-          yield evt;
-          if (evt.sessionUpdate === "remi:result" || evt.sessionUpdate === "remi:error") return;
+          yield eventQueue.shift()!;
         }
 
         if (promptDone) break;
 
         if (options?.signal?.aborted) {
           await entry.client.cancel(entry.acpSessionId);
-          yield { sessionUpdate: "remi:error" as const, error: "Cancelled", code: "cancelled" };
-          return;
+          throw new Error("Cancelled");
         }
 
         await new Promise<void>((resolve) => {
@@ -231,6 +210,8 @@ export class AcpProvider implements Provider {
       this._activeStreaming.delete(chatId);
       entry.lastUsed = Date.now();
     }
+
+    if (promptError) throw promptError;
   }
 
   async healthCheck(): Promise<boolean> {

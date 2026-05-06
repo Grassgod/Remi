@@ -488,9 +488,9 @@ export class FeishuConnector implements Connector {
     incoming: IncomingMessage,
     chatId: string,
     threadId: string,
-  ): Promise<import("../../providers/base.js").AgentResponse | null> {
+  ): Promise<void> {
     const sessionKey = `${chatId}:thread:${threadId}`;
-    return this._handleStreaming(incoming, chatId, sessionKey, threadId);
+    await this._handleStreaming(incoming, chatId, sessionKey, threadId);
   }
 
   private async _handleStreaming(
@@ -499,7 +499,7 @@ export class FeishuConnector implements Connector {
     sessionKey: string,
     replyToMessageId?: string,
     _log?: import("../../logger.js").Logger,
-  ): Promise<import("../../providers/base.js").AgentResponse | null> {
+  ): Promise<void> {
     const slog = _log ?? log; // streaming-scoped logger
     const creds = {
       appId: this._config.appId,
@@ -516,13 +516,16 @@ export class FeishuConnector implements Connector {
 
     let thinkingText = "";
     let contentText = "";
-    let finalResponse: AgentResponse | null = null;
+    // finalResponse removed — stats built from usage_update events directly
     let toolCount = 0;
 
     // Collect tool entries for final card nested collapsible panels
     const toolEntries: ToolEntry[] = [];
     let currentThinkingSegment = "";
     let trailingThinkingFlushed = false;
+    let usageTokens = 0;
+    let usageContextWindow: number | null = null;
+    let usageCost = 0;
 
     // Plan task tracking for status bar
     const planTasks: PlanTask[] = [];
@@ -563,6 +566,7 @@ export class FeishuConnector implements Connector {
       const acpToolNames = new Map<string, string>();
 
       try {
+        try {
         for await (const event of stream) {
           if (session.abortSignal.aborted) {
             slog.warn("Safety timeout aborted stream consumption");
@@ -732,121 +736,40 @@ export class FeishuConnector implements Connector {
               }
               break;
             }
-            case "remi:rate_limit":
-              if (event.status !== "allowed") {
-                const secs = ((event.retryAfterMs) / 1000).toFixed(0);
-                await session.updateStatus(`⚠️ Rate limited, retrying in ${secs}s...`);
-                session.addStep("_default", `⚠️ Rate limited, retrying in ${secs}s`);
-              }
+            case "usage_update": {
+              const u = event as any;
+              if (u.used != null) usageTokens = u.used;
+              if (u.size != null) usageContextWindow = u.size;
+              if (u.cost?.amount != null) usageCost = u.cost.amount;
               break;
-            case "remi:error":
-              contentText += `\n\n**Error:** ${event.error}\n`;
-              await session.update(contentText);
-              break;
-            case "remi:result":
-              finalResponse = event.response;
-              slog.info(`remi:result received: tools=${toolCount} thinking=${thinkingText.length}b content=${contentText.length}b`);
-              break;
-          }
-        }
-
-        slog.info(`Stream ended: gotResult=${!!finalResponse} tools=${toolCount} elapsed=${session.getElapsed()}s`);
-
-        // Close streaming card with final content + stats + tool entries
-        // @mention is embedded in the final card for group chats (single message)
-        const stats = finalResponse ? this._formatStats(finalResponse) : null;
-        const mentionOpenId: string | undefined = undefined;
-
-        // Extract permission_denials and register card actions for AskUserQuestion / ExitPlanMode
-        let askQuestions: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> } | undefined;
-        let planReviewAction: { actionId: string; planContent?: string } | undefined;
-        const denials = finalResponse?.permissionDenials;
-
-        if (denials && denials.length > 0) {
-          for (const denial of denials) {
-            if (denial.toolName === "AskUserQuestion" && denial.toolInput?.questions) {
-              const questions = denial.toolInput.questions as typeof askQuestions extends { questions: infer Q } | undefined ? Q : never;
-              // Register action: on resolve, send answers as new user message to CLI
-              // Capture replyToMessageId for group chat thread context
-              const capturedReplyTo = replyToMessageId;
-              const capturedSessionKey = sessionKey;
-              const actionId = registerPendingAction(
-                (answers) => {
-                  const answerMap = answers as Record<string, string>;
-                  const lines = Object.entries(answerMap).map(([q, a], i) => `${i + 1}. ${q}: ${a}`);
-                  const answerText = `用户回答了之前的问题:\n${lines.join("\n")}`;
-                  slog.info(`AskUserQuestion answered, sending as new streaming message`);
-                  // Use full _handleStreaming to render the CLI response in a new card
-                  this._handleStreaming(
-                    { ...incoming, text: answerText },
-                    chatId,
-                    capturedSessionKey,
-                    capturedReplyTo,
-                    _log,
-                  ).catch((e) => slog.error(`Failed to relay AskUserQuestion answer: ${e}`));
-                },
-                () => {},
-                questions,
-                chatId,
-              );
-              askQuestions = { actionId, questions };
-              slog.info(`Embedded AskUserQuestion form: actionId=${actionId}`);
-            } else if (denial.toolName === "ExitPlanMode") {
-              const capturedReplyTo = replyToMessageId;
-              const capturedSessionKey = sessionKey;
-              const actionId = registerPendingAction(
-                (rawDecision) => {
-                  // Form submits { decision: "approved"|"rejected"|"feedback", feedback_text?: string }
-                  const formData = typeof rawDecision === "object" && rawDecision !== null
-                    ? rawDecision as Record<string, string>
-                    : { decision: String(rawDecision) };
-                  const d = formData.decision;
-                  const feedback = String(formData.feedback_text ?? "").trim();
-                  let decisionText: string;
-                  if (d === "approved") {
-                    decisionText = "Plan approved, please proceed.";
-                  } else if (d === "feedback" && feedback) {
-                    decisionText = `User has feedback on the plan:\n${feedback}\nPlease revise accordingly.`;
-                  } else if (d === "feedback") {
-                    decisionText = "User wants to give feedback but didn't write anything. Please ask what they'd like changed.";
-                  } else {
-                    decisionText = "Plan rejected. Please stop.";
-                  }
-                  slog.info(`ExitPlanMode answered: ${d}, feedback=${feedback.slice(0, 100)}`);
-                  this._handleStreaming(
-                    { ...incoming, text: decisionText },
-                    chatId,
-                    capturedSessionKey,
-                    capturedReplyTo,
-                    _log,
-                  ).catch((e) => slog.error(`Failed to relay ExitPlanMode decision: ${e}`));
-                },
-                () => {},
-                undefined,
-                chatId,
-              );
-              // Read plan file content to display before the approval form
-              const gcStore = new GroupConfigStore();
-              const gc = gcStore.getByChatId(chatId);
-              const planCwd = gc?.cwd || gc?.projectCwd || (incoming.metadata?.cwd as string) || undefined;
-              const planContent = readLatestPlanContent(planCwd);
-              planReviewAction = { actionId, planContent: planContent ?? undefined };
-              slog.info(`Embedded ExitPlanMode buttons: actionId=${actionId}, planContent=${planContent ? `${planContent.length} chars` : "none"}`);
             }
           }
         }
+      } catch (streamErr) {
+        slog.error(`Stream error: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
+        contentText += `\n\n**Error:** ${streamErr instanceof Error ? streamErr.message : String(streamErr)}\n`;
+      }
+
+        slog.info(`Stream ended: tools=${toolCount} elapsed=${session.getElapsed()}s`);
+
+        const stats = this._formatStreamStats(session.getElapsed(), usageTokens, usageContextWindow, toolCount);
+        const mentionOpenId: string | undefined = undefined;
+
+        // AskUserQuestion / ExitPlanMode: handled via ACP permission requests, not via stream events
+        const askQuestions = undefined;
+        const planReviewAction = undefined;
 
         slog.info(`Closing streaming card...`);
         const closeStart = Date.now();
         await session.close({
-          finalText: contentText || finalResponse?.text,
-          thinking: thinkingText || finalResponse?.thinking || null,
+          finalText: contentText || undefined,
+          thinking: thinkingText || null,
           toolEntries: toolEntries.length > 0 ? toolEntries : undefined,
           trailingThinking: currentThinkingSegment || undefined,
           toolCount: toolCount > 0 ? toolCount : undefined,
           stats,
           mentionOpenId,
-          sessionId: finalResponse?.sessionId,
+          sessionId: meta.sessionId,
           displayName: meta.displayName,
           askQuestions,
           planReview: planReviewAction,
@@ -867,7 +790,6 @@ export class FeishuConnector implements Connector {
       }
     });
 
-    return finalResponse;
   }
 
   /**
@@ -927,6 +849,20 @@ export class FeishuConnector implements Connector {
       parts.push(`${response.toolCalls.length} tools`);
     }
 
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
+
+  private _formatStreamStats(elapsedSec: number, usedTokens: number, contextWindow: number | null, toolCount: number): string | null {
+    const parts: string[] = [];
+    if (elapsedSec > 0) parts.push(`${elapsedSec.toFixed(1)}s`);
+    if (usedTokens > 0) {
+      const fmtN = (n: number) =>
+        n >= 1_000_000 ? `${Math.round(n / 1_000_000)}M` :
+        n >= 1_000 ? `${Math.round(n / 1_000)}k` : `${n}`;
+      const usedStr = fmtN(usedTokens);
+      parts.push(contextWindow ? `${usedStr}/${fmtN(contextWindow)}` : usedStr);
+    }
+    if (toolCount > 0) parts.push(`${toolCount} tools`);
     return parts.length > 0 ? parts.join(" · ") : null;
   }
 }

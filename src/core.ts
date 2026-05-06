@@ -285,18 +285,22 @@ export class Remi {
   private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<ProviderEvent> {
     const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
+    let resultResponse: AgentResponse | null = null;
+
     // Handle slash commands — use rawContent (without speaker prefix) for detection
     const rawContent = (msg.metadata?.rawContent as string) ?? msg.text;
     const cmdResponse = await this._tryCommand(rawContent, msg);
     if (cmdResponse) {
-      yield { sessionUpdate: "remi:result" as const, response: cmdResponse };
+      yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: cmdResponse.text }] };
+      resultResponse = cmdResponse;
       return;
     }
 
     // Handle report detail request
     const reportResponse = this._tryReportDetail(msg.text);
     if (reportResponse) {
-      yield { sessionUpdate: "remi:result" as const, response: reportResponse };
+      yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: reportResponse.text }] };
+      resultResponse = reportResponse;
       return;
     }
 
@@ -356,71 +360,63 @@ export class Remi {
     });
 
     _log.debug("starting provider.sendStream iteration");
-    let resultResponse: AgentResponse | null = null;
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
     let promptTooLong = false;
     let staleSession = false;
 
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
 
-    for await (const event of provider.sendStream(msg.text, streamOptions)) {
-      _log.debug(`received event: ${event.sessionUpdate}`);
+    try {
+      for await (const event of provider.sendStream(msg.text, streamOptions)) {
+        _log.debug(`received event: ${event.sessionUpdate}`);
+        yield event;
 
-      // Detect prompt-too-long: suppress and mark for auto-retry
-      if (
-        (event.sessionUpdate === "remi:error" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.error)) ||
-        (event.sessionUpdate === "remi:result" && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(event.response.text))
-      ) {
+        if (event.sessionUpdate === "tool_call") {
+          const tc = event as ToolCallUpdate;
+          const toolName = (tc._meta as any)?.claudeCode?.toolName ?? tc.title ?? "unknown";
+          toolCallMap.set(tc.toolCallId, { name: toolName, toolUseId: tc.toolCallId, input: tc.rawInput as Record<string, unknown> });
+          if (providerSpan) {
+            const toolSpan = providerSpan.context().startSpan(`tool.${toolName}`, {
+              "tool.name": toolName,
+              "tool.use_id": tc.toolCallId,
+              "tool.input": JSON.stringify(tc.rawInput ?? {}).slice(0, 4096),
+            });
+            toolSpans.set(tc.toolCallId, toolSpan);
+          }
+        } else if (event.sessionUpdate === "tool_call_update") {
+          const tc = event as ToolCallProgressUpdate;
+          if (tc.status === "completed" || tc.status === "failed") {
+            const existing = toolCallMap.get(tc.toolCallId);
+            if (existing) {
+              existing.resultPreview = tc.rawOutput ? String(tc.rawOutput).slice(0, 2048) : undefined;
+            }
+            const toolSpan = toolSpans.get(tc.toolCallId);
+            if (toolSpan) {
+              if (tc.rawOutput) toolSpan.setAttribute("tool.output", String(tc.rawOutput).slice(0, 4096));
+              toolSpan.end();
+              toolSpans.delete(tc.toolCallId);
+            }
+          }
+        }
+      }
+    } catch (streamErr) {
+      _log.error(`Stream error: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
+      const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
+      if (/prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(errText)) {
         promptTooLong = true;
-        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
-        continue;
-      }
-
-      // Detect stale session resume: "No conversation found with session ID"
-      if (
-        existingSessionId &&
-        ((event.sessionUpdate === "remi:error" && /no conversation found/i.test(event.error)) ||
-         (event.sessionUpdate === "remi:result" && event.response.inputTokens === 0 && event.response.durationMs === 0))
-      ) {
+      } else if (existingSessionId && /no conversation found/i.test(errText)) {
         staleSession = true;
-        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
-        continue;
       }
+    }
 
-      yield event;
-
-      if (event.sessionUpdate === "remi:result") {
-        resultResponse = event.response;
-      } else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
-        this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
-        providerSpan?.addEvent("rate_limit", { type: event.rateLimitType });
-      } else if (event.sessionUpdate === "tool_call") {
-        const tc = event as ToolCallUpdate;
-        const toolName = (tc._meta as any)?.claudeCode?.toolName ?? tc.title ?? "unknown";
-        toolCallMap.set(tc.toolCallId, { name: toolName, toolUseId: tc.toolCallId, input: tc.rawInput as Record<string, unknown> });
-        if (providerSpan) {
-          const toolSpan = providerSpan.context().startSpan(`tool.${toolName}`, {
-            "tool.name": toolName,
-            "tool.use_id": tc.toolCallId,
-            "tool.input": JSON.stringify(tc.rawInput ?? {}).slice(0, 4096),
-          });
-          toolSpans.set(tc.toolCallId, toolSpan);
-        }
-      } else if (event.sessionUpdate === "tool_call_update") {
-        const tc = event as ToolCallProgressUpdate;
-        if (tc.status === "completed" || tc.status === "failed") {
-          const existing = toolCallMap.get(tc.toolCallId);
-          if (existing) {
-            existing.resultPreview = tc.rawOutput ? String(tc.rawOutput).slice(0, 2048) : undefined;
-          }
-          const toolSpan = toolSpans.get(tc.toolCallId);
-          if (toolSpan) {
-            if (tc.rawOutput) toolSpan.setAttribute("tool.output", String(tc.rawOutput).slice(0, 4096));
-            toolSpan.end();
-            toolSpans.delete(tc.toolCallId);
-          }
-        }
-      }
+    // Get response from provider after stream ends
+    resultResponse = provider.getLastResponse?.() ?? null;
+    // Detect prompt-too-long from response text
+    if (!promptTooLong && resultResponse && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(resultResponse.text)) {
+      promptTooLong = true;
+    }
+    if (!staleSession && existingSessionId && resultResponse && resultResponse.inputTokens === 0 && resultResponse.durationMs === 0) {
+      staleSession = true;
     }
 
     // End any unclosed tool spans
@@ -447,11 +443,8 @@ export class Remi {
       resultResponse = null;
       for await (const event of provider.sendStream(msg.text, retryOptions)) {
         yield event;
-        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
-        else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
-          this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
-        }
       }
+      resultResponse = provider.getLastResponse?.() ?? null;
     }
 
     // ── Auto-recovery: stale session → clear session + retry ──
@@ -471,11 +464,8 @@ export class Remi {
       resultResponse = null;
       for await (const event of provider.sendStream(msg.text, retryOptions)) {
         yield event;
-        if (event.sessionUpdate === "remi:result") resultResponse = event.response;
-        else if (event.sessionUpdate === "remi:rate_limit" && event.rateLimitType) {
-          this.metrics.updateUsage(event.rateLimitType, event.resetsAt ?? "", event.status ?? "allowed");
-        }
       }
+      resultResponse = provider.getLastResponse?.() ?? null;
     }
 
     if (!promptTooLong && !staleSession) {
@@ -510,11 +500,11 @@ export class Remi {
           if (typeof fallback.sendStream === "function") {
             for await (const event of fallback.sendStream(msg.text, streamOptions)) {
               yield event;
-              if (event.sessionUpdate === "remi:result") resultResponse = event.response;
             }
+            resultResponse = fallback.getLastResponse?.() ?? null;
           } else {
             resultResponse = await fallback.send(msg.text, streamOptions);
-            yield { sessionUpdate: "remi:result" as const, response: resultResponse };
+            yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: resultResponse.text }] };
           }
           fallbackSpan?.end();
         }
@@ -604,10 +594,10 @@ export class Remi {
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
     let lastResponse: AgentResponse | null = null;
     for await (const event of this._processStream(msg)) {
-      if (event.sessionUpdate === "remi:result") {
-        lastResponse = event.response;
-      }
+      // consume all events
     }
+    const provider = this._getProvider();
+    lastResponse = provider.getLastResponse?.() ?? null;
     if (!lastResponse) {
       return createAgentResponse({ text: "[Error: no result from provider]" });
     }

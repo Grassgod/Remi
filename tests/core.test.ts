@@ -43,6 +43,8 @@ class MockProvider implements Provider {
     });
   }
 
+  private _lastResponse: AgentResponse | null = null;
+
   async *sendStream(
     message: string,
     options?: {
@@ -53,14 +55,11 @@ class MockProvider implements Provider {
   ): AsyncGenerator<ProviderEvent> {
     this.lastMessage = message;
     this.lastContext = options?.context ?? null;
-    yield {
-      sessionUpdate: "remi:result" as const,
-      response: createAgentResponse({
-        text: this._responseText,
-        sessionId: "sess-mock",
-      }),
-    };
+    this._lastResponse = createAgentResponse({ text: this._responseText, sessionId: "sess-mock" });
+    yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: this._responseText }] };
   }
+
+  getLastResponse(): AgentResponse | null { return this._lastResponse; }
 
   async healthCheck(): Promise<boolean> {
     return true;
@@ -88,7 +87,7 @@ class MockFailProvider implements Provider {
       chatId?: string | null;
     },
   ): AsyncGenerator<ProviderEvent> {
-    yield { sessionUpdate: "remi:result" as const, response: createAgentResponse({ text: "[Provider error: boom]" }) };
+    yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: "[Provider error: boom]" }] };
   }
 
   async healthCheck(): Promise<boolean> {
