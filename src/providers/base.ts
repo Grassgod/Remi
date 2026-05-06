@@ -13,17 +13,6 @@ export interface AskUserQuestion {
   multiSelect?: boolean;
 }
 
-/** @deprecated Use ProviderEvent instead. Will be removed after ACP pass-through refactor. */
-export type StreamEvent =
-  | { kind: "thinking_delta"; text: string }
-  | { kind: "content_delta"; text: string }
-  | { kind: "tool_use"; name: string; toolUseId: string; input?: Record<string, unknown> }
-  | { kind: "tool_input_update"; toolUseId: string; name: string; input: Record<string, unknown> }
-  | { kind: "tool_result"; toolUseId: string; name: string; resultPreview?: string; durationMs?: number; input?: Record<string, unknown> }
-  | { kind: "rate_limit"; retryAfterMs: number; rateLimitType?: string; resetsAt?: string; status?: string }
-  | { kind: "error"; error: string; code?: string }
-  | { kind: "result"; response: AgentResponse };
-
 /** Stream event type: pure ACP SessionUpdate. */
 export type ProviderEvent = import("./acp/protocol.js").SessionUpdate;
 

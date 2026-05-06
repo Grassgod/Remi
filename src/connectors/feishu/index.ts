@@ -3,7 +3,7 @@
  *
  * Message flow:
  *   Feishu WebSocket → parse + dedup + resolve → IncomingMessage → streamHandler()
- *   StreamEvent deltas → streaming card (thinking + content in real-time) → close with stats
+ *   ACP SessionUpdate events → streaming card (thinking + content in real-time) → close with stats
  */
 
 import type { FeishuConfig } from "../../config.js";
