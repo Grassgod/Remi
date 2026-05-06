@@ -15,7 +15,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
-import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv } from "./tool-formatters.js";
+import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, formatToolInputSummary } from "./tool-formatters.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
 type CardState = {
@@ -145,32 +145,50 @@ export function buildFinalCard(opts: {
   const hasSteps = opts.steps && opts.steps.length > 0;
   const hasThinking = opts.thinking || hasTools || hasSteps;
 
+  // Feishu cards have a 200-element limit. Each div step = ~3 elements.
+  // When steps exceed ~50, fall back to a single markdown element.
+  const MAX_DIV_STEPS = 50;
+
   if (hasThinking) {
-    // Build step elements for the collapsed panel
     const panelElements: Record<string, unknown>[] = [];
+    let stepCount = 0;
 
     if (hasTools) {
-      for (const entry of opts.toolEntries!) {
-        if (entry.thinkingBefore?.trim()) {
-          panelElements.push(buildThinkingDiv(entry.thinkingBefore));
+      const entries = opts.toolEntries!;
+      stepCount = entries.length;
+      if (stepCount <= MAX_DIV_STEPS) {
+        for (const entry of entries) {
+          if (entry.thinkingBefore?.trim()) panelElements.push(buildThinkingDiv(entry.thinkingBefore));
+          panelElements.push(buildToolDiv(entry));
         }
-        panelElements.push(buildToolDiv(entry));
-      }
-      if (opts.trailingThinking?.trim()) {
-        panelElements.push(buildThinkingDiv(opts.trailingThinking));
+        if (opts.trailingThinking?.trim()) panelElements.push(buildThinkingDiv(opts.trailingThinking));
+      } else {
+        const lines: string[] = [];
+        for (const entry of entries) {
+          if (entry.thinkingBefore?.trim()) lines.push(`🤖 ${entry.thinkingBefore.trim().split("\n")[0].slice(0, 80)}`);
+          const dur = entry.durationMs != null ? ` (${(entry.durationMs / 1000).toFixed(1)}s)` : "";
+          const summary = formatToolInputSummary(entry.name, entry.input);
+          lines.push(`${entry.name} ${summary}${dur}`.trim());
+        }
+        if (opts.trailingThinking?.trim()) lines.push(`🤖 ${opts.trailingThinking.trim().split("\n")[0].slice(0, 80)}`);
+        panelElements.push({ tag: "markdown", content: lines.join("\n") });
       }
     } else if (hasSteps) {
-      for (const step of opts.steps!) {
-        panelElements.push(buildStepDiv(step.tool, step.desc));
+      const steps = opts.steps!;
+      stepCount = steps.length;
+      if (stepCount <= MAX_DIV_STEPS) {
+        for (const step of steps) panelElements.push(buildStepDiv(step.tool, step.desc));
+      } else {
+        const lines = steps.map((s) => s.desc);
+        panelElements.push({ tag: "markdown", content: lines.join("\n") });
       }
     } else if (opts.thinking) {
-      // No tools/steps — fallback to thinking div (consistent with tool steps)
       panelElements.push(buildThinkingDiv(opts.thinking));
     }
 
     if (panelElements.length > 0) {
-      const stepCount = opts.toolCount ?? opts.steps?.length ?? (hasTools ? panelElements.length : 0);
-      if (stepCount > 0 || hasTools || hasSteps) {
+      const displayCount = opts.toolCount ?? stepCount || panelElements.length;
+      if (displayCount > 0 || hasTools || hasSteps) {
         elements.push({
           tag: "collapsible_panel",
           expanded: false,
@@ -178,7 +196,7 @@ export function buildFinalCard(opts: {
           header: {
             title: {
               tag: "plain_text",
-              content: `Show ${stepCount} steps`,
+              content: `Show ${displayCount} steps`,
               text_color: "grey",
               text_size: "notation",
             },
