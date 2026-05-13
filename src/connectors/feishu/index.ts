@@ -9,8 +9,8 @@
 import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse, ProviderEvent } from "../../providers/base.js";
-import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock, RequestPermissionParams, PermissionOutcome } from "../../providers/acp/protocol.js";
-import { createAdapter } from "../../providers/acp/adapters/index.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock, RequestPermissionParams, PermissionOutcome, PermissionOption } from "../../providers/acp/protocol.js";
+import { createAdapter, type AgentAdapter } from "../../providers/acp/adapters/index.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
 import { createLogger } from "../../logger.js";
@@ -27,7 +27,7 @@ import {
   shortPath,
   formatToolInputSummary,
 } from "./tool-formatters.js";
-import { registerPendingAction, rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
+import { registerPendingAction, rejectAllPendingActions, rejectPendingAction, rejectPendingActionsForChat, hasPendingAction } from "./card-actions.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "./permission-ui.js";
 import {
   startWebSocketListener,
@@ -123,6 +123,84 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
     default:
       return `Tool: ${name}...`;
   }
+}
+
+function selectPermissionOption(
+  options: PermissionOption[],
+  preferredIds: string[],
+  fallbackKinds: PermissionOption["kind"][],
+): PermissionOption | undefined {
+  for (const id of preferredIds) {
+    const option = options.find((o) => o.optionId === id);
+    if (option) return option;
+  }
+  for (const kind of fallbackKinds) {
+    const option = options.find((o) => o.kind === kind);
+    if (option) return option;
+  }
+  return undefined;
+}
+
+function allowCurrentToolOption(options: PermissionOption[]): PermissionOption | undefined {
+  return selectPermissionOption(options, ["allow"], ["allow_once", "allow_always"]);
+}
+
+export function approvePlanOption(options: PermissionOption[]): PermissionOption | undefined {
+  return selectPermissionOption(
+    options,
+    ["default", "acceptEdits", "auto", "allow"],
+    ["allow_once", "allow_always"],
+  );
+}
+
+export function rejectPermissionOption(options: PermissionOption[]): PermissionOption | undefined {
+  return selectPermissionOption(options, ["reject", "plan"], ["reject_once", "reject_always"]);
+}
+
+function selectedPermissionOption(value: unknown, options: PermissionOption[]): PermissionOption | undefined {
+  const decision = typeof value === "string" ? value : formValueText(value, "decision");
+  if (!decision) return undefined;
+  return options.find((option) => option.optionId === decision);
+}
+
+function formValueText(value: unknown, key: string): string {
+  if (!value || typeof value !== "object") return "";
+  const raw = (value as Record<string, unknown>)[key];
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map(String).join(", ");
+  if (typeof raw === "object" && "value" in raw) return String((raw as Record<string, unknown>).value ?? "");
+  return String(raw);
+}
+
+export function isPlanApproval(value: unknown): boolean {
+  const decision = formValueText(value, "decision").toLowerCase();
+  return decision === "approved" || decision === "approve" || decision === "allow";
+}
+
+function answerValueText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(answerValueText).filter(Boolean).join(", ");
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.label === "string") return obj.label;
+    if (typeof obj.content === "string") return obj.content;
+    if (obj.text && typeof obj.text === "object") return answerValueText((obj.text as Record<string, unknown>).content);
+  }
+  return String(value);
+}
+
+function normalizeAskAnswers(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const answers: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw == null) continue;
+    answers[key] = answerValueText(raw);
+  }
+  return answers;
 }
 
 /** Read the most recently modified plan file from .claude/plans/ directory. */
@@ -509,6 +587,7 @@ export class FeishuConnector implements Connector {
     };
     const client = createFeishuClient(creds);
     const session = new FeishuStreamingSession(client, creds, {
+      log: (msg) => slog.info(msg),
       tokenProvider: this._tokenProvider ?? undefined,
     });
 
@@ -561,24 +640,39 @@ export class FeishuConnector implements Connector {
         return;
       }
 
-      const acpAdapter = createAdapter("claude");
+      const agentType = meta.agentType
+        ?? (meta.providerName?.startsWith("acp:") ? meta.providerName.slice("acp:".length) : null)
+        ?? "claude";
+      let acpAdapter: AgentAdapter;
+      try {
+        acpAdapter = createAdapter(agentType);
+      } catch {
+        acpAdapter = createAdapter("claude");
+      }
       const toolStartTimes = new Map<string, number>();
       const seenInputs = new Set<string>();
       const acpToolNames = new Map<string, string>();
+      let permissionQueue: Promise<void> = Promise.resolve();
 
       // Register permission handler for interactive approval
       if (meta.setPermissionHandler) {
-        meta.setPermissionHandler(async (params: RequestPermissionParams): Promise<PermissionOutcome> => {
+        const handlePermissionRequest = async (params: RequestPermissionParams): Promise<PermissionOutcome> => {
           const askData = acpAdapter.extractAskUserQuestion(params.toolCall);
           const isExitPlan = acpAdapter.isExitPlanMode(params.toolCall);
           const toolName = acpAdapter.resolveToolName(params.toolCall);
-          const savedStatus = session.getLastStatus();
 
-          const result = await new Promise<unknown>((resolve, reject) => {
+          const savedStatus = session.getLastStatus();
+          let actionId = "";
+          let result: unknown;
+          let resolved = false;
+          let actionPromise: Promise<unknown> | null = null;
+          try {
             const questions = askData
               ? askData.questions.map((q) => ({ question: q.question, options: q.options }))
               : undefined;
-            const actionId = registerPendingAction(resolve, reject, questions, chatId);
+            actionPromise = new Promise<unknown>((resolve, reject) => {
+              actionId = registerPendingAction(resolve, reject, questions, chatId);
+            });
 
             let form;
             if (askData) {
@@ -586,46 +680,74 @@ export class FeishuConnector implements Connector {
               session.updateStatus("Waiting for input...");
             } else if (isExitPlan) {
               const planContent = typeof params.toolCall.rawInput === "object" && params.toolCall.rawInput
-                ? String((params.toolCall.rawInput as any).planContent ?? "")
+                ? String((params.toolCall.rawInput as any).planContent ?? (params.toolCall.rawInput as any).plan ?? "")
                 : undefined;
               form = buildPlanReviewForm(actionId, planContent || undefined);
               session.updateStatus("Waiting for approval...");
             } else {
               const inputSummary = formatToolInputSummary(toolName, acpAdapter.extractToolInput(params.toolCall) ?? undefined);
-              form = buildToolApprovalForm(actionId, toolName, inputSummary);
+              form = buildToolApprovalForm(actionId, toolName, inputSummary, params.options);
               session.updateStatus(`Waiting for ${toolName} approval...`);
             }
 
             slog.info(`permission request: type=${askData ? "ask" : isExitPlan ? "plan" : "tool"} tool=${toolName} actionId=${actionId}`);
-            session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm failed: ${e}`));
-          });
-
-          // User responded — clean up form
-          const actionIdPrefix = "act_";
-          // Find actionId from the form elements
-          const formId = (typeof result === "object" && result && "_actionId" in (result as any))
-            ? String((result as any)._actionId)
-            : undefined;
-          // Remove form elements (best-effort, may already be gone if /esc)
-          if (formId) {
-            await session.removePermissionForm(formId).catch(() => {});
+            await session.appendPermissionForm(form);
+            result = await actionPromise;
+            resolved = true;
+          } catch (err) {
+            if (actionId && hasPendingAction(actionId)) {
+              rejectPendingAction(actionId, String(err));
+              await actionPromise?.catch(() => {});
+            }
+            slog.info(`permission cancelled: tool=${toolName} reason=${String(err)}`);
+            return { outcome: "cancelled" };
+          } finally {
+            if (actionId) {
+              await session.removePermissionForm(actionId, { preservePanel: isExitPlan && resolved }).catch(() => {});
+            }
+            await session.updateStatus(savedStatus || "Running...");
           }
-          await session.updateStatus(savedStatus || "Running...");
 
           if (askData) {
-            const allowOpt = params.options.find((o) => o.kind === "allow_once" || o.kind === "allow_always");
-            return { outcome: "selected", optionId: allowOpt?.optionId ?? params.options[0]?.optionId ?? "" };
+            const option = allowCurrentToolOption(params.options);
+            const answers = normalizeAskAnswers(result);
+            slog.info(`AskUserQuestion answered via card: ${JSON.stringify(result)?.slice(0, 500)} option=${option?.optionId ?? "none"}`);
+            return option
+              ? {
+                  outcome: "selected",
+                  optionId: option.optionId,
+                  updatedInput: { questions: askData.questions, answers },
+                }
+              : { outcome: "cancelled" };
           }
 
-          const resultStr = typeof result === "object" && result ? JSON.stringify(result) : String(result ?? "");
-          const approved = resultStr.includes("approve") || resultStr.includes("Approve") || resultStr.includes("Allow") || resultStr.includes("allow");
-          if (approved) {
-            const allowOpt = params.options.find((o) => o.kind === "allow_once" || o.kind === "allow_always");
-            return { outcome: "selected", optionId: allowOpt?.optionId ?? params.options[0]?.optionId ?? "" };
+          if (isExitPlan) {
+            if (isPlanApproval(result)) {
+              const option = approvePlanOption(params.options);
+              slog.info(`ExitPlanMode approved via card: option=${option?.optionId ?? "none"}`);
+              return option
+                ? { outcome: "selected", optionId: option.optionId }
+                : { outcome: "cancelled" };
+            }
+            const option = rejectPermissionOption(params.options);
+            slog.info(`ExitPlanMode rejected via card: option=${option?.optionId ?? "none"}`);
+            return option
+              ? { outcome: "selected", optionId: option.optionId }
+              : { outcome: "cancelled" };
           }
-          const denyOpt = params.options.find((o) => o.kind === "reject_once" || o.kind === "reject_always");
-          if (denyOpt) return { outcome: "selected", optionId: denyOpt.optionId };
-          return { outcome: "cancelled" };
+
+          const selected = selectedPermissionOption(result, params.options);
+          slog.info(`permission selected via card: tool=${toolName} option=${selected?.optionId ?? "none"}`);
+          return selected
+            ? { outcome: "selected", optionId: selected.optionId }
+            : { outcome: "cancelled" };
+        };
+
+        meta.setPermissionHandler((params: RequestPermissionParams): Promise<PermissionOutcome> => {
+          const run = () => handlePermissionRequest(params);
+          const queued = permissionQueue.then(run, run);
+          permissionQueue = queued.then(() => undefined, () => undefined);
+          return queued;
         });
       }
 
@@ -786,42 +908,12 @@ export class FeishuConnector implements Connector {
                 const input = acpAdapter.extractToolInput(tc);
                 const inputKeys = input ? Object.keys(input) : [];
                 slog.info(`tool_call_update(in-progress): tool=${toolName} id=${tc.toolCallId} alreadySeen=${alreadySeen} inputKeys=[${inputKeys}] rawInput=${JSON.stringify(tc.rawInput)?.slice(0, 100)} title="${tc.title ?? ""}" content=${JSON.stringify(tc.content)?.slice(0, 100)}`);
-                // AskUserQuestion / ExitPlanMode: render interactive form and wait
-                if (!alreadySeen && toolName === "AskUserQuestion" && input?.questions) {
+                if (!alreadySeen && toolName === "AskUserQuestion") {
                   seenInputs.add(tc.toolCallId);
-                  const askData = { questions: input.questions as import("../../providers/base.js").AskUserQuestion[] };
-                  const savedStatus = session.getLastStatus();
-                  slog.info(`AskUserQuestion detected: ${askData.questions.length} question(s)`);
-                  try {
-                    const result = await new Promise<unknown>((resolve, reject) => {
-                      const questions = askData.questions.map((q: any) => ({ question: q.question, options: q.options ?? [] }));
-                      const actionId = registerPendingAction(resolve, reject, questions, chatId);
-                      const form = buildAskQuestionForm(actionId, askData);
-                      session.updateStatus("Waiting for input...");
-                      session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm: ${e}`));
-                    });
-                    slog.info(`AskUserQuestion answered: ${JSON.stringify(result)?.slice(0, 100)}`);
-                  } catch (e) {
-                    slog.info(`AskUserQuestion cancelled: ${e}`);
-                  }
-                  await session.updateStatus(savedStatus || "Running...");
-                } else if (!alreadySeen && toolName === "ExitPlanMode" && input?.plan) {
+                  slog.info("AskUserQuestion tool update observed; waiting is handled by ACP permission request");
+                } else if (!alreadySeen && toolName === "ExitPlanMode") {
                   seenInputs.add(tc.toolCallId);
-                  const planContent = String(input.plan);
-                  const savedStatus = session.getLastStatus();
-                  slog.info(`ExitPlanMode detected: plan=${planContent.slice(0, 80)}`);
-                  try {
-                    const result = await new Promise<unknown>((resolve, reject) => {
-                      const actionId = registerPendingAction(resolve, reject, undefined, chatId);
-                      const form = buildPlanReviewForm(actionId, planContent);
-                      session.updateStatus("Waiting for approval...");
-                      session.appendPermissionForm(form).catch((e) => slog.error(`appendPermissionForm: ${e}`));
-                    });
-                    slog.info(`ExitPlanMode result: ${JSON.stringify(result)?.slice(0, 100)}`);
-                  } catch (e) {
-                    slog.info(`ExitPlanMode cancelled: ${e}`);
-                  }
-                  await session.updateStatus(savedStatus || "Running...");
+                  slog.info("ExitPlanMode tool update observed; waiting is handled by ACP permission request");
                 } else if (!alreadySeen && input && inputKeys.length > 0) {
                   seenInputs.add(tc.toolCallId);
                   const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
@@ -883,8 +975,9 @@ export class FeishuConnector implements Connector {
           }
         }
       } catch (streamErr) {
-        slog.error(`Stream error: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
-        contentText += `\n\n**Error:** ${streamErr instanceof Error ? streamErr.message : String(streamErr)}\n`;
+        const message = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        slog.error(`Stream error: ${message}`);
+        contentText += `\n\n**Error:** ${message}\n`;
       }
 
         slog.info(`Stream ended: tools=${toolCount} elapsed=${session.getElapsed()}s`);
@@ -917,8 +1010,16 @@ export class FeishuConnector implements Connector {
         slog.error(`streaming error: ${String(err)}`);
         // Always close the streaming card to prevent it from being stuck
         if (session.isActive()) {
+          const stats = this._formatStreamStats(session.getElapsed(), usageTokens, usageContextWindow, toolCount);
           await session.close({
             finalText: contentText || `Error: ${String(err)}`,
+            thinking: thinkingText || null,
+            toolEntries: toolEntries.length > 0 ? toolEntries : undefined,
+            trailingThinking: currentThinkingSegment || undefined,
+            toolCount: toolCount > 0 ? toolCount : undefined,
+            stats,
+            sessionId: meta.sessionId,
+            displayName: meta.displayName,
           }).catch(() => {});
         }
       } finally {
@@ -1003,4 +1104,3 @@ export class FeishuConnector implements Connector {
     return parts.length > 0 ? parts.join(" · ") : null;
   }
 }
-

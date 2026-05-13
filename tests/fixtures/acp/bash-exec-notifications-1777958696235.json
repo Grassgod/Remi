@@ -1,0 +1,263 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 38102,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to run a"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " bash command and report the output."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01CvKucHXqsYLjC4BDsVQdxs",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": []
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01CvKucHXqsYLjC4BDsVQdxs",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "echo hello_from_acp_test",
+          "description": "Echo test string"
+        },
+        "title": "echo hello_from_acp_test",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Echo test string"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 38196,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "hello_from_acp_test",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false
+            },
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01CvKucHXqsYLjC4BDsVQdxs",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01CvKucHXqsYLjC4BDsVQdxs",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "hello_from_acp_test",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```console\nhello_from_acp_test\n```"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 38230,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The output was \"hello_from"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "_acp_test\"."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "The output was `hello_from_acp_test`."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 38260,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "0e1b2f6e-290c-4628-aee9-025fd54c7f3c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 38260,
+        "size": 200000,
+        "cost": {
+          "amount": 0.18113355,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

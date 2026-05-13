@@ -1,0 +1,573 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "update-config",
+            "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.",
+            "input": null
+          },
+          {
+            "name": "debug",
+            "description": "Enable debug logging for this session and help diagnose issues",
+            "input": {
+              "hint": "[issue description]"
+            }
+          },
+          {
+            "name": "simplify",
+            "description": "Review changed code for reuse, quality, and efficiency, then fix any issues found.",
+            "input": null
+          },
+          {
+            "name": "batch",
+            "description": "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+            "input": {
+              "hint": "<instruction>"
+            }
+          },
+          {
+            "name": "fewer-permission-prompts",
+            "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+            "input": null
+          },
+          {
+            "name": "loop",
+            "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo, defaults to 10m)",
+            "input": {
+              "hint": "[interval] <prompt>"
+            }
+          },
+          {
+            "name": "claude-api",
+            "description": "Build, debug, and optimize Claude API / Anthropic SDK apps. Apps built with this skill should include prompt caching. Also handles migrating existing Claude API code between Claude model versions (4.5 → 4.6, 4.6 → 4.7, retired-model replacements).\nTRIGGER when: code imports `anthropic`/`@anthropic-ai/sdk`; user asks for the Claude API, Anthropic SDK, or Managed Agents; user adds/modifies/tunes a Claude feature (caching, thinking, compaction, tool use, batch, files, citations, memory) or model (Opus/Sonnet/Haiku) in a file; questions about prompt caching / cache hit rate in an Anthropic SDK project.\nSKIP: file imports `openai`/other-provider SDK, filename like `*-openai.py`/`*-generic.py`, provider-neutral code, general programming/ML.",
+            "input": null
+          },
+          {
+            "name": "pair-agent",
+            "description": "Pair a remote AI agent with your browser. One command generates a setup key and\nprints instructions the other agent can follow to connect. Works with OpenClaw,\nHermes, Codex, Cursor, or any agent that can make HTTP requests. The remote agent\ngets its own tab with scoped access (read+write by default, admin on request).\nUse when asked to \"pair agent\", \"connect agent\", \"share browser\", \"remote browser\",\n\"let another agent use my browser\", or \"give browser access\". (gstack)\nVoice triggers (speech-to-text aliases): \"pair agent\", \"connect agent\", \"share my browser\", \"remote browser access\". (user)",
+            "input": null
+          },
+          {
+            "name": "devex-review",
+            "description": "Live developer experience audit. Uses the browse tool to actually TEST the\ndeveloper experience: navigates docs, tries the getting started flow, times\nTTHW, screenshots error messages, evaluates CLI help text. Produces a DX\nscorecard with evidence. Compares against /plan-devex-review scores if they\nexist (the boomerang: plan said 3 minutes, reality says 8). Use when asked to\n\"test the DX\", \"DX audit\", \"developer experience test\", or \"try the\nonboarding\". Proactively suggest after shipping a developer-facing feature. (gstack)\nVoice triggers (speech-to-text aliases): \"dx audit\", \"test the developer experience\", \"try the onboarding\", \"developer experience test\". (user)",
+            "input": null
+          },
+          {
+            "name": "open-gstack-browser",
+            "description": "Launch GStack Browser — AI-controlled Chromium with the sidebar extension baked in.\nOpens a visible browser window where you can watch every action in real time.\nThe sidebar shows a live activity feed and chat. Anti-bot stealth built in.\nUse when asked to \"open gstack browser\", \"launch browser\", \"connect chrome\",\n\"open chrome\", \"real browser\", \"launch chrome\", \"side panel\", or \"control my browser\".\nVoice triggers (speech-to-text aliases): \"show me the browser\". (user)",
+            "input": null
+          },
+          {
+            "name": "retro",
+            "description": "Weekly engineering retrospective. Analyzes commit history, work patterns,\nand code quality metrics with persistent history and trend tracking.\nTeam-aware: breaks down per-person contributions with praise and growth areas.\nUse when asked to \"weekly retro\", \"what did we ship\", or \"engineering retrospective\".\nProactively suggest at the end of a work week or sprint. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "setup-deploy",
+            "description": "Configure deployment settings for /land-and-deploy. Detects your deploy\nplatform (Fly.io, Render, Vercel, Netlify, Heroku, GitHub Actions, custom),\nproduction URL, health check endpoints, and deploy status commands. Writes\nthe configuration to CLAUDE.md so all future deploys are automatic.\nUse when: \"setup deploy\", \"configure deployment\", \"set up land-and-deploy\",\n\"how do I deploy with gstack\", \"add deploy config\". (user)",
+            "input": null
+          },
+          {
+            "name": "plan-eng-review",
+            "description": "Eng manager-mode plan review. Lock in the execution plan — architecture,\ndata flow, diagrams, edge cases, test coverage, performance. Walks through\nissues interactively with opinionated recommendations. Use when asked to\n\"review the architecture\", \"engineering review\", or \"lock in the plan\".\nProactively suggest when the user has a plan or design doc and is about to\nstart coding — to catch architecture issues before implementation. (gstack)\nVoice triggers (speech-to-text aliases): \"tech review\", \"technical review\", \"plan engineering review\". (user)",
+            "input": null
+          },
+          {
+            "name": "careful",
+            "description": "Safety guardrails for destructive commands. Warns before rm -rf, DROP TABLE,\nforce-push, git reset --hard, kubectl delete, and similar destructive operations.\nUser can override each warning. Use when touching prod, debugging live systems,\nor working in a shared environment. Use when asked to \"be careful\", \"safety mode\",\n\"prod mode\", or \"careful mode\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "unfreeze",
+            "description": "Clear the freeze boundary set by /freeze, allowing edits to all directories\nagain. Use when you want to widen edit scope without ending the session.\nUse when asked to \"unfreeze\", \"unlock edits\", \"remove freeze\", or\n\"allow all edits\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "design-shotgun",
+            "description": "Design shotgun: generate multiple AI design variants, open a comparison board,\ncollect structured feedback, and iterate. Standalone design exploration you can\nrun anytime. Use when: \"explore designs\", \"show me options\", \"design variants\",\n\"visual brainstorm\", or \"I don't like how this looks\".\nProactively suggest when the user describes a UI feature but hasn't seen\nwhat it could look like. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "freeze",
+            "description": "Restrict file edits to a specific directory for the session. Blocks Edit and\nWrite outside the allowed path. Use when debugging to prevent accidentally\n\"fixing\" unrelated code, or when you want to scope changes to one module.\nUse when asked to \"freeze\", \"restrict edits\", \"only edit this folder\",\nor \"lock down edits\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "plan-devex-review",
+            "description": "Interactive developer experience plan review. Explores developer personas,\nbenchmarks against competitors, designs magical moments, and traces friction\npoints before scoring. Three modes: DX EXPANSION (competitive advantage),\nDX POLISH (bulletproof every touchpoint), DX TRIAGE (critical gaps only).\nUse when asked to \"DX review\", \"developer experience audit\", \"devex review\",\nor \"API design review\".\nProactively suggest when the user has a plan for developer-facing products\n(APIs, CLIs, SDKs, libraries, platforms, docs). (gstack)\nVoice triggers (speech-to-text aliases): \"dx review\", \"developer experience review\", \"devex review\", \"devex audit\", \"API design review\", \"onboarding review\". (user)",
+            "input": null
+          },
+          {
+            "name": "gstack",
+            "description": "Fast headless browser for QA testing and site dogfooding. Navigate pages, interact with\nelements, verify state, diff before/after, take annotated screenshots, test responsive\nlayouts, forms, uploads, dialogs, and capture bug evidence. Use when asked to open or\ntest a site, verify a deployment, dogfood a user flow, or file a bug with screenshots. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "benchmark",
+            "description": "Performance regression detection using the browse daemon. Establishes\nbaselines for page load times, Core Web Vitals, and resource sizes.\nCompares before/after on every PR. Tracks performance trends over time.\nUse when: \"performance\", \"benchmark\", \"page speed\", \"lighthouse\", \"web vitals\",\n\"bundle size\", \"load time\". (gstack)\nVoice triggers (speech-to-text aliases): \"speed test\", \"check performance\". (user)",
+            "input": null
+          },
+          {
+            "name": "office-hours",
+            "description": "YC Office Hours — two modes. Startup mode: six forcing questions that expose\ndemand reality, status quo, desperate specificity, narrowest wedge, observation,\nand future-fit. Builder mode: design thinking brainstorming for side projects,\nhackathons, learning, and open source. Saves a design doc.\nUse when asked to \"brainstorm this\", \"I have an idea\", \"help me think through\nthis\", \"office hours\", or \"is this worth building\".\nProactively invoke this skill (do NOT answer directly) when the user describes\na new product idea, asks whether something is worth building, wants to think\nthrough design decisions for something that doesn't exist yet, or is exploring\na concept before any code is written.\nUse before /plan-ceo-review or /plan-eng-review. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "canary",
+            "description": "Post-deploy canary monitoring. Watches the live app for console errors,\nperformance regressions, and page failures using the browse daemon. Takes\nperiodic screenshots, compares against pre-deploy baselines, and alerts\non anomalies. Use when: \"monitor deploy\", \"canary\", \"post-deploy check\",\n\"watch production\", \"verify deploy\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "land-and-deploy",
+            "description": "Land and deploy workflow. Merges the PR, waits for CI and deploy,\nverifies production health via canary checks. Takes over after /ship\ncreates the PR. Use when: \"merge\", \"land\", \"deploy\", \"merge and verify\",\n\"land it\", \"ship it to production\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "document-release",
+            "description": "Post-ship documentation update. Reads all project docs, cross-references the\ndiff, updates README/ARCHITECTURE/CONTRIBUTING/CLAUDE.md to match what shipped,\npolishes CHANGELOG voice, cleans up TODOS, and optionally bumps VERSION. Use when\nasked to \"update the docs\", \"sync documentation\", or \"post-ship docs\".\nProactively suggest after a PR is merged or code is shipped. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "image",
+            "description": "Generate images using Nano Banana 2 (Gemini) and upload to Feishu.\nUse when the user asks to generate, draw, create, or make an image/picture/illustration.\nAlso supports image-to-image: iterate/refine an existing image with a text prompt.\nTrigger keywords: 画, 生成图片, generate image, draw, /image, 图片, 插画, make a picture, create an image, 修改图片, 迭代图片, refine image, edit image. (user)",
+            "input": null
+          },
+          {
+            "name": "codex",
+            "description": "OpenAI Codex CLI wrapper — three modes. Code review: independent diff review via\ncodex review with pass/fail gate. Challenge: adversarial mode that tries to break\nyour code. Consult: ask codex anything with session continuity for follow-ups.\nThe \"200 IQ autistic developer\" second opinion. Use when asked to \"codex review\",\n\"codex challenge\", \"ask codex\", \"second opinion\", or \"consult codex\". (gstack)\nVoice triggers (speech-to-text aliases): \"code x\", \"code ex\", \"get another opinion\". (user)",
+            "input": null
+          },
+          {
+            "name": "cso",
+            "description": "Chief Security Officer mode. Infrastructure-first security audit: secrets archaeology,\ndependency supply chain, CI/CD pipeline security, LLM/AI security, skill supply chain\nscanning, plus OWASP Top 10, STRIDE threat modeling, and active verification.\nTwo modes: daily (zero-noise, 8/10 confidence gate) and comprehensive (monthly deep\nscan, 2/10 bar). Trend tracking across audit runs.\nUse when: \"security audit\", \"threat model\", \"pentest review\", \"OWASP\", \"CSO review\". (gstack)\nVoice triggers (speech-to-text aliases): \"see-so\", \"see so\", \"security review\", \"security check\", \"vulnerability scan\", \"run security\". (user)",
+            "input": null
+          },
+          {
+            "name": "learn",
+            "description": "Manage project learnings. Review, search, prune, and export what gstack\nhas learned across sessions. Use when asked to \"what have we learned\",\n\"show learnings\", \"prune stale learnings\", or \"export learnings\".\nProactively suggest when the user asks about past patterns or wonders\n\"didn't we fix this before?\" (user)",
+            "input": null
+          },
+          {
+            "name": "guard",
+            "description": "Full safety mode: destructive command warnings + directory-scoped edits.\nCombines /careful (warns before rm -rf, DROP TABLE, force-push, etc.) with\n/freeze (blocks edits outside a specified directory). Use for maximum safety\nwhen touching prod or debugging live systems. Use when asked to \"guard mode\",\n\"full safety\", \"lock it down\", or \"maximum safety\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "review",
+            "description": "Pre-landing PR review. Analyzes diff against the base branch for SQL safety, LLM trust\nboundary violations, conditional side effects, and other structural issues. Use when\nasked to \"review this PR\", \"code review\", \"pre-landing review\", or \"check my diff\".\nProactively suggest when the user is about to merge or land code changes. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "design-review",
+            "description": "Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems,\nAI slop patterns, and slow interactions — then fixes them. Iteratively fixes issues\nin source code, committing each fix atomically and re-verifying with before/after\nscreenshots. For plan-mode design review (before implementation), use /plan-design-review.\nUse when asked to \"audit the design\", \"visual QA\", \"check if it looks good\", or \"design polish\".\nProactively suggest when the user mentions visual inconsistencies or\nwants to polish the look of a live site. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "autoplan",
+            "description": "Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk\nand runs them sequentially with auto-decisions using 6 decision principles. Surfaces\ntaste decisions (close approaches, borderline scope, codex disagreements) at a final\napproval gate. One command, fully reviewed plan out.\nUse when asked to \"auto review\", \"autoplan\", \"run all reviews\", \"review this plan\nautomatically\", or \"make the decisions for me\".\nProactively suggest when the user has a plan file and wants to run the full review\ngauntlet without answering 15-30 intermediate questions. (gstack)\nVoice triggers (speech-to-text aliases): \"auto plan\", \"automatic review\". (user)",
+            "input": null
+          },
+          {
+            "name": "investigate",
+            "description": "Systematic debugging with root cause investigation. Four phases: investigate,\nanalyze, hypothesize, implement. Iron Law: no fixes without root cause.\nUse when asked to \"debug this\", \"fix this bug\", \"why is this broken\",\n\"investigate this error\", or \"root cause analysis\".\nProactively invoke this skill (do NOT debug directly) when the user reports\nerrors, 500 errors, stack traces, unexpected behavior, \"it was working\nyesterday\", or is troubleshooting why something stopped working. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "dorado-git",
+            "description": "Dorado 数据任务的 git 式命令行工具,覆盖代码(clone/pull/push/diff/deploy)、诊断(info/instances/logs)、查询(exec)、发现(whereis)。当用户想同步 Dorado 代码、查任务调度/运行情况/日志、跑临时 SQL 查询、找 Hive 表产出任务、上线发布、对比版本时使用。触发词:dorado-git、同步 dorado、pull/push dorado、dorado 代码同步、部署/上线 dorado、whereis、找产出任务、查 Dorado 任务/调度/实例/日志、adhoc query、临时查询、select 线上数据。 (user)",
+            "input": null
+          },
+          {
+            "name": "design-html",
+            "description": "Design finalization: generates production-quality Pretext-native HTML/CSS.\nWorks with approved mockups from /design-shotgun, CEO plans from /plan-ceo-review,\ndesign review context from /plan-design-review, or from scratch with a user\ndescription. Text actually reflows, heights are computed, layouts are dynamic.\n30KB overhead, zero deps. Smart API routing: picks the right Pretext patterns\nfor each design type. Use when: \"finalize this design\", \"turn this into HTML\",\n\"build me a page\", \"implement this design\", or after any planning skill.\nProactively suggest when user has approved a design or has a plan ready. (gstack)\nVoice triggers (speech-to-text aliases): \"build the design\", \"code the mockup\", \"make it real\". (user)",
+            "input": null
+          },
+          {
+            "name": "ship",
+            "description": "Ship workflow: detect + merge base branch, run tests, review diff, bump VERSION,\nupdate CHANGELOG, commit, push, create PR. Use when asked to \"ship\", \"deploy\",\n\"push to main\", \"create a PR\", \"merge and push\", or \"get it deployed\".\nProactively invoke this skill (do NOT push/PR directly) when the user says code\nis ready, asks about deploying, wants to push code up, or asks to create a PR. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "mcp-builder",
+            "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK). (user)",
+            "input": null
+          },
+          {
+            "name": "plan-ceo-review",
+            "description": "CEO/founder-mode plan review. Rethink the problem, find the 10-star product,\nchallenge premises, expand scope when it creates a better product. Four modes:\nSCOPE EXPANSION (dream big), SELECTIVE EXPANSION (hold scope + cherry-pick\nexpansions), HOLD SCOPE (maximum rigor), SCOPE REDUCTION (strip to essentials).\nUse when asked to \"think bigger\", \"expand scope\", \"strategy review\", \"rethink this\",\nor \"is this ambitious enough\".\nProactively suggest when the user is questioning scope or ambition of a plan,\nor when the plan feels like it could be thinking bigger. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "gstack-upgrade",
+            "description": "Upgrade gstack to the latest version. Detects global vs vendored install,\nruns the upgrade, and shows what's new. Use when asked to \"upgrade gstack\",\n\"update gstack\", or \"get latest version\".\nVoice triggers (speech-to-text aliases): \"upgrade the tools\", \"update the tools\", \"gee stack upgrade\", \"g stack upgrade\". (user)",
+            "input": null
+          },
+          {
+            "name": "design-consultation",
+            "description": "Design consultation: understands your product, researches the landscape, proposes a\ncomplete design system (aesthetic, typography, color, layout, spacing, motion), and\ngenerates font+color preview pages. Creates DESIGN.md as your project's design source\nof truth. For existing sites, use /plan-design-review to infer the system instead.\nUse when asked to \"design system\", \"brand guidelines\", or \"create DESIGN.md\".\nProactively suggest when starting a new project's UI with no existing\ndesign system or DESIGN.md. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "qa-only",
+            "description": "Report-only QA testing. Systematically tests a web application and produces a\nstructured report with health score, screenshots, and repro steps — but never\nfixes anything. Use when asked to \"just report bugs\", \"qa report only\", or\n\"test but don't fix\". For the full test-fix-verify loop, use /qa instead.\nProactively suggest when the user wants a bug report without any code changes. (gstack)\nVoice triggers (speech-to-text aliases): \"bug report\", \"just check for bugs\". (user)",
+            "input": null
+          },
+          {
+            "name": "checkpoint",
+            "description": "Save and resume working state checkpoints. Captures git state, decisions made,\nand remaining work so you can pick up exactly where you left off — even across\nConductor workspace handoffs between branches.\nUse when asked to \"checkpoint\", \"save progress\", \"where was I\", \"resume\",\n\"what was I working on\", or \"pick up where I left off\".\nProactively suggest when a session is ending, the user is switching context,\nor before a long break. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "qa",
+            "description": "Systematically QA test a web application and fix bugs found. Runs QA testing,\nthen iteratively fixes bugs in source code, committing each fix atomically and\nre-verifying. Use when asked to \"qa\", \"QA\", \"test this site\", \"find bugs\",\n\"test and fix\", or \"fix what's broken\".\nProactively suggest when the user says a feature is ready for testing\nor asks \"does this work?\". Three tiers: Quick (critical/high only),\nStandard (+ medium), Exhaustive (+ cosmetic). Produces before/after health scores,\nfix evidence, and a ship-readiness summary. For report-only mode, use /qa-only. (gstack)\nVoice triggers (speech-to-text aliases): \"quality check\", \"test the app\", \"run QA\". (user)",
+            "input": null
+          },
+          {
+            "name": "setup-browser-cookies",
+            "description": "Import cookies from your real Chromium browser into the headless browse session.\nOpens an interactive picker UI where you select which cookie domains to import.\nUse before QA testing authenticated pages. Use when asked to \"import cookies\",\n\"login to the site\", or \"authenticate the browser\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "health",
+            "description": "Code quality dashboard. Wraps existing project tools (type checker, linter,\ntest runner, dead code detector, shell linter), computes a weighted composite\n0-10 score, and tracks trends over time. Use when: \"health check\",\n\"code quality\", \"how healthy is the codebase\", \"run all checks\",\n\"quality score\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "plan-design-review",
+            "description": "Designer's eye plan review — interactive, like CEO and Eng review.\nRates each design dimension 0-10, explains what would make it a 10,\nthen fixes the plan to get there. Works in plan mode. For live site\nvisual audits, use /design-review. Use when asked to \"review the design plan\"\nor \"design critique\".\nProactively suggest when the user has a plan with UI/UX components that\nshould be reviewed before implementation. (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "browse",
+            "description": "Fast headless browser for QA testing and site dogfooding. Navigate any URL, interact with\nelements, verify page state, diff before/after actions, take annotated screenshots, check\nresponsive layouts, test forms and uploads, handle dialogs, and assert element states.\n~100ms per command. Use when you need to test a feature, verify a deployment, dogfood a\nuser flow, or file a bug with evidence. Use when asked to \"open in browser\", \"test the\nsite\", \"take a screenshot\", or \"dogfood this\". (gstack) (user)",
+            "input": null
+          },
+          {
+            "name": "skill-creator",
+            "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, update or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy. (user)",
+            "input": null
+          },
+          {
+            "name": "bytedance-tools",
+            "description": "Router skill for bytedcli (ByteDance internal CLI). Use when tasks mention bytedcli, SSO/auth, Feishu/Lark docs or collaboration workflows, Starling i18n project/task/space/text search, Luban npm package search, TCE/TOS/Volcano/Netlink/Neptune, RDS, Merlin trial YAML extraction/submission, ByteDoc, TCC, SCM, Cloud Docs, ByteTech, Cloud Ticket, Kani approval, ENV, Cronjob, Overpass, APM, Slardar Web alarms, BAM, AGW, Log, Cache, Hive, Dorado, Aeolus, ES, Goofy Deploy, Goofy Preview, `goofy deploy`, `goofy preview`, quick preview, local web deployment, BMQ, Kafka, MQ testing, produce/consume messages, BITS, BitsAI engineering knowledge or engineering asset Q&A, DKMS, KMS v2, IAM, data encryption keys, dev tasks, pipelines, releases, API Test, Grafana dashboards, panels, groups, Libra, A/B test, experiment, flight, DataTester, metric group, Codecov code coverage, or internal tech articles. Routes to subskills by domain and provides common execution patterns with --json output and help handling. (user)",
+            "input": null
+          },
+          {
+            "name": "clear",
+            "description": "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+            "input": null
+          },
+          {
+            "name": "compact",
+            "description": "Free up context by summarizing the conversation so far",
+            "input": {
+              "hint": "<optional custom summarization instructions>"
+            }
+          },
+          {
+            "name": "context",
+            "description": "Show current context usage",
+            "input": null
+          },
+          {
+            "name": "heapdump",
+            "description": "Dump the JS heap to ~/Desktop",
+            "input": null
+          },
+          {
+            "name": "init",
+            "description": "Initialize a new CLAUDE.md file with codebase documentation",
+            "input": null
+          },
+          {
+            "name": "review",
+            "description": "Review a pull request",
+            "input": null
+          },
+          {
+            "name": "security-review",
+            "description": "Complete a security review of the pending changes on the current branch",
+            "input": null
+          },
+          {
+            "name": "usage",
+            "description": "Show the total cost and duration of the current session",
+            "input": null
+          },
+          {
+            "name": "insights",
+            "description": "Generate a report analyzing your Claude Code sessions",
+            "input": null
+          },
+          {
+            "name": "team-onboarding",
+            "description": "Help teammates ramp on Claude Code with a guide from your usage",
+            "input": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36503,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to grep"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " for 'StreamEvent' in src/providers/ and report the count."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_01GFLUMswUdCMY2FmD93N1oP",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "grep",
+        "kind": "search",
+        "content": []
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_01GFLUMswUdCMY2FmD93N1oP",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "pattern": "StreamEvent",
+          "path": "src/providers/",
+          "output_mode": "files_with_matches"
+        },
+        "title": "grep -l \"StreamEvent\" src/providers/",
+        "kind": "search",
+        "content": []
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36623,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "mode": "files_with_matches",
+              "filenames": [
+                "src/providers/acp/event-mapper.ts",
+                "src/providers/acp/provider.ts",
+                "src/providers/base.ts",
+                "src/providers/claude-cli/provider.ts"
+              ],
+              "numFiles": 4
+            },
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_01GFLUMswUdCMY2FmD93N1oP",
+        "sessionUpdate": "tool_call_update"
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Grep"
+          }
+        },
+        "toolCallId": "toolu_01GFLUMswUdCMY2FmD93N1oP",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "Found 4 files\nsrc/providers/acp/event-mapper.ts\nsrc/providers/acp/provider.ts\nsrc/providers/base.ts\nsrc/providers/claude-cli/provider.ts",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Found 4 files\nsrc/providers/acp/event-mapper.ts\nsrc/providers/acp/provider.ts\nsrc/providers/base.ts\nsrc/providers/claude-cli/provider.ts"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36692,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "4"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " files contain 'StreamEvent'."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "4 files contain `StreamEvent`."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36719,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36719,
+        "size": 200000,
+        "cost": {
+          "amount": 0.15087135,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

@@ -15,6 +15,7 @@ import {
   renameSync,
   symlinkSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -140,7 +141,7 @@ export async function runProjectInit(
   // Step 2: Setup directory
   const step2 = await runStep(store, projectId, "setup_dir", async () => {
     if (input.dirMode === "existing") {
-      const path = input.existingPath!;
+      const path = realpathSync(input.existingPath!);
       if (!existsSync(path)) throw new Error(`Directory not found: ${path}`);
       store.updateField(projectId, "cwd", path);
       return path;

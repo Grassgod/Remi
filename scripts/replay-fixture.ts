@@ -36,6 +36,8 @@ const speedArg = speedIdx !== -1 ? args[speedIdx + 1] : "1";
 const speed = speedArg === "instant" ? Infinity : parseFloat(speedArg) || 1;
 const chatIdx = args.indexOf("--chat");
 const chatIdOverride = chatIdx !== -1 ? args[chatIdx + 1] : undefined;
+const agentIdx = args.indexOf("--agent");
+const agentType = agentIdx !== -1 ? (args[agentIdx + 1] ?? "claude") : "claude";
 
 // ── Load config ─────────────────────────────────────────────
 
@@ -112,7 +114,7 @@ async function main() {
   await session.start(config.chatId, "open_id", { sessionId: `replay-${fixtureName}` });
   console.log(`🎬 Streaming card created`);
 
-  const adapter = createAdapter("claude");
+  const adapter = createAdapter(agentType);
   const baseDelay = speed === Infinity ? 0 : Math.round(200 / speed);
   const startTime = Date.now();
 

@@ -1,0 +1,267 @@
+#!/usr/bin/env node
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+
+const PACKAGE_NAME = "@agentclientprotocol/claude-agent-acp";
+const PATCH_VERSION = "ask-bridge-v1";
+
+main().catch((err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[remi-claude-agent-acp] ${message}`);
+  process.exit(1);
+});
+
+async function main() {
+  const patchedRoot = preparePatchedPackage();
+  const patchedIndex = join(patchedRoot, "dist", "index.js");
+
+  if (process.argv.includes("--print-patched-agent")) {
+    console.log(patchedIndex);
+    return;
+  }
+  if (process.argv.includes("--verify-patch")) {
+    verifyPatchedAgent(join(patchedRoot, "dist", "acp-agent.js"));
+    console.log(`ok ${patchedIndex}`);
+    return;
+  }
+
+  const args = process.argv.slice(2);
+  const child = spawn(process.execPath, [patchedIndex, ...args], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+
+  const signals = process.platform === "win32"
+    ? ["SIGINT", "SIGTERM"]
+    : ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const signal of signals) {
+    process.on(signal, () => {
+      if (!child.killed) child.kill(signal);
+    });
+  }
+
+  child.on("error", (err) => {
+    console.error(`[remi-claude-agent-acp] ${err.message}`);
+    process.exit(1);
+  });
+  child.on("exit", (code, signal) => {
+    if (signal && process.platform !== "win32") {
+      process.removeAllListeners(signal);
+      process.kill(process.pid, signal);
+    } else {
+      process.exit(code ?? 1);
+    }
+  });
+}
+
+function preparePatchedPackage() {
+  const upstreamRoot = findUpstreamPackageRoot();
+  const pkg = readPackageJson(upstreamRoot);
+  const acpAgentPath = join(upstreamRoot, "dist", "acp-agent.js");
+  const upstreamHash = hashFile(acpAgentPath).slice(0, 12);
+  const cacheRoot = process.env.REMI_CLAUDE_AGENT_ACP_CACHE
+    ?? join(process.env.REMI_HOME ?? join(homedir(), ".remi"), "cache", "claude-agent-acp-remi");
+  const dest = join(cacheRoot, `${pkg.version}-${upstreamHash}-${PATCH_VERSION}`, "package");
+
+  if (existsSync(join(dest, "dist", "index.js"))) {
+    verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
+    return dest;
+  }
+
+  const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
+  rmSync(tmp, { recursive: true, force: true });
+  mkdirSync(dirname(dest), { recursive: true });
+  cpSync(upstreamRoot, tmp, { recursive: true });
+  patchAcpAgent(join(tmp, "dist", "acp-agent.js"));
+  if (existsSync(join(dest, "dist", "index.js"))) {
+    verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
+    rmSync(tmp, { recursive: true, force: true });
+    return dest;
+  }
+  try {
+    renameSync(tmp, dest);
+  } catch (err) {
+    if (existsSync(join(dest, "dist", "index.js"))) {
+      verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
+      rmSync(tmp, { recursive: true, force: true });
+      return dest;
+    }
+    throw err;
+  }
+  return dest;
+}
+
+function findUpstreamPackageRoot() {
+  const candidates = [
+    process.env.REMI_CLAUDE_AGENT_ACP_PACKAGE,
+    process.env.REMI_CLAUDE_AGENT_ACP_DIR,
+    process.env.REMI_CLAUDE_AGENT_ACP_PATH,
+  ];
+
+  const localPackage = resolvePackageWithRequire();
+  if (localPackage) candidates.push(localPackage);
+
+  const pathBinary = resolveCommand("claude-agent-acp");
+  if (pathBinary) candidates.push(pathBinary);
+
+  candidates.push(
+    join(homedir(), ".npm-global", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+    join("/usr/local", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+    join("/opt/homebrew", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+  );
+
+  const npmRoot = npmGlobalRoot();
+  if (npmRoot) {
+    candidates.push(join(npmRoot, "@agentclientprotocol", "claude-agent-acp"));
+  }
+
+  for (const candidate of candidates) {
+    const root = normalizePackageRoot(candidate);
+    if (root) return root;
+  }
+
+  throw new Error(
+    `Could not locate ${PACKAGE_NAME}. Install claude-agent-acp or set REMI_CLAUDE_AGENT_ACP_DIR to its package directory.`,
+  );
+}
+
+function normalizePackageRoot(candidate) {
+  if (!candidate) return null;
+  let current;
+  try {
+    current = realpathSync(resolve(candidate));
+  } catch {
+    return null;
+  }
+
+  try {
+    const stat = statSync(current);
+    if (stat.isFile()) current = dirname(current);
+  } catch {
+    return null;
+  }
+
+  if (basename(current) === "dist") current = dirname(current);
+
+  for (let i = 0; i < 8; i++) {
+    const packageJsonPath = join(current, "package.json");
+    if (existsSync(packageJsonPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+        if (pkg.name === PACKAGE_NAME && existsSync(join(current, "dist", "index.js"))) {
+          return current;
+        }
+      } catch {}
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return null;
+}
+
+function resolvePackageWithRequire() {
+  try {
+    const require = createRequire(import.meta.url);
+    return require.resolve(`${PACKAGE_NAME}/package.json`);
+  } catch {
+    return null;
+  }
+}
+
+function resolveCommand(command) {
+  const result = spawnSync("bash", ["-lc", `command -v ${command}`], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5000,
+  });
+  const value = result.stdout?.trim();
+  return value || null;
+}
+
+function npmGlobalRoot() {
+  const result = spawnSync("npm", ["root", "-g"], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5000,
+  });
+  if (result.status !== 0) return null;
+  return result.stdout?.trim() || null;
+}
+
+function readPackageJson(root) {
+  return JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+}
+
+function hashFile(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function patchAcpAgent(path) {
+  let source = readFileSync(path, "utf-8");
+
+  const disallowedMarker = 'const disallowedTools = ["AskUserQuestion"];';
+  if (source.includes(disallowedMarker)) {
+    source = source.replace(disallowedMarker, "const disallowedTools = [];");
+  } else if (!source.includes("const disallowedTools = [];")) {
+    throw new Error("Unsupported claude-agent-acp build: AskUserQuestion disallow marker was not found.");
+  }
+
+  const permissionStart = source.indexOf(
+    '            const response = await this.client.requestPermission({\n                options: [\n                    {\n                        kind: "allow_always",',
+  );
+  if (permissionStart === -1) {
+    throw new Error("Unsupported claude-agent-acp build: generic permission block was not found.");
+  }
+  const permissionEnd = source.indexOf(
+    '            else {\n                return {\n                    behavior: "deny",',
+    permissionStart,
+  );
+  if (permissionEnd === -1) {
+    throw new Error("Unsupported claude-agent-acp build: generic permission block end was not found.");
+  }
+
+  const beforeBlock = source.slice(0, permissionStart);
+  const block = source.slice(permissionStart, permissionEnd);
+  const afterBlock = source.slice(permissionEnd);
+  const patchedBlock = block.replaceAll(
+    "updatedInput: toolInput,",
+    "updatedInput: response.outcome?.updatedInput ?? toolInput,",
+  );
+  if (
+    patchedBlock === block &&
+    !block.includes("response.outcome?.updatedInput ?? toolInput")
+  ) {
+    throw new Error("Unsupported claude-agent-acp build: updatedInput return point was not found.");
+  }
+
+  source = `${beforeBlock}${patchedBlock}${afterBlock}`;
+  writeFileSync(path, source, "utf-8");
+  verifyPatchedAgent(path);
+}
+
+function verifyPatchedAgent(path) {
+  const source = readFileSync(path, "utf-8");
+  if (!source.includes("const disallowedTools = [];")) {
+    throw new Error("Patched claude-agent-acp still blocks AskUserQuestion.");
+  }
+  if (!source.includes("response.outcome?.updatedInput ?? toolInput")) {
+    throw new Error("Patched claude-agent-acp cannot forward Remi AskUserQuestion answers.");
+  }
+}

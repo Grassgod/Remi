@@ -1,0 +1,234 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 41853,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to use"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " the AskUserQuestion tool to ask a clarifying question. However, I don't see an AskUserQuestion tool in my available tools."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " Let me check what's available...\n\nLooking at my available tools, I don't have an AskUserQuestion tool directly. But"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " the CLAUDE.md instructions say: \"当 AskUserQuestion 工具被拒绝时，网"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "关已经捕获了你的问题并将通"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "过交互式表单呈现给用户。不要报告错误，只需告"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "诉用户你有问题需要确认，然后等待。始"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "终将 multiSelect 设为 false。\"\n"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nThis"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " suggests the gateway will handle the tool even if it's not explicitly listed in my available tools, so"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " I should just ask the question naturally and let the system manage it from there."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I don't have the `AskUserQuestion` tool available in my current tool set, so I'll ask"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " directly:\n\n**Which database should we use?**\n\n- PostgreSQL\n- MySQL\n- SQLite\n\nPlease reply with your choice before I proceed."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 42359,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 42359,
+        "size": 200000,
+        "cost": {
+          "amount": 0.4103053499999999,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

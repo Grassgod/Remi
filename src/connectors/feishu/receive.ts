@@ -23,7 +23,7 @@ function gcStore(): GroupConfigStore {
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody } from "./mention.js";
 import { getMessageFeishu } from "./send.js";
-import { handleFormSubmission, handleButtonClick } from "./card-actions.js";
+import { handleFormSubmission, handleButtonClick, hasPendingAction } from "./card-actions.js";
 
 // ── Dedup (persisted across restarts) ────────────────────────
 const DEDUP_TTL_MS = 30 * 60 * 1000;
@@ -146,6 +146,21 @@ function parseTextContent(content: string, messageType: string): string {
   } catch {
     return content;
   }
+}
+
+function callbackValueText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(callbackValueText).filter(Boolean).join(", ");
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.label === "string") return obj.label;
+    if (typeof obj.content === "string") return obj.content;
+    if (obj.text && typeof obj.text === "object") return callbackValueText((obj.text as Record<string, unknown>).content);
+  }
+  return String(value);
 }
 
 /** Strip simple HTML tags (e.g. <p>, <br>, <b>) from text, preserving inner content. */
@@ -622,23 +637,38 @@ export function startWebSocketListener(
           log.info(`form_value keys=[${Object.keys(action.form_value).join(",")}] raw=${JSON.stringify(action.form_value)}`);
         }
 
+        let handled = false;
+        let missingSelection = false;
+
         if (action.form_value) {
           // Form submission via WS: action.name is the button name, not form name.
           // Try _action_id in form_value, then action.name, then first pending action.
-          const formActionId = String(action.form_value._action_id || "");
-          handleFormSubmission(formActionId || action.name || "", action.form_value);
+          const isPlanForm = Object.prototype.hasOwnProperty.call(action.form_value, "feedback_text");
+          const decision = callbackValueText(action.form_value.decision).trim();
+          if (isPlanForm && !decision) {
+            missingSelection = true;
+            log.warn(`card action missing plan decision: tag=${action.tag} name=${action.name}`);
+          } else {
+            const formActionId = String(action.form_value._action_id || "");
+            handled = handleFormSubmission(formActionId || action.name || "", action.form_value);
+          }
         } else if (action.tag === "button" && action.value) {
           // Button click — route to pending action handler
           log.info(`button value: ${typeof action.value === "string" ? action.value : JSON.stringify(action.value)}`);
           const valueStr = typeof action.value === "string"
             ? action.value
             : JSON.stringify(action.value);
-          handleButtonClick(valueStr);
+          handled = handleButtonClick(valueStr);
+        } else if (action.tag === "button" && action.name && hasPendingAction(action.name)) {
+          missingSelection = true;
+          log.warn(`card action missing selection: tag=${action.tag} name=${action.name}`);
         } else {
           log.warn(`card action not handled: tag=${action.tag} name=${action.name}`);
         }
 
-        return { toast: { type: "success", content: "已提交，处理中..." } };
+        if (handled) return { toast: { type: "success", content: "已提交，处理中..." } };
+        if (missingSelection) return { toast: { type: "error", content: "请选择审批选项后再提交" } };
+        return { toast: { type: "error", content: "操作已过期或无法识别" } };
       } catch (err) {
         log.error(`error handling card action: ${String(err)}`);
         return { toast: { type: "error", content: "处理失败" } };

@@ -54,6 +54,9 @@ export interface NewSessionMeta {
     options?: Record<string, unknown>;
     emitRawSDKMessages?: boolean | SdkMessageFilter[];
   };
+  codex?: {
+    options?: Record<string, unknown>;
+  };
   additionalRoots?: string[];
 }
 
@@ -219,8 +222,11 @@ export interface RequestPermissionResult {
   outcome: PermissionOutcome;
 }
 
+// Standard ACP permission responses select a client-presented option. Remi may
+// attach `updatedInput` for patched Claude ACP agents that bridge
+// AskUserQuestion back to the Claude SDK canUseTool `updatedInput` field.
 export type PermissionOutcome =
-  | { outcome: "selected"; optionId: string }
+  | { outcome: "selected"; optionId: string; updatedInput?: Record<string, unknown> }
   | { outcome: "cancelled" };
 
 // ── Plan ────────────────────────────────────────────────────────

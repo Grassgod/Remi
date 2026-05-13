@@ -21,9 +21,25 @@ interface PendingAction {
 }
 
 const pendingActions = new Map<string, PendingAction>();
+let actionCounter = 0;
 
 /** Timeout for user interaction (12 hours). */
 const ACTION_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+
+function formAnswerText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(formAnswerText).filter(Boolean).join(", ");
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.value === "string") return obj.value;
+    if (typeof obj.label === "string") return obj.label;
+    if (typeof obj.content === "string") return obj.content;
+    if (obj.text && typeof obj.text === "object") return formAnswerText((obj.text as Record<string, unknown>).content);
+  }
+  return String(value);
+}
 
 /**
  * Register a pending action that will be resolved when the user interacts with the card.
@@ -35,7 +51,9 @@ export function registerPendingAction(
   questions?: Array<{ question: string; options: Array<{ label: string }> }>,
   chatId?: string,
 ): string {
-  const actionId = `a${Date.now().toString(36)}`;
+  actionCounter = (actionCounter + 1) % 1_000_000;
+  const suffix = `${actionCounter.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const actionId = `a${Date.now().toString(36)}_${suffix}`;
 
   const timeoutTimer = setTimeout(() => {
     const action = pendingActions.get(actionId);
@@ -68,6 +86,24 @@ export function resolvePendingAction(actionId: string, value: unknown): boolean 
   return true;
 }
 
+/** Reject one pending action by ID. */
+export function rejectPendingAction(actionId: string, reason: string): boolean {
+  const action = pendingActions.get(actionId);
+  if (!action) {
+    log.warn(`No pending action found for reject: ${actionId}`);
+    return false;
+  }
+  clearTimeout(action.timeoutTimer);
+  pendingActions.delete(actionId);
+  action.reject(reason);
+  log.info(`Rejected action ${actionId}: ${reason}`);
+  return true;
+}
+
+/** Whether an action ID is still waiting for user input. */
+export function hasPendingAction(actionId: string): boolean {
+  return pendingActions.has(actionId);
+}
 
 /**
  * Process a card form submission event.
@@ -78,8 +114,8 @@ export function handleFormSubmission(
   formValue: Record<string, unknown>,
 ): boolean {
   // Try exact match first, then fallback to first pending action with questions
-  let actionId = formName;
-  let action = pendingActions.get(formName);
+  let actionId = formName.startsWith("form_") ? formName.slice("form_".length) : formName;
+  let action = pendingActions.get(actionId);
   if (!action) {
     // Check if it's a feedback form (actionId_feedback)
     if (formName.endsWith("_feedback")) {
@@ -101,7 +137,7 @@ export function handleFormSubmission(
     for (let i = 0; i < questions.length; i++) {
       const customKey = `q${i}_custom`;
       const selectKey = `q${i}`;
-      const customValue = String(formValue[customKey] ?? "").trim();
+      const customValue = formAnswerText(formValue[customKey]).trim();
       const selected = formValue[selectKey];
       log.info(`form q${i}: select=${JSON.stringify(selected)} custom="${customValue}" type=${typeof selected}`);
 
@@ -110,11 +146,7 @@ export function handleFormSubmission(
         answers[questions[i].question] = customValue;
       } else {
         // Use checker selection (may be array for multi-select or string)
-        if (Array.isArray(selected)) {
-          answers[questions[i].question] = selected.join(", ");
-        } else {
-          answers[questions[i].question] = String(selected ?? "");
-        }
+        answers[questions[i].question] = formAnswerText(selected);
       }
     }
     log.info(`form answers: ${JSON.stringify(answers)}`);
@@ -147,6 +179,11 @@ export function handleButtonClick(valueJson: string): boolean {
         return resolvePendingAction(value._action_id, answers);
       }
       return resolvePendingAction(value._action_id, value.label);
+    }
+
+    // Generic ACP permission option button.
+    if (value._permission_action_id && value.decision) {
+      return resolvePendingAction(value._permission_action_id, { decision: value.decision });
     }
 
     // Plan review button: { action, decision }

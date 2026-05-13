@@ -1,0 +1,165 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49228,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to create a todo"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " list with 3 items. Just create it, don't execute."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Read config file",
+            "status": "pending",
+            "priority": "medium"
+          },
+          {
+            "content": "Update version",
+            "status": "pending",
+            "priority": "medium"
+          },
+          {
+            "content": "Run tests",
+            "status": "pending",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49377,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49415,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Todo"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " list created with 3 pending items."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49427,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49427,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.47689824999999997,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

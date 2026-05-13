@@ -1,0 +1,229 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14445,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14321,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_KuuFOBbbEr3HJQNszh3tsHx9",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "wc -l src/providers/base.ts",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+          }
+        ],
+        "rawInput": {
+          "command": "wc -l src/providers/base.ts",
+          "cwd": "/data00/home/hehuajie/project/remi"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/data00/home/hehuajie/project/remi",
+            "terminal_id": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_KuuFOBbbEr3HJQNszh3tsHx9",
+        "status": "completed",
+        "rawOutput": {
+          "formatted_output": "106 src/providers/base.ts\n",
+          "exit_code": 0
+        },
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "src"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/providers"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/base"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".ts"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " has"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " "
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "106"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " lines"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14387,
+        "size": 258400
+      }
+    }
+  }
+]

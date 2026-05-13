@@ -1,0 +1,247 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 49900,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " me to use AskUserQuestion. But I don't have an AskUserQuestion tool available in"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " my tool list. Let me check... No, I don't see AskUserQuestion in my available tools. "
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nHowever, the CLAUDE.md says: \"当 AskUserQuestion 工具被拒绝时，网关"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "已经捕获了你的问题并将通过交互式表单呈现给用户。不要报告错误，只需告诉用户你有问题需要确认，然后等待。\" And"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " \"注意：你应该正常使用这些工具（AskUserQuestion、EnterPlanMode、ExitPlanMode），不要因为它们可能被拒绝而回避使"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "用。拒绝是预期行为，网关会处理。\"\n"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "\n\nI"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "'ll just ask the question directly in text since I can only work with the tools I actually"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " have access to."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "I don't have an `AskUserQuestion` tool available in my current tool"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "set. I'll ask directly instead:\n\n**Which database should we use?**\n-"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " PostgreSQL\n- MySQL\n- SQLite\n\nPlease let me know your choice before I"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " proceed."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 50224,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "a159896b-59ff-4595-8a30-411dedc5d3bf",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 50224,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.6604198000000001,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

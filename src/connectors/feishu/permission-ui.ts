@@ -8,6 +8,7 @@
  */
 
 import type { AskUserQuestion } from "../../providers/base.js";
+import type { PermissionOption } from "../../providers/acp/protocol.js";
 
 export interface AskUserQuestionData {
   questions: AskUserQuestion[];
@@ -19,59 +20,54 @@ export interface PermissionFormElements {
   panel?: Record<string, unknown>;
 }
 
-function twoButtonColumns(
-  actionId: string,
-  leftName: string,
-  leftText: string,
-  rightName: string,
-  rightText: string,
-): Record<string, unknown> {
-  return {
-    tag: "column_set",
-    flex_mode: "none",
-    columns: [
-      {
-        tag: "column",
-        width: "weighted",
-        weight: 1,
-        elements: [{
-          tag: "button",
-          name: leftName,
-          text: { tag: "plain_text", content: leftText },
-          type: "primary",
-          form_action_type: "submit",
-        }],
-      },
-      {
-        tag: "column",
-        width: "weighted",
-        weight: 1,
-        elements: [{
-          tag: "button",
-          name: rightName,
-          text: { tag: "plain_text", content: rightText },
-          type: "default",
-          form_action_type: "submit",
-        }],
-      },
-    ],
-  };
+function buttonTypeForPermissionOption(option: PermissionOption): string {
+  const text = `${option.kind} ${option.optionId} ${option.name ?? ""}`.toLowerCase();
+  if (text.includes("reject") || text.includes("deny")) return "danger";
+  if (
+    text.includes("allow") ||
+    text.includes("approve") ||
+    text.includes("accept") ||
+    text.includes("default") ||
+    text.includes("auto")
+  ) {
+    return "primary";
+  }
+  return "default";
 }
 
 export function buildToolApprovalForm(
   actionId: string,
   toolName: string,
   inputSummary: string,
+  options: PermissionOption[],
 ): PermissionFormElements {
   return {
     hr: { tag: "hr", element_id: `perm_hr_${actionId}` },
     form: {
       tag: "form",
-      name: actionId,
+      name: `form_${actionId}`,
       element_id: `perm_${actionId}`,
       elements: [
-        { tag: "markdown", content: `**🔒 ${toolName}**\n\n${inputSummary}` },
-        twoButtonColumns(actionId, `${actionId}_approve`, "Allow", `${actionId}_deny`, "Deny"),
+        { tag: "markdown", content: `**${toolName}**\n\n${inputSummary}` },
+        {
+          tag: "column_set",
+          flex_mode: "none",
+          columns: options.map((option, index) => ({
+            tag: "column",
+            width: "weighted",
+            weight: 1,
+            elements: [{
+              tag: "button",
+              name: `${actionId}_${index}`,
+              text: { tag: "plain_text", content: option.name || option.optionId },
+              type: buttonTypeForPermissionOption(option),
+              value: JSON.stringify({
+                _permission_action_id: actionId,
+                decision: option.optionId,
+              }),
+            }],
+          })),
+        },
       ],
     },
   };
@@ -104,6 +100,7 @@ export function buildAskQuestionForm(
     }
     formElements.push({
       tag: "input",
+      input_type: "multiline_text",
       name: `q${i}_custom`,
       placeholder: { tag: "plain_text", content: "或自定义回答..." },
       max_length: 500,
@@ -122,7 +119,7 @@ export function buildAskQuestionForm(
     hr: { tag: "hr", element_id: `perm_hr_${actionId}` },
     form: {
       tag: "form",
-      name: actionId,
+      name: `form_${actionId}`,
       element_id: `perm_${actionId}`,
       elements: formElements,
     },
@@ -152,7 +149,7 @@ export function buildPlanReviewForm(
     panel,
     form: {
       tag: "form",
-      name: actionId,
+      name: `form_${actionId}`,
       element_id: `perm_${actionId}`,
       elements: [
         {
@@ -166,10 +163,11 @@ export function buildPlanReviewForm(
         },
         {
           tag: "input",
+          input_type: "multiline_text",
           name: "feedback_text",
           placeholder: { tag: "plain_text", content: "Feedback or changes (optional)..." },
-          max_length: 1000,
-          rows: 3,
+          max_length: 2000,
+          rows: 8,
         },
         {
           tag: "button",

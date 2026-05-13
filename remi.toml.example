@@ -15,6 +15,11 @@
 # 如需使用远程 OpenAI 兼容端点，取消下方注释。
 # ---------------------------------------------------------------------------
 [provider]
+# name = "acp:claude"       # ACP Claude via claude-agent-acp
+# name = "acp:codex"        # ACP Codex via codex-acp
+# Install codex-acp with: npm install -g @agentclientprotocol/codex-acp
+# Or set REMI_CODEX_AGENT_ACP_EXECUTABLE=/absolute/path/to/codex-acp
+# executable = "/path/to/codex-acp"
 # model = "claude-opus-4-7"
 # api_key = "your-provider-api-key-here"
 # base_url = "http://localhost:3000"
@@ -136,6 +141,12 @@ type = "send_message"
 
 [[bot_menu.default.children]]
 name = "/switch claude:auto"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/switch codex"
 
 [[bot_menu.default.children.behaviors]]
 type = "send_message"

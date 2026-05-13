@@ -37,6 +37,15 @@ import * as sessDb from "./db/sessions.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
+import {
+  availableSwitchModes,
+  buildSwitchTarget,
+  defaultSwitchMode,
+  isKnownSwitchMode,
+  parseSwitchArgs,
+  providerLabel,
+  resolveSwitchProviderAlias,
+} from "./switch-mode.js";
 
 const log = createLogger("core");
 
@@ -269,9 +278,20 @@ export class Remi {
       const providerName = groupConfig?.provider ?? sessRow?.provider ?? null;
       const provider = this._getProvider(providerName);
       const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
-        ? (handler: any) => (provider as any).setPermissionHandler(handler)
+        ? (handler: any) => (provider as any).setPermissionHandler(handler, sessionKey)
         : undefined;
-      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), { sessionId: existingSessionId, displayName: existingDisplayName, setPermissionHandler: setPermHandler });
+      const agentType = typeof (provider as any).adapter?.agentType === "string"
+        ? (provider as any).adapter.agentType
+        : provider.name.startsWith("acp:")
+          ? provider.name.slice("acp:".length)
+          : null;
+      await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), {
+        sessionId: existingSessionId,
+        displayName: existingDisplayName,
+        providerName: provider.name,
+        agentType,
+        setPermissionHandler: setPermHandler,
+      });
       rootSpan.end();
     } catch (e) {
       rootSpan.endWithError(e instanceof Error ? e.message : String(e));
@@ -648,73 +668,69 @@ export class Remi {
         if (!args) {
           // Show current state + available options
           const switchSessRow = sessDb.getSession(sessionKey);
-          const curProvider = switchSessRow?.provider ?? this.config.provider.name;
-          const curMode = switchSessRow?.mode ?? "bypass";
+          const curProvider = resolveSwitchProviderAlias(switchSessRow?.provider ?? this.config.provider.name);
+          const curMode = switchSessRow?.mode ?? defaultSwitchMode(curProvider) ?? "agent default";
           const lines = [
-            `当前: **Claude · ${curMode}**`,
+            `当前: **${providerLabel(curProvider)} · ${curMode === "bypassPermissions" ? "bypass" : curMode}**`,
             "",
             "可用组合:",
-            "  `/switch claude:bypass` — Claude 全权限（默认）",
-            "  `/switch claude:plan` — Claude Plan 模式",
-            "  `/switch claude:auto` — Claude Auto 模式",
-            "  `/switch claude:default` — Claude 需确认模式",
-            "  `/switch claude:acceptEdits` — Claude 自动编辑",
+            "  `/switch claude` 或 `/switch claude:auto` — ACP Claude Auto（默认，若 agent 不支持会回退 default）",
+            "  `/switch claude:default` — ACP Claude 标准权限确认",
+            "  `/switch claude:acceptEdits` — ACP Claude 自动接受编辑",
+            "  `/switch claude:plan` — ACP Claude Plan 模式",
+            "  `/switch claude:dontAsk` — ACP Claude 不询问，未预批准则拒绝",
+            "  `/switch claude:bypass` — ACP Claude 跳过权限检查",
+            "  `/switch cli:bypass` — 旧 Claude CLI 全权限",
           ];
+          if (this._providers.has("acp:codex")) {
+            lines.push("  `/switch codex[:mode]` — ACP Codex（mode 由 agent 定义）");
+          }
           return { text: lines.join("\n") };
         }
 
-        // Parse provider:mode (e.g. "claude:plan", "claude")
-        const [rawAlias, modeArg] = args.includes(":") ? args.split(":", 2) : [args, undefined];
-        const providerAlias = rawAlias.toLowerCase();
-
-        // Resolve provider name
-        const PROVIDER_ALIASES: Record<string, string> = { claude: "claude_cli" };
-        const providerName = PROVIDER_ALIASES[providerAlias] ?? providerAlias;
-        if (!this._providers.has(providerName)) {
-          const available = Object.keys(PROVIDER_ALIASES).join(", ");
-          return { text: `Provider "${providerAlias}" 不可用。可选: ${available}` };
+        // Parse provider:mode. Use the last colon so "acp:claude:auto" also works.
+        const { providerAlias, modeArg } = parseSwitchArgs(args);
+        const target = buildSwitchTarget(providerAlias, modeArg);
+        const providerName = target.providerName;
+        let provider: Provider;
+        try {
+          provider = this._getProvider(providerName);
+        } catch {
+          return { text: `Provider "${providerAlias}" 不可用。可选: claude, codex, cli` };
         }
 
-        // Resolve default mode per provider
-        const CLAUDE_MODES = new Set(["bypass", "plan", "auto", "default", "acceptEdits", "bypassPermissions"]);
-        const validModes = CLAUDE_MODES;
-        const defaultMode = "bypass";
-
-        // Normalize "bypass" alias
-        let mode = modeArg ?? defaultMode;
-        if (mode === "bypass") mode = "bypassPermissions";
-
-        if (!validModes.has(mode) && mode !== "bypassPermissions") {
-          return { text: `模式 "${modeArg}" 对 ${providerAlias} 不可用。可选: ${[...validModes].join(", ")}` };
+        if (target.mode && !isKnownSwitchMode(providerName, target.mode)) {
+          const available = availableSwitchModes(providerName).join(", ");
+          return { text: `模式 "${modeArg}" 对 ${providerLabel(providerName)} 不可用。可选: ${available}` };
         }
 
-        const curProviderName = sessDb.getSession(sessionKey)?.provider ?? this.config.provider.name;
+        const curProviderName = resolveSwitchProviderAlias(sessDb.getSession(sessionKey)?.provider ?? this.config.provider.name);
         const providerChanged = curProviderName !== providerName;
 
         if (providerChanged) {
           // Switching provider — clear old session (sessionId is provider-specific)
-          const oldProvider = this._providers.get(curProviderName);
+          let oldProvider: Provider | null = null;
+          try { oldProvider = this._getProvider(curProviderName); } catch {}
           if (oldProvider && "clearSession" in oldProvider && typeof (oldProvider as any).clearSession === "function") {
             await (oldProvider as any).clearSession(sessionKey);
           }
           sessDb.clearSessionId(sessionKey);
-          sessDb.updateSessionProvider(sessionKey, providerName);
         } else {
           // Same provider, mode change only — kill process but keep sessionId for resume
-          const provider = this._providers.get(providerName);
           if (provider && "clearSession" in provider && typeof (provider as any).clearSession === "function") {
             await (provider as any).clearSession(sessionKey);
           }
           // Don't clear session — preserve sessionId for --resume
         }
 
-        // Store mode (or clear if default)
-        const isDefaultMode = mode === "bypassPermissions";
-        sessDb.updateSessionMode(sessionKey, isDefaultMode ? null : mode);
+        sessDb.upsertSessionSettings(sessionKey, {
+          provider: providerName,
+          mode: target.storedMode,
+          clearSessionId: providerChanged,
+        });
 
-        const modeLabel = isDefaultMode ? "Bypass" : mode;
         const resumeNote = !providerChanged ? "（上下文保留）" : "（新对话）";
-        return { text: `已切换到 **Claude · ${modeLabel}** ${resumeNote}` };
+        return { text: `已切换到 **${providerLabel(providerName)} · ${target.modeLabel}** ${resumeNote}` };
       }
       case "restart": {
         // Delay restart so the response gets sent first

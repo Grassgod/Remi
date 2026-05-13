@@ -16,9 +16,13 @@ import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "./client.js";
 import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, formatToolInputSummary } from "./tool-formatters.js";
-import type { PermissionFormElements } from "./permission-ui.js";
+import { buildAskQuestionForm, buildPlanReviewForm, type PermissionFormElements } from "./permission-ui.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
+type RetainedPermissionPanel = {
+  hr: Record<string, unknown>;
+  panel: Record<string, unknown>;
+};
 type CardState = {
   cardId: string;
   messageId: string;
@@ -52,6 +56,8 @@ export interface StreamingCloseOptions {
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** Pre-built ExitPlanMode data (actionId). Set by index.ts after registerPendingAction. */
   planReview?: { actionId: string; planContent?: string };
+  /** Permission panels retained after their interactive form was submitted. */
+  retainedPermissionPanels?: RetainedPermissionPanel[];
 }
 
 /** Step data for process panel rendering. */
@@ -61,6 +67,15 @@ export interface StepInfo {
   /** Thinking text offset when this step was added (for timeline interleaving). */
   thinkingOffset?: number;
   durationMs?: number;
+}
+
+function appendPermissionElements(
+  elements: Record<string, unknown>[],
+  form: PermissionFormElements,
+): void {
+  elements.push(form.hr);
+  if (form.panel) elements.push(form.panel);
+  elements.push(form.form);
 }
 
 // ── Token cache (shared across sessions) ────────────────────
@@ -137,6 +152,8 @@ export function buildFinalCard(opts: {
   askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
   /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
   planReview?: { actionId: string; planContent?: string };
+  /** Permission panels retained after their interactive form was submitted. */
+  retainedPermissionPanels?: RetainedPermissionPanel[];
   /** Suffix appended to card header name (e.g. " · msn_xxx"). */
   nameSuffix?: string;
 }): Record<string, unknown> {
@@ -204,105 +221,27 @@ export function buildFinalCard(opts: {
 
   elements.push(...buildContentElements(opts.text || ""));
 
+  if (opts.retainedPermissionPanels?.length) {
+    for (const retained of opts.retainedPermissionPanels) {
+      elements.push(retained.hr);
+      elements.push(retained.panel);
+    }
+  }
+
   // AskUserQuestion form — between content and stats bar
   if (opts.askQuestions) {
-    const formElements: Record<string, unknown>[] = [];
-    for (let i = 0; i < opts.askQuestions.questions.length; i++) {
-      const q = opts.askQuestions.questions[i];
-      // Full description as markdown list (no truncation)
-      const optionLines = (q.options ?? []).map((opt) =>
-        opt.description ? `- **${opt.label}** — ${opt.description}` : `- ${opt.label}`
-      );
-      formElements.push({
-        tag: "markdown",
-        content: `**${i + 1}. ${q.question}**\n${optionLines.join("\n")}`,
-      });
-      // Dropdown for quick selection (multi_select_static when multiSelect=true)
-      if (q.options && q.options.length > 0) {
-        formElements.push({
-          tag: q.multiSelect ? "multi_select_static" : "select_static",
-          name: `q${i}`,
-          placeholder: { tag: "plain_text", content: q.multiSelect ? "可多选..." : "请选择..." },
-          options: q.options.map((opt) => ({
-            text: { tag: "plain_text", content: opt.label },
-            value: opt.label,
-          })),
-        });
-      }
-      // Custom input (overrides selection)
-      formElements.push({
-        tag: "input",
-        name: `q${i}_custom`,
-        placeholder: { tag: "plain_text", content: "或自定义回答..." },
-        max_length: 500,
-      });
-    }
-    formElements.push({
-      tag: "button",
-      name: opts.askQuestions.actionId,
-      text: { tag: "plain_text", content: "📤 提交回答" },
-      type: "primary",
-      form_action_type: "submit",
-    });
-    elements.push({ tag: "hr" });
-    elements.push({
-      tag: "form",
-      name: `form_${opts.askQuestions.actionId}`,
-      elements: formElements,
-    });
+    appendPermissionElements(
+      elements,
+      buildAskQuestionForm(opts.askQuestions.actionId, { questions: opts.askQuestions.questions }),
+    );
   }
 
   // ExitPlanMode — between content and stats bar (matches Claude Code CLI wording)
   if (opts.planReview) {
-    elements.push({ tag: "hr" });
-    // Show plan content if available (truncate to fit Feishu card limits)
-    if (opts.planReview.planContent) {
-      const planText = opts.planReview.planContent.length > 3000
-        ? opts.planReview.planContent.slice(0, 3000) + "\n\n*(...truncated)*"
-        : opts.planReview.planContent;
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: true,
-        header: {
-          title: { tag: "plain_text", content: "Implementation Plan" },
-        },
-        border: { color: "grey" },
-        elements: [{ tag: "markdown", content: planText }],
-      });
-    }
-    elements.push({
-      tag: "markdown",
-      content: "**Plan ready for review.** How would you like to proceed?",
-    });
-    elements.push({
-      tag: "form",
-      name: `form_plan_${opts.planReview.actionId}`,
-      elements: [
-        {
-          tag: "select_static",
-          name: "decision",
-          placeholder: { tag: "plain_text", content: "Select action..." },
-          options: [
-            { text: { tag: "plain_text", content: "Yes, proceed" }, value: "approved" },
-            { text: { tag: "plain_text", content: "No, stop" }, value: "rejected" },
-            { text: { tag: "plain_text", content: "Give feedback" }, value: "feedback" },
-          ],
-        },
-        {
-          tag: "input",
-          name: "feedback_text",
-          placeholder: { tag: "plain_text", content: "Optional feedback or changes..." },
-          max_length: 1000,
-        },
-        {
-          tag: "button",
-          name: opts.planReview.actionId,
-          text: { tag: "plain_text", content: "Submit" },
-          type: "primary",
-          form_action_type: "submit",
-        },
-      ],
-    });
+    appendPermissionElements(
+      elements,
+      buildPlanReviewForm(opts.planReview.actionId, opts.planReview.planContent),
+    );
   }
 
   // Stats bar with optional @mention (always last)
@@ -390,6 +329,7 @@ export class FeishuStreamingSession {
   private static DEGRADED_FAILURE_THRESHOLD = 2;
   private _degradedFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private static DEGRADED_FLUSH_MS = 3000;
+  private static PERMISSION_FLUSH_MS = 100;
 
   // (PROCESS_BUDGET removed — steps are now individual div elements, no markdown accumulation)
 
@@ -403,6 +343,7 @@ export class FeishuStreamingSession {
 
   // Active permission form (for degraded mode card rebuild)
   private _pendingPermission: PermissionFormElements | null = null;
+  private _retainedPermissionPanels = new Map<string, RetainedPermissionPanel>();
 
   constructor(
     client: Client,
@@ -718,7 +659,14 @@ export class FeishuStreamingSession {
       });
     }
 
-    elements.push(...buildContentElements(this.state?.currentText || "..."));
+    if (this.state?.currentText?.trim()) {
+      elements.push(...buildContentElements(this.state.currentText));
+    }
+
+    for (const retained of this._retainedPermissionPanels.values()) {
+      elements.push(retained.hr);
+      elements.push(retained.panel);
+    }
 
     if (this._pendingPermission) {
       const pf = this._pendingPermission;
@@ -735,21 +683,13 @@ export class FeishuStreamingSession {
     };
   }
 
-  private _scheduleDegradedFlush(): void {
+  private _scheduleDegradedFlush(delayMs = FeishuStreamingSession.DEGRADED_FLUSH_MS): void {
     if (this._degradedFlushTimer || this.closed || !this.state) return;
     this._degradedFlushTimer = setTimeout(async () => {
       this._degradedFlushTimer = null;
       if (this.closed || !this.state) return;
-      try {
-        const card = this._buildCurrentCard();
-        await this.client.im.message.patch({
-          path: { message_id: this.state.messageId },
-          data: { content: JSON.stringify(card) },
-        });
-      } catch (e) {
-        this.log(`Degraded flush failed: ${String(e)}`);
-      }
-    }, FeishuStreamingSession.DEGRADED_FLUSH_MS);
+      await this._flushDegradedNow();
+    }, delayMs);
   }
 
   private _clearDegradedFlushTimer(): void {
@@ -759,31 +699,102 @@ export class FeishuStreamingSession {
     }
   }
 
+  private async _flushDegradedNow(): Promise<boolean> {
+    if (!this.state || this.closed) return false;
+    this._clearDegradedFlushTimer();
+    try {
+      const card = this._buildCurrentCard();
+      await this.client.im.message.patch({
+        path: { message_id: this.state.messageId },
+        data: { content: JSON.stringify(card) },
+      });
+      return true;
+    } catch (e: any) {
+      const detail = e?.response?.data ? JSON.stringify(e.response.data).slice(0, 500) : "";
+      this.log(`Degraded flush failed: ${String(e)} ${detail}`);
+      return false;
+    }
+  }
+
   // ── Permission form in streaming card ──────────────────────
 
   async appendPermissionForm(form: PermissionFormElements): Promise<void> {
     this._pendingPermission = form;
     if (this._degraded) {
-      this._scheduleDegradedFlush();
+      if (!(await this._flushDegradedNow())) {
+        throw new Error("Failed to render permission form");
+      }
       return;
     }
-    const elements = [form.hr, ...(form.panel ? [form.panel] : []), form.form];
-    for (const el of elements) {
-      await new Promise<void>((resolve) => {
-        this.queue = this.queue
-          .then(() => this._appendElementAfter("content", el))
-          .then(() => resolve());
-      });
+    // Streaming mode: use CardKit element API to insert form elements.
+    // im.message.patch fails on cards with streaming_mode=true, so we
+    // must stay within the CardKit element API while streaming is active.
+    try {
+      const hrId = (form.hr as Record<string, unknown>).element_id as string;
+      await this._insertElementOrThrow("content", form.hr);
+      if (form.panel) {
+        const panelId = (form.panel as Record<string, unknown>).element_id as string;
+        await this._insertElementOrThrow(hrId, form.panel);
+        await this._insertElementOrThrow(panelId, form.form);
+      } else {
+        await this._insertElementOrThrow(hrId, form.form);
+      }
+    } catch (e) {
+      this.log(`Permission form element insert failed: ${e}, falling back to degraded`);
+      await this._closeStreamingMode();
+      this._degraded = true;
+      this._clearRenewTimer();
+      if (!(await this._flushDegradedNow())) {
+        throw new Error("Failed to render permission form");
+      }
     }
   }
 
-  async removePermissionForm(actionId: string): Promise<void> {
+  /** Insert element via CardKit API, throwing on failure (unlike fire-and-forget _appendElementAfter). */
+  private async _insertElementOrThrow(
+    afterElementId: string,
+    element: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.state || this.closed) throw new Error("Session not active");
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    const seq = this.state.sequence;
+    const res = await fetch(
+      `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await this._getToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "insert_after",
+          target_element_id: afterElementId,
+          sequence: seq,
+          elements: JSON.stringify([element]),
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`CardKit insert_after ${afterElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
+    }
+  }
+
+  async removePermissionForm(actionId: string, options?: { preservePanel?: boolean }): Promise<void> {
+    const preservePanel = options?.preservePanel === true;
+    if (preservePanel && this._pendingPermission?.panel) {
+      this._retainedPermissionPanels.set(actionId, {
+        hr: this._pendingPermission.hr,
+        panel: this._pendingPermission.panel,
+      });
+    }
     this._pendingPermission = null;
     if (this._degraded) {
-      this._scheduleDegradedFlush();
+      this._scheduleDegradedFlush(FeishuStreamingSession.PERMISSION_FLUSH_MS);
       return;
     }
-    const ids = [`perm_hr_${actionId}`, `perm_plan_${actionId}`, `perm_${actionId}`];
+    const ids = preservePanel ? [`perm_${actionId}`] : [`perm_hr_${actionId}`, `perm_plan_${actionId}`, `perm_${actionId}`];
     for (const id of ids) {
       this.queue = this.queue.then(() => this._deleteElement(id).catch(() => {}));
     }
@@ -1214,6 +1225,45 @@ export class FeishuStreamingSession {
     this._scheduleDegradedFlush();
   }
 
+  // ── Close streaming mode (prerequisite for im.message.patch) ──
+
+  private async _closeStreamingMode(summaryText?: string): Promise<void> {
+    if (!this.state || this._degraded) return;
+    this.state.sequence += 1;
+    const apiBase = resolveApiBase(this.creds.domain);
+    const seq = this.state.sequence;
+    try {
+      const res = await fetch(
+        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await this._getToken()}`,
+            "Content-Type": "application/json; charset=utf-8",
+          },
+          body: JSON.stringify({
+            settings: JSON.stringify({
+              config: {
+                streaming_mode: false,
+                summary: { content: buildSummary(summaryText ?? this.state.currentText ?? "") },
+              },
+            }),
+            sequence: seq,
+            uuid: `c_${this.state.cardId}_${seq}`,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log(`Close streaming mode HTTP ${res.status}: ${body.slice(0, 300)}`);
+      } else {
+        this.log(`Close streaming mode OK (streaming_mode=false)`);
+      }
+    } catch (e) {
+      this.log(`Close streaming mode failed: ${String(e)}`);
+    }
+  }
+
   // ── Close streaming card ───────────────────────────────────
 
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
@@ -1276,37 +1326,7 @@ export class FeishuStreamingSession {
 
     // Close streaming mode via PATCH /settings (skip if degraded — streaming already expired)
     if (!this._degraded) {
-      this.state.sequence += 1;
-      try {
-        const res = await fetch(
-          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-          {
-            method: "PATCH",
-            headers: {
-              Authorization: `Bearer ${await this._getToken()}`,
-              "Content-Type": "application/json; charset=utf-8",
-            },
-            body: JSON.stringify({
-              settings: JSON.stringify({
-                config: {
-                  streaming_mode: false,
-                  summary: { content: buildSummary(text) },
-                },
-              }),
-              sequence: this.state.sequence,
-              uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-            }),
-          },
-        );
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          this.log(`Close settings HTTP ${res.status}: ${body.slice(0, 300)}`);
-        } else {
-          this.log(`Close settings OK (streaming_mode=false)`);
-        }
-      } catch (e) {
-        this.log(`Close settings failed: ${String(e)}`);
-      }
+      await this._closeStreamingMode(text);
     } else {
       this.log(`Close: skipping settings PATCH (degraded mode)`);
     }
@@ -1315,6 +1335,9 @@ export class FeishuStreamingSession {
     const permDenials = typeof finalTextOrOptions === "object" ? finalTextOrOptions?.permissionDenials : undefined;
     const askQuestions = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { askQuestions?: Parameters<typeof buildFinalCard>[0]["askQuestions"] }).askQuestions : undefined;
     const planReview = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { planReview?: Parameters<typeof buildFinalCard>[0]["planReview"] }).planReview : undefined;
+    const retainedPermissionPanels = typeof finalTextOrOptions === "object"
+      ? (finalTextOrOptions.retainedPermissionPanels ?? [...this._retainedPermissionPanels.values()])
+      : [...this._retainedPermissionPanels.values()];
 
     // Replace with static card — process panel collapsed with icon divs
     try {
@@ -1331,6 +1354,7 @@ export class FeishuStreamingSession {
         displayName,
         askQuestions,
         planReview,
+        retainedPermissionPanels,
         nameSuffix: this._nameSuffix,
       });
       const cardJson = JSON.stringify(finalCard);

@@ -1,0 +1,242 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14443,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14337,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_PAZENn2YgwNWX8jW3yuxhAQe",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "wc -l src/providers/base.ts",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "call_PAZENn2YgwNWX8jW3yuxhAQe"
+          }
+        ],
+        "rawInput": {
+          "command": "wc -l src/providers/base.ts",
+          "cwd": "/data00/home/hehuajie/project/remi"
+        },
+        "_meta": {
+          "terminal_info": {
+            "cwd": "/data00/home/hehuajie/project/remi",
+            "terminal_id": "call_PAZENn2YgwNWX8jW3yuxhAQe"
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_PAZENn2YgwNWX8jW3yuxhAQe",
+        "status": "completed",
+        "rawOutput": {
+          "formatted_output": "106 src/providers/base.ts\n",
+          "exit_code": 0
+        },
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": 0,
+            "signal": null,
+            "terminal_id": "call_PAZENn2YgwNWX8jW3yuxhAQe"
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "src"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/providers"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/base"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".ts"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " has"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "106"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " lines"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14404,
+        "size": 258400
+      }
+    }
+  }
+]

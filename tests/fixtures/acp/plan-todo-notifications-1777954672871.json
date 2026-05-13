@@ -1,0 +1,204 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36778,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The user wants me to create a"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " todo list with 3 items using TodoWrite, but not execute any of the tasks."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Read config file",
+            "status": "pending",
+            "priority": "medium"
+          },
+          {
+            "content": "Update version",
+            "status": "pending",
+            "priority": "medium"
+          },
+          {
+            "content": "Run tests",
+            "status": "pending",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36926,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 36982,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": "The todo list has been created with"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {
+          "type": "text",
+          "text": " the 3 items as requested."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ""
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Todo list created with 3 pending"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " items."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 37011,
+        "size": 200000
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "408f2a76-eed7-482f-9cce-be58361d3d6c",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 37011,
+        "size": 200000,
+        "cost": {
+          "amount": 0.17688855,
+          "currency": "USD"
+        }
+      }
+    }
+  }
+]

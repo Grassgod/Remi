@@ -9,12 +9,20 @@
  * 5. Bash execution
  * 6. Session resume
  *
- * Usage: bun run tests/acp-e2e-full.ts
+ * Usage: bun run tests/acp-e2e-full.ts [--agent claude|codex]
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+const agentIdx = process.argv.indexOf("--agent");
+const agentType = agentIdx !== -1 ? (process.argv[agentIdx + 1] ?? "claude") : "claude";
+const executableMap: Record<string, string> = {
+  claude: "claude-agent-acp",
+  codex: process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE || "codex-acp",
+};
+const agentExecutable = executableMap[agentType] ?? agentType;
 
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "acp");
 mkdirSync(FIXTURE_DIR, { recursive: true });
@@ -32,8 +40,9 @@ class AcpTestClient {
   private sessionId: string | null = null;
   private label = "";
 
-  constructor() {
-    this.proc = spawn("claude-agent-acp", [], {
+  constructor(executable: string = "claude-agent-acp") {
+    console.log(`  [spawn] ${executable}`);
+    this.proc = spawn(executable, [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env },
     });
@@ -98,11 +107,11 @@ class AcpTestClient {
           const t = u.content?.thought || u.content?.text || "";
           if (t.trim()) process.stdout.write(`  [thought] ${t.slice(0, 100)}\n`);
         } else if (st === "tool_call") {
-          const toolName = u._meta?.claudeCode?.toolName || u.title;
+          const toolName = u._meta?.claudeCode?.toolName || u._meta?.toolName || u.title;
           console.log(`  [tool_call] ${toolName} | title="${u.title}" kind=${u.kind} status=${u.status}`);
         } else if (st === "tool_call_update") {
           if (u.status === "completed" || u.status === "failed") {
-            const toolName = u._meta?.claudeCode?.toolName || "";
+            const toolName = u._meta?.claudeCode?.toolName || u._meta?.toolName || "";
             console.log(`  [tool_done] ${toolName} id=${u.toolCallId} status=${u.status}`);
           }
         } else if (st === "plan") {
@@ -174,7 +183,7 @@ class AcpTestClient {
             const params = req.params as any;
             const options = params?.options;
             const toolCall = params?.toolCall;
-            const toolName = toolCall?._meta?.claudeCode?.toolName || toolCall?.title || "";
+            const toolName = toolCall?._meta?.claudeCode?.toolName || toolCall?._meta?.toolName || toolCall?.title || "";
             console.log(`    permission for: ${toolName}`);
             console.log(`    options: ${options?.map((o: any) => `${o.name}(${o.kind})`).join(", ")}`);
             // Auto-approve
@@ -276,84 +285,84 @@ class AcpTestClient {
 
 // ── Test Scenarios ────────────────────────────────────────
 
-async function testMultiTool(client: AcpTestClient) {
+async function testMultiTool(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Multi-Tool (grep + read) ═══");
   const result = await client.prompt(
     "Use Grep to find all files containing 'StreamEvent' in src/providers/, then tell me how many matches. Be brief, use only Grep."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("multi-tool");
+  client.saveScenarioFixtures(label);
 }
 
-async function testReadTool(client: AcpTestClient) {
+async function testReadTool(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Read Tool ═══");
   const result = await client.prompt(
     "Use the Read tool to read the file src/providers/base.ts and tell me how many lines it has. Be brief."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("read-tool");
+  client.saveScenarioFixtures(label);
 }
 
-async function testPlanMode(client: AcpTestClient) {
+async function testPlanMode(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Plan / TodoWrite ═══");
   const result = await client.prompt(
     "Create a todo list with 3 items using TodoWrite: 1) Read config file 2) Update version 3) Run tests. Just create the todo list, do NOT execute the tasks."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("plan-todo");
+  client.saveScenarioFixtures(label);
 }
 
-async function testAgentBash(client: AcpTestClient) {
+async function testAgentBash(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Agent + Bash (subagent) ═══");
   const result = await client.prompt(
     "Use the Agent tool to spawn a subagent with description 'check disk usage' and prompt 'Run `df -h /` and `uptime` using Bash. Reply with a one-line summary.'. Wait for it to complete."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("agent-bash");
+  client.saveScenarioFixtures(label);
 }
 
-async function testAgentSpawn(client: AcpTestClient) {
+async function testAgentSpawn(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Agent/Subagent Spawn ═══");
   const result = await client.prompt(
     "Use the Agent tool to spawn a subagent with description 'count TypeScript files' and prompt 'How many .ts files are in the src/ directory? Use Glob and count the results. Reply with just the number.'. Wait for it to complete."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("agent-spawn");
+  client.saveScenarioFixtures(label);
 }
 
-async function testBashExecution(client: AcpTestClient) {
+async function testBashExecution(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Bash Execution ═══");
   const result = await client.prompt(
     "Run `echo hello_from_acp_test` using the Bash tool. Tell me what the output was. Be brief."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("bash-exec");
+  client.saveScenarioFixtures(label);
 }
 
-async function testAskUserQuestion(client: AcpTestClient) {
+async function testAskUserQuestion(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: AskUserQuestion ═══");
   const result = await client.prompt(
     "You need to ask me a clarifying question before proceeding. Use the AskUserQuestion tool to ask me 'Which database should we use?' with options: 'PostgreSQL', 'MySQL', 'SQLite'. Do NOT proceed without asking."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("ask-user");
+  client.saveScenarioFixtures(label);
 }
 
-async function testEnterPlanMode(client: AcpTestClient) {
+async function testEnterPlanMode(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: EnterPlanMode ═══");
   const result = await client.prompt(
     "Use the EnterPlanMode tool to enter plan mode. You are planning a refactoring of the config system."
   );
   console.log(`  result: ${JSON.stringify(result)}`);
   console.log(`  events: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("enter-plan");
+  client.saveScenarioFixtures(label);
 }
 
 async function testSessionResume(client: AcpTestClient) {
@@ -396,8 +405,9 @@ async function testSessionResume(client: AcpTestClient) {
 // ── Main ─────────────────────────────────────────────────
 
 async function main() {
-  console.log("🚀 ACP Full E2E Test Suite\n");
-  const client = new AcpTestClient();
+  const prefix = agentType === "claude" ? "" : `${agentType}-`;
+  console.log(`🚀 ACP Full E2E Test Suite (agent: ${agentType}, executable: ${agentExecutable})\n`);
+  const client = new AcpTestClient(agentExecutable);
   await new Promise(r => setTimeout(r, 1500));
 
   // Init
@@ -411,24 +421,23 @@ async function main() {
   console.log(`  sessionId: ${sid}`);
 
   // Run scenarios
-  const scenarios = [
-    ["multi-tool", testMultiTool],
-    ["read-tool", testReadTool],
-    ["plan-todo", testPlanMode],
-    ["agent-spawn", testAgentSpawn],
-    ["agent-bash", testAgentBash],
-    ["bash-exec", testBashExecution],
-    ["ask-user", testAskUserQuestion],
-    ["enter-plan", testEnterPlanMode],
-  ] as const;
+  const scenarios: Array<[string, (c: AcpTestClient, label: string) => Promise<void>]> = [
+    [`${prefix}multi-tool`, testMultiTool],
+    [`${prefix}read-tool`, testReadTool],
+    [`${prefix}plan-todo`, testPlanMode],
+    [`${prefix}agent-spawn`, testAgentSpawn],
+    [`${prefix}agent-bash`, testAgentBash],
+    [`${prefix}bash-exec`, testBashExecution],
+    [`${prefix}ask-user`, testAskUserQuestion],
+    [`${prefix}enter-plan`, testEnterPlanMode],
+  ];
 
-  for (const [name, fn] of scenarios) {
+  for (const [label, fn] of scenarios) {
     try {
-      await (fn as (c: AcpTestClient) => Promise<void>)(client);
+      await fn(client, label);
     } catch (e) {
-      console.log(`  ❌ ${name} failed: ${e}`);
+      console.log(`  ❌ ${label} failed: ${e}`);
     }
-    // Small delay between tests
     await new Promise(r => setTimeout(r, 2000));
   }
 
@@ -440,7 +449,7 @@ async function main() {
   }
 
   // Save all events
-  client.saveFixtures("full-suite");
+  client.saveFixtures(`${prefix}full-suite`);
 
   // Cleanup
   await client.shutdown();

@@ -5,6 +5,8 @@
  */
 
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type {
   Provider,
   SendOptions,
@@ -21,6 +23,7 @@ import type {
   PermissionOutcome,
   PromptResult,
   UsageUpdate,
+  SessionModeState,
 } from "./protocol.js";
 
 export interface AcpProviderOptions {
@@ -44,6 +47,10 @@ export interface AcpProviderOptions {
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
+  claude: "auto",
+};
+const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
 
 interface PromptState {
   promptStartTime: number;
@@ -80,9 +87,90 @@ interface PoolEntry {
   acpSessionId: string;
   lastUsed: number;
   promptState: PromptState;
+  modes?: SessionModeState;
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
+
+export function resolveAcpPermissionMode(agentType: string, mode?: string | null): string | null {
+  const normalized = typeof mode === "string" ? mode.trim() : "";
+  if (normalized) return normalized === "bypass" ? "bypassPermissions" : normalized;
+  return DEFAULT_PERMISSION_MODE_BY_AGENT[agentType] ?? null;
+}
+
+export function resolveAvailableAcpPermissionMode(
+  mode: string | null,
+  modes?: SessionModeState,
+): string | null {
+  if (!mode) return null;
+  if (!modes?.availableModes?.length) return mode;
+  if (modes.availableModes.some((m) => m.id === mode)) return mode;
+  if (mode === "auto" && modes.availableModes.some((m) => m.id === "default")) {
+    return "default";
+  }
+  return mode;
+}
+
+export function resolveAcpExecutableForAgent(agentType: string, executable: string | null | undefined, fallback: string): string {
+  const explicit = typeof executable === "string" ? executable.trim() : "";
+  if (explicit) return explicit;
+
+  if (agentType === "claude") {
+    const envExecutable = process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE?.trim();
+    if (envExecutable) return envExecutable;
+
+    const remiHome = process.env.REMI_HOME ?? join(homedir(), ".remi");
+    const candidates = [
+      join(remiHome, "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
+      join(homedir(), ".remi", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
+      join(import.meta.dir, "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
+      join(import.meta.dir, "..", "..", "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+
+  if (agentType === "codex") {
+    const envExecutable = process.env.REMI_CODEX_AGENT_ACP_EXECUTABLE?.trim();
+    if (envExecutable) return envExecutable;
+
+    const remiHome = process.env.REMI_HOME ?? join(homedir(), ".remi");
+    const candidates = [
+      join(remiHome, "bin", "codex-acp"),
+      join(homedir(), ".remi", "bin", "codex-acp"),
+      join(homedir(), ".npm-global", "bin", "codex-acp"),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+
+  return fallback;
+}
+
+export interface AcpHealthCheckCommand {
+  command: string;
+  args: string[];
+}
+
+export function resolveAcpHealthCheckCommand(
+  agentType: string,
+  executable: string | null | undefined,
+  fallback: string,
+): AcpHealthCheckCommand {
+  const explicit = typeof executable === "string" ? executable.trim() : "";
+
+  // Preserve the cheap Claude CLI check for the default Claude ACP setup. The
+  // Remi Claude ACP wrapper prepares a patched server and should not be invoked
+  // on every heartbeat just to check liveness.
+  if (agentType === "claude" && !explicit) {
+    return { command: "claude", args: ["--version"] };
+  }
+
+  const command = resolveAcpExecutableForAgent(agentType, executable, fallback);
+  return { command, args: ["--version"] };
+}
 
 export class AcpProvider implements Provider {
   readonly name: string;
@@ -93,6 +181,8 @@ export class AcpProvider implements Provider {
   private _activeStreaming = new Set<string>();
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
+  private _permissionHandlers = new Map<string, PermissionHandler>();
+  private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
 
   constructor(options: AcpProviderOptions = {}) {
@@ -106,8 +196,12 @@ export class AcpProvider implements Provider {
   }
 
   /** Register external handler for permission requests (AskUserQuestion, ExitPlanMode, tool approval). */
-  setPermissionHandler(handler: PermissionHandler): void {
-    this._permissionHandler = handler;
+  setPermissionHandler(handler: PermissionHandler, chatId?: string | null): void {
+    if (chatId) {
+      this._permissionHandlers.set(chatId, handler);
+    } else {
+      this._permissionHandler = handler;
+    }
   }
 
   getLastResponse(): AgentResponse | null {
@@ -216,8 +310,13 @@ export class AcpProvider implements Provider {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const { execSync } = await import("node:child_process");
-      execSync("claude --version", { timeout: 5000, stdio: "pipe" });
+      const { execFileSync } = await import("node:child_process");
+      const check = resolveAcpHealthCheckCommand(
+        this._adapter.agentType,
+        this._options.executable,
+        this._adapter.defaultExecutable(),
+      );
+      execFileSync(check.command, check.args, { timeout: 5000, stdio: "pipe" });
       return true;
     } catch {
       return false;
@@ -227,20 +326,27 @@ export class AcpProvider implements Provider {
   // ── Session pool management ────────────────────────────────────
 
   private async _ensureSession(chatId: string, options?: SendOptions): Promise<PoolEntry> {
+    const permissionMode = resolveAcpPermissionMode(this._adapter.agentType, options?.permissionMode);
     const existing = this._pool.get(chatId);
     if (existing?.client.alive) {
       if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
+        this._sessionToChatId.delete(existing.acpSessionId);
         const result = await existing.client.loadSession(options.sessionId);
         existing.acpSessionId = result.sessionId;
+        existing.modes = result.modes;
+        this._sessionToChatId.set(existing.acpSessionId, chatId);
       }
-      if (options?.permissionMode) {
-        await existing.client.setMode(existing.acpSessionId, options.permissionMode);
+      const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, existing.modes);
+      if (effectiveMode) {
+        const appliedMode = await this._setMode(existing.client, existing.acpSessionId, effectiveMode, permissionMode);
+        if (existing.modes) existing.modes = { ...existing.modes, currentModeId: appliedMode };
       }
       return existing;
     }
 
     if (existing) {
       await existing.client.stop();
+      this._sessionToChatId.delete(existing.acpSessionId);
       this._pool.delete(chatId);
     }
 
@@ -254,15 +360,19 @@ export class AcpProvider implements Provider {
     const sessionMeta = this._adapter.buildSessionMeta({
       model: this._options.model,
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
-      permissionMode: options?.permissionMode,
+      permissionMode,
       additionalDirectories: options?.addDirs,
     });
 
     const client = new AcpClient({
-      executable: this._options.executable ?? this._adapter.defaultExecutable(),
+      executable: resolveAcpExecutableForAgent(
+        this._adapter.agentType,
+        this._options.executable,
+        this._adapter.defaultExecutable(),
+      ),
       cwd,
       env,
-      claudeCodeOptions: sessionMeta?.claudeCode?.options as Record<string, unknown> | undefined,
+      sessionMeta: sessionMeta ?? undefined,
       onPermissionRequest: (params) => this._handlePermission(params),
       onSessionUpdate: () => {},
       log: (...args) => {
@@ -274,12 +384,20 @@ export class AcpProvider implements Provider {
     await client.initialize();
 
     let acpSessionId: string;
+    let sessionModes: SessionModeState | undefined;
     if (options?.sessionId) {
       const result = await client.resumeSession(options.sessionId, cwd);
       acpSessionId = result.sessionId;
+      sessionModes = result.modes;
     } else {
       const result = await client.newSession({ cwd, _meta: sessionMeta });
       acpSessionId = result.sessionId;
+      sessionModes = result.modes;
+    }
+    const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes);
+    if (effectiveMode) {
+      const appliedMode = await this._setMode(client, acpSessionId, effectiveMode, permissionMode);
+      if (sessionModes) sessionModes = { ...sessionModes, currentModeId: appliedMode };
     }
 
     const entry: PoolEntry = {
@@ -287,23 +405,35 @@ export class AcpProvider implements Provider {
       acpSessionId,
       lastUsed: Date.now(),
       promptState: createPromptState(),
+      modes: sessionModes,
     };
 
     this._pool.set(chatId, entry);
+    this._sessionToChatId.set(acpSessionId, chatId);
     this._startCleanupTimer();
     return entry;
   }
 
-  private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
-    if (this._permissionHandler) {
-      return this._permissionHandler(params);
+  private async _setMode(client: AcpClient, sessionId: string, mode: string, requestedMode: string | null): Promise<string> {
+    try {
+      await client.setMode(sessionId, mode);
+      return mode;
+    } catch (err) {
+      if (requestedMode === "auto" && mode === "auto") {
+        await client.setMode(sessionId, "default");
+        return "default";
+      }
+      throw err;
     }
-    const allowOption = params.options.find(
-      (o) => o.kind === "allow_once" || o.kind === "allow_always",
-    );
-    if (allowOption) return { outcome: "selected", optionId: allowOption.optionId };
-    const firstOption = params.options[0];
-    if (firstOption) return { outcome: "selected", optionId: firstOption.optionId };
+  }
+
+  private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
+    const chatId = this._sessionToChatId.get(params.sessionId);
+    const handler = (chatId ? this._permissionHandlers.get(chatId) : undefined) ?? this._permissionHandler;
+    if (handler) {
+      return handler(params);
+    }
+    console.error(`[AcpProvider] permission request cancelled: no handler for session ${params.sessionId}`);
     return { outcome: "cancelled" };
   }
 
@@ -323,6 +453,8 @@ export class AcpProvider implements Provider {
           await entry.client.closeSession(entry.acpSessionId);
           await entry.client.stop();
         } catch {}
+        this._sessionToChatId.delete(entry.acpSessionId);
+        this._permissionHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     }
@@ -338,14 +470,18 @@ export class AcpProvider implements Provider {
       if (entry) {
         try { await entry.client.closeSession(entry.acpSessionId); } catch {}
         await entry.client.stop();
+        this._sessionToChatId.delete(entry.acpSessionId);
+        this._permissionHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     } else {
       for (const [, entry] of this._pool) {
         try { await entry.client.closeSession(entry.acpSessionId); } catch {}
         await entry.client.stop();
+        this._sessionToChatId.delete(entry.acpSessionId);
       }
       this._pool.clear();
+      this._permissionHandlers.clear();
     }
   }
 

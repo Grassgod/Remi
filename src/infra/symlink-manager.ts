@@ -70,22 +70,6 @@ export interface MappingStatus {
 export class SymlinkManager {
   private verified = new Set<string>();
 
-  /** Convert a filesystem path to CC's hash format. */
-  pathToHash(path: string): string {
-    return path.replace(/\//g, "-");
-  }
-
-  /**
-   * Convert a hash to a readable alias for display purposes.
-   * Returns null for hashes that don't look like project paths.
-   */
-  hashToAlias(hash: string): string | null {
-    const projectMatch = hash.match(/-project-(.+)$/);
-    if (projectMatch) return projectMatch[1];
-    const tasksMatch = hash.match(/-tasks-(.+)$/);
-    if (tasksMatch) return tasksMatch[1];
-    return hash;
-  }
 
   /**
    * Register and ensure a single symlink mapping.

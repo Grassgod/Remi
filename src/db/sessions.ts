@@ -98,6 +98,39 @@ export function updateSessionMode(sessionKey: string, mode: string | null): void
   db().run("UPDATE sessions SET mode = ?, last_active = ? WHERE session_key = ?", [mode, Date.now(), sessionKey]);
 }
 
+export function upsertSessionSettings(
+  sessionKey: string,
+  settings: { provider?: string | null; mode?: string | null; clearSessionId?: boolean },
+): string {
+  const existing = getSession(sessionKey);
+  const now = Date.now();
+
+  if (existing) {
+    db().run(
+      `UPDATE sessions
+       SET provider = ?, mode = ?, session_id = ?, last_active = ?, status = 'active'
+      WHERE session_key = ?`,
+      [
+        settings.provider === undefined ? existing.provider : settings.provider,
+        settings.mode === undefined ? existing.mode : settings.mode,
+        settings.clearSessionId ? "" : existing.session_id,
+        now,
+        sessionKey,
+      ],
+    );
+    return existing.display_name;
+  }
+
+  const taken = getAllDisplayNames();
+  const displayName = generateUniqueName(sessionKey, taken);
+  db().run(
+    `INSERT INTO sessions (session_key, session_id, display_name, provider, mode, created_at, last_active, status)
+     VALUES (?, '', ?, ?, ?, ?, ?, 'active')`,
+    [sessionKey, displayName, settings.provider ?? null, settings.mode ?? null, now, now],
+  );
+  return displayName;
+}
+
 export function touchSession(sessionKey: string): void {
   db().run("UPDATE sessions SET last_active = ? WHERE session_key = ?", [Date.now(), sessionKey]);
 }

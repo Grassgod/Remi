@@ -10,7 +10,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync, rmSync, statSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -51,6 +51,8 @@ writeFileSync(
   `exec bun run "$REMI_HOME/dist/remi.bundle.js" "$@"\n`,
   { mode: 0o755 },
 );
+cpSync(join(ROOT, "bin", "remi-claude-agent-acp"), join(BUILD_DIR, "bin", "remi-claude-agent-acp"));
+chmodSync(join(BUILD_DIR, "bin", "remi-claude-agent-acp"), 0o755);
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8"));
 const prodPkg = {

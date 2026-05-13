@@ -130,6 +130,7 @@ async function main() {
           },
           {
             tag: "input",
+            input_type: "multiline_text",
             name: "q0_custom",
             placeholder: { tag: "plain_text", content: "或自定义回答..." },
             max_length: 500,
@@ -172,10 +173,11 @@ async function main() {
         elements: [
           {
             tag: "input",
+            input_type: "multiline_text",
             name: "feedback_text",
             placeholder: { tag: "plain_text", content: "反馈或修改建议（可选）..." },
-            max_length: 1000,
-            rows: 3,
+            max_length: 2000,
+            rows: 8,
           },
           {
             tag: "column_set",

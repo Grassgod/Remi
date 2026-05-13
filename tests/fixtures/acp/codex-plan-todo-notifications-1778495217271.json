@@ -1,0 +1,113 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14387,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "status": "pending",
+            "content": "Read config file",
+            "priority": "medium"
+          },
+          {
+            "status": "pending",
+            "content": "Update version",
+            "priority": "medium"
+          },
+          {
+            "status": "pending",
+            "content": "Run tests",
+            "priority": "medium"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14294,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Todo"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " list"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " created"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14315,
+        "size": 258400
+      }
+    }
+  }
+]

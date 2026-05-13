@@ -29,6 +29,10 @@ export interface StreamMeta {
   sessionId?: string | null;
   /** Display name from session registry (e.g. "好奇的 Remi·Vulpes"). */
   displayName?: string | null;
+  /** Selected provider name, e.g. "acp:claude" or "acp:codex". */
+  providerName?: string | null;
+  /** ACP agent type used by the selected provider, e.g. "claude" or "codex". */
+  agentType?: string | null;
   /** Register a handler for permission requests (tool approval, AskUserQuestion, ExitPlanMode). */
   setPermissionHandler?: (handler: (params: import("../providers/acp/protocol.js").RequestPermissionParams) => Promise<import("../providers/acp/protocol.js").PermissionOutcome>) => void;
 }

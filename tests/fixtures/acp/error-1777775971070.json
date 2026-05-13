@@ -1,0 +1,97 @@
+[
+  {
+    "direction": "send",
+    "ts": 1777775971063,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "protocolVersion": 1,
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "clientInfo": {
+          "name": "remi-test",
+          "title": "Remi ACP Test Harness",
+          "version": "0.1.0"
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1777775971068,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "_meta": {
+            "claudeCode": {
+              "promptQueueing": true
+            }
+          },
+          "promptCapabilities": {
+            "image": true,
+            "embeddedContext": true
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": true
+          },
+          "loadSession": true,
+          "sessionCapabilities": {
+            "fork": {},
+            "list": {},
+            "resume": {},
+            "close": {}
+          }
+        },
+        "agentInfo": {
+          "name": "@agentclientprotocol/claude-agent-acp",
+          "title": "Claude Agent",
+          "version": "0.31.4"
+        },
+        "authMethods": []
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1777775971068,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "session/new",
+      "params": {
+        "cwd": "/data00/home/hehuajie/project/remi"
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1777775971070,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "error": {
+        "code": -32602,
+        "message": "Invalid params",
+        "data": {
+          "_errors": [],
+          "mcpServers": {
+            "_errors": [
+              "Invalid input: expected array, received undefined"
+            ]
+          }
+        }
+      }
+    }
+  }
+]

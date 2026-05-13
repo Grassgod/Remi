@@ -1,0 +1,5714 @@
+[
+  {
+    "direction": "send",
+    "ts": 1778495177697,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "protocolVersion": 1,
+        "clientCapabilities": {
+          "fs": {
+            "readTextFile": false,
+            "writeTextFile": false
+          },
+          "terminal": false
+        },
+        "clientInfo": {
+          "name": "remi-test",
+          "title": "Remi ACP Test",
+          "version": "0.1.0"
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495177725,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": 1,
+        "agentCapabilities": {
+          "auth": {
+            "logout": {}
+          },
+          "loadSession": true,
+          "promptCapabilities": {
+            "image": true
+          },
+          "sessionCapabilities": {
+            "resume": {},
+            "list": {}
+          },
+          "mcpCapabilities": {
+            "http": true,
+            "sse": false
+          }
+        },
+        "authMethods": [
+          {
+            "id": "api-key",
+            "name": "API Key",
+            "description": "Use an API key to authenticate",
+            "_meta": {
+              "api-key": {
+                "provider": "openai"
+              }
+            }
+          },
+          {
+            "id": "chat-gpt",
+            "name": "ChatGPT",
+            "description": "Use ChatGPT to authenticate"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495177725,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "session/new",
+      "params": {
+        "cwd": "/data00/home/hehuajie/project/remi",
+        "mcpServers": []
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495177791,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "models": {
+          "availableModels": [
+            {
+              "modelId": "gpt-5.5[low]",
+              "name": "GPT-5.5 (low)",
+              "description": "Frontier model for complex coding, research, and real-world work. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.5[medium]",
+              "name": "GPT-5.5 (medium)",
+              "description": "Frontier model for complex coding, research, and real-world work. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.5[high]",
+              "name": "GPT-5.5 (high)",
+              "description": "Frontier model for complex coding, research, and real-world work. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.5[xhigh]",
+              "name": "GPT-5.5 (xhigh)",
+              "description": "Frontier model for complex coding, research, and real-world work. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4[low]",
+              "name": "gpt-5.4 (low)",
+              "description": "Strong model for everyday coding. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.4[medium]",
+              "name": "gpt-5.4 (medium)",
+              "description": "Strong model for everyday coding. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.4[high]",
+              "name": "gpt-5.4 (high)",
+              "description": "Strong model for everyday coding. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4[xhigh]",
+              "name": "gpt-5.4 (xhigh)",
+              "description": "Strong model for everyday coding. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4-mini[low]",
+              "name": "GPT-5.4-Mini (low)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.4-mini[medium]",
+              "name": "GPT-5.4-Mini (medium)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.4-mini[high]",
+              "name": "GPT-5.4-Mini (high)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4-mini[xhigh]",
+              "name": "GPT-5.4-Mini (xhigh)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.3-codex[low]",
+              "name": "gpt-5.3-codex (low)",
+              "description": "Coding-optimized model. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.3-codex[medium]",
+              "name": "gpt-5.3-codex (medium)",
+              "description": "Coding-optimized model. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.3-codex[high]",
+              "name": "gpt-5.3-codex (high)",
+              "description": "Coding-optimized model. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.3-codex[xhigh]",
+              "name": "gpt-5.3-codex (xhigh)",
+              "description": "Coding-optimized model. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.2[low]",
+              "name": "gpt-5.2 (low)",
+              "description": "Optimized for professional work and long-running agents. Balances speed with some reasoning; useful for straightforward queries and short explanations"
+            },
+            {
+              "modelId": "gpt-5.2[medium]",
+              "name": "gpt-5.2 (medium)",
+              "description": "Optimized for professional work and long-running agents. Provides a solid balance of reasoning depth and latency for general-purpose tasks"
+            },
+            {
+              "modelId": "gpt-5.2[high]",
+              "name": "gpt-5.2 (high)",
+              "description": "Optimized for professional work and long-running agents. Maximizes reasoning depth for complex or ambiguous problems"
+            },
+            {
+              "modelId": "gpt-5.2[xhigh]",
+              "name": "gpt-5.2 (xhigh)",
+              "description": "Optimized for professional work and long-running agents. Extra high reasoning for complex problems"
+            }
+          ],
+          "currentModelId": "gpt-5.5[xhigh]"
+        },
+        "modes": {
+          "availableModes": [
+            {
+              "id": "read-only",
+              "name": "Read-only",
+              "description": "Requires approval to edit files and run commands."
+            },
+            {
+              "id": "agent",
+              "name": "Agent",
+              "description": "Read and edit files, and run commands."
+            },
+            {
+              "id": "agent-full-access",
+              "name": "Agent (full access)",
+              "description": "Codex can edit files outside this workspace and run commands with network access. Exercise caution when using."
+            }
+          ],
+          "currentModeId": "agent"
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495177791,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Use Grep to find all files containing 'StreamEvent' in src/providers/, then tell me how many matches. Be brief, use only Grep."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495177801,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "available_commands_update",
+          "availableCommands": [
+            {
+              "name": "mcp",
+              "description": "List configured Model Context Protocol (MCP) tools.",
+              "input": null
+            },
+            {
+              "name": "skills",
+              "description": "List available skills.",
+              "input": null
+            },
+            {
+              "name": "status",
+              "description": "Display session configuration and token usage.",
+              "input": null
+            },
+            {
+              "name": "logout",
+              "description": "Sign out of Codex. This option is available when you are logged in via ChatGPT.",
+              "input": null
+            },
+            {
+              "name": "$agent-browser",
+              "description": "Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to \"open a website\", \"fill out a form\", \"click a button\", \"take a screenshot\", \"scrape data from a page\", \"test this web app\", \"login to a site\", \"automate browser actions\", or any task requiring programmatic web interaction.",
+              "input": null
+            },
+            {
+              "name": "$bytedance-tools",
+              "description": "Router skill for bytedcli (ByteDance internal CLI). Use when tasks mention bytedcli, SSO/auth, TCE/TOS/Netlink/Neptune, RDS, TCC, SCM, Cloud Docs, ByteTech, Cloud Ticket, ENV, Overpass, APM, BAM, Log, Cache, Hive, Dorado, Aeolus, ES, Goofy Deploy, BMQ, Kafka, BITS, DKMS, KMS v2, IAM, data encryption keys, dev tasks, pipelines, releases, or internal tech articles. Routes to subskills by domain and provides common execution patterns with --json output and help handling.",
+              "input": null
+            },
+            {
+              "name": "$imagegen",
+              "description": "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas.",
+              "input": null
+            },
+            {
+              "name": "$openai-docs",
+              "description": "Use when the user asks how to build with OpenAI products or APIs and needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; prioritize OpenAI docs MCP tools, use bundled references only as helper context, and restrict any fallback browsing to official OpenAI domains.",
+              "input": null
+            },
+            {
+              "name": "$plugin-creator",
+              "description": "Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, and baseline placeholders you can edit before publishing or testing. Use when Codex needs to create a new local plugin, add optional plugin structure, or generate or update repo-root `.agents/plugins/marketplace.json` entries for plugin ordering and availability metadata.",
+              "input": null
+            },
+            {
+              "name": "$skill-creator",
+              "description": "Create or update a skill",
+              "input": null
+            },
+            {
+              "name": "$skill-installer",
+              "description": "Install curated skills from openai/skills or other repos",
+              "input": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495190841,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14288,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495190873,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_ZLtoqKSriTgHt0tvtrrD5wIz",
+          "status": "in_progress",
+          "kind": "search",
+          "title": "Search for 'StreamEvent' in providers"
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495190873,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_ZLtoqKSriTgHt0tvtrrD5wIz",
+          "status": "failed",
+          "rawOutput": {
+            "formatted_output": "",
+            "exit_code": 1
+          },
+          "_meta": {
+            "terminal_exit": {
+              "exit_code": 1,
+              "signal": null,
+              "terminal_id": "call_ZLtoqKSriTgHt0tvtrrD5wIz"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495194830,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "0"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495194835,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " matches"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495194839,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495195047,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14445,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495195051,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 14445,
+          "inputTokens": 2685,
+          "cachedReadTokens": 11648,
+          "outputTokens": 112,
+          "thoughtTokens": 103
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 14445,
+              "inputTokens": 2685,
+              "cachedInputTokens": 11648,
+              "outputTokens": 112,
+              "reasoningOutputTokens": 103
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 14445,
+                  "inputTokens": 2685,
+                  "cachedInputTokens": 11648,
+                  "outputTokens": 112,
+                  "reasoningOutputTokens": 103
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495197052,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Use the Read tool to read the file src/providers/base.ts and tell me how many lines it has. Be brief."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495197679,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14445,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495206190,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14321,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495206198,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_KuuFOBbbEr3HJQNszh3tsHx9",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "wc -l src/providers/base.ts",
+          "content": [
+            {
+              "type": "terminal",
+              "terminalId": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+            }
+          ],
+          "rawInput": {
+            "command": "wc -l src/providers/base.ts",
+            "cwd": "/data00/home/hehuajie/project/remi"
+          },
+          "_meta": {
+            "terminal_info": {
+              "cwd": "/data00/home/hehuajie/project/remi",
+              "terminal_id": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495206198,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_KuuFOBbbEr3HJQNszh3tsHx9",
+          "status": "completed",
+          "rawOutput": {
+            "formatted_output": "106 src/providers/base.ts\n",
+            "exit_code": 0
+          },
+          "_meta": {
+            "terminal_exit": {
+              "exit_code": 0,
+              "signal": null,
+              "terminal_id": "call_KuuFOBbbEr3HJQNszh3tsHx9"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208698,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208699,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "src"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208704,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "/providers"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208704,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "/base"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208707,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ".ts"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208714,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208717,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " has"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208719,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208787,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "106"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208787,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " lines"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495208787,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495209073,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14387,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495209075,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 14387,
+          "inputTokens": 676,
+          "cachedReadTokens": 13696,
+          "outputTokens": 15,
+          "thoughtTokens": 0
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 14387,
+              "inputTokens": 676,
+              "cachedInputTokens": 13696,
+              "outputTokens": 15,
+              "reasoningOutputTokens": 0
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 14387,
+                  "inputTokens": 676,
+                  "cachedInputTokens": 13696,
+                  "outputTokens": 15,
+                  "reasoningOutputTokens": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495211077,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Create a todo list with 3 items using TodoWrite: 1) Read config file 2) Update version 3) Run tests. Just create the todo list, do NOT execute the tasks."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495211801,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14387,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495215637,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "plan",
+          "entries": [
+            {
+              "status": "pending",
+              "content": "Read config file",
+              "priority": "medium"
+            },
+            {
+              "status": "pending",
+              "content": "Update version",
+              "priority": "medium"
+            },
+            {
+              "status": "pending",
+              "content": "Run tests",
+              "priority": "medium"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495215686,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14294,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217071,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Todo"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217077,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " list"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217082,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " created"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217085,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217269,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14315,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495217270,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 14315,
+          "inputTokens": 611,
+          "cachedReadTokens": 13696,
+          "outputTokens": 8,
+          "thoughtTokens": 0
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 14315,
+              "inputTokens": 611,
+              "cachedInputTokens": 13696,
+              "outputTokens": 8,
+              "reasoningOutputTokens": 0
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 14315,
+                  "inputTokens": 611,
+                  "cachedInputTokens": 13696,
+                  "outputTokens": 8,
+                  "reasoningOutputTokens": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495219271,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Use the Agent tool to spawn a subagent with description 'count TypeScript files' and prompt 'How many .ts files are in the src/ directory? Use Glob and count the results. Reply with just the number.'. Wait for it to complete."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495219960,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14315,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495219960,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "You've hit your usage limit. To get more access now, send a request to your admin or try again at May 14th, 2026 2:51 AM.\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495219962,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "error": {
+        "code": -32000,
+        "message": "Authentication required"
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495221964,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Use the Agent tool to spawn a subagent with description 'check disk usage' and prompt 'Run `df -h /` and `uptime` using Bash. Reply with a one-line summary.'. Wait for it to complete."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495222677,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Reconnecting... 2/5\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495223347,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Reconnecting... 3/5\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495224357,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Reconnecting... 4/5\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495226257,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Reconnecting... 5/5\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495229792,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Warning: Falling back from WebSockets to HTTPS transport. stream disconnected before completion: websocket closed by server before response.completed\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495233265,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14315,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495243986,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495243991,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’ll"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495243993,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " use"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495243999,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " two"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244003,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " sub"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244008,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "agents"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244013,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " because"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244027,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " both"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244033,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " requested"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244047,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " tasks"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244051,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " are"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244061,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " independent"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244065,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " and"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244071,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " explicitly"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244075,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " ask"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244075,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " for"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244077,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " agent"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244077,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " delegation"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495244083,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495245390,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14936,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495246646,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 14936,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495247948,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Both"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495247948,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " sub"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495247949,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "agents"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495247949,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " are"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248000,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " running"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248070,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248072,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248078,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’m"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248079,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " waiting"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248082,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " for"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248084,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " their"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248085,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " final"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248141,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " replies"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248141,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " now"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495248141,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495249002,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15117,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495267790,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15117,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270606,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "The"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270636,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " disk"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270664,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "-"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270672,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "usage"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270683,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " sub"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270691,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "agent"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270698,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " finished"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270702,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270705,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270713,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’m"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270725,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " still"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270729,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " waiting"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270737,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " on"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270741,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " the"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270742,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " Type"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270780,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Script"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270823,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " file"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270847,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " count"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270856,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " sub"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270862,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "agent"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270884,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " so"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270914,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270941,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " can"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270944,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " report"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270951,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " both"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270992,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " requested"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495270997,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " results"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495271000,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " clean"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495271000,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "ly"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495271000,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495271569,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15022,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495274736,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15022,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278359,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Type"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278359,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Script"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278361,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " files"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278366,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " in"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278370,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " `"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278372,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "src"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278374,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "/"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278380,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`:"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278381,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278385,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "97"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278385,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278620,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Disk"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278623,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " summary"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278630,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ":"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278651,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " Root"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278651,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " disk"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278652,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " is"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278659,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278660,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "38"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278662,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "%"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278662,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " used"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278663,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ":"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278663,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278663,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "42"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278664,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "G"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278665,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " of"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278665,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278665,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "118"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278665,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "G"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278665,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278666,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278666,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "72"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278676,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "G"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278679,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " free"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278681,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ";"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278681,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " uptime"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278682,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " is"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278758,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278780,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "75"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278781,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " days"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278782,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278784,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "20"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278787,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ":"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278788,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "59"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278792,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " with"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278794,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " load"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278795,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " averages"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278804,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278809,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "2"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278820,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278820,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "59"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278820,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278820,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278820,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "2"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278824,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278826,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "16"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278829,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278832,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " "
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495278863,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495279115,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495279117,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "91"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495279117,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495279231,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15078,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495279234,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 15078,
+          "inputTokens": 1316,
+          "cachedReadTokens": 13696,
+          "outputTokens": 66,
+          "thoughtTokens": 0
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 15078,
+              "inputTokens": 1316,
+              "cachedInputTokens": 13696,
+              "outputTokens": 66,
+              "reasoningOutputTokens": 0
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 15078,
+                  "inputTokens": 1316,
+                  "cachedInputTokens": 13696,
+                  "outputTokens": 66,
+                  "reasoningOutputTokens": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495281235,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Run `echo hello_from_acp_test` using the Bash tool. Tell me what the output was. Be brief."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495282647,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15078,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495286181,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15160,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495286187,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_1H8nfQQ8OK2ITwHsXAfX5XU2",
+          "status": "in_progress",
+          "kind": "execute",
+          "title": "echo hello_from_acp_test",
+          "content": [
+            {
+              "type": "terminal",
+              "terminalId": "call_1H8nfQQ8OK2ITwHsXAfX5XU2"
+            }
+          ],
+          "rawInput": {
+            "command": "echo hello_from_acp_test",
+            "cwd": "/data00/home/hehuajie/project/remi"
+          },
+          "_meta": {
+            "terminal_info": {
+              "cwd": "/data00/home/hehuajie/project/remi",
+              "terminal_id": "call_1H8nfQQ8OK2ITwHsXAfX5XU2"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495286187,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_1H8nfQQ8OK2ITwHsXAfX5XU2",
+          "status": "completed",
+          "rawOutput": {
+            "formatted_output": "hello_from_acp_test\n",
+            "exit_code": 0
+          },
+          "_meta": {
+            "terminal_exit": {
+              "exit_code": 0,
+              "signal": null,
+              "terminal_id": "call_1H8nfQQ8OK2ITwHsXAfX5XU2"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495287455,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15160,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289003,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289015,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "hello"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289015,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "_from"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289015,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "_ac"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289015,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "p"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289047,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "_test"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289048,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289222,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15224,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495289225,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 15224,
+          "inputTokens": 493,
+          "cachedReadTokens": 14720,
+          "outputTokens": 11,
+          "thoughtTokens": 0
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 15224,
+              "inputTokens": 493,
+              "cachedInputTokens": 14720,
+              "outputTokens": 11,
+              "reasoningOutputTokens": 0
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 15224,
+                  "inputTokens": 493,
+                  "cachedInputTokens": 14720,
+                  "outputTokens": 11,
+                  "reasoningOutputTokens": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495291226,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "You need to ask me a clarifying question before proceeding. Use the AskUserQuestion tool to ask me 'Which database should we use?' with options: 'PostgreSQL', 'MySQL', 'SQLite'. Do NOT proceed without asking."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495292373,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15224,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495296243,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15382,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495297600,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15382,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298150,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298206,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " can"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298206,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’t"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298294,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " use"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298295,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " the"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298300,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " Ask"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298301,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "User"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298304,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Question"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298304,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " tool"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298306,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " in"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298308,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " this"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298333,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " mode"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298333,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298403,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " \n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298408,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Which"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298410,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " database"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298411,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " should"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298412,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " we"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298412,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " use"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298469,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ":"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298469,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " Postgre"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298477,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "SQL"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298480,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298482,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " My"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298483,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "SQL"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298483,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298545,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " or"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298551,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " SQLite"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298551,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "?"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298699,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15435,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495298702,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 15435,
+          "inputTokens": 170,
+          "cachedReadTokens": 15232,
+          "outputTokens": 33,
+          "thoughtTokens": 0
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 15435,
+              "inputTokens": 170,
+              "cachedInputTokens": 15232,
+              "outputTokens": 33,
+              "reasoningOutputTokens": 0
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 15435,
+                  "inputTokens": 170,
+                  "cachedInputTokens": 15232,
+                  "outputTokens": 33,
+                  "reasoningOutputTokens": 0
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495300704,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "prompt": [
+          {
+            "type": "text",
+            "text": "Use the EnterPlanMode tool to enter plan mode. You are planning a refactoring of the config system."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495301949,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15435,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311862,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311862,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " don"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311892,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’t"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311896,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " have"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311913,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " an"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311915,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " `"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311918,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Enter"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311921,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Plan"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311922,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "Mode"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311922,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311960,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " tool"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311980,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " available"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311983,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " in"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495311985,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " this"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312021,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " session"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312021,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ","
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312022,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " so"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312022,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312045,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " can"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312046,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "’t"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312046,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " enter"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312048,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " plan"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312052,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " mode"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312083,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " directly"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312083,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": ".\n\n"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312083,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "I"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312100,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " can"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312103,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " still"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312113,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " help"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312152,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " plan"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312152,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " the"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312153,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " config"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312187,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "-system"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312187,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " ref"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312192,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "actor"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312202,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " here"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312216,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " if"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312216,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " you"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312262,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " want"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312328,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " to"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312390,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " continue"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312398,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " in"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312407,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " normal"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312408,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": " mode"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312409,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "content": {
+            "type": "text",
+            "text": "."
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312572,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15998,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495312575,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": {
+        "stopReason": "end_turn",
+        "usage": {
+          "totalTokens": 15998,
+          "inputTokens": 231,
+          "cachedReadTokens": 15232,
+          "outputTokens": 535,
+          "thoughtTokens": 484
+        },
+        "_meta": {
+          "quota": {
+            "token_count": {
+              "totalTokens": 15998,
+              "inputTokens": 231,
+              "cachedInputTokens": 15232,
+              "outputTokens": 535,
+              "reasoningOutputTokens": 484
+            },
+            "model_usage": [
+              {
+                "model": "gpt-5.5",
+                "token_count": {
+                  "totalTokens": 15998,
+                  "inputTokens": 231,
+                  "cachedInputTokens": 15232,
+                  "outputTokens": 535,
+                  "reasoningOutputTokens": 484
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495314577,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "method": "session/close",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e"
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495314579,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "error": {
+        "code": -32601,
+        "message": "\"Method not found\": session/close",
+        "data": {
+          "method": "session/close"
+        }
+      }
+    }
+  },
+  {
+    "direction": "send",
+    "ts": 1778495315579,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "method": "session/resume",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "cwd": "/data00/home/hehuajie/project/remi",
+        "mcpServers": []
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495315661,
+    "data": {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "019e1692-c425-7621-8b8e-5ab8ff5e074e",
+        "update": {
+          "sessionUpdate": "usage_update",
+          "used": 15998,
+          "size": 258400
+        }
+      }
+    }
+  },
+  {
+    "direction": "recv",
+    "ts": 1778495315664,
+    "data": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "result": {
+        "models": {
+          "availableModels": [
+            {
+              "modelId": "gpt-5.5[low]",
+              "name": "GPT-5.5 (low)",
+              "description": "Frontier model for complex coding, research, and real-world work. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.5[medium]",
+              "name": "GPT-5.5 (medium)",
+              "description": "Frontier model for complex coding, research, and real-world work. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.5[high]",
+              "name": "GPT-5.5 (high)",
+              "description": "Frontier model for complex coding, research, and real-world work. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.5[xhigh]",
+              "name": "GPT-5.5 (xhigh)",
+              "description": "Frontier model for complex coding, research, and real-world work. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4[low]",
+              "name": "gpt-5.4 (low)",
+              "description": "Strong model for everyday coding. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.4[medium]",
+              "name": "gpt-5.4 (medium)",
+              "description": "Strong model for everyday coding. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.4[high]",
+              "name": "gpt-5.4 (high)",
+              "description": "Strong model for everyday coding. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4[xhigh]",
+              "name": "gpt-5.4 (xhigh)",
+              "description": "Strong model for everyday coding. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4-mini[low]",
+              "name": "GPT-5.4-Mini (low)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.4-mini[medium]",
+              "name": "GPT-5.4-Mini (medium)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.4-mini[high]",
+              "name": "GPT-5.4-Mini (high)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.4-mini[xhigh]",
+              "name": "GPT-5.4-Mini (xhigh)",
+              "description": "Small, fast, and cost-efficient model for simpler coding tasks. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.3-codex[low]",
+              "name": "gpt-5.3-codex (low)",
+              "description": "Coding-optimized model. Fast responses with lighter reasoning"
+            },
+            {
+              "modelId": "gpt-5.3-codex[medium]",
+              "name": "gpt-5.3-codex (medium)",
+              "description": "Coding-optimized model. Balances speed and reasoning depth for everyday tasks"
+            },
+            {
+              "modelId": "gpt-5.3-codex[high]",
+              "name": "gpt-5.3-codex (high)",
+              "description": "Coding-optimized model. Greater reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.3-codex[xhigh]",
+              "name": "gpt-5.3-codex (xhigh)",
+              "description": "Coding-optimized model. Extra high reasoning depth for complex problems"
+            },
+            {
+              "modelId": "gpt-5.2[low]",
+              "name": "gpt-5.2 (low)",
+              "description": "Optimized for professional work and long-running agents. Balances speed with some reasoning; useful for straightforward queries and short explanations"
+            },
+            {
+              "modelId": "gpt-5.2[medium]",
+              "name": "gpt-5.2 (medium)",
+              "description": "Optimized for professional work and long-running agents. Provides a solid balance of reasoning depth and latency for general-purpose tasks"
+            },
+            {
+              "modelId": "gpt-5.2[high]",
+              "name": "gpt-5.2 (high)",
+              "description": "Optimized for professional work and long-running agents. Maximizes reasoning depth for complex or ambiguous problems"
+            },
+            {
+              "modelId": "gpt-5.2[xhigh]",
+              "name": "gpt-5.2 (xhigh)",
+              "description": "Optimized for professional work and long-running agents. Extra high reasoning for complex problems"
+            }
+          ],
+          "currentModelId": "gpt-5.5[xhigh]"
+        },
+        "modes": {
+          "availableModes": [
+            {
+              "id": "read-only",
+              "name": "Read-only",
+              "description": "Requires approval to edit files and run commands."
+            },
+            {
+              "id": "agent",
+              "name": "Agent",
+              "description": "Read and edit files, and run commands."
+            },
+            {
+              "id": "agent-full-access",
+              "name": "Agent (full access)",
+              "description": "Codex can edit files outside this workspace and run commands with network access. Exercise caution when using."
+            }
+          ],
+          "currentModeId": "agent"
+        }
+      }
+    }
+  }
+]

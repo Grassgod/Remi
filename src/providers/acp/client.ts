@@ -33,8 +33,10 @@ export interface AcpClientOptions {
   cwd?: string;
   /** Additional MCP servers to configure. */
   mcpServers?: McpServerConfig[];
-  /** Claude Code SDK options to pass through. */
+  /** Claude Code SDK options to pass through (legacy; prefer sessionMeta). */
   claudeCodeOptions?: Record<string, unknown>;
+  /** Full session meta — passed as _meta to session/new. Takes precedence over claudeCodeOptions. */
+  sessionMeta?: import("./protocol.js").NewSessionMeta;
   /** Environment variables for the agent process. */
   env?: Record<string, string>;
   /** Handler for permission requests from the agent. */
@@ -334,12 +336,13 @@ export class AcpClient {
   }
 
   async newSession(params?: Partial<NewSessionParams>): Promise<NewSessionResult> {
+    const meta = params?._meta
+      ?? this._options.sessionMeta
+      ?? (this._options.claudeCodeOptions ? { claudeCode: { options: this._options.claudeCodeOptions } } : undefined);
     const fullParams: NewSessionParams = {
       cwd: params?.cwd ?? this._options.cwd ?? process.cwd(),
       mcpServers: params?.mcpServers ?? this._options.mcpServers ?? [],
-      _meta: params?._meta ?? (this._options.claudeCodeOptions ? {
-        claudeCode: { options: this._options.claudeCodeOptions },
-      } : undefined),
+      _meta: meta,
     };
 
     const result = await this._request<NewSessionResult>(

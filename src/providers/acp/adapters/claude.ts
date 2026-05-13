@@ -18,6 +18,9 @@ export class ClaudeAdapter implements AgentAdapter {
     if (claudeCode?.toolName && typeof claudeCode.toolName === "string") {
       return claudeCode.toolName;
     }
+    if (update.kind === "switch_mode" || update.title === "Ready to code?") {
+      return "ExitPlanMode";
+    }
     return titleToToolName(update.title ?? "unknown");
   }
 
@@ -113,18 +116,21 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   extractAskUserQuestion(toolCall: ToolCallProgressUpdate): AskUserQuestionData | null {
-    const claudeCode = this._claudeCodeMeta(toolCall);
-    if (claudeCode?.toolName !== "AskUserQuestion") return null;
+    if (this.resolveToolName(toolCall) !== "AskUserQuestion") return null;
 
-    const rawInput = toolCall.rawInput as Record<string, unknown> | undefined;
-    if (!rawInput?.questions || !Array.isArray(rawInput.questions)) return null;
+    let rawInput = toolCall.rawInput;
+    if (typeof rawInput === "string") {
+      try { rawInput = JSON.parse(rawInput); } catch {}
+    }
+    if (!rawInput || typeof rawInput !== "object" || Array.isArray(rawInput)) return null;
+    const input = rawInput as Record<string, unknown>;
+    if (!input.questions || !Array.isArray(input.questions)) return null;
 
-    return { questions: rawInput.questions as AskUserQuestionData["questions"] };
+    return { questions: input.questions as AskUserQuestionData["questions"] };
   }
 
   isExitPlanMode(toolCall: ToolCallProgressUpdate): boolean {
-    const claudeCode = this._claudeCodeMeta(toolCall);
-    return claudeCode?.toolName === "ExitPlanMode";
+    return this.resolveToolName(toolCall) === "ExitPlanMode";
   }
 
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
@@ -151,7 +157,7 @@ export class ClaudeAdapter implements AgentAdapter {
 function titleToToolName(title: string): string {
   const lower = title.toLowerCase();
   if (lower.includes("bash") || lower.includes("terminal")) return "Bash";
-  if (lower.includes("read")) return "Read";
+  if (lower === "read" || lower.startsWith("read ")) return "Read";
   if (lower.includes("write") || lower.includes("create")) return "Write";
   if (lower.includes("edit")) return "Edit";
   if (lower.includes("glob")) return "Glob";

@@ -1,0 +1,411 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "mcp",
+            "description": "List configured Model Context Protocol (MCP) tools.",
+            "input": null
+          },
+          {
+            "name": "skills",
+            "description": "List available skills.",
+            "input": null
+          },
+          {
+            "name": "status",
+            "description": "Display session configuration and token usage.",
+            "input": null
+          },
+          {
+            "name": "logout",
+            "description": "Sign out of Codex. This option is available when you are logged in via ChatGPT.",
+            "input": null
+          },
+          {
+            "name": "$agent-browser",
+            "description": "Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to \"open a website\", \"fill out a form\", \"click a button\", \"take a screenshot\", \"scrape data from a page\", \"test this web app\", \"login to a site\", \"automate browser actions\", or any task requiring programmatic web interaction.",
+            "input": null
+          },
+          {
+            "name": "$bytedance-tools",
+            "description": "Router skill for bytedcli (ByteDance internal CLI). Use when tasks mention bytedcli, SSO/auth, TCE/TOS/Netlink/Neptune, RDS, TCC, SCM, Cloud Docs, ByteTech, Cloud Ticket, ENV, Overpass, APM, BAM, Log, Cache, Hive, Dorado, Aeolus, ES, Goofy Deploy, BMQ, Kafka, BITS, DKMS, KMS v2, IAM, data encryption keys, dev tasks, pipelines, releases, or internal tech articles. Routes to subskills by domain and provides common execution patterns with --json output and help handling.",
+            "input": null
+          },
+          {
+            "name": "$imagegen",
+            "description": "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas.",
+            "input": null
+          },
+          {
+            "name": "$openai-docs",
+            "description": "Use when the user asks how to build with OpenAI products or APIs and needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; prioritize OpenAI docs MCP tools, use bundled references only as helper context, and restrict any fallback browsing to official OpenAI domains.",
+            "input": null
+          },
+          {
+            "name": "$plugin-creator",
+            "description": "Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, and baseline placeholders you can edit before publishing or testing. Use when Codex needs to create a new local plugin, add optional plugin structure, or generate or update repo-root `.agents/plugins/marketplace.json` entries for plugin ordering and availability metadata.",
+            "input": null
+          },
+          {
+            "name": "$skill-creator",
+            "description": "Create or update a skill",
+            "input": null
+          },
+          {
+            "name": "$skill-installer",
+            "description": "Install curated skills from openai/skills or other repos",
+            "input": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14264,
+        "size": 258400
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_SKYdcY1Qqxrbc2cPF9E71bWm",
+        "status": "in_progress",
+        "kind": "search",
+        "title": "Search for 'StreamEvent' in providers"
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_SKYdcY1Qqxrbc2cPF9E71bWm",
+        "status": "failed",
+        "rawOutput": {
+          "formatted_output": "",
+          "exit_code": 1
+        },
+        "_meta": {
+          "terminal_exit": {
+            "exit_code": 1,
+            "signal": null,
+            "terminal_id": "call_SKYdcY1Qqxrbc2cPF9E71bWm"
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "grep"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " found"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " no"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " files"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " containing"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Stream"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Event"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " in"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "src"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/providers"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "/"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`.\n\n"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Matches"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ":"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "0"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "019e1690-0a03-79f0-a4e9-b39ec2df632a",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 14443,
+        "size": 258400
+      }
+    }
+  }
+]
