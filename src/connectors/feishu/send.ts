@@ -77,7 +77,7 @@ export async function sendMessageFeishu(
  * - sessionId null → newborn name ("刚醒来的 Remi")
  * - sessionId undefined → plain "Remi" (non-streaming cards)
  */
-export function buildCardHeader(sessionId?: string | null, displayName?: string | null, nameSuffix?: string) {
+export function buildCardHeader(sessionId?: string | null, displayName?: string | null, nameSuffix?: string, subtitle?: string | null) {
   const baseName =
     displayName ? displayName :
     sessionId ? getSessionName(sessionId) :
@@ -87,11 +87,15 @@ export function buildCardHeader(sessionId?: string | null, displayName?: string 
   const now = new Date();
   const hh = String(((now.getUTCHours() + 8) % 24)).padStart(2, "0");
   const mm = String(now.getUTCMinutes()).padStart(2, "0");
-  return {
+  const header: Record<string, unknown> = {
     title: { tag: "plain_text" as const, content: `${title}  ${hh}:${mm}` },
     template: "default" as const,
     icon: { tag: "standard_icon" as const, token: "robot_outlined", color: "grey" },
   };
+  if (subtitle) {
+    header.subtitle = { tag: "plain_text", content: subtitle };
+  }
+  return header;
 }
 
 

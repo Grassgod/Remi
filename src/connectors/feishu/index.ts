@@ -628,13 +628,12 @@ export class FeishuConnector implements Connector {
     await this._streamHandler!(incoming, async (stream, meta) => {
       // Start streaming card with session name (existing session → deterministic name, new → newborn)
       try {
-        // Build name suffix: mission ID + provider/mode label
+        // Build subtitle (provider + mode) and name suffix (mission ID only)
         const missionSuffix = incoming.metadata?.missionId ? ` · ${incoming.metadata.missionId}` : "";
         const agentLabel = meta.agentType === "codex" ? "Codex" : "Claude";
         const modeLabel = meta.mode && meta.mode !== "auto" ? ` ${meta.mode === "bypassPermissions" ? "Bypass" : meta.mode.charAt(0).toUpperCase() + meta.mode.slice(1)}` : "";
-        const providerSuffix = ` · ${agentLabel}${modeLabel}`;
-        const nameSuffix = `${missionSuffix}${providerSuffix}` || undefined;
-        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName ?? undefined, nameSuffix });
+        const subtitle = `${agentLabel}${modeLabel}`;
+        await session.start(chatId, "chat_id", { replyToMessageId, sessionId: meta.sessionId, displayName: meta.displayName ?? undefined, nameSuffix: missionSuffix || undefined, subtitle });
       } catch (err) {
         slog.warn(`streaming card creation failed, falling back to static reply: ${String(err)}`);
         if (this._handler) {

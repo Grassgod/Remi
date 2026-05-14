@@ -156,6 +156,8 @@ export function buildFinalCard(opts: {
   retainedPermissionPanels?: RetainedPermissionPanel[];
   /** Suffix appended to card header name (e.g. " · msn_xxx"). */
   nameSuffix?: string;
+  /** Subtitle shown below the header title (e.g. "Claude Plan"). */
+  subtitle?: string | null;
 }): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
 
@@ -278,7 +280,7 @@ export function buildFinalCard(opts: {
 
   return {
     schema: "2.0",
-    header: buildCardHeader(opts.sessionId, opts.displayName, opts.nameSuffix),
+    header: buildCardHeader(opts.sessionId, opts.displayName, opts.nameSuffix, opts.subtitle),
     config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
     body: { elements },
   };
@@ -340,6 +342,7 @@ export class FeishuStreamingSession {
   private _steps: StepInfo[] = [];
   private _fullThinking = "";
   private _nameSuffix: string | undefined;
+  private _subtitle: string | null = null;
 
   // Active permission form (for degraded mode card rebuild)
   private _pendingPermission: PermissionFormElements | null = null;
@@ -368,15 +371,16 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string },
+    options?: { replyToMessageId?: string; sessionId?: string | null; displayName?: string | null; nameSuffix?: string; subtitle?: string | null },
   ): Promise<void> {
     if (this.state) return;
     this._nameSuffix = options?.nameSuffix;
+    this._subtitle = options?.subtitle ?? null;
 
     const apiBase = resolveApiBase(this.creds.domain);
     const cardJson = {
       schema: "2.0",
-      header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix),
+      header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix, options?.subtitle),
       config: {
         width_mode: "fill",
         streaming_mode: true,
@@ -677,7 +681,7 @@ export class FeishuStreamingSession {
 
     return {
       schema: "2.0",
-      header: buildCardHeader(undefined, undefined, this._nameSuffix),
+      header: buildCardHeader(undefined, undefined, this._nameSuffix, this._subtitle),
       config: { width_mode: "fill" },
       body: { elements },
     };
@@ -1356,6 +1360,7 @@ export class FeishuStreamingSession {
         planReview,
         retainedPermissionPanels,
         nameSuffix: this._nameSuffix,
+        subtitle: this._subtitle,
       });
       const cardJson = JSON.stringify(finalCard);
       this.log(`Final card patch: msgId=${this.state.messageId} size=${(cardJson.length / 1024).toFixed(1)}KB steps=${this._steps.length}`);
