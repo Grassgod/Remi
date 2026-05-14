@@ -919,6 +919,17 @@ export class FeishuConnector implements Connector {
                   slog.info("ExitPlanMode tool update observed; waiting is handled by ACP permission request");
                 } else if (!alreadySeen && input && inputKeys.length > 0) {
                   seenInputs.add(tc.toolCallId);
+
+                  if (toolName === "Agent") {
+                    const desc = String(input.description ?? input.prompt ?? "").slice(0, 60);
+                    const agent = activeAgents.find((a) => a.toolUseId === tc.toolCallId);
+                    if (agent && desc) {
+                      agent.description = desc;
+                      syncHeartbeatRenderer();
+                      await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()));
+                    }
+                  }
+
                   const pendingEntry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
                   if (pendingEntry && !pendingEntry.stepAdded) {
                     pendingEntry.input = input;
