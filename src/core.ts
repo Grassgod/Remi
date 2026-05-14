@@ -290,6 +290,7 @@ export class Remi {
         displayName: existingDisplayName,
         providerName: provider.name,
         agentType,
+        mode: sessRow?.mode ?? null,
         setPermissionHandler: setPermHandler,
       });
       rootSpan.end();
@@ -659,9 +660,9 @@ export class Remi {
         return { text: "上下文已清除，开始新对话。" };
       }
       case "switch": {
-        const chatType = msg.metadata?.chatType as string | undefined;
-        if (chatType === "group") {
-          return { text: "群聊 provider 请在 remi.toml 的 [[bots]] 配置中修改。" };
+        const groupCfg = this._getGroupConfig(msg.chatId);
+        if (groupCfg?.provider) {
+          return { text: `此群 provider 已由管理员固定为 ${providerLabel(groupCfg.provider)}，无法通过 /switch 切换。` };
         }
         const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
 

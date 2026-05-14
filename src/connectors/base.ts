@@ -33,6 +33,8 @@ export interface StreamMeta {
   providerName?: string | null;
   /** ACP agent type used by the selected provider, e.g. "claude" or "codex". */
   agentType?: string | null;
+  /** Permission / approval mode, e.g. "auto", "plan", "bypassPermissions". */
+  mode?: string | null;
   /** Register a handler for permission requests (tool approval, AskUserQuestion, ExitPlanMode). */
   setPermissionHandler?: (handler: (params: import("../providers/acp/protocol.js").RequestPermissionParams) => Promise<import("../providers/acp/protocol.js").PermissionOutcome>) => void;
 }
