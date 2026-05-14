@@ -24,13 +24,13 @@ describe("switch mode helpers", () => {
     });
   });
 
-  it("defaults ACP Claude to auto and stores that as default", () => {
-    expect(defaultSwitchMode("acp:claude")).toBe("auto");
+  it("defaults ACP Claude to bypassPermissions", () => {
+    expect(defaultSwitchMode("acp:claude")).toBe("bypassPermissions");
     expect(buildSwitchTarget("claude")).toEqual({
       providerName: "acp:claude",
-      mode: "auto",
+      mode: "bypassPermissions",
       storedMode: null,
-      modeLabel: "auto",
+      modeLabel: "bypass",
     });
   });
 
@@ -38,7 +38,7 @@ describe("switch mode helpers", () => {
     expect(buildSwitchTarget("claude", "bypass")).toEqual({
       providerName: "acp:claude",
       mode: "bypassPermissions",
-      storedMode: "bypassPermissions",
+      storedMode: null,
       modeLabel: "bypass",
     });
   });

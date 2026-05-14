@@ -48,7 +48,7 @@ export interface AcpProviderOptions {
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
-  claude: "auto",
+  claude: "bypassPermissions",
 };
 const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
 

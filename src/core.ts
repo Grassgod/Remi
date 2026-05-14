@@ -916,7 +916,7 @@ export class Remi {
     }
     remi.authStore = authStore;
 
-    // 2. Providers — register primary + fallback + secondary providers
+    // 2. Providers — register primary + fallback + ACP siblings
     const provider = Remi._buildProvider(config);
     remi.addProvider(provider);
 
@@ -926,6 +926,17 @@ export class Remi {
         remi.addProvider(fallback);
       } catch (e) {
         log.warn("Failed to build fallback provider:", e);
+      }
+    }
+
+    // Auto-register ACP sibling (claude↔codex) so /switch works
+    const ACP_SIBLINGS: Record<string, string> = { "acp:claude": "acp:codex", "acp:codex": "acp:claude" };
+    const sibling = ACP_SIBLINGS[provider.name];
+    if (sibling && !remi._providers.has(sibling)) {
+      try {
+        remi.addProvider(Remi._buildProvider(config, sibling));
+      } catch (e) {
+        log.warn(`Failed to build ACP sibling provider ${sibling}:`, e);
       }
     }
 

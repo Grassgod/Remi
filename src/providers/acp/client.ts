@@ -381,8 +381,8 @@ export class AcpClient {
       "session/resume",
       params as unknown as Record<string, unknown>,
     );
-    this._serverSessionId = result.sessionId;
-    return result;
+    this._serverSessionId = result.sessionId ?? sessionId;
+    return { ...result, sessionId: result.sessionId ?? sessionId };
   }
 
   async loadSession(sessionId: string, cwd?: string): Promise<NewSessionResult> {
@@ -391,8 +391,8 @@ export class AcpClient {
       "session/load",
       params as unknown as Record<string, unknown>,
     );
-    this._serverSessionId = result.sessionId;
-    return result;
+    this._serverSessionId = result.sessionId ?? sessionId;
+    return { ...result, sessionId: result.sessionId ?? sessionId };
   }
 
   async closeSession(sessionId: string): Promise<void> {

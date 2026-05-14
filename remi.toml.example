@@ -15,8 +15,9 @@
 # 如需使用远程 OpenAI 兼容端点，取消下方注释。
 # ---------------------------------------------------------------------------
 [provider]
-# name = "acp:claude"       # ACP Claude via claude-agent-acp
-# name = "acp:codex"        # ACP Codex via codex-acp
+# name = "acp"              # ACP mode — auto-registers both claude and codex siblings for /switch
+# name = "acp:claude"       # ACP Claude via claude-agent-acp (also registers codex sibling)
+# name = "acp:codex"        # ACP Codex via codex-acp (also registers claude sibling)
 # Install codex-acp with: npm install -g @agentclientprotocol/codex-acp
 # Or set REMI_CODEX_AGENT_ACP_EXECUTABLE=/absolute/path/to/codex-acp
 # executable = "/path/to/codex-acp"

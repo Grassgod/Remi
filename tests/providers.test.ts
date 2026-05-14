@@ -14,10 +14,10 @@ describe("ClaudeCLIProvider", () => {
 });
 
 describe("AcpProvider", () => {
-  it("defaults Claude ACP sessions to auto permission mode", () => {
-    expect(resolveAcpPermissionMode("claude", null)).toBe("auto");
-    expect(resolveAcpPermissionMode("claude", undefined)).toBe("auto");
-    expect(resolveAcpPermissionMode("claude", "")).toBe("auto");
+  it("defaults Claude ACP sessions to bypassPermissions", () => {
+    expect(resolveAcpPermissionMode("claude", null)).toBe("bypassPermissions");
+    expect(resolveAcpPermissionMode("claude", undefined)).toBe("bypassPermissions");
+    expect(resolveAcpPermissionMode("claude", "")).toBe("bypassPermissions");
   });
 
   it("preserves explicit ACP permission modes", () => {

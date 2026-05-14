@@ -52,7 +52,7 @@ export function resolveSwitchProviderAlias(alias: string): string {
 }
 
 export function defaultSwitchMode(providerName: string): string | null {
-  if (providerName === ACP_CLAUDE_PROVIDER || providerName === "acp") return "auto";
+  if (providerName === ACP_CLAUDE_PROVIDER || providerName === "acp") return "bypassPermissions";
   if (providerName === CLAUDE_CLI_PROVIDER) return "bypassPermissions";
   return null;
 }
