@@ -146,7 +146,13 @@ name = "/switch claude:auto"
 type = "send_message"
 
 [[bot_menu.default.children]]
-name = "/switch codex"
+name = "/switch codex:agent"
+
+[[bot_menu.default.children.behaviors]]
+type = "send_message"
+
+[[bot_menu.default.children]]
+name = "/switch codex:agent-full-access"
 
 [[bot_menu.default.children.behaviors]]
 type = "send_message"
