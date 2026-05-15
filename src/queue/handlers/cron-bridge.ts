@@ -268,17 +268,19 @@ handlers.set("cli-ingest", async (remi) => {
   );
 });
 
-/** Resolve skill path: cwd → ~/.remi → /pipeline/skills/ */
+/** Resolve skill path: cwd → cc-switch managed → legacy → pipeline built-in */
 function resolveSkillPath(skillName: string, cwd?: string): string {
   if (cwd) {
     const p = join(cwd, ".claude", "skills", skillName, "SKILL.md");
     if (existsSync(p)) return p;
   }
-  const userSkill = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
-  if (existsSync(userSkill)) return userSkill;
+  const ccManaged = join(homedir(), ".claude", "skills", skillName, "SKILL.md");
+  if (existsSync(ccManaged)) return ccManaged;
+  const legacy = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
+  if (existsSync(legacy)) return legacy;
   const builtIn = join(import.meta.dir, "../../../pipeline/skills", skillName, "SKILL.md");
   if (existsSync(builtIn)) return builtIn;
-  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.remi, pipeline/)`);
+  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.claude, ~/.remi, pipeline/)`);
 }
 
 handlers.set("skill:run", async (remi, config) => {
@@ -598,9 +600,11 @@ handlers.set("builtin:skill-optimize", async (remi, config) => {
 
   // For each skill with feedback, generate optimization prompt
   for (const [skillName, items] of grouped) {
-    const skillPath = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
-    if (!existsSync(skillPath)) {
-      log.warn(`[skill-optimize] Skill file not found: ${skillPath}`);
+    let skillPath: string;
+    try {
+      skillPath = resolveSkillPath(skillName);
+    } catch {
+      log.warn(`[skill-optimize] Skill file not found: ${skillName}`);
       continue;
     }
 

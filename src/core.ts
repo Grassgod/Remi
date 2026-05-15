@@ -22,7 +22,7 @@ import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "./providers/base.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "./providers/acp/protocol.js";
 import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
-import { AcpProvider } from "./providers/acp/index.js";
+import { AcpProvider, resolveAcpPermissionMode } from "./providers/acp/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
 import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
@@ -90,7 +90,7 @@ export class Remi {
   traceCollector: TraceCollector;
   queue: RemiQueueManager;
   authStore: AuthStore | null = null;
-  _symlinkManager: any = null; // SymlinkManager instance
+  _configManager: any = null; // ConfigManager instance
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
   private _laneLocks = new Map<string, AsyncLock>();
@@ -285,12 +285,15 @@ export class Remi {
         : provider.name.startsWith("acp:")
           ? provider.name.slice("acp:".length)
           : null;
+      const effectiveMode = agentType
+        ? resolveAcpPermissionMode(agentType, sessRow?.mode)
+        : sessRow?.mode ?? null;
       await consumer(this._processStream(msg, rootSpan.context(), convId, startMs, rlog), {
         sessionId: existingSessionId,
         displayName: existingDisplayName,
         providerName: provider.name,
         agentType,
-        mode: sessRow?.mode ?? null,
+        mode: effectiveMode,
         setPermissionHandler: setPermHandler,
       });
       rootSpan.end();
@@ -788,7 +791,7 @@ export class Remi {
         }
 
         // Kill old process, bind new cwd
-        this._symlinkManager?.ensureForCwd(targetPath);
+        this._configManager?.ensureForCwd(targetPath);
         sessDb.updateSessionCwd(sessionKey, targetPath);
         sessDb.clearSessionId(sessionKey);
         const provider = this._getProvider();
@@ -968,11 +971,11 @@ export class Remi {
       });
     }
 
-    // 4. SymlinkManager — Globals + Layer 1 (project hash dirs)
-    const { symlinkManager } = require("./infra/symlink-manager");
-    remi._symlinkManager = symlinkManager;
-    symlinkManager.ensureAllProjects();
-    symlinkManager.ensureGlobals();
+    // 4. ConfigManager — symlinks + cc-switch sync
+    const { configManager } = require("./infra/config-manager");
+    remi._configManager = configManager;
+    configManager.ensureAllProjects();
+    configManager.ensureGlobals();
 
     // 5. Restart handler
     remi.onRestart((info) => remi._handleRestart(info));

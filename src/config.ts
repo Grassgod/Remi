@@ -188,6 +188,11 @@ export interface GoogleConfig {
   model: string;
 }
 
+export interface CCSwitchConfig {
+  enabled: boolean;
+  configDir: string;
+}
+
 export interface TracingConfig {
   enabled: boolean;
   logsDir: string;
@@ -218,6 +223,8 @@ export interface RemiConfig {
   embedding?: EmbeddingConfig;
   /** Google API config for Gemini image generation (optional). */
   google?: GoogleConfig;
+  /** cc-switch config for multi-tool configuration management. */
+  ccSwitch: CCSwitchConfig;
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -272,6 +279,7 @@ export function defaultRemiConfig(): RemiConfig {
     services: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
+    ccSwitch: { enabled: false, configDir: join(homedir(), ".remi", "cc-switch") },
     tracing: {
       enabled: true,
       logsDir: join(homedir(), ".remi", "logs"),
@@ -320,6 +328,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
 
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
+  const ccSwitchData = (fileData.cc_switch ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
 
@@ -409,6 +418,10 @@ export function loadConfig(configPath?: string | null): RemiConfig {
     proxy: {
       http: (proxyData.http as string) ?? "",
       noProxy: (proxyData.no_proxy as string) ?? "",
+    },
+    ccSwitch: {
+      enabled: (ccSwitchData.enabled as boolean) ?? false,
+      configDir: (ccSwitchData.config_dir as string)?.replace(/^~/, homedir()) ?? join(homedir(), ".remi", "cc-switch"),
     },
     botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData
