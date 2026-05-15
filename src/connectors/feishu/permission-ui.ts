@@ -166,7 +166,7 @@ export function buildPlanReviewForm(
           input_type: "multiline_text",
           name: "feedback_text",
           placeholder: { tag: "plain_text", content: "Feedback or changes (optional)..." },
-          max_length: 2000,
+          max_length: 1000,
           rows: 8,
         },
         {
