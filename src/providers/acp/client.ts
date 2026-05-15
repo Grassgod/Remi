@@ -3,6 +3,8 @@
  * Spawns the ACP agent process and handles bidirectional communication over stdio.
  */
 
+import { createLogger } from "../../logger.js";
+
 import type {
   JsonRpcRequest,
   JsonRpcResponse,
@@ -51,6 +53,8 @@ type PendingRequest = {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
 };
+
+const slog = createLogger("acp-client");
 
 export class AcpClient {
   private _process: ReturnType<typeof Bun.spawn> | null = null;
@@ -269,15 +273,20 @@ export class AcpClient {
   private async _handleServerRequest(msg: JsonRpcRequest): Promise<void> {
     if (msg.method === "session/request_permission") {
       const params = msg.params as unknown as RequestPermissionParams;
+      const toolName = params.toolCall?.toolName ?? params.toolCall?.title ?? "unknown";
+      slog.info(`session/request_permission received: tool=${toolName} sessionId=${params.sessionId} id=${msg.id}`);
       const handler = this._options.onPermissionRequest;
       if (handler) {
         try {
           const outcome = await handler(params);
+          slog.info(`session/request_permission resolved: tool=${toolName} outcome=${outcome.outcome}`);
           this._respond(msg.id, { outcome });
         } catch (err) {
+          slog.info(`session/request_permission error: tool=${toolName} err=${err}`);
           this._respond(msg.id, { outcome: { outcome: "cancelled" } });
         }
       } else {
+        slog.info(`session/request_permission no handler: tool=${toolName}`);
         this._respond(msg.id, { outcome: { outcome: "cancelled" } });
       }
       return;
