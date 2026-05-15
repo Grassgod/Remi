@@ -4,12 +4,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen } from "lucide-react";
+import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen, ToggleLeft, ToggleRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import { SkillTreeNode } from "../components/SkillTreeNode";
 import * as api from "../api/client";
 import type { SkillInfo, SkillFileNode, SkillScope } from "../api/types";
+
+interface CCSwitchSkill {
+  id: string;
+  name: string;
+  apps: Record<string, boolean>;
+}
+
+const APP_LABELS: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  gemini: "Gemini",
+};
 
 type Tab = "file" | "reports";
 
@@ -28,6 +40,29 @@ export function Skills() {
   const [reportContent, setReportContent] = useState("");
   const [loading, setLoading] = useState(true);
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
+  const [ccSkills, setCcSkills] = useState<CCSwitchSkill[]>([]);
+
+  useEffect(() => {
+    api.request("/api/v1/cc-switch/skills")
+      .then((res: any) => { if (res.skills) setCcSkills(res.skills); })
+      .catch(() => {});
+  }, []);
+
+  const ccSkillMap = new Map(ccSkills.map(s => [s.name, s]));
+
+  const handleToggleApp = async (skillName: string, app: string, current: boolean) => {
+    const ccId = ccSkills.find(s => s.name === skillName)?.id;
+    if (!ccId) return;
+    try {
+      await api.request(`/api/v1/cc-switch/skills/${encodeURIComponent(ccId)}/toggle`, {
+        method: "PUT",
+        body: JSON.stringify({ app, enabled: !current }),
+      });
+      setCcSkills(prev => prev.map(s =>
+        s.id === ccId ? { ...s, apps: { ...s.apps, [app]: !current } } : s
+      ));
+    } catch {}
+  };
 
   // Load scopes on mount
   useEffect(() => {
@@ -238,6 +273,30 @@ export function Skills() {
                     </div>
                     {currentSkill.description && (
                       <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{currentSkill.description}</p>
+                    )}
+                    {/* cc-switch per-app toggles */}
+                    {ccSkillMap.has(currentSkill.name) && (
+                      <div className="mt-2 flex items-center gap-3 border-t border-border/50 pt-2">
+                        {Object.entries(APP_LABELS).map(([app, label]) => {
+                          const cc = ccSkillMap.get(currentSkill.name)!;
+                          return (
+                            <button
+                              key={app}
+                              onClick={() => handleToggleApp(currentSkill.name, app, cc.apps[app])}
+                              className="flex items-center gap-1 text-xs transition-colors"
+                            >
+                              {cc.apps[app] ? (
+                                <ToggleRight className="h-4 w-4 text-primary" />
+                              ) : (
+                                <ToggleLeft className="h-4 w-4 text-muted-foreground/40" />
+                              )}
+                              <span className={cc.apps[app] ? "text-foreground" : "text-muted-foreground/50"}>
+                                {label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
                   </CardHeader>
                 </Card>

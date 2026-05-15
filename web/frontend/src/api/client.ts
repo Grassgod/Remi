@@ -6,7 +6,7 @@ export function setAuthToken(token: string) {
   authToken = token;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string>),
   };

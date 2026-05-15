@@ -39,6 +39,7 @@ import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
+import { registerCCSwitchHandlers } from "./handlers/cc-switch.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../src/project/store.js";
@@ -94,6 +95,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
   registerMcpHandlers(app, data);
+  registerCCSwitchHandlers(app);
   registerProjectInitHandlers(app);
 
   // ── Filesystem browse (for directory picker) ──
