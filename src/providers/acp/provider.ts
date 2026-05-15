@@ -7,6 +7,7 @@
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { configManager } from "../../infra/config-manager.js";
 import type {
   Provider,
   SendOptions,
@@ -383,14 +384,18 @@ export class AcpProvider implements Provider {
     await client.start();
     await client.initialize();
 
+    const mcpServers = configManager.hasCCSwitch
+      ? configManager.ccSwitch.getMcpServersForApp(this._adapter.agentType as any)
+      : [];
+
     let acpSessionId: string;
     let sessionModes: SessionModeState | undefined;
     if (options?.sessionId) {
-      const result = await client.resumeSession(options.sessionId, cwd);
+      const result = await client.resumeSession(options.sessionId, cwd, mcpServers);
       acpSessionId = result.sessionId;
       sessionModes = result.modes;
     } else {
-      const result = await client.newSession({ cwd, _meta: sessionMeta });
+      const result = await client.newSession({ cwd, mcpServers, _meta: sessionMeta });
       acpSessionId = result.sessionId;
       sessionModes = result.modes;
     }

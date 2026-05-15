@@ -156,6 +156,43 @@ export class CCSwitchClient {
     return this.exec(["mcp", "import", "--app", app]);
   }
 
+  /**
+   * Read MCP servers enabled for a given app directly from cc-switch.db.
+   * Returns configs compatible with ACP's McpServerConfig protocol.
+   */
+  getMcpServersForApp(app: AppType = "claude"): Array<{
+    name: string;
+    command: string;
+    args?: string[];
+    env?: Record<string, string>;
+  }> {
+    if (!this.dbExists) return [];
+    try {
+      const { Database } = require("bun:sqlite");
+      const db = new Database(this.dbPath, { readonly: true });
+      const col = `enabled_${app === "open-code" ? "opencode" : app === "open-claw" ? "hermes" : app}`;
+      const rows = db.query(`SELECT id, name, server_config FROM mcp_servers WHERE ${col} = 1`).all() as Array<{
+        id: string;
+        name: string;
+        server_config: string;
+      }>;
+      db.close();
+
+      return rows.map((row) => {
+        const cfg = JSON.parse(row.server_config);
+        return {
+          name: row.name,
+          command: cfg.command,
+          args: cfg.args,
+          env: cfg.env,
+        };
+      });
+    } catch (e: any) {
+      log.warn(`failed to read MCP servers from cc-switch.db: ${e.message}`);
+      return [];
+    }
+  }
+
   // ── Providers ─────────────────────────────────────────────────
 
   async providerList(app?: AppType): Promise<string> {

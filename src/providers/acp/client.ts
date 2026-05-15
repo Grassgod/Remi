@@ -384,8 +384,8 @@ export class AcpClient {
     this._notify("session/cancel", params as unknown as Record<string, unknown>);
   }
 
-  async resumeSession(sessionId: string, cwd?: string): Promise<NewSessionResult> {
-    const params: ResumeSessionParams = { sessionId, cwd: cwd ?? this._options.cwd };
+  async resumeSession(sessionId: string, cwd?: string, mcpServers?: McpServerConfig[]): Promise<NewSessionResult> {
+    const params: ResumeSessionParams = { sessionId, cwd: cwd ?? this._options.cwd, mcpServers };
     const result = await this._request<NewSessionResult>(
       "session/resume",
       params as unknown as Record<string, unknown>,
