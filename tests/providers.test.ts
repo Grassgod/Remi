@@ -30,15 +30,15 @@ describe("AcpProvider", () => {
     expect(resolveAcpPermissionMode("codex", null)).toBeNull();
   });
 
-  it("falls back from Claude auto when the agent does not advertise it", () => {
-    expect(resolveAvailableAcpPermissionMode("auto", {
+  it("passes through mode when agent advertises it", () => {
+    expect(resolveAvailableAcpPermissionMode("default", {
       currentModeId: "default",
       availableModes: [{ id: "default", name: "Default" }],
     })).toBe("default");
-    expect(resolveAvailableAcpPermissionMode("auto", {
-      currentModeId: "auto",
-      availableModes: [{ id: "auto", name: "Auto" }, { id: "default", name: "Default" }],
-    })).toBe("auto");
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", {
+      currentModeId: "bypassPermissions",
+      availableModes: [{ id: "bypassPermissions", name: "Bypass" }, { id: "default", name: "Default" }],
+    })).toBe("bypassPermissions");
   });
 
   it("uses Remi's Claude ACP wrapper by default when available", () => {

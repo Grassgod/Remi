@@ -106,9 +106,6 @@ export function resolveAvailableAcpPermissionMode(
   if (!mode) return null;
   if (!modes?.availableModes?.length) return mode;
   if (modes.availableModes.some((m) => m.id === mode)) return mode;
-  if (mode === "auto" && modes.availableModes.some((m) => m.id === "default")) {
-    return "default";
-  }
   return mode;
 }
 
@@ -339,7 +336,7 @@ export class AcpProvider implements Provider {
       }
       const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, existing.modes);
       if (effectiveMode) {
-        const appliedMode = await this._setMode(existing.client, existing.acpSessionId, effectiveMode, permissionMode);
+        const appliedMode = await this._setMode(existing.client, existing.acpSessionId, effectiveMode);
         if (existing.modes) existing.modes = { ...existing.modes, currentModeId: appliedMode };
       }
       return existing;
@@ -401,7 +398,7 @@ export class AcpProvider implements Provider {
     }
     const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes);
     if (effectiveMode) {
-      const appliedMode = await this._setMode(client, acpSessionId, effectiveMode, permissionMode);
+      const appliedMode = await this._setMode(client, acpSessionId, effectiveMode);
       if (sessionModes) sessionModes = { ...sessionModes, currentModeId: appliedMode };
     }
 
@@ -419,17 +416,9 @@ export class AcpProvider implements Provider {
     return entry;
   }
 
-  private async _setMode(client: AcpClient, sessionId: string, mode: string, requestedMode: string | null): Promise<string> {
-    try {
-      await client.setMode(sessionId, mode);
-      return mode;
-    } catch (err) {
-      if (requestedMode === "auto" && mode === "auto") {
-        await client.setMode(sessionId, "default");
-        return "default";
-      }
-      throw err;
-    }
+  private async _setMode(client: AcpClient, sessionId: string, mode: string): Promise<string> {
+    await client.setMode(sessionId, mode);
+    return mode;
   }
 
   private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {

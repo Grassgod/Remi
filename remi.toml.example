@@ -141,7 +141,7 @@ name = "/switch claude:plan"
 type = "send_message"
 
 [[bot_menu.default.children]]
-name = "/switch claude:auto"
+name = "/switch claude:default"
 
 [[bot_menu.default.children.behaviors]]
 type = "send_message"

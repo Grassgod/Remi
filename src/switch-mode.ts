@@ -3,7 +3,6 @@ const ACP_CODEX_PROVIDER = "acp:codex";
 const CLAUDE_CLI_PROVIDER = "claude_cli";
 
 const ACP_CLAUDE_MODES = new Set([
-  "auto",
   "default",
   "acceptEdits",
   "plan",
@@ -14,7 +13,6 @@ const ACP_CLAUDE_MODES = new Set([
 const CLAUDE_CLI_MODES = new Set([
   "bypassPermissions",
   "plan",
-  "auto",
   "default",
   "acceptEdits",
 ]);
