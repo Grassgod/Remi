@@ -171,7 +171,10 @@ export async function runAuth(provider?: string): Promise<void> {
 
 async function runByteDanceSSOAuth(): Promise<void> {
   const config = loadConfig();
-  const ssoConfig = config.bytedanceSso ?? {};
+  const ssoConfig = config.bytedanceSso;
+  if (!ssoConfig?.clientId) {
+    throw new Error("ByteDance SSO: clientId is required. Set remi.toml [bytedance_sso].client_id or BYTEDANCE_SSO_CLIENT_ID.");
+  }
 
   const adapter = new ByteDanceSSOAdapter(ssoConfig);
 

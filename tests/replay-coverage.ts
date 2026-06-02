@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAdapter } from "../src/providers/acp/adapters/index.js";
-import { formatToolInputSummary } from "../src/connectors/feishu/tool-formatters.js";
+import { formatToolInputSummary } from "@remi/feishu-channel";
 import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "../src/providers/acp/protocol.js";
 
 const FIXTURE_DIR = join(import.meta.dir, "fixtures", "acp");

@@ -194,6 +194,10 @@ export function getDb(): Database {
       last_active   INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       status        TEXT NOT NULL DEFAULT 'active'
     );
+
+    -- (SSO plugin tables — users, user_sessions, sso_providers, sso_settings,
+    --  clusters — are defined inside src/plugins/sso/db/migrations.ts and
+    --  installed by SsoPlugin.migrate() at startup.)
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)

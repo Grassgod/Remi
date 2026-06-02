@@ -2,7 +2,7 @@
  * GroupConfigStore — SQLite CRUD for the group_configs table.
  */
 
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDb } from "../db/index.js";
 import type { GroupConfig, GroupConfigInput } from "./model.js";
 
@@ -121,7 +121,7 @@ export class GroupConfigStore {
     if (!existing) return false;
 
     const sets: string[] = [];
-    const vals: unknown[] = [];
+    const vals: SQLQueryBindings[] = [];
 
     if (fields.projectId !== undefined) { sets.push("project_id = ?"); vals.push(fields.projectId); }
     if (fields.name !== undefined) { sets.push("name = ?"); vals.push(fields.name); }

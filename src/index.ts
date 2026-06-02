@@ -19,7 +19,7 @@ export {
   type ToolDefinition,
   createAgentResponse,
 } from "./providers/base.js";
-export { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
+export { AcpProvider } from "./providers/acp/index.js";
 
 // Connectors
 export { type Connector, type IncomingMessage, type MessageHandler } from "./connectors/base.js";

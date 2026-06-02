@@ -6,7 +6,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { getSessionName } from "../connectors/feishu/session-name.js";
+import { getSessionName } from "@remi/feishu-channel";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -42,6 +42,7 @@ export interface ChatMessage {
     duration: number | null;
     toolCount: number;
     sessionId?: string;
+    traceId?: number;
   };
 }
 

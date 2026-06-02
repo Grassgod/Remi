@@ -19,7 +19,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers["Content-Type"] = "application/json";
   }
 
-  const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  const res = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -416,50 +420,63 @@ export const confirmMissionDone = (missionId: string) =>
     method: "POST",
   });
 
-// ── Eval ──
-export const getEvalOverview = () =>
-  request<import("./types").EvalOverview>("/api/v1/eval/overview");
+// ── SSO / Auth ────────────────────────────────────────────────
 
-export const getEvalCases = () =>
-  request<import("./types").EvalCase[]>("/api/v1/eval/cases");
+export interface CurrentUser {
+  username: string;
+  email: string;
+  nickname: string | null;
+  name: string | null;
+  picture: string | null;
+  tenantAlias: string | null;
+}
 
-export const getEvalCase = (id: string) =>
-  request<import("./types").EvalCaseDetail>("/api/v1/eval/cases/" + id);
+export interface AuthMeResponse {
+  user: CurrentUser | null;
+  ssoConfigured: boolean;
+}
 
-export const getEvalBaseline = () =>
-  request<import("./types").EvalBaseline>("/api/v1/eval/baseline");
+export const getCurrentUser = async (): Promise<AuthMeResponse> => {
+  const res = await fetch(`${BASE}/api/auth/me`, { credentials: "include" });
+  if (res.status === 401) {
+    const body = await res.json().catch(() => ({ ssoConfigured: true })) as { ssoConfigured?: boolean };
+    return { user: null, ssoConfigured: body.ssoConfigured ?? true };
+  }
+  if (!res.ok) throw new Error("getCurrentUser failed: " + res.status);
+  return res.json();
+};
 
-export const getEvalRuns = () =>
-  request<import("./types").EvalRunSummary[]>("/api/v1/eval/runs");
-
-export const getEvalRun = (id: string) =>
-  request<import("./types").EvalRunResult>("/api/v1/eval/runs/" + id);
-
-export const triggerEvalRun = (opts: { type: string; cases: string[] }) =>
-  request<{ ok: boolean; message?: string }>("/api/v1/eval/run", {
+export const ssoLogoutApi = () =>
+  fetch(`${BASE}/api/auth/sso/logout`, {
     method: "POST",
-    body: JSON.stringify(opts),
+    credentials: "include",
   });
 
-export const triggerEvalPrepare = (opts: { action: string; caseId?: string }) =>
-  request<{ ok: boolean }>("/api/v1/eval/prepare", {
-    method: "POST",
-    body: JSON.stringify(opts),
-  });
+export interface SsoProviderInfo {
+  id: string;
+  type: string;
+  name: string;
+  icon: string | null;
+}
 
-export const createEvalCase = (data: Partial<import("./types").EvalCase>) =>
-  request<{ ok: boolean; id: string }>("/api/v1/eval/cases", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+export const listSsoProviders = async (): Promise<SsoProviderInfo[]> => {
+  const res = await fetch(`${BASE}/api/auth/sso/providers`, { credentials: "include" });
+  if (!res.ok) return [];
+  const body = (await res.json()) as { providers: SsoProviderInfo[] };
+  return body.providers;
+};
 
-export const updateEvalCase = (id: string, patch: Partial<import("./types").EvalCase>) =>
-  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
+export const ssoLoginUrl = (providerId: string, next?: string) => {
+  const q = next ? `?next=${encodeURIComponent(next)}` : "";
+  return `/api/auth/sso/${encodeURIComponent(providerId)}/login${q}`;
+};
 
-export const deleteEvalCase = (id: string) =>
-  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
-    method: "DELETE",
-  });
+export interface HostInfo {
+  hostname: string;
+  ips: Array<{ interface: string; address: string; family: string }>;
+  currentBaseUrl: string;
+  recommendedCallbacks: string[];
+}
+
+export const getHostInfo = () =>
+  request<HostInfo>("/api/v1/system/host-info");

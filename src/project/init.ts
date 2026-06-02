@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
-import { createProjectChat, setupProjectChat } from "../connectors/feishu/chat.js";
+import { createProjectChat, setupProjectChat } from "@remi/feishu-channel";
 import { GroupConfigStore } from "../group/store.js";
 import { loadConfig } from "../config.js";
 
@@ -117,7 +117,7 @@ export async function runProjectInit(
       if (!ownerOpenId) {
         throw new Error("No owner open_id configured. Set feishu.trigger_user_ids in remi.toml.");
       }
-      chatId = await createProjectChat(input.name, ownerOpenId);
+      chatId = await createProjectChat(loadConfig().feishu, input.name, ownerOpenId);
       store.updateField(projectId, "chat_id", chatId);
     }
 
@@ -132,7 +132,7 @@ export async function runProjectInit(
     });
 
     // Setup group: avatar + mission board tab
-    await setupProjectChat(chatId, projectId);
+    await setupProjectChat(loadConfig().feishu, chatId, projectId);
 
     return chatId;
   });

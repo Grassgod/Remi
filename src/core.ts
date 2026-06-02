@@ -21,11 +21,9 @@ import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "./providers/base.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "./providers/acp/protocol.js";
-import { ClaudeCLIProvider } from "./providers/claude-cli/index.js";
 import { AcpProvider, resolveAcpPermissionMode } from "./providers/acp/index.js";
 import { FeishuConnector } from "./connectors/feishu/index.js";
-import { flushDedupCacheSync } from "./connectors/feishu/receive.js";
-import { MenuSyncer } from "./connectors/feishu/menu-sync.js";
+import { flushDedupCacheSync, MenuSyncer } from "@remi/feishu-channel";
 
 import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
@@ -121,7 +119,7 @@ export class Remi {
   }
 
   _getProvider(name?: string | null): Provider {
-    const n = name ?? this.config.provider.name;
+    const n = name ?? this.config.provider.name ?? `acp:${this.config.provider.default}`;
     let provider = this._providers.get(n);
     if (!provider) {
       // "acp" → match first "acp:*" variant
@@ -313,7 +311,7 @@ export class Remi {
     }
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<ProviderEvent> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("./logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
     const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
     let resultResponse: AgentResponse | null = null;
@@ -324,7 +322,7 @@ export class Remi {
     if (cmdResponse) {
       yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: cmdResponse.text }] };
       resultResponse = cmdResponse;
-      return;
+      return resultResponse;
     }
 
     // Handle report detail request
@@ -332,7 +330,7 @@ export class Remi {
     if (reportResponse) {
       yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: reportResponse.text }] };
       resultResponse = reportResponse;
-      return;
+      return resultResponse;
     }
 
     const sessionKey = this._resolveSessionKey(msg);
@@ -353,12 +351,17 @@ export class Remi {
     const chatMeta = groupConfig?.injectChatContext
       ? `\n[chat_context] chatId=${msg.chatId} sender=${msg.sender} senderOpenId=${msg.metadata?.senderOpenId ?? "unknown"}`
       : "";
-    const effectiveSystemPrompt = groupConfig?.systemPrompt
-      ? groupConfig.systemPrompt + chatMeta
-      : chatMeta || undefined;
+    const memoryContext = this.memory.readMemory().trim();
+    const promptParts = [
+      memoryContext ? `# Memory\n${memoryContext}` : "",
+      groupConfig?.systemPrompt ?? "",
+      chatMeta,
+    ].filter(Boolean);
+    const effectiveSystemPrompt = promptParts.length ? promptParts.join("\n\n") : undefined;
 
     const streamOptions = {
       systemPrompt: effectiveSystemPrompt,
+      context: memoryContext || undefined,
       chatId: this._resolveSessionKey(msg),
       sessionId: existingSessionId,
       cwd: cwd ?? undefined,
@@ -396,10 +399,21 @@ export class Remi {
     let staleSession = false;
 
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
+    let streamedText = "";
+    let streamedThinking = "";
 
     try {
       for await (const event of provider.sendStream(msg.text, streamOptions)) {
         _log.debug(`received event: ${event.sessionUpdate}`);
+        if (event.sessionUpdate === "agent_message_chunk") {
+          for (const block of event.content) {
+            if (block.type === "text") streamedText += block.text;
+          }
+        } else if (event.sessionUpdate === "agent_thought_chunk") {
+          for (const block of event.content) {
+            if (block.type === "text") streamedThinking += block.text;
+          }
+        }
         yield event;
 
         if (event.sessionUpdate === "tool_call") {
@@ -442,6 +456,9 @@ export class Remi {
 
     // Get response from provider after stream ends
     resultResponse = provider.getLastResponse?.() ?? null;
+    if (!resultResponse && streamedText) {
+      resultResponse = createAgentResponse({ text: streamedText, thinking: streamedThinking || null });
+    }
     // Detect prompt-too-long from response text
     if (!promptTooLong && resultResponse && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(resultResponse.text)) {
       promptTooLong = true;
@@ -521,7 +538,7 @@ export class Remi {
       ) {
         providerSpan?.endWithError("primary provider failed");
 
-        const fallbackName = this.config.provider.fallback;
+        const fallbackName = this.config.provider.fallback ?? null;
         if (fallbackName && this._providers.has(fallbackName)) {
           _log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
           const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
@@ -620,19 +637,39 @@ export class Remi {
         _log.warn("insert conversation failed:", e);
       }
     }
+
+    return resultResponse;
   }
 
   private async _process(msg: IncomingMessage): Promise<AgentResponse> {
-    let lastResponse: AgentResponse | null = null;
-    for await (const event of this._processStream(msg)) {
-      // consume all events
+    let returnedResponse: AgentResponse | null = null;
+    let text = "";
+    let thinking = "";
+    const stream = this._processStream(msg);
+    while (true) {
+      const next = await stream.next();
+      if (next.done) {
+        returnedResponse = next.value ?? null;
+        break;
+      }
+      const event = next.value;
+      if (event.sessionUpdate === "agent_message_chunk") {
+        for (const block of event.content) {
+          if (block.type === "text") text += block.text;
+        }
+      } else if (event.sessionUpdate === "agent_thought_chunk") {
+        for (const block of event.content) {
+          if (block.type === "text") thinking += block.text;
+        }
+      }
     }
-    const provider = this._getProvider();
-    lastResponse = provider.getLastResponse?.() ?? null;
-    if (!lastResponse) {
+    if (returnedResponse) {
+      return returnedResponse;
+    } else if (text) {
+      return createAgentResponse({ text, thinking: thinking || null });
+    } else {
       return createAgentResponse({ text: "[Error: no result from provider]" });
     }
-    return lastResponse;
   }
 
   // ── Slash commands ───────────────────────────────────────
@@ -654,7 +691,7 @@ export class Remi {
     switch (name) {
       case "clear":
       case "new": {
-        sessDb.deleteSession(sessionKey);
+        sessDb.clearSessionId(sessionKey);
         // Also clear the underlying provider's conversation context
         const provider = this._getProvider();
         if ("clearSession" in provider && typeof provider.clearSession === "function") {
@@ -672,7 +709,7 @@ export class Remi {
         if (!args) {
           // Show current state + available options
           const switchSessRow = sessDb.getSession(sessionKey);
-          const curProvider = resolveSwitchProviderAlias(switchSessRow?.provider ?? this.config.provider.name);
+          const curProvider = resolveSwitchProviderAlias(switchSessRow?.provider ?? `acp:${this.config.provider.default}`);
           const curMode = switchSessRow?.mode ?? defaultSwitchMode(curProvider) ?? "agent default";
           const lines = [
             `当前: **${providerLabel(curProvider)} · ${curMode === "bypassPermissions" ? "bypass" : curMode}**`,
@@ -708,7 +745,7 @@ export class Remi {
           return { text: `模式 "${modeArg}" 对 ${providerLabel(providerName)} 不可用。可选: ${available}` };
         }
 
-        const curProviderName = resolveSwitchProviderAlias(sessDb.getSession(sessionKey)?.provider ?? this.config.provider.name);
+        const curProviderName = resolveSwitchProviderAlias(sessDb.getSession(sessionKey)?.provider ?? `acp:${this.config.provider.default}`);
         const providerChanged = curProviderName !== providerName;
 
         if (providerChanged) {
@@ -919,27 +956,17 @@ export class Remi {
     }
     remi.authStore = authStore;
 
-    // 2. Providers — register primary + fallback + ACP siblings
+    // 2. Providers — register primary + both ACP agents
     const provider = Remi._buildProvider(config);
     remi.addProvider(provider);
 
-    if (config.provider.fallback) {
+    // Auto-register the other ACP agent so /switch claude ↔ /switch codex works
+    const otherType = config.provider.default === "claude" ? "codex" : "claude";
+    if (!remi._providers.has(`acp:${otherType}`)) {
       try {
-        const fallback = Remi._buildProvider(config, config.provider.fallback);
-        remi.addProvider(fallback);
+        remi.addProvider(Remi._buildProvider(config, otherType));
       } catch (e) {
-        log.warn("Failed to build fallback provider:", e);
-      }
-    }
-
-    // Auto-register ACP sibling (claude↔codex) so /switch works
-    const ACP_SIBLINGS: Record<string, string> = { "acp:claude": "acp:codex", "acp:codex": "acp:claude" };
-    const sibling = ACP_SIBLINGS[provider.name];
-    if (sibling && !remi._providers.has(sibling)) {
-      try {
-        remi.addProvider(Remi._buildProvider(config, sibling));
-      } catch (e) {
-        log.warn(`Failed to build ACP sibling provider ${sibling}:`, e);
+        log.warn(`Failed to build acp:${otherType} provider:`, e);
       }
     }
 
@@ -983,32 +1010,26 @@ export class Remi {
     return remi;
   }
 
-  private static _buildProvider(config: RemiConfig, name?: string | null) {
-    const n = name ?? config.provider.name;
-    if (n === "claude_cli") {
-      return new ClaudeCLIProvider({
-        model: config.provider.model,
-        timeout: config.provider.timeout,
-        allowedTools: config.provider.allowedTools,
-        cwd: homedir(),
-        apiKey: config.provider.apiKey,
-        baseUrl: config.provider.baseUrl,
-      });
+  private static _buildProvider(config: RemiConfig, agentType?: string) {
+    const rawType = agentType ?? config.provider.default;
+    const type = rawType.startsWith("acp:") ? rawType.slice("acp:".length) : rawType;
+    if (type !== "claude" && type !== "codex") {
+      throw new Error(`Unknown ACP provider: ${rawType}`);
     }
-    if (n === "acp" || n === "acp:claude" || n === "acp:codex") {
-      const agentType = n.includes(":") ? n.split(":")[1] : "claude";
-      return new AcpProvider({
-        agentType,
-        model: config.provider.model,
-        timeout: config.provider.timeout,
-        allowedTools: config.provider.allowedTools,
-        cwd: homedir(),
-        apiKey: config.provider.apiKey,
-        baseUrl: config.provider.baseUrl,
-        executable: config.provider.executable ?? undefined,
-      });
-    }
-    throw new Error(`Unknown provider: ${n}`);
+    const agentCfg = config.provider[type] ?? config.provider.claude;
+    return new AcpProvider({
+      agentType: type,
+      model: agentCfg.model,
+      timeout: agentCfg.timeout,
+      allowedTools: agentCfg.allowedTools,
+      cwd: homedir(),
+      executable: agentCfg.executable,
+      getMcpServers: () => {
+        const { getConfigHub } = require("./plugins/config-hub");
+        const hub = getConfigHub();
+        return hub ? hub.service.getMcpServersForApp(type) : [];
+      },
+    });
   }
 
   // ── Restart / notify ──────────────────────────────────────

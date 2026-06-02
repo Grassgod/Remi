@@ -947,12 +947,22 @@ export class RemiData {
       outputTokens: number | null;
       connector: string | null;
       chatId: string;
+      threadId: string | null;
+      messageId: string | null;
       senderName: string | null;
+      sessionId: string | null;
     };
     userMessage: string | null;
     toolCalls: ToolCallData[];
     jsonlAvailable: boolean;
     remiSpans: Array<{ op: string; ms: number }>;
+    timeline: Array<{
+      name: string;
+      startMs: number;
+      durationMs: number;
+      depth: number;
+      toolIndex?: number;
+    }>;
   } | null {
     const db = getDb();
     const row = db.query(`

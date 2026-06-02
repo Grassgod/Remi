@@ -11,9 +11,13 @@
     "rootDir": ".",
     "declaration": true,
     "resolveJsonModule": true,
-    "types": ["bun-types"],
+    "types": ["bun"],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@remi/feishu-channel": ["./packages/feishu-channel/src/index.ts"],
+      "@remi/feishu-channel/*": ["./packages/feishu-channel/src/*"],
+      "@remi/acp-provider": ["./packages/acp-provider/src/index.ts"],
+      "@remi/acp-provider/*": ["./packages/acp-provider/src/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],

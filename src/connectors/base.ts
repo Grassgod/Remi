@@ -3,7 +3,7 @@
  */
 
 import type { AgentResponse, ProviderEvent } from "../providers/base.js";
-import type { MediaAttachment } from "../providers/claude-cli/protocol.js";
+import type { MediaAttachment } from "@remi/acp-provider";
 
 /** A message received from any connector. */
 export interface IncomingMessage {

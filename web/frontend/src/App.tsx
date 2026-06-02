@@ -1,5 +1,8 @@
+import { useEffect } from "react";
 import { Route, Switch, Router as WouterRouter } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { AuthGate } from "./components/AuthGate";
+import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Conversations } from "./pages/Conversations";
 import { Missions } from "./pages/Missions";
@@ -10,6 +13,8 @@ import { MemoryDaily } from "./pages/MemoryDaily";
 import { Wiki } from "./pages/Wiki";
 import { Skills } from "./pages/Skills";
 import { Mcp } from "./pages/Mcp";
+import { Prompts } from "./pages/Prompts";
+import { Providers } from "./pages/Providers";
 import { Analytics } from "./pages/Analytics";
 import { Traces } from "./pages/Traces";
 import { Logs } from "./pages/Logs";
@@ -37,10 +42,25 @@ function NotFound() {
   );
 }
 
+function RedirectToLogin() {
+  const [location, navigate] = useHashLocation();
+  useEffect(() => {
+    if (location !== "/login") navigate("/login");
+  }, [location, navigate]);
+  return null;
+}
+
 export function App() {
   return (
     <WouterRouter hook={useHashLocation}>
+      <AuthGate
+        isPublic={(p) => p === "/login"}
+        renderUnauthenticated={() => <RedirectToLogin />}
+      >
       <Switch>
+        {/* Auth */}
+        <Route path="/login" component={Login} />
+
         {/* Overview */}
         <Route path="/" component={Dashboard} />
 
@@ -54,6 +74,8 @@ export function App() {
         <Route path="/wiki" component={Wiki} />
         <Route path="/skills" component={Skills} />
         <Route path="/mcp" component={Mcp} />
+        <Route path="/prompts" component={Prompts} />
+        <Route path="/providers" component={Providers} />
 
         {/* Observability */}
         <Route path="/analytics" component={Analytics} />
@@ -78,6 +100,7 @@ export function App() {
 
         <Route component={NotFound} />
       </Switch>
+      </AuthGate>
     </WouterRouter>
   );
 }

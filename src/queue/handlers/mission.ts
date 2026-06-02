@@ -12,7 +12,8 @@ import type { MissionJobData } from "../queues.js";
 import { MissionStore } from "../../mission/store.js";
 import type { Mission, PipelineStep, Contract } from "../../mission/model.js";
 import type { AgentResponse } from "../../providers/base.js";
-import { sendToThread } from "../../connectors/feishu/thread.js";
+import { sendToThread } from "@remi/feishu-channel";
+import { loadConfig } from "../../config.js";
 import { insertConversationProcessing, completeConversation } from "../../db/index.js";
 import { createLogger } from "../../logger.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -106,7 +107,7 @@ export async function handleMissionJob(
       // Send stage label (only for first message of a step, not multi-turn replies)
       if (!userMessage) {
         try {
-          await sendToThread(mission.chatId, mission.threadId, `── **${label}** ──`);
+          await sendToThread(loadConfig().feishu, mission.chatId, mission.threadId, `── **${label}** ──`);
         } catch (err) {
           log.warn(`Failed to send stage label for ${missionId}/${step}: ${err}`);
         }

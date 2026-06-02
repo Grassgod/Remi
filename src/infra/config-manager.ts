@@ -1,11 +1,8 @@
 /**
- * ConfigManager — unified configuration management for Remi.
- *
- * Responsibilities:
- *   1. Symlink management (CLAUDE.md → soul.md, projects/)   [inherited from SymlinkManager]
- *   2. cc-switch orchestration (skills, MCP, providers sync)  [new]
- *
- * If cc-switch is not installed, degrades gracefully to symlink-only behavior.
+ * ConfigManager — symlink-based config management (CLAUDE.md → soul.md,
+ * projects/). Cross-tool MCP/Skills/Prompts sync now lives in the
+ * `config-hub` plugin (src/plugins/config-hub), so the cc-switch CLI shell-out
+ * is gone from here.
  */
 
 import {
@@ -23,7 +20,6 @@ import {
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createLogger } from "../logger.js";
-import { CCSwitchClient, type AppType } from "./cc-switch-client.js";
 
 const log = createLogger("config");
 
@@ -60,30 +56,6 @@ export interface MappingStatus {
 
 export class ConfigManager {
   private verified = new Set<string>();
-  private _ccSwitch: CCSwitchClient;
-  private _ccSwitchChecked = false;
-  private _ccSwitchAvailable = false;
-
-  constructor() {
-    this._ccSwitch = new CCSwitchClient();
-  }
-
-  get ccSwitch(): CCSwitchClient {
-    return this._ccSwitch;
-  }
-
-  get hasCCSwitch(): boolean {
-    if (!this._ccSwitchChecked) {
-      this._ccSwitchAvailable = this._ccSwitch.isAvailable();
-      this._ccSwitchChecked = true;
-      if (this._ccSwitchAvailable) {
-        log.info("cc-switch available");
-      } else {
-        log.debug("cc-switch not available, degrading to symlink-only mode");
-      }
-    }
-    return this._ccSwitchAvailable;
-  }
 
   // ── Symlink methods (unchanged from SymlinkManager) ──────────
 
@@ -232,54 +204,10 @@ export class ConfigManager {
     return { fixed, errors };
   }
 
-  // ── cc-switch orchestration (new) ────────────────────────────
-
-  async syncSkills(): Promise<void> {
-    if (!this.hasCCSwitch) return;
-    try {
-      await this._ccSwitch.skillsSync();
-      log.info("cc-switch skills synced");
-    } catch (e: any) {
-      log.warn(`cc-switch skills sync failed: ${e.message}`);
-    }
-  }
-
-  async syncMcpServers(): Promise<void> {
-    if (!this.hasCCSwitch) return;
-    try {
-      await this._ccSwitch.mcpSync();
-      log.info("cc-switch MCP servers synced");
-    } catch (e: any) {
-      log.warn(`cc-switch MCP sync failed: ${e.message}`);
-    }
-  }
-
-  async syncSettings(app: AppType = "claude"): Promise<void> {
-    if (!this.hasCCSwitch) return;
-    const overrideFile = join(REMI_HOME, "settings", `${app}.json`);
-    if (!existsSync(overrideFile)) {
-      log.debug(`no settings override for ${app}: ${overrideFile}`);
-      return;
-    }
-    try {
-      const snippet = readFileSync(overrideFile, "utf-8");
-      JSON.parse(snippet); // validate
-      await this._ccSwitch.configCommonSet(snippet, app);
-      log.info(`cc-switch settings synced for ${app}`);
-    } catch (e: any) {
-      log.warn(`cc-switch settings sync failed for ${app}: ${e.message}`);
-    }
-  }
-
   async syncAll(): Promise<void> {
     this.ensureGlobals();
     this.ensureProjectsRoot();
-
-    if (this.hasCCSwitch) {
-      await this.syncSkills();
-      await this.syncMcpServers();
-      await this.syncSettings("claude");
-    }
+    // Cross-tool config sync now happens in the config-hub plugin.
   }
 
   // ── Private helpers ──────────────────────────────────────────

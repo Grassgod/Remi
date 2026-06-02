@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import {
   LayoutDashboard, MessageSquare, KanbanSquare, Brain, BookOpen,
   BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap, Bot, Shield, Plug,
-  Database, Settings, Link2,
+  Database, Settings, Link2, Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "./ui/scroll-area";
@@ -21,6 +21,8 @@ const navItems = [
     { path: "/agents", label: "Agents", icon: Bot },
     { path: "/skills", label: "Skills", icon: Zap },
     { path: "/mcp", label: "MCP", icon: Plug },
+    { path: "/prompts", label: "Prompts", icon: FileText },
+    { path: "/providers", label: "Providers", icon: Boxes },
   ]},
   { group: "Observability", items: [
     { path: "/analytics", label: "Analytics", icon: BarChart3 },

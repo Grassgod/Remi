@@ -10,7 +10,7 @@ describe("switch mode helpers", () => {
   it("routes claude switches to ACP Claude by default", () => {
     expect(resolveSwitchProviderAlias("claude")).toBe("acp:claude");
     expect(resolveSwitchProviderAlias("acp:claude")).toBe("acp:claude");
-    expect(resolveSwitchProviderAlias("cli")).toBe("claude_cli");
+    expect(resolveSwitchProviderAlias("codex")).toBe("acp:codex");
   });
 
   it("uses the last colon so ACP provider ids can include a colon", () => {

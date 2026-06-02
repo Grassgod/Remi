@@ -10,9 +10,9 @@
  *   import { startWebDashboard, stopWebDashboard } from "./web/server.js";
  */
 
-import { join } from "node:path";
+import { join, resolve as resolvePath, sep as pathSep } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
@@ -21,6 +21,9 @@ import { RemiData } from "./remi-data.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
 import { registerAuthHandlers } from "./handlers/auth.js";
+import { SsoPlugin } from "../src/plugins/sso/index.js";
+import { getDb } from "../src/db/index.js";
+import { loadConfig } from "../src/config.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
 import { registerAnalyticsHandlers } from "./handlers/analytics.js";
@@ -39,7 +42,7 @@ import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
-import { registerCCSwitchHandlers } from "./handlers/cc-switch.js";
+import { ConfigHubPlugin, setConfigHubInstance } from "../src/plugins/config-hub/index.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../src/project/store.js";
@@ -62,10 +65,24 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   const data = new RemiData();
   const app = new Hono();
 
+  // ── SSO plugin: install DB tables, seed from toml, register routes ──
+  const remiConfig = loadConfig();
+  const sso = new SsoPlugin({ adminEmails: remiConfig.auth.adminEmails });
+  sso.migrate(getDb());
+  sso.seed();
+
+  // ── config-hub plugin: cross-tool MCP/Skills/Prompts management ──
+  const hub = new ConfigHubPlugin();
+  hub.migrate(getDb());
+  setConfigHubInstance(hub);
+
   // Global middleware
   if (devMode) {
     app.use("/api/*", cors());
   }
+  // SSO middleware first (gates non-public paths if SSO active);
+  // then legacy bearer-token middleware (still supported for /api/* if used).
+  app.use("/api/*", sso.middleware());
   app.use("/api/*", authMiddleware(authToken));
 
   // Global error handler
@@ -78,6 +95,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
   registerAuthHandlers(app, data);
+  sso.registerHttp(app);
   registerConfigHandlers(app, data);
   registerProjectHandlers(app, data);
   registerGroupHandlers(app);
@@ -95,7 +113,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
   registerMcpHandlers(app, data);
-  registerCCSwitchHandlers(app);
+  hub.registerHttp(app);
   registerProjectInitHandlers(app);
 
   // ── Filesystem browse (for directory picker) ──
@@ -140,7 +158,7 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
       const msgId = c.req.query("msgId") ?? "";
       const qs = msgId ? `?msgId=${encodeURIComponent(msgId)}` : "";
       const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}${qs}`);
-      if (!resp.ok) return c.json({ error: "image not found" }, resp.status);
+      if (!resp.ok) return c.json({ error: "image not found" }, { status: resp.status as any });
       const buf = Buffer.from(await resp.arrayBuffer());
       // Cache locally for next time
       try { require("node:fs").writeFileSync(cachePath, buf); } catch {}
@@ -163,10 +181,67 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     }
   } catch { /* tasks dir missing — skip */ }
 
-  // Static files (production only)
+  // ── Pages: list ~/tasks/<slug>/ that contain index.html ──
+  app.get("/api/v1/pages", (c) => {
+    try {
+      if (!existsSync(tasksDir)) return c.json([]);
+      const entries = readdirSync(tasksDir)
+        .filter((name) => {
+          const p = join(tasksDir, name);
+          return statSync(p).isDirectory() && existsSync(join(p, "index.html"));
+        })
+        .map((name) => ({
+          slug: name,
+          updatedAt: statSync(join(tasksDir, name, "index.html")).mtime.toISOString(),
+        }))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      return c.json(entries);
+    } catch {
+      return c.json([]);
+    }
+  });
+
+  // ── /p/:slug — serve static page content from ~/tasks/:slug/ ──
+  //
+  // Security: resolves the requested path and ensures it stays inside
+  // `tasksDir`. This catches URL-encoded `..%2f`, absolute paths, symlinks
+  // pointing outside, etc. — defenses the naive `.includes("..")` misses.
+  const tasksDirResolved = resolvePath(tasksDir) + pathSep;
+  app.get("/p/:slug{.+}", async (c) => {
+    const fullPath = c.req.path;
+    const match = fullPath.match(/^\/p\/([^/]+)(\/.*)?$/);
+    if (!match) return c.json({ error: "not found" }, 404);
+    const slug = decodeURIComponent(match[1]);
+    let rest = match[2] ? decodeURIComponent(match[2].slice(1)) : "";
+    // Default index for directory-style URLs (/p/foo, /p/foo/, /p/foo/sub/).
+    if (!rest || rest.endsWith("/")) rest = `${rest}index.html`;
+
+    const requested = resolvePath(tasksDir, slug, rest);
+    if (
+      !requested.startsWith(tasksDirResolved) &&
+      requested !== tasksDirResolved.slice(0, -1)
+    ) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    if (!existsSync(requested) || !statSync(requested).isFile()) {
+      return c.json({ error: "not found" }, 404);
+    }
+    return new Response(Bun.file(requested));
+  });
+
+  // ── Static files (production only) ──
+  // Only serve actual files from /assets and /fonts; everything else
+  // falls through to the SPA fallback below, which picks the right HTML
+  // based on path (Dashboard vs public Board/Home).
   if (!devMode) {
-    app.use("/*", serveStatic({ root: staticDir }));
-    app.get("/*", serveStatic({ path: join(staticDir, "index.html") }));
+    app.use("/assets/*", serveStatic({ root: staticDir }));
+    app.use("/fonts/*",  serveStatic({ root: staticDir }));
+    app.get("/*", (c) => {
+      const path = new URL(c.req.url).pathname;
+      const isDashboard = path === "/home" || path.startsWith("/home/");
+      const html = isDashboard ? "index.html" : "board.html";
+      return new Response(Bun.file(join(staticDir, html)));
+    });
   }
 
   // Dev mode fallback
@@ -203,9 +278,11 @@ export function stopWebDashboard(): void {
   }
 }
 
-// ── Auto-start (standalone service) ───────────────────
+// ── Auto-start ONLY when invoked directly (not when imported) ──
+// When src/cli/serve.ts imports startWebDashboard, this block doesn't fire.
 
-const devMode = process.argv.includes("--dev");
-const { port } = startWebDashboard({ devMode });
-
-console.log(`[remi-web] Dashboard started on port ${port} (${devMode ? "dev" : "production"})`);
+if (import.meta.main) {
+  const devMode = process.argv.includes("--dev");
+  const { port } = startWebDashboard({ devMode });
+  console.log(`[remi-web] Dashboard started on port ${port} (${devMode ? "dev" : "production"})`);
+}

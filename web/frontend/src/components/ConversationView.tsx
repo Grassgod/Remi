@@ -197,7 +197,7 @@ function RemiCard({ message, date, time }: { message: ChatMessage; date: string;
 interface ConversationViewProps {
   messages: ChatMessage[];
   msgLoading: boolean;
-  bottomRef: RefObject<HTMLDivElement>;
+  bottomRef: RefObject<HTMLDivElement | null>;
   /** Display name for the user side. Defaults to "Jack". */
   userName?: string;
 }

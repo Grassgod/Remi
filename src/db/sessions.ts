@@ -4,7 +4,7 @@
  */
 
 import { getDb } from "./index.js";
-import { generateUniqueName, getSessionName } from "../connectors/feishu/session-name.js";
+import { generateUniqueName, getSessionName } from "@remi/feishu-channel";
 
 export interface SessionRow {
   session_key: string;

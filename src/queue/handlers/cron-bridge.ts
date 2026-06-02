@@ -110,6 +110,85 @@ async function pushAgentReport(
   }
 }
 
+/**
+ * builtin:pulse — proactive "is anything worth interrupting?" briefing.
+ *
+ * Runs a one-shot session asking the agent to surface anything genuinely worth
+ * pinging the user about (reminders, follow-ups, time-sensitive items) using its
+ * memory. If the reply is the sentinel `[SKIPPED]` (default), nothing is posted —
+ * this is the key anti-"cries wolf" pattern borrowed from agentara's pulse.
+ * Otherwise the briefing is pushed to the configured Feishu targets.
+ *
+ * handler_config:
+ *   pushTargets: string[]   — chat IDs to post to (required to actually deliver)
+ *   connectorName: string   — default "feishu"
+ *   prompt: string          — optional override of the default pulse prompt
+ *   sentinel: string        — optional override of "[SKIPPED]"
+ *   title: string           — optional card title prefix
+ */
+handlers.set("builtin:pulse", async (remi, config) => {
+  const tag = "builtin:pulse";
+  const sentinel: string = (config?.sentinel as string) ?? "[SKIPPED]";
+  const title: string = (config?.title as string) ?? "🔔 Remi Pulse";
+  const prompt: string =
+    (config?.prompt as string) ??
+    `You are Remi's proactive pulse. Using your memory (recall what you know about the user, ` +
+    `recent daily notes, ongoing projects/missions), decide whether there is anything genuinely ` +
+    `worth interrupting the user with RIGHT NOW — a due reminder, a stale follow-up, a time-sensitive ` +
+    `item, or a useful nudge. Be conservative: only surface things that clear a high bar.\n\n` +
+    `If there is something worth it, write a SHORT briefing (1-4 bullet points, no preamble).\n` +
+    `If nothing clears the bar, reply with EXACTLY "${sentinel}" and nothing else.`;
+
+  const provider = remi["_providers"].values().next().value as
+    | import("../../providers/base.js").Provider
+    | undefined;
+  if (!provider) {
+    log.warn(`[${tag}] no provider available, skipping`);
+    return;
+  }
+
+  let text = "";
+  try {
+    const result = await provider.send(prompt, { chatId: "builtin:pulse" });
+    text = (result.text ?? "").trim();
+  } catch (e) {
+    log.warn(`[${tag}] session failed: ${e}`);
+    return;
+  }
+
+  // Self-suppression: if the model decided nothing is worth it, stay silent.
+  if (!text || text.includes(sentinel)) {
+    log.info(`[${tag}] nothing worth surfacing (suppressed)`);
+    return;
+  }
+
+  // Deliver — same target/connector resolution as pushAgentReport.
+  const delivery = (config?.delivery as Record<string, any> | undefined) ?? {};
+  const pushTargets: string[] =
+    (config?.pushTargets as string[]) ?? (delivery.pushTargets as string[]) ?? [];
+  const connectorName: string =
+    (config?.connectorName as string) ?? (delivery.connectorName as string) ?? "feishu";
+  if (pushTargets.length === 0) {
+    log.info(`[${tag}] briefing ready but no pushTargets configured — not delivered`);
+    return;
+  }
+  const connectors = remi["_connectors"] as Connector[];
+  const connector = connectors.find((c) => c.name === connectorName);
+  if (!connector) {
+    log.warn(`[${tag}] connector "${connectorName}" not found, skipping`);
+    return;
+  }
+  const response = { text: `${title}\n\n${text}`, thinking: null, durationMs: null };
+  for (const target of pushTargets) {
+    try {
+      await connector.reply(target, response);
+      log.info(`[${tag}] briefing pushed to ${target}`);
+    } catch (e) {
+      log.warn(`[${tag}] failed to push to ${target}: ${e}`);
+    }
+  }
+});
+
 handlers.set("agent:wiki-curate", async (remi, config) => {
   const { AgentRunner } = await import("../../agents/index.js");
   const runner = new AgentRunner();
@@ -190,7 +269,7 @@ handlers.set("cli-ingest", async (remi) => {
       // cwd lives on the first user/assistant message line).
       let cwd: string | undefined;
       try {
-        const head = readFileSync(jsonlPath, "utf-8", { flag: "r" }).slice(0, 16384);
+        const head = readFileSync(jsonlPath, { encoding: "utf-8", flag: "r" }).slice(0, 16384);
         const lines = head.split("\n", 20);
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -515,8 +594,7 @@ ${gitStats || "(无统计信息)"}
   // ── 6. Deliver to Feishu as card ──
   if (pushTargets?.length > 0) {
     try {
-      const { createFeishuClient } = await import("../../connectors/feishu/client.js");
-      const { sendCardFeishu } = await import("../../connectors/feishu/send.js");
+      const { createFeishuClient, sendCardFeishu } = await import("@remi/feishu-channel");
       const { loadConfig: loadCfg } = await import("../../config.js");
       const cfg = loadCfg();
       const client = createFeishuClient({ appId: cfg.feishu.appId, appSecret: cfg.feishu.appSecret, domain: cfg.feishu.domain });

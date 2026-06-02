@@ -5,17 +5,20 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "../components/ui/table";
 import { ScrollArea } from "../components/ui/scroll-area";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import { SkillTreeNode } from "../components/SkillTreeNode";
 import {
   Bot, RefreshCw, ChevronLeft, Timer,
   AlertTriangle, Activity, Check, XCircle,
-  Cpu, Zap,
+  Cpu, Zap, Plus, Trash2, AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAgentsStore } from "../stores/agents";
 import * as api from "../api/client";
+import { request } from "../api/client";
 import type { AgentInfo, AgentRunEntry, SkillFileNode } from "../api/types";
+import { PageHeader, StatTile, EmptyState, staggerStyle } from "../components/configkit";
 
 export function Agents() {
   const {
@@ -23,6 +26,40 @@ export function Agents() {
     loading, fetchAgents, selectAgent,
     saveClaudeMd, saveSettings, saveSkill,
   } = useAgentsStore();
+
+  // CRUD dialog state
+  const [addOpen, setAddOpen] = useState(false);
+  const [addForm, setAddForm] = useState({ name: "", description: "" });
+  const [addError, setAddError] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    setAddError(null);
+    if (!addForm.name) { setAddError("Name is required"); return; }
+    try {
+      await request("/api/v1/agents", {
+        method: "POST",
+        body: JSON.stringify({ name: addForm.name, description: addForm.description }),
+      });
+      setAddOpen(false);
+      setAddForm({ name: "", description: "" });
+      fetchAgents();
+    } catch (e: any) {
+      setAddError(e.message);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    setActionError(null);
+    try {
+      await request(`/api/v1/agents/${encodeURIComponent(name)}`, { method: "DELETE" });
+      setDeleteConfirm(null);
+      fetchAgents();
+    } catch (e: any) {
+      setActionError(e.message);
+    }
+  };
 
   useEffect(() => {
     selectAgent(null);
@@ -55,8 +92,36 @@ export function Agents() {
     );
   }
 
+  const avgDurationDisplay = avgDuration > 0 ? formatDuration(avgDuration) : "—";
+  const avgPct = agents.length > 0 ? Math.round(agents.reduce((s, a) => s + a.successRate7d, 0) / agents.length) : 0;
+  const successRateDisplay = agents.length > 0 ? `${avgPct}%` : "—";
+
   return (
     <Layout title="Agents" subtitle="CONFIGURATION">
+      <PageHeader
+        icon={Bot}
+        title="Agents"
+        subtitle="Registered AI agents — schedules, models, and run history."
+        count={agents.length}
+        countLabel="registered"
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={fetchAgents} className="h-7 text-xs">
+              <RefreshCw className="mr-1 h-3 w-3" /> Refresh
+            </Button>
+            <Button size="sm" onClick={() => setAddOpen(true)} className="h-7 text-xs">
+              <Plus className="mr-1 h-3 w-3" /> New Agent
+            </Button>
+          </>
+        }
+      />
+
+      {actionError && (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="h-3.5 w-3.5" /> {actionError}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icon={<Bot className="h-4 w-4" />} label="Total Agents" value={String(agents.length)} sub={`${cronCount} cron · ${onDemandCount} other`} />
@@ -66,35 +131,88 @@ export function Agents() {
       </div>
 
       {/* Agent Cards */}
-      <Card className="mb-3">
-        <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <Bot className="h-4 w-4 text-muted-foreground" />
-            Agent Registry
-            <Badge variant="secondary" className="text-[10px]">{agents.length}</Badge>
-          </CardTitle>
-          <Button variant="ghost" size="sm" onClick={fetchAgents} className="h-7 text-xs text-muted-foreground">
-            <RefreshCw className="mr-1 h-3 w-3" /> Refresh
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-3 pt-2">
-          {agents.length === 0 ? (
-            <div className="p-8 text-center text-xs text-muted-foreground">No agents registered</div>
-          ) : (
-            agents.map(agent => (
-              <AgentCard key={agent.name} agent={agent} onClick={() => selectAgent(agent.name)} />
-            ))
-          )}
-        </CardContent>
-      </Card>
+      {agents.length === 0 ? (
+        <EmptyState
+          icon={Bot}
+          title="No agents yet"
+          description="Scaffold one to start drafting its CLAUDE.md and skills. Runtime registration still requires editing src/agents/registry.ts."
+          action={
+            <Button size="sm" onClick={() => setAddOpen(true)} className="h-7 text-xs">
+              <Plus className="mr-1 h-3 w-3" /> Create draft
+            </Button>
+          }
+        />
+      ) : (
+        <div className="space-y-3">
+          {agents.map((agent, i) => (
+            <div key={agent.name} style={staggerStyle(i, 80, 60)}>
+              <AgentCard
+                agent={agent}
+                onClick={() => selectAgent(agent.name)}
+                onDelete={() => setDeleteConfirm(agent.name)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
+      {/* Create dialog */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>New Agent (draft)</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <input
+              value={addForm.name}
+              onChange={(e) => setAddForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="agent-name (alphanumeric + dashes)"
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-sm outline-none focus:border-input"
+            />
+            <textarea
+              value={addForm.description}
+              onChange={(e) => setAddForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="What does this agent do? (becomes the registry description in CLAUDE.md)"
+              rows={4}
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm outline-none focus:border-input"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Scaffolds <code className="rounded bg-muted/40 px-1">~/.remi/agents/&lt;name&gt;/.claude/</code> with starter
+              files. Schedule it by adding to <code className="rounded bg-muted/40 px-1">src/agents/registry.ts</code>
+              and restarting the daemon.
+            </p>
+          </div>
+          {addError && (
+            <div className="flex items-center gap-2 text-xs text-destructive">
+              <AlertCircle className="h-3 w-3" /> {addError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={handleCreate}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm */}
+      <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Delete agent</DialogTitle></DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            Remove <span className="font-mono font-medium text-foreground">{deleteConfirm}</span>'s
+            on-disk content? Registry-registered agents are protected.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" size="sm" onClick={() => deleteConfirm && handleDelete(deleteConfirm)}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }
 
 // ── Agent Card ────────────────────────────────────────
 
-function AgentCard({ agent, onClick }: { agent: AgentInfo; onClick: () => void }) {
+function AgentCard({ agent, onClick, onDelete }: { agent: AgentInfo; onClick: () => void; onDelete?: () => void }) {
   const triggerColor = agent.trigger === "cron"
     ? "border-blue-500/30 text-blue-500 bg-blue-500/5"
     : agent.trigger === "debounce"
@@ -124,6 +242,15 @@ function AgentCard({ agent, onClick }: { agent: AgentInfo; onClick: () => void }
           <Badge variant="outline" className={cn("text-[9px]", modelColor)}>{agent.model}</Badge>
           <Badge variant="outline" className={cn("text-[9px]", triggerColor)}>{agent.trigger}</Badge>
           {!agent.mcp && <Badge variant="outline" className="text-[9px] text-muted-foreground">no mcp</Badge>}
+          {onDelete && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+              title="Delete agent"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
 

@@ -2,9 +2,10 @@
  * MissionStore — SQLite CRUD for missions and skill_feedbacks.
  */
 
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDb } from "../db/index.js";
-import { createThread } from "../connectors/feishu/thread.js";
+import { createThread } from "@remi/feishu-channel";
+import { loadConfig } from "../config.js";
 import { createLogger } from "../logger.js";
 import type {
   Mission,
@@ -69,7 +70,7 @@ export class MissionStore {
 
     if (!threadId && input.chatId) {
       try {
-        const result = await createThread(input.chatId, `Mission: ${input.title}`);
+        const result = await createThread(loadConfig().feishu, input.chatId, `Mission: ${input.title}`);
         // Store the root message ID (om_xxx) as threadId — this matches msg.rootId
         // in Feishu message events, enabling _resolveMissionForThread to find the mission.
         threadId = result.messageId;
@@ -152,7 +153,7 @@ export class MissionStore {
 
   update(id: string, fields: Partial<Pick<Mission, "title" | "description" | "status" | "currentStep">>): void {
     const sets: string[] = [];
-    const values: unknown[] = [];
+    const values: SQLQueryBindings[] = [];
 
     if (fields.title !== undefined) { sets.push("title = ?"); values.push(fields.title); }
     if (fields.description !== undefined) { sets.push("description = ?"); values.push(fields.description); }

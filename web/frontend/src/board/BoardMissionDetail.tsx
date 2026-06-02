@@ -3,7 +3,7 @@ import { BoardLayout } from "./BoardLayout";
 import { MissionDetailContent } from "../components/missions/MissionDetailContent";
 
 export function BoardMissionDetail() {
-  const [, params] = useRoute("/mission/:slug/issue/:id");
+  const [, params] = useRoute("/board/:slug/issue/:id");
   const slug = params?.slug ?? "";
   const id = params?.id ?? "";
 

@@ -1,4 +1,3 @@
-export { AcpProvider, type AcpProviderOptions, resolveAcpPermissionMode } from "./provider.js";
-export { AcpClient, type AcpClientOptions } from "./client.js";
-export { createAdapter, type AgentAdapter } from "./adapters/index.js";
-export type * from "./protocol.js";
+// Re-export from @remi/acp-provider — single source of truth.
+export { AcpProvider, resolveAcpPermissionMode, resolveAvailableAcpPermissionMode } from "@remi/acp-provider";
+export type { AcpProviderOptions } from "@remi/acp-provider";

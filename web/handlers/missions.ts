@@ -4,6 +4,8 @@ import { MissionStore } from "../../src/mission/store.js";
 import type { Mission, MissionStatus, PipelineStep } from "../../src/mission/model.js";
 import { createLogger } from "../../src/logger.js";
 import { getDb } from "../../src/db/index.js";
+import { loadConfig } from "../../src/config.js";
+import { sendToThread } from "@remi/feishu-channel";
 import { execSync } from "child_process";
 
 const store = new MissionStore();
@@ -172,9 +174,8 @@ export function registerMissionsHandlers(app: Hono, _data: RemiData) {
 
     // Notify thread and enqueue execute with review feedback
     try {
-      const { sendToThread } = await import("../../src/connectors/feishu/thread.js");
       if (mission.chatId && mission.threadId) {
-        await sendToThread(mission.chatId, mission.threadId, `── **Review 意见** ──\n\n${comments}`);
+        await sendToThread(loadConfig().feishu, mission.chatId, mission.threadId, `── **Review 意见** ──\n\n${comments}`);
       }
     } catch {}
 

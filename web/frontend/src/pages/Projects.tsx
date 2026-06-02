@@ -491,8 +491,8 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
           onChange={(e) => setProvider(e.target.value)}
         >
           <option value="">Default</option>
-          <option value="claude_cli">Claude CLI</option>
-          <option value="aiden_cli">Aiden CLI</option>
+          <option value="acp:claude">ACP Claude</option>
+          <option value="acp:codex">ACP Codex</option>
         </select>
       </div>
 

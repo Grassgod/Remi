@@ -10,16 +10,43 @@ import { parse as parseToml } from "smol-toml";
 const DEFAULT_MEMORY_DIR = join(homedir(), ".remi", "memory");
 const CONFIG_FILENAME = "remi.toml";
 
-export interface ProviderConfig {
-  name: string;
-  fallback: string | null;
-  allowedTools: string[];
-  model: string | null;
+/** Per-agent ACP configuration. */
+export interface AcpAgentConfig {
+  /** ACP agent executable path. Auto-detected if omitted. */
+  executable?: string;
+  /** Model override passed to the agent. */
+  model?: string;
+  /** Request timeout in seconds (default: 300). */
   timeout: number;
-  apiKey: string | null;
-  baseUrl: string | null;
-  /** Path to ACP agent executable (for name="acp"). */
-  executable: string | null;
+  /** Tool allowlist passed to the agent. */
+  allowedTools: string[];
+  /** Optional API key forwarded to compatible ACP wrappers. */
+  apiKey?: string | null;
+  /** Optional API base URL forwarded to compatible ACP wrappers. */
+  baseUrl?: string | null;
+}
+
+export interface ProviderConfig {
+  /** Default agent to use: "claude" | "codex". */
+  default: "claude" | "codex";
+  claude: AcpAgentConfig;
+  codex: AcpAgentConfig;
+  /** Optional explicit provider name for tests/legacy integrations. Prefer `default`. */
+  name?: string;
+  /** Optional fallback provider name for tests/legacy integrations. */
+  fallback?: string | null;
+  /** Legacy provider-wide tool allowlist. Prefer per-agent `allowedTools`. */
+  allowedTools?: string[];
+  /** Legacy provider-wide model. Prefer per-agent `model`. */
+  model?: string | null;
+  /** Legacy provider-wide timeout. Prefer per-agent `timeout`. */
+  timeout?: number;
+  /** Legacy provider-wide API key. Prefer per-agent `apiKey`. */
+  apiKey?: string | null;
+  /** Legacy provider-wide API base URL. Prefer per-agent `baseUrl`. */
+  baseUrl?: string | null;
+  /** Legacy provider-wide executable. Prefer per-agent `executable`. */
+  executable?: string | null;
 }
 
 export interface FeishuConfig {
@@ -28,7 +55,7 @@ export interface FeishuConfig {
   verificationToken: string;
   encryptKey: string;
   port: number;
-  domain: "feishu" | "lark" | (string & {});
+  domain: "feishu" | "lark" | "bytedance";
   connectionMode: "websocket";
   userAccessToken: string;
   /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
@@ -114,6 +141,21 @@ export interface ByteDanceSSOConfig {
   ssoHost: string;
   bytecloudHost: string;
   scopes: string[];
+}
+
+// SSO inbound login (web Authorization Code / OIDC) is managed by
+// the SSO plugin's DB tables (sso_providers / sso_settings) — not via remi.toml.
+// On first boot the SSO plugin seeds itself from a legacy [sso] section if found
+// (see src/plugins/sso/seed.ts), then ignores it on subsequent boots.
+//
+// Clusters are similarly DB-managed (clusters table).
+
+/**
+ * Auth config — bootstrap-only. Determines who is auto-promoted to admin
+ * on first login. After bootstrap, role changes happen via DB (admin UI later).
+ */
+export interface AuthConfig {
+  adminEmails: string[];
 }
 
 export interface TokenSyncRuleConfig {
@@ -203,8 +245,10 @@ export interface TracingConfig {
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
-  /** ByteDance SSO config (optional). */
+  /** ByteDance SSO config (optional) — outbound Device Code flow. */
   bytedanceSso?: ByteDanceSSOConfig;
+  /** Auth bootstrap (who is admin on first login). */
+  auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
   tokenSync: TokenSyncRuleConfig[];
   /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
@@ -234,9 +278,16 @@ export interface RemiConfig {
   sessionsFile: string;
 }
 
+function defaultAgentConfig(): AcpAgentConfig {
+  return { timeout: 300, allowedTools: [], apiKey: null, baseUrl: null };
+}
+
 function defaultProviderConfig(): ProviderConfig {
   return {
-    name: "claude_cli",
+    default: "claude",
+    claude: defaultAgentConfig(),
+    codex: defaultAgentConfig(),
+    name: undefined,
     fallback: null,
     allowedTools: [],
     model: null,
@@ -279,6 +330,7 @@ export function defaultRemiConfig(): RemiConfig {
     services: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
+    auth: { adminEmails: [] },
     ccSwitch: { enabled: false, configDir: join(homedir(), ".remi", "cc-switch") },
     tracing: {
       enabled: true,
@@ -320,6 +372,9 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const providerData = (fileData.provider ?? {}) as Record<string, unknown>;
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const bytedanceSsoData = fileData.bytedance_sso as Record<string, unknown> | undefined;
+  const authData = (fileData.auth ?? {}) as Record<string, unknown>;
+  // Note: legacy [sso] and [[clusters]] in remi.toml are read by SSO plugin's
+  // seed routine (one-time migration to DB), not parsed here anymore.
   const tokenSyncData = (fileData.token_sync ?? []) as Array<Record<string, unknown>>;
   const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
   const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
@@ -336,16 +391,31 @@ export function loadConfig(configPath?: string | null): RemiConfig {
 
   const env = process.env;
 
+  const parseAgentConfig = (data: Record<string, unknown>, legacy: Record<string, unknown> = {}): AcpAgentConfig => ({
+    executable: (data.executable ?? legacy.executable) as string | undefined,
+    model: (env.REMI_MODEL ?? data.model ?? legacy.model) as string | undefined,
+    timeout: parseInt(env.REMI_TIMEOUT ?? String(data.timeout ?? legacy.timeout ?? 300), 10),
+    allowedTools: ((data.allowed_tools ?? legacy.allowed_tools) as string[]) ?? [],
+    apiKey: (env.REMI_API_KEY ?? data.api_key ?? legacy.api_key ?? null) as string | null,
+    baseUrl: (env.REMI_BASE_URL ?? data.base_url ?? legacy.base_url ?? null) as string | null,
+  });
+
+  const claudeData = (providerData.claude ?? {}) as Record<string, unknown>;
+  const codexData = (providerData.codex ?? {}) as Record<string, unknown>;
+
   return {
     provider: {
-      name: env.REMI_PROVIDER ?? (providerData.name as string) ?? "claude_cli",
-      fallback: env.REMI_FALLBACK ?? (providerData.fallback as string) ?? null,
-      allowedTools: (providerData.allowed_tools as string[]) ?? [],
-      model: env.REMI_MODEL ?? (providerData.model as string) ?? null,
+      default: (env.REMI_PROVIDER ?? (providerData.default as string) ?? providerData.name ?? "claude") as "claude" | "codex",
+      claude: parseAgentConfig(claudeData, providerData),
+      codex: parseAgentConfig(codexData),
+      name: (env.REMI_PROVIDER ?? providerData.name) as string | undefined,
+      fallback: (env.REMI_FALLBACK ?? providerData.fallback ?? null) as string | null,
+      allowedTools: ((providerData.allowed_tools as string[]) ?? []),
+      model: (env.REMI_MODEL ?? providerData.model ?? null) as string | null,
       timeout: parseInt(env.REMI_TIMEOUT ?? String(providerData.timeout ?? 300), 10),
-      apiKey: env.REMI_API_KEY ?? (providerData.api_key as string) ?? null,
-      baseUrl: env.REMI_BASE_URL ?? (providerData.base_url as string) ?? null,
-      executable: (providerData.executable as string) ?? null,
+      apiKey: (env.REMI_API_KEY ?? providerData.api_key ?? null) as string | null,
+      baseUrl: (env.REMI_BASE_URL ?? providerData.base_url ?? null) as string | null,
+      executable: (providerData.executable ?? null) as string | null,
     },
     feishu: {
       appId: env.FEISHU_APP_ID ?? (feishuData.app_id as string) ?? "",
@@ -366,6 +436,11 @@ export function loadConfig(configPath?: string | null): RemiConfig {
           scopes: (bytedanceSsoData.scopes as string[]) ?? ["read", "ciam.device.read"],
         }
       : undefined,
+    auth: {
+      adminEmails: ((authData.admin_emails as string[]) ?? [])
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    },
     tokenSync: tokenSyncData.map((r) => ({
       name: (r.name as string) ?? "",
       source: (r.source as string) ?? "",

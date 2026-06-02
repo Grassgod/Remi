@@ -20,8 +20,17 @@ const PROJECT_ROOT = resolve(join(import.meta.dir, "..", ".."));
 export class AgentRunner {
   /**
    * Run an agent with a prompt, collect output, write JSONL log.
+   *
+   * cwd stays the agent's own dir (so its CLAUDE.md + skills auto-load).
+   * `opts.addDirs` are passed as `--add-dir`, granting the agent tool access
+   * to working directories outside its definition dir (their CLAUDE.md is
+   * loaded too, but skills are NOT discovered from added dirs).
    */
-  async run(agentName: string, prompt: string): Promise<AgentRunResult> {
+  async run(
+    agentName: string,
+    prompt: string,
+    opts?: { addDirs?: string[] },
+  ): Promise<AgentRunResult> {
     const config = AGENTS[agentName];
     if (!config) {
       throw new Error(`Unknown agent: ${agentName}`);
@@ -35,7 +44,7 @@ export class AgentRunner {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
-    const cmd = this._buildCommand(config, prompt);
+    const cmd = this._buildCommand(config, prompt, opts?.addDirs);
 
     // Strip Claude env vars to avoid nested-session detection
     const env = { ...process.env };
@@ -92,12 +101,15 @@ export class AgentRunner {
     return result;
   }
 
-  private _buildCommand(config: AgentConfig, prompt: string): string[] {
+  private _buildCommand(config: AgentConfig, prompt: string, addDirs?: string[]): string[] {
     const cmd = [
       "claude",
       "--dangerously-skip-permissions",
       "--model", config.model,
     ];
+    for (const dir of addDirs ?? []) {
+      cmd.push("--add-dir", dir);
+    }
     if (config.mcp === false) {
       cmd.push("--mcp-config", "/dev/null");
     }

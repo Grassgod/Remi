@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
 import { loadConfig, findConfigPath } from "../../src/config.js";
-import { MenuSyncer } from "../../src/connectors/feishu/menu-sync.js";
+import { MenuSyncer } from "@remi/feishu-channel";
 
 export function registerBotMenuHandlers(app: Hono, data: RemiData) {
   // GET — read current bot_menu config from remi.toml

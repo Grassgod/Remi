@@ -4,7 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { ScrollArea } from "../components/ui/scroll-area";
-import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen, ToggleLeft, ToggleRight } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../components/ui/dialog";
+import { Zap, FileText, Clock, ChevronRight, ChevronDown, FolderOpen, ToggleLeft, ToggleRight, Plus, Trash2, AlertCircle } from "lucide-react";
+import { request } from "../api/client";
 import { cn } from "@/lib/utils";
 import { MarkdownFileViewer } from "../components/MarkdownFileViewer";
 import { SkillTreeNode } from "../components/SkillTreeNode";
@@ -42,11 +44,47 @@ export function Skills() {
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
   const [ccSkills, setCcSkills] = useState<CCSwitchSkill[]>([]);
 
-  useEffect(() => {
-    api.request("/api/v1/cc-switch/skills")
+  // Install / Uninstall (cc-switch managed skills)
+  const [installOpen, setInstallOpen] = useState(false);
+  const [installForm, setInstallForm] = useState({ sourceDir: "", name: "", description: "" });
+  const [installError, setInstallError] = useState<string | null>(null);
+  const [uninstallConfirm, setUninstallConfirm] = useState<CCSwitchSkill | null>(null);
+
+  const reloadCcSkills = () => {
+    return request("/api/v1/cc-switch/skills")
       .then((res: any) => { if (res.skills) setCcSkills(res.skills); })
       .catch(() => {});
-  }, []);
+  };
+
+  useEffect(() => { reloadCcSkills(); }, []);
+
+  const handleInstall = async () => {
+    setInstallError(null);
+    if (!installForm.sourceDir) { setInstallError("Source directory is required"); return; }
+    try {
+      await request("/api/v1/cc-switch/skills", {
+        method: "POST",
+        body: JSON.stringify({
+          sourceDir: installForm.sourceDir,
+          name: installForm.name || undefined,
+          description: installForm.description || undefined,
+        }),
+      });
+      setInstallOpen(false);
+      setInstallForm({ sourceDir: "", name: "", description: "" });
+      await reloadCcSkills();
+    } catch (e: any) {
+      setInstallError(e.message);
+    }
+  };
+
+  const handleUninstall = async (skill: CCSwitchSkill) => {
+    try {
+      await request(`/api/v1/cc-switch/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+      setUninstallConfirm(null);
+      await reloadCcSkills();
+    } catch {}
+  };
 
   const ccSkillMap = new Map(ccSkills.map(s => [s.name, s]));
 
@@ -155,20 +193,51 @@ export function Skills() {
 
   return (
     <Layout title="Skills" subtitle="Skill Definitions & Reports">
-      {/* Scope selector */}
-      {scopes.length > 1 && (
+      {/* Scope selector + install */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        {scopes.length > 1 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {scopes.map(s => (
+              <Button
+                key={s.scope}
+                variant={activeScope === s.scope ? "default" : "outline"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setActiveScope(s.scope)}
+              >
+                {s.label}
+                <Badge variant="secondary" className="ml-1.5 text-[10px]">{s.count}</Badge>
+              </Button>
+            ))}
+          </div>
+        ) : <div />}
+        <div className="flex items-center gap-1.5">
+          {ccSkills.length > 0 && (
+            <Badge variant="outline" className="h-6 text-[10px]">
+              {ccSkills.length} cc-switch managed
+            </Badge>
+          )}
+          <Button size="sm" onClick={() => setInstallOpen(true)} className="h-7 text-xs">
+            <Plus className="mr-1 h-3 w-3" /> Install Skill
+          </Button>
+        </div>
+      </div>
+
+      {/* cc-switch managed list with uninstall */}
+      {ccSkills.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
-          {scopes.map(s => (
-            <Button
-              key={s.scope}
-              variant={activeScope === s.scope ? "default" : "outline"}
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setActiveScope(s.scope)}
-            >
-              {s.label}
-              <Badge variant="secondary" className="ml-1.5 text-[10px]">{s.count}</Badge>
-            </Button>
+          {ccSkills.map(s => (
+            <div key={s.id} className="group flex items-center gap-1.5 rounded-md border border-border bg-card/60 px-2.5 py-1 text-[11px]">
+              <Zap className="h-3 w-3 text-amber-500" />
+              <span className="font-mono">{s.name}</span>
+              <button
+                onClick={() => setUninstallConfirm(s)}
+                className="ml-1 text-muted-foreground/60 transition-colors hover:text-destructive"
+                title="Uninstall"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -367,6 +436,61 @@ export function Skills() {
           </div>
         </div>
       )}
+
+      {/* Install dialog */}
+      <Dialog open={installOpen} onOpenChange={setInstallOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Install Skill</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <input
+              value={installForm.sourceDir}
+              onChange={(e) => setInstallForm(f => ({ ...f, sourceDir: e.target.value }))}
+              placeholder="Source directory (absolute path)"
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-sm outline-none focus:border-input"
+            />
+            <input
+              value={installForm.name}
+              onChange={(e) => setInstallForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="Name (optional — defaults to dir name)"
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm outline-none focus:border-input"
+            />
+            <input
+              value={installForm.description}
+              onChange={(e) => setInstallForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="Description (optional)"
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm outline-none focus:border-input"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Copies the directory into <code className="rounded bg-muted/40 px-1">~/.cc-switch/skills/</code> as the
+              SSOT, then symlinks into each enabled tool's skills folder on toggle.
+            </p>
+          </div>
+          {installError && (
+            <div className="flex items-center gap-2 text-xs text-destructive">
+              <AlertCircle className="h-3 w-3" /> {installError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setInstallOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={handleInstall}>Install</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Uninstall confirm */}
+      <Dialog open={!!uninstallConfirm} onOpenChange={() => setUninstallConfirm(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Uninstall Skill</DialogTitle></DialogHeader>
+          <div className="text-sm text-muted-foreground">
+            Remove <span className="font-mono font-medium text-foreground">{uninstallConfirm?.name}</span>?
+            All symlinks in tool skill dirs + the SSOT copy will be cleared.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setUninstallConfirm(null)}>Cancel</Button>
+            <Button variant="destructive" size="sm" onClick={() => uninstallConfirm && handleUninstall(uninstallConfirm)}>Uninstall</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }

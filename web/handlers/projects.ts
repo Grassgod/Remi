@@ -139,7 +139,7 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
         encoding: "utf-8",
       }).trim();
 
-      let result: string;
+      let result = "";
 
       const gitlabHost = process.env.REMI_GITLAB_HOST ?? "code.byted.org";
       if (remoteUrl.includes(gitlabHost)) {

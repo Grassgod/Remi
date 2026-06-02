@@ -6,11 +6,10 @@ import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../config.js";
 import { Remi } from "../core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "../logger.js";
 import { MissionStore } from "../mission/store.js";
-import { startBoardServer } from "../../web/board/server.js";
-import { registerMissionActionHandler } from "../connectors/feishu/card-actions.js";
-import { createFeishuClient } from "../connectors/feishu/client.js";
-import { sendToThread } from "../connectors/feishu/thread.js";
+// Board service has been merged into the main web service (web/server.ts).
+import { registerMissionActionHandler, sendToThread } from "@remi/feishu-channel";
 import { getDb } from "../db/index.js";
+import { startWebDashboard, stopWebDashboard } from "../../web/server.js";
 
 const log = createLogger("serve");
 
@@ -32,7 +31,11 @@ export async function runServe(_args: string[]): Promise<void> {
     log.info(`${signal} received — shutting down gracefully...`);
     try {
       await Promise.race([
-        (async () => { await remi.queue.stop(); await remi.stop(); })(),
+        (async () => {
+          try { stopWebDashboard(); } catch { /* ignore */ }
+          await remi.queue.stop();
+          await remi.stop();
+        })(),
         new Promise((_, reject) => setTimeout(() => reject(new Error("shutdown timeout")), 10_000)),
       ]);
     } catch {
@@ -56,26 +59,11 @@ export async function runServe(_args: string[]): Promise<void> {
   const cronJobs = migrateToCronJobs(config);
   await remi.queue.setupSchedulers(cronJobs, remi);
 
-  // Start Mission Board web server (port 8090)
+  // Board pages are served by the main web service (web/server.ts) now.
+  // We still register the mission approve/reject card-action handler here
+  // because that's a daemon-side concern (queue access required).
   try {
     const missionStore = new MissionStore();
-    const feishuClient = config.feishu.appId
-      ? createFeishuClient({
-          appId: config.feishu.appId,
-          appSecret: config.feishu.appSecret,
-          domain: config.feishu.domain,
-        })
-      : undefined;
-    startBoardServer({
-      config,
-      missionStore,
-      authToken: process.env.REMI_WEB_AUTH_TOKEN,
-      feishuClient,
-      enqueueMission: (data) => remi.queue.enqueueMission(data),
-      enqueueCron: (data) => remi.queue.enqueueCron(data),
-    });
-
-    // Register mission approve/reject handler for Feishu card buttons
     registerMissionActionHandler((actionType, missionId) => {
       const mission = missionStore.getById(missionId);
       if (!mission) return;
@@ -87,22 +75,33 @@ export async function runServe(_args: string[]): Promise<void> {
         });
         log.info(`Mission ${missionId} approved, pipeline started`);
         if (mission.threadId) {
-          sendToThread(mission.chatId, mission.threadId, "**Mission 已审批通过** — 开始执行 RFC 阶段").catch(() => {});
+          sendToThread(config.feishu, mission.chatId, mission.threadId, "**Mission 已审批通过** — 开始执行 RFC 阶段").catch(() => {});
         }
       } else if (actionType === "mission_reject") {
         missionStore.updateStatus(missionId, "rejected");
         log.info(`Mission ${missionId} rejected`);
         if (mission.threadId) {
-          sendToThread(mission.chatId, mission.threadId, "**Mission 已驳回**").catch(() => {});
+          sendToThread(config.feishu, mission.chatId, mission.threadId, "**Mission 已驳回**").catch(() => {});
         }
       }
     });
   } catch (err) {
-    log.warn(`Board server failed to start: ${(err as Error).message}`);
+    log.warn(`Mission action handler failed to register: ${(err as Error).message}`);
+  }
+
+  // ── Start the unified Web Dashboard HTTP server in this same process ──
+  try {
+    const { port } = startWebDashboard({
+      port: parseInt(process.env.REMI_WEB_PORT ?? "6120", 10),
+      authToken: process.env.REMI_WEB_AUTH_TOKEN,
+    });
+    log.info(`Web Dashboard mounted on :${port} (same process as daemon)`);
+  } catch (err) {
+    log.error("Failed to start Web Dashboard:", err);
   }
 
   log.info("=".repeat(60));
-  log.info(`Remi starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${config.provider.name})`);
+  log.info(`Remi starting at ${new Date().toISOString()} (pid=${process.pid}, provider=${`acp:${config.provider.default}`})`);
 
   // Send restart notification after connectors have time to initialize
   setTimeout(() => remi.sendRestartNotify(), 5000);
@@ -114,6 +113,7 @@ export async function runServe(_args: string[]): Promise<void> {
       throw e;
     }
   } finally {
+    try { stopWebDashboard(); } catch { /* ignore */ }
     await remi.queue.stop();
     await remi.stop();
     log.info("Remi stopped.");

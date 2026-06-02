@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { handleButtonClick, handleFormSubmission, registerPendingAction } from "../src/connectors/feishu/card-actions.js";
+import { handleButtonClick, handleFormSubmission, registerPendingAction } from "@remi/feishu-channel";
 import { approvePlanOption, isPlanApproval, rejectPermissionOption } from "../src/connectors/feishu/index.js";
-import { buildPlanReviewForm, buildToolApprovalForm } from "../src/connectors/feishu/permission-ui.js";
-import { buildFinalCard, FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
+import { buildPlanReviewForm, buildToolApprovalForm, buildFinalCard, FeishuStreamingSession } from "@remi/feishu-channel";
 
 describe("Feishu final card", () => {
   it("preserves final content and stats", () => {
@@ -75,7 +74,7 @@ describe("Feishu card actions", () => {
     const json = JSON.stringify(form);
     expect(json).toContain("\"name\":\"feedback_text\"");
     expect(json).toContain("\"input_type\":\"multiline_text\"");
-    expect(json).toContain("\"max_length\":2000");
+    expect(json).toContain("\"max_length\":1000");
     expect(json).toContain("\"rows\":8");
   });
 

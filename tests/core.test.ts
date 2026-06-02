@@ -98,6 +98,9 @@ class MockFailProvider implements Provider {
 function makeConfig(tmpDir: string): RemiConfig {
   return {
     provider: {
+      default: "claude",
+      claude: { timeout: 300, allowedTools: [] },
+      codex: { timeout: 300, allowedTools: [] },
       name: "mock",
       fallback: null,
       allowedTools: [],
@@ -110,6 +113,10 @@ function makeConfig(tmpDir: string): RemiConfig {
       verificationToken: "",
       encryptKey: "",
       port: 9000,
+      domain: "feishu",
+      connectionMode: "websocket",
+      userAccessToken: "",
+      triggerUserIds: [],
     },
     tokenSync: [],
     scheduler: {
@@ -119,8 +126,10 @@ function makeConfig(tmpDir: string): RemiConfig {
     scheduledSkills: [],
     cronJobs: [],
     services: [],
-    projects: {},
-    bots: [],
+    botMenu: {},
+    proxy: { http: "", noProxy: "" },
+    auth: { adminEmails: [] },
+    ccSwitch: { enabled: false, configDir: join(tmpDir, "cc-switch") },
     tracing: {
       enabled: false,
       logsDir: join(tmpDir, "logs"),

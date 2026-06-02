@@ -64,8 +64,7 @@ export async function sendApprovalCard(mission: Mission): Promise<void> {
 
   const { loadConfig } = await import("../config.js");
   const config = loadConfig();
-  const { createFeishuClient } = await import("../connectors/feishu/client.js");
-  const { sendCardFeishu } = await import("../connectors/feishu/send.js");
+  const { createFeishuClient, sendCardFeishu } = await import("@remi/feishu-channel");
 
   const client = createFeishuClient({
     appId: config.feishu.appId,

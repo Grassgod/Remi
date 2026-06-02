@@ -38,18 +38,19 @@ describe("Config", () => {
 
   it("loads defaults", () => {
     const config = loadConfig(join(tmpDir, "nonexistent.toml"));
-    expect(config.provider.name).toBe("claude_cli");
-    expect(config.provider.timeout).toBe(300);
+    expect(config.provider.default).toBe("claude");
+    expect(config.provider.claude.timeout).toBe(300);
     expect(config.memoryDir).toContain("memory");
   });
 
   it("respects env overrides", () => {
-    process.env.REMI_PROVIDER = "claude_sdk";
+    process.env.REMI_PROVIDER = "codex";
     process.env.REMI_TIMEOUT = "60";
 
     const config = loadConfig(join(tmpDir, "nonexistent.toml"));
-    expect(config.provider.name).toBe("claude_sdk");
-    expect(config.provider.timeout).toBe(60);
+    expect(config.provider.default).toBe("codex");
+    expect(config.provider.name).toBe("codex");
+    expect(config.provider.claude.timeout).toBe(60);
   });
 
   it("reads toml file", () => {
@@ -58,7 +59,9 @@ describe("Config", () => {
       tomlPath,
       `
 [provider]
-name = "claude_sdk"
+default = "codex"
+
+[provider.claude]
 timeout = 120
 
 [feishu]
@@ -68,25 +71,25 @@ port = 8080
     );
 
     const config = loadConfig(tomlPath);
-    expect(config.provider.name).toBe("claude_sdk");
-    expect(config.provider.timeout).toBe(120);
+    expect(config.provider.default).toBe("codex");
+    expect(config.provider.claude.timeout).toBe(120);
     expect(config.feishu.appId).toBe("test-app");
     expect(config.feishu.port).toBe(8080);
   });
 
   it("env overrides toml", () => {
-    process.env.REMI_PROVIDER = "codex_sdk";
+    process.env.REMI_PROVIDER = "codex";
 
     const tomlPath = join(tmpDir, "remi.toml");
     writeFileSync(
       tomlPath,
       `
 [provider]
-name = "claude_sdk"
+default = "claude"
 `,
     );
 
     const config = loadConfig(tomlPath);
-    expect(config.provider.name).toBe("codex_sdk"); // env wins
+    expect(config.provider.default).toBe("codex"); // env wins
   });
 });

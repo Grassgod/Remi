@@ -3,6 +3,7 @@ import { Sun, Moon } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
+import { UserMenu } from "./UserMenu";
 
 interface HeaderProps {
   title: string;
@@ -51,6 +52,9 @@ export function Header({ title, subtitle, actions, daemonAlive, tokensValid, tok
             <Moon className="h-4 w-4" />
           )}
         </Button>
+
+        {/* User menu (visible when signed in via SSO) */}
+        <UserMenu />
       </div>
     </header>
   );

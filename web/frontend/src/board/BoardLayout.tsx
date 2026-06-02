@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useLocation } from "wouter";
+import { AuthIndicator } from "../components/AuthIndicator";
 
 interface BoardLayoutProps {
   title: string;
@@ -18,7 +19,7 @@ export function BoardLayout({ title, subtitle, slug, children }: BoardLayoutProp
         <div className="flex items-center gap-3">
           {slug && (
             <button
-              onClick={() => navigate(`/mission/${slug}`)}
+              onClick={() => navigate(`/board/${slug}`)}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               ← Board
@@ -30,6 +31,7 @@ export function BoardLayout({ title, subtitle, slug, children }: BoardLayoutProp
             <span className="text-xs text-muted-foreground">{subtitle}</span>
           )}
         </div>
+        <AuthIndicator />
       </header>
 
       {/* Content */}

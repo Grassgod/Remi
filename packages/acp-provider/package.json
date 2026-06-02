@@ -1,0 +1,14 @@
+{
+  "name": "@remi/acp-provider",
+  "version": "0.1.0",
+  "description": "ACP (Agent Client Protocol) provider for Remi — client, protocol types, and Claude/Codex adapters.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

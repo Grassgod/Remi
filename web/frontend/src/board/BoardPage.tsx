@@ -19,7 +19,7 @@ import { Button } from "../components/ui/button";
 type ViewMode = "list" | "kanban";
 
 export function BoardPage() {
-  const [, params] = useRoute("/mission/:slug");
+  const [, params] = useRoute("/board/:slug");
   const [, navigate] = useLocation();
   const slug = params?.slug ?? "";
 
@@ -55,7 +55,7 @@ export function BoardPage() {
   }, [slug]);
 
   const handleMissionClick = (mission: MissionItem) => {
-    navigate(`/mission/${slug}/issue/${mission.id}`);
+    navigate(`/board/${slug}/issue/${mission.id}`);
   };
 
   const handleCreate = async () => {

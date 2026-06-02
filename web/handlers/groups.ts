@@ -1,13 +1,15 @@
 import type { Hono } from "hono";
 import { GroupConfigStore } from "../../src/group/store.js";
-import { getChatName, transferChatOwner, updateChat } from "../../src/connectors/feishu/chat.js";
+import { getChatName, transferChatOwner, updateChat } from "@remi/feishu-channel";
 import { invalidateGroupNameCache } from "./conversations.js";
 import { createLogger } from "../../src/logger.js";
+import { loadConfig } from "../../src/config.js";
 
 const log = createLogger("groups");
 
 export function registerGroupHandlers(app: Hono) {
   const store = new GroupConfigStore();
+  const feishuConfig = loadConfig().feishu;
 
   // List all group configs
   app.get("/api/v1/groups", (c) => {
@@ -59,7 +61,7 @@ export function registerGroupHandlers(app: Hono) {
     let updated = 0;
     for (const g of groups) {
       if (g.name) continue; // already has a name
-      const name = await getChatName(g.chatId);
+      const name = await getChatName(feishuConfig, g.chatId);
       if (name) {
         store.update(g.chatId, { name });
         updated++;
@@ -79,7 +81,7 @@ export function registerGroupHandlers(app: Hono) {
     let transferred = 0;
     let failed = 0;
     for (const g of groups) {
-      const ok = await transferChatOwner(g.chatId, ownerOpenId);
+      const ok = await transferChatOwner(feishuConfig, g.chatId, ownerOpenId);
       if (ok) transferred++;
       else failed++;
     }
@@ -95,7 +97,7 @@ export function registerGroupHandlers(app: Hono) {
       description?: string;
     };
     if (!chatId) return c.json({ error: "chatId required" }, 400);
-    const ok = await updateChat(chatId, { name, avatar, description });
+    const ok = await updateChat(feishuConfig, chatId, { name, avatar, description });
     if (!ok) return c.json({ error: "failed to update chat" }, 500);
     return c.json({ ok: true });
   });
