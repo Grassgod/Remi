@@ -64,6 +64,11 @@ register("update", "Download latest version from GitHub", async () => {
   return { run: runUpdate };
 });
 
+register("multica", "Bun Multica task runtime", async () => {
+  const { runMultica } = await import("./multica.js");
+  return { run: runMultica };
+});
+
 // ── Internal commands (used by PM2, not user-facing) ─────
 
 register("serve", "Production daemon (PM2 subprocess)", async () => {

@@ -45,6 +45,8 @@ export interface AcpProviderOptions {
   cwd?: string;
   /** Inject MCP servers at construction time (e.g. from cc-switch). */
   getMcpServers?: () => Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>;
+  /** Extra environment variables for the spawned ACP process. */
+  env?: Record<string, string>;
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -355,6 +357,7 @@ export class AcpProvider implements Provider {
       env.ANTHROPIC_API_KEY = this._options.apiKey;
     }
     if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
+    if (this._options.env) Object.assign(env, this._options.env);
 
     const sessionMeta = this._adapter.buildSessionMeta({
       model: this._options.model,

@@ -1,0 +1,183 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { createLogger } from "../logger.js";
+import { renderMulticaDashboardHtml } from "./dashboard.js";
+import { MulticaStore } from "./store.js";
+import type { CreateAgentInput, CreateIssueInput, CreateTaskInput, RegisterRuntimeInput } from "./types.js";
+
+const log = createLogger("multica-api");
+
+export interface MulticaApiOptions {
+  store?: MulticaStore;
+  authToken?: string | null;
+  hostname?: string;
+}
+
+export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
+  const store = options.store ?? new MulticaStore();
+  const authToken = options.authToken ?? process.env.MULTICA_TOKEN ?? "";
+  const app = new Hono();
+
+  app.use("*", cors());
+  app.get("/", (c) => c.html(renderMulticaDashboardHtml()));
+
+  if (authToken) {
+    app.use("*", async (c, next) => {
+      const header = c.req.header("Authorization") ?? "";
+      const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      if (token !== authToken) return c.json({ error: "unauthorized" }, 401);
+      await next();
+    });
+  }
+
+  app.onError((err, c) => {
+    log.error(err.message);
+    return c.json({ error: err.message }, 500);
+  });
+
+  app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/api/multica/health", (c) => c.json({ ok: true }));
+
+  app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
+  app.post("/api/multica/agents", async (c) => {
+    const body = await readJson<CreateAgentInput>(c);
+    return c.json({ agent: store.createAgent(body) }, 201);
+  });
+  app.post("/api/multica/agents/default", async (c) => {
+    const body = await readJson<{ provider?: string }>(c);
+    return c.json({ agent: store.ensureDefaultAgent(body.provider ?? "claude") }, 201);
+  });
+  app.get("/api/multica/agents/:id", (c) => {
+    const agent = store.getAgent(c.req.param("id"));
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    return c.json({ agent });
+  });
+
+  app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
+  app.post("/api/multica/runtimes", async (c) => {
+    const body = await readJson<RegisterRuntimeInput>(c);
+    return c.json({ runtime: store.registerRuntime(body) }, 201);
+  });
+  app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
+    store.heartbeatRuntime(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/multica/issues", (c) => c.json({ issues: store.listIssues() }));
+  app.post("/api/multica/issues", async (c) => {
+    const body = await readJson<CreateIssueInput & { agentId?: string; prompt?: string }>(c);
+    const issue = store.createIssue(body);
+    let task = null;
+    if (body.agentId && body.prompt) {
+      task = store.createTask({
+        agentId: body.agentId,
+        issueId: issue.id,
+        workspaceId: issue.workspaceId,
+        prompt: body.prompt,
+      });
+    }
+    return c.json({ issue, task }, 201);
+  });
+  app.get("/api/multica/issues/:id", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json({ issue });
+  });
+
+  app.get("/api/multica/tasks", (c) => {
+    const status = c.req.query("status") as any;
+    return c.json({ tasks: store.listTasks(status) });
+  });
+  app.post("/api/multica/tasks", async (c) => {
+    const body = await readJson<CreateTaskInput>(c);
+    return c.json({ task: store.createTask(body) }, 201);
+  });
+  app.get("/api/multica/tasks/:id", (c) => {
+    const task = store.getTaskWithAgent(c.req.param("id"));
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ task });
+  });
+  app.post("/api/multica/tasks/:id/cancel", (c) => {
+    return c.json({ task: store.cancelTask(c.req.param("id")) });
+  });
+  app.get("/api/multica/tasks/:id/messages", (c) => {
+    return c.json({ messages: store.listTaskMessages(c.req.param("id")) });
+  });
+
+  // Multica daemon-compatible endpoints.
+  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", (c) => {
+    const task = store.claimTask(c.req.param("runtimeId"));
+    return c.json({ task });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
+    const recovered = store.recoverOrphans(c.req.param("runtimeId"));
+    return c.json({ recovered });
+  });
+  app.post("/api/daemon/tasks/:taskId/start", (c) => {
+    return c.json({ task: store.startTask(c.req.param("taskId")) });
+  });
+  app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
+    const body = await readJson<{ summary?: string; step?: number; total?: number }>(c);
+    store.reportProgress(c.req.param("taskId"), body.summary ?? "", body.step, body.total);
+    return c.json({ ok: true });
+  });
+  app.post("/api/daemon/tasks/:taskId/messages", async (c) => {
+    const body = await readJson<{ messages?: any[] }>(c);
+    const messages = store.appendTaskMessages(c.req.param("taskId"), body.messages ?? []);
+    return c.json({ messages });
+  });
+  app.post("/api/daemon/tasks/:taskId/session", async (c) => {
+    const body = await readJson<{ session_id?: string; sessionId?: string; work_dir?: string; workDir?: string }>(c);
+    store.pinTaskSession(
+      c.req.param("taskId"),
+      body.session_id ?? body.sessionId ?? null,
+      body.work_dir ?? body.workDir ?? null,
+    );
+    return c.json({ ok: true });
+  });
+  app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
+    const body = await readJson<{ output?: string; branch_name?: string; session_id?: string; work_dir?: string }>(c);
+    const task = store.completeTask(c.req.param("taskId"), {
+      output: body.output ?? "",
+      branchName: body.branch_name ?? null,
+      sessionId: body.session_id ?? null,
+      workDir: body.work_dir ?? null,
+    });
+    return c.json({ task });
+  });
+  app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
+    const body = await readJson<{ error?: string; session_id?: string; work_dir?: string }>(c);
+    const task = store.failTask(c.req.param("taskId"), {
+      error: body.error ?? "Task failed",
+      sessionId: body.session_id ?? null,
+      workDir: body.work_dir ?? null,
+    });
+    return c.json({ task });
+  });
+  app.post("/api/daemon/tasks/:taskId/usage", async (c) => {
+    const body = await readJson<{ usage?: any[] }>(c);
+    store.reportTaskUsage(c.req.param("taskId"), body.usage ?? []);
+    return c.json({ ok: true });
+  });
+  app.get("/api/daemon/tasks/:taskId/status", (c) => {
+    return c.json({ status: store.getTaskStatus(c.req.param("taskId")) });
+  });
+
+  return app;
+}
+
+export function startMulticaServer(options: MulticaApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
+  const app = createMulticaApp(options);
+  const port = options.port ?? parseInt(process.env.MULTICA_PORT ?? "6130", 10);
+  const hostname = options.hostname ?? process.env.MULTICA_HOST ?? "0.0.0.0";
+  return Bun.serve({ port, hostname, fetch: app.fetch });
+}
+
+async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promise<T> {
+  try {
+    return await c.req.json() as T;
+  } catch {
+    return {} as T;
+  }
+}
+
