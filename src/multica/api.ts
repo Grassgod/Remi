@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createLogger } from "../logger.js";
 import { renderMulticaDashboardHtml } from "./dashboard.js";
+import { MulticaScheduler } from "./scheduler.js";
 import { MulticaStore } from "./store.js";
 import type {
   AddSquadMemberInput,
@@ -27,12 +28,14 @@ const log = createLogger("multica-api");
 
 export interface MulticaApiOptions {
   store?: MulticaStore;
+  scheduler?: MulticaScheduler | null;
   authToken?: string | null;
   hostname?: string;
 }
 
 export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   const store = options.store ?? new MulticaStore();
+  const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTICA_TOKEN ?? "";
   const app = new Hono();
 
@@ -152,7 +155,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/autopilots", async (c) => {
     const body = await readJson<CreateAutopilotInput>(c);
-    return c.json({ autopilot: store.createAutopilot(body) }, 201);
+    const autopilot = store.createAutopilot(body);
+    scheduler?.sync();
+    return c.json({ autopilot }, 201);
   });
   app.get("/api/multica/autopilots/:id", (c) => {
     const autopilot = store.getAutopilot(c.req.param("id"));
@@ -161,10 +166,14 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.patch("/api/multica/autopilots/:id", async (c) => {
     const body = await readJson<UpdateAutopilotInput>(c);
-    return c.json({ autopilot: store.updateAutopilot(c.req.param("id"), body) });
+    const autopilot = store.updateAutopilot(c.req.param("id"), body);
+    scheduler?.sync();
+    return c.json({ autopilot });
   });
   app.delete("/api/multica/autopilots/:id", (c) => {
-    return c.json({ autopilot: store.archiveAutopilot(c.req.param("id")) });
+    const autopilot = store.archiveAutopilot(c.req.param("id"));
+    scheduler?.sync();
+    return c.json({ autopilot });
   });
   app.get("/api/multica/autopilots/:id/runs", (c) => {
     return c.json({ runs: store.listAutopilotRuns(c.req.param("id")) });
@@ -172,6 +181,17 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/multica/autopilots/:id/run", async (c) => {
     const body = await readJson<RunAutopilotInput>(c);
     return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
+  });
+  app.post("/api/multica/autopilots/:id/run-scheduled", (c) => {
+    const run = scheduler?.trigger(c.req.param("id")) ?? store.runAutopilot(c.req.param("id"), { source: "schedule" });
+    return c.json({ run }, 201);
+  });
+  app.get("/api/multica/scheduler", (c) => {
+    return c.json({
+      enabled: Boolean(scheduler),
+      scheduledIds: scheduler?.scheduledIds() ?? [],
+      total: scheduler?.scheduledCount() ?? 0,
+    });
   });
   app.post("/api/multica/autopilots/:id/trigger", async (c) => {
     const body = await readJson<RunAutopilotInput>(c);
@@ -320,10 +340,19 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
 }
 
 export function startMulticaServer(options: MulticaApiOptions & { port?: number } = {}): ReturnType<typeof Bun.serve> {
-  const app = createMulticaApp(options);
+  const store = options.store ?? new MulticaStore();
+  const scheduler = options.scheduler === undefined ? new MulticaScheduler({ store }) : options.scheduler;
+  scheduler?.start();
+  const app = createMulticaApp({ ...options, store, scheduler });
   const port = options.port ?? parseInt(process.env.MULTICA_PORT ?? "6130", 10);
   const hostname = options.hostname ?? process.env.MULTICA_HOST ?? "0.0.0.0";
-  return Bun.serve({ port, hostname, fetch: app.fetch });
+  const server = Bun.serve({ port, hostname, fetch: app.fetch });
+  const stopServer = server.stop.bind(server);
+  server.stop = (closeActiveConnections?: boolean) => {
+    scheduler?.stop();
+    return stopServer(closeActiveConnections);
+  };
+  return server;
 }
 
 async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promise<T> {

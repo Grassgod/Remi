@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createMulticaApp } from "../src/multica/api.js";
+import { MulticaScheduler } from "../src/multica/scheduler.js";
 import { MulticaStore } from "../src/multica/store.js";
 
 let db: Database | null = null;
@@ -186,6 +187,32 @@ describe("Bun Multica core store", () => {
     expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
     expect(store.listIssueActivity(run.issueId!).at(-1)?.type).toBe("task_completed");
   });
+
+  it("schedules active cron autopilots and unschedules inactive ones", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Scheduled triage",
+      assigneeId: agent.id,
+      triggerKind: "schedule",
+      cronExpression: "*/5 * * * * *",
+      issueTitleTemplate: "Scheduled prompt",
+    });
+    const scheduler = new MulticaScheduler({ store, pollIntervalMs: 60_000 });
+
+    scheduler.start();
+    expect(scheduler.scheduledIds()).toContain(autopilot.id);
+
+    const run = scheduler.trigger(autopilot.id);
+    expect(run?.source).toBe("schedule");
+    expect(store.getTask(run!.taskId!)?.prompt).toBe("Scheduled prompt");
+
+    store.updateAutopilot(autopilot.id, { status: "paused" });
+    scheduler.sync();
+    expect(scheduler.scheduledIds()).not.toContain(autopilot.id);
+    expect(scheduler.trigger(autopilot.id)).toBeNull();
+    scheduler.stop();
+  });
 });
 
 describe("Bun Multica API", () => {
@@ -295,5 +322,41 @@ describe("Bun Multica API", () => {
     expect(webhookBody.run.source).toBe("webhook");
     expect(webhookBody.run.payload.event).toBe("opened");
     expect(store.getIssue(webhookBody.run.issueId)?.title).toBe("Webhook prompt");
+  });
+
+  it("syncs scheduler state through autopilot API updates", async () => {
+    const store = createStore();
+    const scheduler = new MulticaScheduler({ store });
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const app = createMulticaApp({ store, scheduler });
+
+    const created = await app.request("/api/multica/autopilots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "API scheduled",
+        assigneeId: agent.id,
+        triggerKind: "schedule",
+        cronExpression: "*/10 * * * * *",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(scheduler.scheduledIds()).toContain(createdBody.autopilot.id);
+
+    const scheduled = await app.request(`/api/multica/autopilots/${createdBody.autopilot.id}/run-scheduled`, {
+      method: "POST",
+    });
+    expect(scheduled.status).toBe(201);
+    expect((await scheduled.json()).run.source).toBe("schedule");
+
+    const paused = await app.request(`/api/multica/autopilots/${createdBody.autopilot.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "paused" }),
+    });
+    expect(paused.status).toBe(200);
+    expect(scheduler.scheduledIds()).not.toContain(createdBody.autopilot.id);
+    scheduler.stop();
   });
 });

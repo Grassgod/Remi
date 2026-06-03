@@ -1764,7 +1764,8 @@ export function renderMulticaDashboardHtml(): string {
               assigneeId: document.getElementById("entityAssignee").value,
               executionMode: document.getElementById("entityMode").value,
               issueTitleTemplate: document.getElementById("entityPrompt").value || null,
-              triggerKind: document.getElementById("entityTrigger").value
+              triggerKind: document.getElementById("entityTrigger").value,
+              cronExpression: document.getElementById("entityCron").value || null
             })
           });
         }
@@ -2162,6 +2163,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"issue-meta\\">" +
             "<span class=\\"status-badge\\">" + esc(autopilot.assigneeType) + ": " + esc(assignee ? (assignee.name || assignee.title) : "missing") + "</span>" +
             (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") +
+            (autopilot.cronExpression ? "<span class=\\"status-badge\\">" + esc(autopilot.cronExpression) + "</span>" : "") +
             (autopilot.lastRunAt ? "<span class=\\"status-badge\\">" + esc(timeAgo(autopilot.lastRunAt)) + "</span>" : "") +
           "</div>" +
           "<div class=\\"issue-meta\\">" +
@@ -2469,6 +2471,7 @@ export function renderMulticaDashboardHtml(): string {
         "<label>Assignee<select id=\\"entityAssignee\\">" + agentOptions(false) + "</select></label>" +
         "<label>Mode<select id=\\"entityMode\\"><option value=\\"create_issue\\">create_issue</option><option value=\\"run_only\\">run_only</option></select></label>" +
         "<label>Trigger<select id=\\"entityTrigger\\"><option value=\\"manual\\">manual</option><option value=\\"schedule\\">schedule</option><option value=\\"webhook\\">webhook</option><option value=\\"api\\">api</option></select></label>" +
+        "<label>Cron<input id=\\"entityCron\\" placeholder=\\"*/5 * * * *\\"></label>" +
         "<label>Prompt<textarea id=\\"entityPrompt\\" placeholder=\\"Optional\\"></textarea></label>" +
         "<button class=\\"primary\\" type=\\"submit\\">Create autopilot</button><div class=\\"notice\\"></div>";
     }
