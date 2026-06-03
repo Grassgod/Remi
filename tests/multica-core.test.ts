@@ -1617,6 +1617,72 @@ describe("Bun Multica API", () => {
     expect(failedDetailBody.error).toBe("provider not available");
   });
 
+  it("serves runtime update request flow", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_update_flow", name: "Update runtime", provider: "codex" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/runtimes/rt_update_flow/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_version: "v1.2.3" }),
+    });
+    expect(created.status).toBe(200);
+    const createdBody = await created.json();
+    expect(createdBody.id).toStartWith("rup_");
+    expect(createdBody.target_version).toBe("v1.2.3");
+    expect(createdBody.status).toBe("pending");
+
+    const duplicate = await app.request("/api/runtimes/rt_update_flow/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_version: "v1.2.4" }),
+    });
+    expect(duplicate.status).toBe(409);
+
+    const claimed = await app.request("/api/daemon/runtimes/rt_update_flow/update/claim", { method: "POST" });
+    const claimedBody = await claimed.json();
+    expect(claimedBody.request.id).toBe(createdBody.id);
+    expect(claimedBody.request.status).toBe("running");
+
+    const running = await app.request(`/api/daemon/runtimes/rt_update_flow/update/${createdBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "running" }),
+    });
+    expect(running.status).toBe(200);
+
+    const completed = await app.request(`/api/daemon/runtimes/rt_update_flow/update/${createdBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "completed", output: "updated ok" }),
+    });
+    expect(completed.status).toBe(200);
+
+    const detail = await app.request(`/api/runtimes/rt_update_flow/update/${createdBody.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.status).toBe("completed");
+    expect(detailBody.output).toBe("updated ok");
+
+    const next = await app.request("/api/multica/runtimes/rt_update_flow/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetVersion: "v1.2.4" }),
+    });
+    expect(next.status).toBe(200);
+    const nextBody = await next.json();
+    await app.request("/api/daemon/runtimes/rt_update_flow/update/claim", { method: "POST" });
+    await app.request(`/api/daemon/runtimes/rt_update_flow/update/${nextBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "failed", error: "download failed" }),
+    });
+    const failedDetail = await app.request(`/api/multica/runtimes/rt_update_flow/update/${nextBody.id}`);
+    const failedDetailBody = await failedDetail.json();
+    expect(failedDetailBody.status).toBe("failed");
+    expect(failedDetailBody.error).toBe("download failed");
+  });
+
   it("serves runtime local skill list and import request flows", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "skill-runtime", provider: "claude", workspaceId: "local" });

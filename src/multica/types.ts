@@ -12,6 +12,7 @@ export type MulticaRuntimeStatus = "online" | "offline";
 export type MulticaRuntimeVisibility = "private" | "public";
 export type MulticaRuntimeLocalSkillRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MulticaRuntimeModelListRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+export type MulticaRuntimeUpdateRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaIssueDependencyType = "blocks" | "blocked_by" | "related";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
@@ -177,6 +178,19 @@ export interface MulticaRuntimeModelListRequest {
   status: MulticaRuntimeModelListRequestStatus;
   models: MulticaRuntimeModel[];
   supported: boolean;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt: string | null;
+}
+
+export interface MulticaRuntimeUpdateRequest {
+  id: string;
+  runtimeId: string;
+  status: MulticaRuntimeUpdateRequestStatus;
+  targetVersion: string;
+  target_version?: string;
+  output: string | null;
   error: string | null;
   createdAt: string;
   updatedAt: string;
@@ -931,6 +945,17 @@ export interface ReportRuntimeModelListInput {
   status?: string;
   models?: MulticaRuntimeModel[];
   supported?: boolean;
+  error?: string;
+}
+
+export interface CreateRuntimeUpdateInput {
+  targetVersion?: string;
+  target_version?: string;
+}
+
+export interface ReportRuntimeUpdateInput {
+  status?: string;
+  output?: string;
   error?: string;
 }
 

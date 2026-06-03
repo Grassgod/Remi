@@ -20,6 +20,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateRuntimeUpdateInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
@@ -77,11 +78,14 @@ import type {
   MulticaRuntimeLocalSkillSummary,
   MulticaRuntimeModelListRequest,
   MulticaRuntimeModelListRequestStatus,
+  MulticaRuntimeUpdateRequest,
+  MulticaRuntimeUpdateRequestStatus,
   QuickCreateIssueInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
+  ReportRuntimeUpdateInput,
   MulticaRuntime,
   MulticaRuntimeDaily,
   MulticaRuntimeModel,
@@ -241,6 +245,21 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_runtime_model_list_runtime ON multica_runtime_model_list_requests(runtime_id, status, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_runtime_update_requests (
+        id TEXT PRIMARY KEY,
+        runtime_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        target_version TEXT NOT NULL,
+        output TEXT,
+        error TEXT,
+        run_started_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(runtime_id) REFERENCES multica_runtimes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_runtime_update_runtime ON multica_runtime_update_requests(runtime_id, status, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_runtime_local_skill_list_requests (
         id TEXT PRIMARY KEY,
@@ -1592,6 +1611,77 @@ export class MulticaStore {
       );
     }
     return this.getRuntimeModelListRequest(runtimeId, requestId)!;
+  }
+
+  createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MulticaRuntimeUpdateRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim();
+    if (!targetVersion) throw new Error("target_version is required");
+    const active = this.db.query(
+      `SELECT id FROM multica_runtime_update_requests
+       WHERE runtime_id = ? AND status IN ('pending', 'running')
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (active) throw new Error("an update is already in progress for this runtime");
+    const id = createId("rup");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_runtime_update_requests (
+        id, runtime_id, status, target_version, created_at, updated_at
+      ) VALUES (?, ?, 'pending', ?, ?, ?)`,
+      [id, runtimeId, targetVersion, now, now],
+    );
+    return this.getRuntimeUpdateRequest(runtimeId, id)!;
+  }
+
+  getRuntimeUpdateRequest(runtimeId: string, requestId: string): MulticaRuntimeUpdateRequest | null {
+    const row = this.db.query(
+      "SELECT * FROM multica_runtime_update_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? toRuntimeUpdateRequest(row) : null;
+  }
+
+  claimRuntimeUpdateRequest(runtimeId: string): MulticaRuntimeUpdateRequest | null {
+    const row = this.db.query(
+      `SELECT * FROM multica_runtime_update_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (!row) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_runtime_update_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, String(row.id)],
+    );
+    return this.getRuntimeUpdateRequest(runtimeId, String(row.id));
+  }
+
+  reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MulticaRuntimeUpdateRequest {
+    const current = this.getRuntimeUpdateRequest(runtimeId, requestId);
+    if (!current) throw new Error("update not found");
+    const status = normalizeRuntimeUpdateStatus(input.status);
+    const now = nowIso();
+    if (current.status === "completed" || current.status === "failed" || current.status === "timeout") return current;
+    if (status === "completed") {
+      this.db.run(
+        "UPDATE multica_runtime_update_requests SET status = 'completed', output = ?, error = NULL, updated_at = ? WHERE id = ?",
+        [input.output ?? "", now, requestId],
+      );
+    } else if (status === "running") {
+      this.db.run(
+        "UPDATE multica_runtime_update_requests SET status = 'running', updated_at = ? WHERE id = ?",
+        [now, requestId],
+      );
+    } else {
+      this.db.run(
+        "UPDATE multica_runtime_update_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+        [input.error ?? "runtime update failed", now, requestId],
+      );
+    }
+    return this.getRuntimeUpdateRequest(runtimeId, requestId)!;
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MulticaRuntimeLocalSkillListRequest {
@@ -5400,6 +5490,28 @@ function toRuntimeModelListRequest(row: Row): MulticaRuntimeModelListRequest {
 }
 
 function normalizeRuntimeModelListStatus(value: unknown): MulticaRuntimeModelListRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
+}
+
+function toRuntimeUpdateRequest(row: Row): MulticaRuntimeUpdateRequest {
+  const targetVersion = String(row.target_version ?? "");
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    status: normalizeRuntimeUpdateStatus(row.status),
+    targetVersion,
+    target_version: targetVersion,
+    output: nullableString(row.output),
+    error: nullableString(row.error),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    runStartedAt: nullableString(row.run_started_at),
+  };
+}
+
+function normalizeRuntimeUpdateStatus(value: unknown): MulticaRuntimeUpdateRequestStatus {
   const status = String(value ?? "failed").trim();
   if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
   return "failed";

@@ -23,6 +23,7 @@ import type {
   CreateAgentFromTemplateInput,
   CreateChatSessionInput,
   CreateFeedbackInput,
+  CreateRuntimeUpdateInput,
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
@@ -43,6 +44,7 @@ import type {
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
+  ReportRuntimeUpdateInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -485,6 +487,36 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/daemon/runtimes/:runtimeId/models/:requestId/result", async (c) => {
     const body = await readJson<ReportRuntimeModelListInput>(c);
     store.reportRuntimeModelListResult(c.req.param("runtimeId"), c.req.param("requestId"), body);
+    return c.json({ status: "ok" });
+  });
+  app.post("/api/multica/runtimes/:id/update", async (c) => {
+    const body = await readJson<CreateRuntimeUpdateInput>(c);
+    const result = safeCreateRuntimeUpdateRequest(store, c.req.param("id"), body);
+    if ("apiError" in result) return c.json({ error: result.apiError }, result.statusCode);
+    return c.json(result);
+  });
+  app.get("/api/multica/runtimes/:id/update/:updateId", (c) => {
+    const request = store.getRuntimeUpdateRequest(c.req.param("id"), c.req.param("updateId"));
+    if (!request) return c.json({ error: "update not found" }, 404);
+    return c.json(request);
+  });
+  app.post("/api/runtimes/:id/update", async (c) => {
+    const body = await readJson<CreateRuntimeUpdateInput>(c);
+    const result = safeCreateRuntimeUpdateRequest(store, c.req.param("id"), body);
+    if ("apiError" in result) return c.json({ error: result.apiError }, result.statusCode);
+    return c.json(result);
+  });
+  app.get("/api/runtimes/:id/update/:updateId", (c) => {
+    const request = store.getRuntimeUpdateRequest(c.req.param("id"), c.req.param("updateId"));
+    if (!request) return c.json({ error: "update not found" }, 404);
+    return c.json(request);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/update/claim", (c) => {
+    return c.json({ request: store.claimRuntimeUpdateRequest(c.req.param("runtimeId")) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/update/:updateId/result", async (c) => {
+    const body = await readJson<ReportRuntimeUpdateInput>(c);
+    store.reportRuntimeUpdateResult(c.req.param("runtimeId"), c.req.param("updateId"), body);
     return c.json({ status: "ok" });
   });
   app.post("/api/multica/runtimes/:id/local-skills", (c) => {
@@ -1451,6 +1483,23 @@ function createFeedbackOrApiError(store: MulticaStore, input: CreateFeedbackInpu
     if (message === "too many feedback submissions, please try again later") {
       throw new MulticaApiError(message, 429);
     }
+    throw error;
+  }
+}
+
+function safeCreateRuntimeUpdateRequest(
+  store: MulticaStore,
+  runtimeId: string,
+  input: CreateRuntimeUpdateInput,
+): ReturnType<MulticaStore["createRuntimeUpdateRequest"]> | { apiError: string; statusCode: 400 | 404 | 409 | 503 } {
+  try {
+    return store.createRuntimeUpdateRequest(runtimeId, input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "target_version is required") return { apiError: message, statusCode: 400 };
+    if (message.startsWith("Runtime not found")) return { apiError: "runtime not found", statusCode: 404 };
+    if (message === "runtime is offline") return { apiError: message, statusCode: 503 };
+    if (message === "an update is already in progress for this runtime") return { apiError: message, statusCode: 409 };
     throw error;
   }
 }
