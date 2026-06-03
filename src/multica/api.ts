@@ -198,6 +198,32 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     return c.json(workspaceReposResponse(c.req.param("workspaceId")));
   });
+  app.get("/api/me", (c) => c.json(store.getCurrentUser()));
+  app.patch("/api/me", async (c) => {
+    const body = await readJson<any>(c);
+    const result = safeUpdateCurrentUser(store, body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.patch("/api/me/onboarding", async (c) => {
+    const body = await readJson<{ questionnaire?: Record<string, unknown>; onboarding_questionnaire?: Record<string, unknown> }>(c);
+    return c.json(store.patchCurrentUserOnboarding(body.questionnaire ?? body.onboarding_questionnaire ?? {}));
+  });
+  app.post("/api/me/onboarding/complete", (c) => c.json(store.markCurrentUserOnboarded()));
+  app.get("/api/workspaces", (c) => c.json(store.listWorkspaces()));
+  app.post("/api/workspaces", async (c) => {
+    const body = await readJson<any>(c);
+    const result = safeCreateWorkspace(store, body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result, 201);
+  });
+  app.get("/api/workspaces/:id", (c) => {
+    const workspace = store.getWorkspace(c.req.param("id"));
+    if (!workspace) return c.json({ error: "workspace not found" }, 404);
+    return c.json(workspace);
+  });
+  app.get("/api/workspaces/:id/members", (c) => c.json(store.listWorkspaceMembers(c.req.param("id"))));
+  app.get("/api/invitations", (c) => c.json([]));
 
   app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
   app.post("/api/multica/agents", async (c) => {
@@ -1654,6 +1680,52 @@ function createFeedbackOrApiError(store: MulticaStore, input: CreateFeedbackInpu
     }
     if (message === "too many feedback submissions, please try again later") {
       throw new MulticaApiError(message, 429);
+    }
+    throw error;
+  }
+}
+
+function safeUpdateCurrentUser(
+  store: MulticaStore,
+  input: any,
+): ReturnType<MulticaStore["updateCurrentUser"]> | { error: string; status: 400 } {
+  try {
+    return store.updateCurrentUser(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message === "name is required"
+      || message === "unsupported language"
+      || message === "invalid timezone"
+      || message.startsWith("profile_description exceeds")
+    ) {
+      return { error: message, status: 400 };
+    }
+    throw error;
+  }
+}
+
+function safeCreateWorkspace(
+  store: MulticaStore,
+  input: any,
+): ReturnType<MulticaStore["createWorkspace"]> | { error: string; status: 400 | 409 } {
+  try {
+    return store.createWorkspace({
+      name: String(input.name ?? ""),
+      slug: input.slug,
+      description: input.description ?? null,
+      context: input.context ?? null,
+      settings: input.settings,
+      repos: input.repos,
+      issuePrefix: input.issuePrefix ?? input.issue_prefix,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "name and slug are required" || message.startsWith("slug must contain")) {
+      return { error: message, status: 400 };
+    }
+    if (message.includes("UNIQUE constraint failed")) {
+      return { error: "workspace slug already exists", status: 409 };
     }
     throw error;
   }

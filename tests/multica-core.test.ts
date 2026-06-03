@@ -1926,6 +1926,95 @@ describe("Bun Multica API", () => {
     });
   });
 
+  it("serves local user and workspace compatibility endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+
+    const me = await app.request("/api/me");
+    const meBody = await me.json();
+    expect(me.status).toBe(200);
+    expect(meBody).toMatchObject({
+      id: "local",
+      email: "local@multica.local",
+      onboarding_questionnaire: {},
+      profile_description: "",
+    });
+
+    const invalidLanguage = await app.request("/api/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ language: "<script>" }),
+    });
+    expect(invalidLanguage.status).toBe(400);
+
+    const updated = await app.request("/api/me", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Local Operator",
+        language: "zh-Hans",
+        timezone: "Asia/Shanghai",
+        profile_description: "Works locally",
+      }),
+    });
+    const updatedBody = await updated.json();
+    expect(updated.status).toBe(200);
+    expect(updatedBody.name).toBe("Local Operator");
+    expect(updatedBody.language).toBe("zh-Hans");
+    expect(updatedBody.timezone).toBe("Asia/Shanghai");
+    expect(updatedBody.profile_description).toBe("Works locally");
+
+    const onboarding = await app.request("/api/me/onboarding", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questionnaire: { source: "codex", role: "builder" } }),
+    });
+    expect((await onboarding.json()).onboarding_questionnaire).toEqual({ source: "codex", role: "builder" });
+
+    const completed = await app.request("/api/me/onboarding/complete", { method: "POST" });
+    expect((await completed.json()).onboarded_at).toBeString();
+
+    const initialWorkspaces = await app.request("/api/workspaces");
+    const initialWorkspacesBody = await initialWorkspaces.json();
+    expect(initialWorkspaces.status).toBe(200);
+    expect(initialWorkspacesBody[0]).toMatchObject({
+      id: "local",
+      slug: "local",
+      issue_prefix: "MUL",
+    });
+
+    const created = await app.request("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Product Team", slug: "product-team", description: "Builds product" }),
+    });
+    const createdBody = await created.json();
+    expect(created.status).toBe(201);
+    expect(createdBody.slug).toBe("product-team");
+    expect(createdBody.issue_prefix).toBe("PRO");
+
+    const duplicate = await app.request("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Product Team", slug: "product-team" }),
+    });
+    expect(duplicate.status).toBe(409);
+
+    const detail = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}`);
+    expect((await detail.json()).name).toBe("Product Team");
+
+    const members = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/members`);
+    const membersBody = await members.json();
+    expect(membersBody[0]).toMatchObject({
+      workspaceId: createdBody.id,
+      role: "owner",
+      email: "local@multica.local",
+    });
+
+    const invitations = await app.request("/api/invitations");
+    expect(await invitations.json()).toEqual([]);
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

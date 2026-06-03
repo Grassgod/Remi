@@ -327,6 +327,44 @@ export interface MulticaWorkspaceMember {
   updatedAt: string;
 }
 
+export interface MulticaUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  avatar_url: string | null;
+  language: string | null;
+  timezone: string | null;
+  onboardedAt: string | null;
+  onboarded_at: string | null;
+  onboardingQuestionnaire: Record<string, unknown>;
+  onboarding_questionnaire: Record<string, unknown>;
+  starterContentState: string | null;
+  starter_content_state: string | null;
+  profileDescription: string;
+  profile_description: string;
+  createdAt: string;
+  created_at: string;
+  updatedAt: string;
+  updated_at: string;
+}
+
+export interface MulticaWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  context: string | null;
+  settings: Record<string, unknown>;
+  repos: unknown[];
+  issuePrefix: string;
+  issue_prefix: string;
+  createdAt: string;
+  created_at: string;
+  updatedAt: string;
+  updated_at: string;
+}
+
 export type MulticaAccessTokenType = "pat" | "daemon";
 
 export interface MulticaAccessToken {
@@ -968,6 +1006,32 @@ export interface RegisterRuntimeInput {
   maxConcurrency?: number;
   max_concurrency?: number;
   models?: MulticaRuntimeModel[];
+}
+
+export interface UpdateMulticaUserInput {
+  name?: string;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  language?: string | null;
+  profileDescription?: string | null;
+  profile_description?: string | null;
+  timezone?: string | null;
+  onboardingQuestionnaire?: Record<string, unknown>;
+  onboarding_questionnaire?: Record<string, unknown>;
+  starterContentState?: string | null;
+  starter_content_state?: string | null;
+}
+
+export interface CreateWorkspaceInput {
+  id?: string;
+  name: string;
+  slug?: string;
+  description?: string | null;
+  context?: string | null;
+  settings?: Record<string, unknown>;
+  repos?: unknown[];
+  issuePrefix?: string;
+  issue_prefix?: string;
 }
 
 export interface UpdateRuntimeInput {

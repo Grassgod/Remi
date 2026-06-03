@@ -25,6 +25,7 @@ import type {
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
+  CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
   MulticaAutopilot,
   MulticaAutopilotRun,
@@ -107,6 +108,8 @@ import type {
   MulticaUsageByAgent,
   MulticaUsageByHour,
   MulticaUsageDaily,
+  MulticaUser,
+  MulticaWorkspace,
   MulticaWorkspaceMember,
   RegisterRuntimeInput,
   ReorderPinnedItemInput,
@@ -123,6 +126,7 @@ import type {
   UpdateIssueInput,
   UpdateIssueCommentInput,
   UpdateLabelInput,
+  UpdateMulticaUserInput,
   UpdateProjectInput,
   UpdateRuntimeInput,
   UpdateSkillInput,
@@ -298,6 +302,34 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_runtime_local_skill_import_runtime ON multica_runtime_local_skill_import_requests(runtime_id, status, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        avatar_url TEXT,
+        language TEXT,
+        timezone TEXT,
+        onboarded_at TEXT,
+        onboarding_questionnaire TEXT NOT NULL DEFAULT '{}',
+        starter_content_state TEXT,
+        profile_description TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS multica_workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        description TEXT,
+        context TEXT,
+        settings TEXT NOT NULL DEFAULT '{}',
+        repos TEXT NOT NULL DEFAULT '[]',
+        issue_prefix TEXT NOT NULL DEFAULT 'MUL',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS multica_workspace_members (
         id TEXT PRIMARY KEY,
@@ -1153,6 +1185,144 @@ export class MulticaStore {
     const now = nowIso();
     this.db.run("UPDATE multica_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
     return this.getWorkspaceMember(id)!;
+  }
+
+  getCurrentUser(): MulticaUser {
+    const existing = this.getUser("local");
+    if (existing) return existing;
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_users (
+        id, name, email, avatar_url, language, timezone, onboarded_at,
+        onboarding_questionnaire, starter_content_state, profile_description,
+        created_at, updated_at
+      ) VALUES ('local', 'Local User', 'local@multica.local', NULL, NULL, NULL, NULL, '{}', NULL, '', ?, ?)`,
+      [now, now],
+    );
+    return this.getUser("local")!;
+  }
+
+  getUser(id: string): MulticaUser | null {
+    const row = this.db.query("SELECT * FROM multica_users WHERE id = ?").get(id) as Row | null;
+    return row ? toUser(row) : null;
+  }
+
+  updateCurrentUser(input: UpdateMulticaUserInput): MulticaUser {
+    const current = this.getCurrentUser();
+    const name = input.name === undefined ? current.name : String(input.name).trim();
+    if (!name) throw new Error("name is required");
+    const language = hasAnyField(input, "language")
+      ? normalizeOptionalLanguage(input.language)
+      : current.language;
+    const timezone = hasAnyField(input, "timezone")
+      ? normalizeOptionalTimezone(input.timezone)
+      : current.timezone;
+    const profileDescription = hasAnyField(input, "profileDescription", "profile_description")
+      ? String(input.profileDescription ?? input.profile_description ?? "").trim()
+      : current.profileDescription;
+    if ([...profileDescription].length > 2000) throw new Error("profile_description exceeds 2000 characters");
+    const onboardingQuestionnaire = input.onboardingQuestionnaire ?? input.onboarding_questionnaire ?? current.onboardingQuestionnaire;
+    const starterContentState = hasAnyField(input, "starterContentState", "starter_content_state")
+      ? cleanOptionalString(input.starterContentState ?? input.starter_content_state)
+      : current.starterContentState;
+    const avatarUrl = hasAnyField(input, "avatarUrl", "avatar_url")
+      ? cleanOptionalString(input.avatarUrl ?? input.avatar_url)
+      : current.avatarUrl;
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_users SET
+        name = ?,
+        avatar_url = ?,
+        language = ?,
+        timezone = ?,
+        onboarding_questionnaire = ?,
+        starter_content_state = ?,
+        profile_description = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        name,
+        avatarUrl,
+        language,
+        timezone,
+        toJson(onboardingQuestionnaire ?? {}),
+        starterContentState,
+        profileDescription,
+        now,
+        current.id,
+      ],
+    );
+    return this.getUser(current.id)!;
+  }
+
+  patchCurrentUserOnboarding(questionnaire: Record<string, unknown>): MulticaUser {
+    return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire });
+  }
+
+  markCurrentUserOnboarded(): MulticaUser {
+    const current = this.getCurrentUser();
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",
+      [now, now, current.id],
+    );
+    return this.getUser(current.id)!;
+  }
+
+  listWorkspaces(): MulticaWorkspace[] {
+    const rows = this.db.query("SELECT * FROM multica_workspaces ORDER BY created_at ASC").all() as Row[];
+    if (!rows.length) return [this.ensureLocalWorkspace()];
+    return rows.map(toWorkspace);
+  }
+
+  getWorkspace(id: string): MulticaWorkspace | null {
+    const row = this.db.query("SELECT * FROM multica_workspaces WHERE id = ?").get(id) as Row | null;
+    return row ? toWorkspace(row) : null;
+  }
+
+  createWorkspace(input: CreateWorkspaceInput): MulticaWorkspace {
+    const name = String(input.name ?? "").trim();
+    const slug = normalizeWorkspaceSlug(input.slug ?? slugifyWorkspaceName(name));
+    if (!name || !slug) throw new Error("name and slug are required");
+    const id = input.id ?? (slug === "local" ? "local" : createId("ws"));
+    const now = nowIso();
+    const issuePrefix = String(input.issuePrefix ?? input.issue_prefix ?? generateIssuePrefix(name)).trim().toUpperCase() || "MUL";
+    this.db.run(
+      `INSERT INTO multica_workspaces (
+        id, name, slug, description, context, settings, repos, issue_prefix, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        name,
+        slug,
+        input.description ?? null,
+        input.context ?? null,
+        toJson(input.settings ?? {}),
+        toJson(input.repos ?? []),
+        issuePrefix,
+        now,
+        now,
+      ],
+    );
+    const user = this.getCurrentUser();
+    const memberId = `mem_${id}_${user.id}`;
+    if (!this.getWorkspaceMember(memberId)) {
+      this.createWorkspaceMember({
+        id: memberId,
+        workspaceId: id,
+        name: user.name,
+        email: user.email,
+        role: "owner",
+      });
+    }
+    this.markCurrentUserOnboarded();
+    return this.getWorkspace(id)!;
+  }
+
+  ensureLocalWorkspace(): MulticaWorkspace {
+    const existing = this.getWorkspace("local");
+    if (existing) return existing;
+    return this.createWorkspace({ id: "local", name: "Local Workspace", slug: "local", issuePrefix: "MUL" });
   }
 
   getNotificationPreferences(input: { workspaceId?: string | null; memberId?: string | null } = {}): MulticaNotificationPreferenceResponse {
@@ -5261,6 +5431,48 @@ function normalizeRuntimeConcurrency(value: number | null | undefined): number {
   return Math.floor(concurrency);
 }
 
+const SUPPORTED_USER_LANGUAGES = new Set(["en", "zh-Hans", "zh-Hant", "ja", "ko"]);
+const WORKSPACE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function normalizeOptionalLanguage(value: unknown): string | null {
+  const language = String(value ?? "").trim();
+  if (!language) return null;
+  if (!SUPPORTED_USER_LANGUAGES.has(language)) throw new Error("unsupported language");
+  return language;
+}
+
+function normalizeOptionalTimezone(value: unknown): string | null {
+  const timezone = String(value ?? "").trim();
+  if (!timezone) return null;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    throw new Error("invalid timezone");
+  }
+}
+
+function normalizeWorkspaceSlug(value: unknown): string {
+  const slug = String(value ?? "").trim().toLowerCase();
+  if (!slug) return "";
+  if (!WORKSPACE_SLUG_RE.test(slug)) throw new Error("slug must contain only lowercase letters, numbers, and hyphens");
+  return slug;
+}
+
+function slugifyWorkspaceName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "workspace";
+}
+
+function generateIssuePrefix(name: string): string {
+  const letters = name.replace(/[^a-zA-Z]/g, "").toUpperCase();
+  if (!letters) return "WS";
+  return letters.slice(0, Math.min(letters.length, 3));
+}
+
 function normalizeRuntimeModels(models: MulticaRuntimeModel[], provider: string): MulticaRuntimeModel[] {
   const seen = new Set<string>();
   return (models ?? []).map((model) => {
@@ -5756,6 +5968,52 @@ function toWorkspaceMember(row: Row): MulticaWorkspaceMember {
     archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toUser(row: Row): MulticaUser {
+  const onboardingQuestionnaire = parseJson<Record<string, unknown>>(row.onboarding_questionnaire, {});
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    email: String(row.email),
+    avatarUrl: nullableString(row.avatar_url),
+    avatar_url: nullableString(row.avatar_url),
+    language: nullableString(row.language),
+    timezone: nullableString(row.timezone),
+    onboardedAt: nullableString(row.onboarded_at),
+    onboarded_at: nullableString(row.onboarded_at),
+    onboardingQuestionnaire,
+    onboarding_questionnaire: onboardingQuestionnaire,
+    starterContentState: nullableString(row.starter_content_state),
+    starter_content_state: nullableString(row.starter_content_state),
+    profileDescription: String(row.profile_description ?? ""),
+    profile_description: String(row.profile_description ?? ""),
+    createdAt: String(row.created_at),
+    created_at: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+function toWorkspace(row: Row): MulticaWorkspace {
+  const settings = parseJson<Record<string, unknown>>(row.settings, {});
+  const repos = parseJson<unknown[]>(row.repos, []);
+  const issuePrefix = String(row.issue_prefix ?? "MUL");
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    slug: String(row.slug),
+    description: nullableString(row.description),
+    context: nullableString(row.context),
+    settings,
+    repos,
+    issuePrefix,
+    issue_prefix: issuePrefix,
+    createdAt: String(row.created_at),
+    created_at: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    updated_at: String(row.updated_at),
   };
 }
 
