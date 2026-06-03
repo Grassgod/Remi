@@ -52,6 +52,7 @@ import type {
   CreateMulticaReactionInput,
   MulticaNotificationPreferences,
   MulticaGitHubPullRequest,
+  MulticaRuntime,
   MulticaSkill,
   MulticaSubscriptionReason,
   MulticaGitHubPullRequestState,
@@ -103,6 +104,27 @@ type NormalizedGitHubPullRequestBody = {
   changedFiles: number;
 };
 
+type DaemonRegisterRequestBody = {
+  workspace_id?: string;
+  workspaceId?: string;
+  daemon_id?: string;
+  daemonId?: string;
+  legacy_daemon_ids?: string[];
+  device_name?: string;
+  deviceName?: string;
+  cli_version?: string;
+  cliVersion?: string;
+  launched_by?: string;
+  launchedBy?: string;
+  runtimes?: Array<{
+    name?: string;
+    type?: string;
+    provider?: string;
+    version?: string;
+    status?: string;
+  }>;
+};
+
 class MulticaApiError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 409 | 413 | 429) {
     super(message);
@@ -150,6 +172,19 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/multica/health", (c) => c.json({ ok: true }));
+  app.post("/api/daemon/register", async (c) => {
+    const body = await readJson<DaemonRegisterRequestBody>(c);
+    const result = registerDaemonRuntimes(store, body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/api/daemon/deregister", async (c) => {
+    const body = await readJson<{ runtime_ids?: string[]; runtimeIds?: string[] }>(c);
+    const runtimeIds = body.runtime_ids ?? body.runtimeIds ?? [];
+    if (!runtimeIds.length) return c.json({ error: "runtime_ids is required" }, 400);
+    for (const runtimeId of runtimeIds) store.setRuntimeOffline(runtimeId);
+    return c.json({ status: "ok" });
+  });
   app.post("/api/daemon/heartbeat", async (c) => {
     const body = await readJson<{ runtime_id?: string; runtimeId?: string; supports_batch_import?: boolean; supportsBatchImport?: boolean }>(c);
     const runtimeId = body.runtime_id ?? body.runtimeId ?? "";
@@ -1619,6 +1654,126 @@ function createFeedbackOrApiError(store: MulticaStore, input: CreateFeedbackInpu
     }
     throw error;
   }
+}
+
+function registerDaemonRuntimes(store: MulticaStore, body: DaemonRegisterRequestBody):
+  | {
+    runtimes: ReturnType<typeof daemonRuntimeResponse>[];
+    repos: unknown[];
+    repos_version: string;
+    settings: Record<string, unknown>;
+  }
+  | { error: string; status: 400 } {
+  const workspaceId = String(body.workspace_id ?? body.workspaceId ?? "").trim();
+  const daemonId = String(body.daemon_id ?? body.daemonId ?? "").trim();
+  const runtimes = body.runtimes ?? [];
+  if (!daemonId) return { error: "daemon_id is required", status: 400 };
+  if (!workspaceId) return { error: "workspace_id is required", status: 400 };
+  if (runtimes.length === 0) return { error: "at least one runtime is required", status: 400 };
+
+  const deviceName = String(body.device_name ?? body.deviceName ?? "").trim();
+  const cliVersion = String(body.cli_version ?? body.cliVersion ?? "").trim();
+  const launchedBy = String(body.launched_by ?? body.launchedBy ?? "").trim();
+  const registered = runtimes.map((runtime) => {
+    const provider = String(runtime.type ?? runtime.provider ?? "unknown").trim() || "unknown";
+    const version = String(runtime.version ?? "").trim();
+    const name = String(runtime.name ?? "").trim() || (deviceName ? `${provider} (${deviceName})` : provider);
+    const id = daemonRuntimeId(daemonId, provider);
+    const saved = store.registerRuntime({
+      id,
+      name,
+      provider,
+      workspaceId,
+      maxConcurrency: 1,
+    });
+    if (runtime.status === "offline") store.setRuntimeOffline(saved.id);
+    const current = store.getRuntime(saved.id) ?? saved;
+    return daemonRuntimeResponse(current, {
+      daemonId,
+      runtimeMode: "local",
+      version,
+      cliVersion,
+      launchedBy,
+      deviceName,
+    });
+  });
+  return {
+    runtimes: registered,
+    repos: [],
+    repos_version: emptyReposVersion(),
+    settings: {},
+  };
+}
+
+function daemonRuntimeId(daemonId: string, provider: string): string {
+  const key = `${daemonId}:${provider}`.toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `rt_${(hash >>> 0).toString(36)}`;
+}
+
+function emptyReposVersion(): string {
+  return "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+}
+
+function launchHeader(provider: string): string {
+  if (provider === "claude") return "Claude";
+  if (provider === "codex") return "Codex";
+  return provider ? provider[0].toUpperCase() + provider.slice(1) : "Runtime";
+}
+
+function daemonRuntimeResponse(
+  runtime: MulticaRuntime,
+  metadata: {
+    daemonId: string;
+    runtimeMode: string;
+    version: string;
+    cliVersion: string;
+    launchedBy: string;
+    deviceName: string;
+  },
+): {
+  id: string;
+  workspace_id: string | null;
+  daemon_id: string;
+  name: string;
+  runtime_mode: string;
+  provider: string;
+  launch_header: string;
+  status: string;
+  device_info: string;
+  metadata: Record<string, unknown>;
+  owner_id: string | null;
+  visibility: string;
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+} {
+  const deviceInfo = [metadata.deviceName, metadata.version].filter(Boolean).join(" · ");
+  return {
+    id: runtime.id,
+    workspace_id: runtime.workspaceId,
+    daemon_id: metadata.daemonId,
+    name: runtime.name,
+    runtime_mode: metadata.runtimeMode,
+    provider: runtime.provider,
+    launch_header: launchHeader(String(runtime.provider)),
+    status: runtime.status,
+    device_info: deviceInfo,
+    metadata: {
+      version: metadata.version,
+      cli_version: metadata.cliVersion,
+      launched_by: metadata.launchedBy,
+    },
+    owner_id: runtime.ownerId,
+    visibility: runtime.visibility,
+    last_seen_at: runtime.lastHeartbeatAt,
+    created_at: runtime.createdAt,
+    updated_at: runtime.updatedAt,
+  };
 }
 
 function safeCreateRuntimeUpdateRequest(

@@ -1541,6 +1541,17 @@ export class MulticaStore {
     return this.getRuntime(id)!;
   }
 
+  setRuntimeOffline(id: string): MulticaRuntime | null {
+    const current = this.getRuntime(id);
+    if (!current) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_runtimes SET status = 'offline', updated_at = ? WHERE id = ?",
+      [now, id],
+    );
+    return this.getRuntime(id);
+  }
+
   listRuntimeModels(runtimeId: string): MulticaRuntimeModel[] {
     if (!this.db.query("SELECT id FROM multica_runtimes WHERE id = ?").get(runtimeId)) {
       throw new Error(`Runtime not found: ${runtimeId}`);

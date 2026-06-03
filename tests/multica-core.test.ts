@@ -1844,6 +1844,78 @@ describe("Bun Multica API", () => {
     expect(emptyHeartbeatBody.pending_update).toBeUndefined();
   });
 
+  it("serves original daemon register and deregister endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+
+    const missing = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daemon_id: "daemon-missing", runtimes: [{ type: "codex" }] }),
+    });
+    expect(missing.status).toBe(400);
+
+    const registered = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-1",
+        device_name: "Laptop",
+        cli_version: "0.2.0",
+        launched_by: "desktop",
+        runtimes: [
+          { name: "Codex local", type: "codex", version: "1.0.0", status: "online" },
+          { type: "claude", version: "2.0.0", status: "offline" },
+        ],
+      }),
+    });
+    const registeredBody = await registered.json();
+
+    expect(registered.status).toBe(200);
+    expect(registeredBody.repos).toEqual([]);
+    expect(registeredBody.repos_version).toBeString();
+    expect(registeredBody.runtimes).toHaveLength(2);
+    expect(registeredBody.runtimes[0]).toMatchObject({
+      workspace_id: "local",
+      daemon_id: "daemon-1",
+      runtime_mode: "local",
+      provider: "codex",
+      launch_header: "Codex",
+      device_info: "Laptop · 1.0.0",
+      metadata: {
+        version: "1.0.0",
+        cli_version: "0.2.0",
+        launched_by: "desktop",
+      },
+      visibility: "private",
+    });
+    expect(store.getRuntime(registeredBody.runtimes[0].id)?.status).toBe("online");
+    expect(store.getRuntime(registeredBody.runtimes[1].id)?.status).toBe("offline");
+
+    const reconnected = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-1",
+        runtimes: [{ type: "codex", version: "1.0.1" }],
+      }),
+    });
+    const reconnectedBody = await reconnected.json();
+    expect(reconnectedBody.runtimes[0].id).toBe(registeredBody.runtimes[0].id);
+    expect(reconnectedBody.runtimes[0].metadata.version).toBe("1.0.1");
+
+    const deregistered = await app.request("/api/daemon/deregister", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runtime_ids: [registeredBody.runtimes[0].id] }),
+    });
+    expect(deregistered.status).toBe(200);
+    expect((await deregistered.json()).status).toBe("ok");
+    expect(store.getRuntime(registeredBody.runtimes[0].id)?.status).toBe("offline");
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
