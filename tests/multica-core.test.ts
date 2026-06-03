@@ -2165,6 +2165,88 @@ describe("Bun Multica API", () => {
     expect(store.getCurrentUser().onboardedAt).toBeString();
   });
 
+  it("serves original health, cloud runtime, issue task, subscription, and daemon polling compatibility endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const member = store.createWorkspaceMember({ id: "mem_compat", name: "Compat Member" });
+    const issue = store.createIssue({
+      title: "Compatibility task surface",
+      workspaceId: "local",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "Run compatibility" });
+    store.reportTaskUsage(task.id, [{
+      provider: "codex",
+      model: "gpt-5",
+      inputTokens: 12,
+      outputTokens: 8,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 2,
+    }]);
+    const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: "local" });
+    const app = createMulticaApp({ store });
+
+    expect((await app.request("/readyz")).status).toBe(200);
+    expect((await app.request("/healthz")).status).toBe(200);
+    const cloudRuntime = await app.request("/api/cloud-runtime/nodes");
+    expect(cloudRuntime.status).toBe(503);
+    expect((await cloudRuntime.json()).configured).toBe(false);
+
+    const active = await app.request(`/api/issues/${issue.id}/active-task`);
+    const activeBody = await active.json();
+    expect(activeBody.tasks[0].id).toBe(task.id);
+    expect(activeBody.tasks[0].issue_id).toBe(issue.id);
+
+    const runs = await app.request(`/api/issues/${issue.id}/task-runs`);
+    const runsBody = await runs.json();
+    expect(runsBody[0].agent_id).toBe(agent.id);
+
+    const usage = await app.request(`/api/issues/${issue.id}/usage`);
+    expect(await usage.json()).toMatchObject({
+      total_input_tokens: 12,
+      total_output_tokens: 8,
+      total_cache_read_tokens: 3,
+      total_cache_write_tokens: 2,
+      task_count: 1,
+    });
+
+    const rerun = await app.request(`/api/issues/${issue.id}/rerun`, { method: "POST" });
+    expect(rerun.status).toBe(202);
+    expect((await rerun.json()).issue_id).toBe(issue.id);
+
+    const subscribe = await app.request(`/api/issues/${issue.id}/subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_id: member.id }),
+    });
+    expect(await subscribe.json()).toEqual({ subscribed: true });
+    const subscribers = await app.request(`/api/issues/${issue.id}/subscribers`);
+    expect((await subscribers.json()).some((item: any) => item.memberId === member.id)).toBe(true);
+    const unsubscribe = await app.request(`/api/issues/${issue.id}/unsubscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_id: member.id }),
+    });
+    expect(await unsubscribe.json()).toEqual({ subscribed: false });
+
+    const pending = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/pending`);
+    expect((await pending.json()).some((item: any) => item.id === task.id && item.workspace_id === "local")).toBe(true);
+
+    const claimed = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    const claimedBody = await claimed.json();
+    expect(claimedBody.task.id).toBe(task.id);
+    await app.request(`/api/daemon/tasks/${task.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ type: "assistant", content: "compat done" }] }),
+    });
+    expect((await (await app.request(`/api/tasks/${task.id}/messages`)).json())[0].content).toBe("compat done");
+
+    const gc = await app.request(`/api/daemon/issues/${issue.id}/gc-check`);
+    expect((await gc.json()).updated_at).toBeString();
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

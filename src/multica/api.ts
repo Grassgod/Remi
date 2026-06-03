@@ -52,6 +52,8 @@ import type {
   CreateMulticaReactionInput,
   MulticaNotificationPreferences,
   MulticaGitHubPullRequest,
+  MulticaIssue,
+  MulticaTask,
   MulticaRuntime,
   MulticaSkill,
   MulticaSubscriptionReason,
@@ -171,6 +173,8 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
 
   app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/readyz", (c) => c.json({ ok: true }));
+  app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/api/config", (c) => c.json({
     cdn_domain: "",
     allow_signup: true,
@@ -215,6 +219,17 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     return c.json(workspaceReposResponse(c.req.param("workspaceId")));
   });
+  app.get("/api/cloud-runtime", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.get("/api/cloud-runtime/healthz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.get("/api/cloud-runtime/readyz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.get("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.delete("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes/start", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes/stop", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes/reboot", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes/status", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.post("/api/cloud-runtime/nodes/exec", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
   app.get("/api/me", (c) => c.json(store.getCurrentUser()));
   app.patch("/api/me", async (c) => {
     const body = await readJson<any>(c);
@@ -1199,6 +1214,36 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
+  app.get("/api/issues/:id/active-task", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const tasks = store.listTasksForIssue(issue.id)
+      .filter((task) => task.status === "queued" || task.status === "dispatched" || task.status === "running")
+      .map(taskCompatibilityResponse);
+    return c.json({ tasks });
+  });
+  app.get("/api/issues/:id/task-runs", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json(store.listTasksForIssue(issue.id).map(taskCompatibilityResponse));
+  });
+  app.get("/api/issues/:id/usage", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json(issueUsageResponse(store, issue));
+  });
+  app.post("/api/issues/:id/rerun", async (c) => {
+    const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
+    const result = safeRerunIssue(store, c.req.param("id"), body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(taskCompatibilityResponse(result.task), 202);
+  });
+  app.post("/api/issues/:id/tasks/:taskId/cancel", (c) => {
+    const issue = store.getIssue(c.req.param("id"));
+    const task = store.getTask(c.req.param("taskId"));
+    if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
+    return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
+  });
   app.get("/api/multica/issues/:id/children", (c) => {
     const children = store.listChildIssues(c.req.param("id"));
     return c.json({ issues: children, total: children.length });
@@ -1309,11 +1354,28 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/issues/:id/subscribers", (c) => {
     return c.json({ subscribers: store.listIssueSubscribers(c.req.param("id")) });
   });
+  app.get("/api/issues/:id/subscribers", (c) => {
+    return c.json(store.listIssueSubscribers(c.req.param("id")));
+  });
   app.post("/api/multica/issues/:id/subscribers", async (c) => {
     const body = await readJson<{ memberId?: string; reason?: unknown }>(c);
     return c.json({
       subscriber: store.addIssueSubscriber(c.req.param("id"), body.memberId ?? "", normalizeSubscriptionReason(body.reason)),
     }, 201);
+  });
+  app.post("/api/issues/:id/subscribe", async (c) => {
+    const body = await readJson<{ memberId?: string; member_id?: string; user_id?: string; reason?: unknown }>(c);
+    store.addIssueSubscriber(
+      c.req.param("id"),
+      body.memberId ?? body.member_id ?? body.user_id ?? "local",
+      normalizeSubscriptionReason(body.reason),
+    );
+    return c.json({ subscribed: true });
+  });
+  app.post("/api/issues/:id/unsubscribe", async (c) => {
+    const body = await readJson<{ memberId?: string; member_id?: string; user_id?: string }>(c);
+    store.removeIssueSubscriber(c.req.param("id"), body.memberId ?? body.member_id ?? body.user_id ?? "local");
+    return c.json({ subscribed: false });
   });
   app.delete("/api/multica/issues/:id/subscribers/:memberId", (c) => {
     store.removeIssueSubscriber(c.req.param("id"), c.req.param("memberId"));
@@ -1525,7 +1587,15 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   // Multica daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", (c) => {
     const task = store.claimTask(c.req.param("runtimeId"));
-    return c.json({ task });
+    return c.json({ task: task ? taskCompatibilityResponse(task) : null });
+  });
+  app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
+    const runtime = store.getRuntime(c.req.param("runtimeId"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const tasks = store.listTasks()
+      .filter((task) => isPendingForRuntime(store, runtime, task))
+      .map(taskCompatibilityResponse);
+    return c.json(tasks);
   });
   app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
     const recovered = store.recoverOrphans(c.req.param("runtimeId"));
@@ -1543,6 +1613,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<{ messages?: any[] }>(c);
     const messages = store.appendTaskMessages(c.req.param("taskId"), body.messages ?? []);
     return c.json({ messages });
+  });
+  app.get("/api/daemon/tasks/:taskId/messages", (c) => {
+    return c.json(store.listTaskMessages(c.req.param("taskId")));
   });
   app.post("/api/daemon/tasks/:taskId/session", async (c) => {
     const body = await readJson<{ session_id?: string; sessionId?: string; work_dir?: string; workDir?: string }>(c);
@@ -1579,6 +1652,29 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.get("/api/daemon/tasks/:taskId/status", (c) => {
     return c.json({ status: store.getTaskStatus(c.req.param("taskId")) });
+  });
+  app.get("/api/tasks/:taskId/messages", (c) => {
+    return c.json(store.listTaskMessages(c.req.param("taskId")));
+  });
+  app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
+    const issue = store.getIssue(c.req.param("issueId"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json({ status: issue.status, updated_at: issue.updatedAt });
+  });
+  app.get("/api/daemon/chat-sessions/:sessionId/gc-check", (c) => {
+    const session = store.getChatSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "chat session not found" }, 404);
+    return c.json({ status: session.status, updated_at: session.updatedAt });
+  });
+  app.get("/api/daemon/autopilot-runs/:runId/gc-check", (c) => {
+    const run = store.getAutopilotRun(c.req.param("runId"));
+    if (!run) return c.json({ error: "autopilot run not found" }, 404);
+    return c.json({ status: run.status, completed_at: run.completedAt });
+  });
+  app.get("/api/daemon/tasks/:taskId/gc-check", (c) => {
+    const task = store.getTask(c.req.param("taskId"));
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ status: task.status, completed_at: task.completedAt });
   });
 
   return app;
@@ -2002,6 +2098,107 @@ function workspaceReposResponse(workspaceId: string): {
     repos_version: emptyReposVersion(),
     settings: {},
   };
+}
+
+function cloudRuntimeUnavailableResponse(): { error: string; configured: false } {
+  return { error: "cloud runtime service is not configured", configured: false };
+}
+
+function taskCompatibilityResponse(task: MulticaTask): MulticaTask & {
+  agent_id: string;
+  runtime_id: string | null;
+  issue_id: string | null;
+  chat_session_id: string | null;
+  workspace_id: string;
+  branch_name: string | null;
+  session_id: string | null;
+  work_dir: string | null;
+  progress_summary: string | null;
+  progress_step: number | null;
+  progress_total: number | null;
+  created_at: string;
+  updated_at: string;
+  dispatched_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  cancelled_at: string | null;
+} {
+  return {
+    ...task,
+    agent_id: task.agentId,
+    runtime_id: task.runtimeId,
+    issue_id: task.issueId,
+    chat_session_id: task.chatSessionId,
+    workspace_id: task.workspaceId,
+    branch_name: task.branchName,
+    session_id: task.sessionId,
+    work_dir: task.workDir,
+    progress_summary: task.progressSummary,
+    progress_step: task.progressStep,
+    progress_total: task.progressTotal,
+    created_at: task.createdAt,
+    updated_at: task.updatedAt,
+    dispatched_at: task.dispatchedAt,
+    started_at: task.startedAt,
+    completed_at: task.completedAt,
+    failed_at: task.failedAt,
+    cancelled_at: task.cancelledAt,
+  };
+}
+
+function issueUsageResponse(store: MulticaStore, issue: MulticaIssue): {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
+  task_count: number;
+} {
+  const taskIds = new Set(store.listTasksForIssue(issue.id).map((task) => task.id));
+  const totals = {
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_cache_read_tokens: 0,
+    total_cache_write_tokens: 0,
+    task_count: taskIds.size,
+  };
+  for (const task of store.listTasksForIssue(issue.id)) {
+    for (const entry of task.usage) {
+      totals.total_input_tokens += entry.inputTokens ?? 0;
+      totals.total_output_tokens += entry.outputTokens ?? 0;
+      totals.total_cache_read_tokens += entry.cacheReadTokens ?? 0;
+      totals.total_cache_write_tokens += entry.cacheWriteTokens ?? 0;
+    }
+  }
+  return totals;
+}
+
+function safeRerunIssue(
+  store: MulticaStore,
+  issueId: string,
+  body: { agent_id?: string; agentId?: string; prompt?: string },
+): { task: MulticaTask } | { error: string; status: 400 | 404 } {
+  const issue = store.getIssue(issueId);
+  if (!issue) return { error: "issue not found", status: 404 };
+  const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
+  if (!agentId) return { error: "issue has no agent assignee", status: 400 };
+  if (!store.getAgent(agentId)) return { error: "agent not found", status: 404 };
+  const task = store.createTask({
+    agentId,
+    issueId: issue.id,
+    workspaceId: issue.workspaceId,
+    prompt: body.prompt ?? issue.title,
+  });
+  return { task };
+}
+
+function isPendingForRuntime(store: MulticaStore, runtime: MulticaRuntime, task: MulticaTask): boolean {
+  if (runtime.workspaceId && task.workspaceId !== runtime.workspaceId) return false;
+  if (task.status === "dispatched" || task.status === "running") return task.runtimeId === runtime.id;
+  if (task.status !== "queued") return false;
+  const agent = store.getAgent(task.agentId);
+  if (!agent || agent.archivedAt) return false;
+  return runtime.provider === "any" || agent.provider === runtime.provider;
 }
 
 function daemonRuntimeId(daemonId: string, provider: string): string {
