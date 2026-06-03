@@ -46,6 +46,8 @@ import type {
   MulticaProjectResource,
   MulticaProjectSearchResult,
   MulticaRuntime,
+  MulticaRuntimeVisibility,
+  MulticaRuntimeUsage,
   MulticaSquad,
   MulticaSquadMember,
   MulticaTask,
@@ -69,6 +71,7 @@ import type {
   UpdateIssueCommentInput,
   UpdateLabelInput,
   UpdateProjectInput,
+  UpdateRuntimeInput,
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
 } from "./types.js";
@@ -112,6 +115,8 @@ export class MulticaStore {
         name TEXT NOT NULL,
         provider TEXT NOT NULL,
         workspace_id TEXT,
+        owner_id TEXT,
+        visibility TEXT NOT NULL DEFAULT 'private',
         status TEXT NOT NULL DEFAULT 'online',
         max_concurrency INTEGER NOT NULL DEFAULT 1,
         last_heartbeat_at TEXT,
@@ -510,6 +515,8 @@ export class MulticaStore {
       CREATE INDEX IF NOT EXISTS idx_multica_messages_task ON multica_task_messages(task_id, seq);
     `);
     this.addColumnIfMissing("multica_agents", "archived_at TEXT");
+    this.addColumnIfMissing("multica_runtimes", "owner_id TEXT");
+    this.addColumnIfMissing("multica_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
     this.addColumnIfMissing("multica_issues", "assignee_type TEXT");
     this.addColumnIfMissing("multica_issues", "assignee_id TEXT");
     this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
@@ -707,15 +714,26 @@ export class MulticaStore {
   registerRuntime(input: RegisterRuntimeInput): MulticaRuntime {
     const id = input.id ?? createId("rt");
     const now = nowIso();
+    const currentRow = this.db.query("SELECT * FROM multica_runtimes WHERE id = ?").get(id) as Row | null;
+    const current = currentRow ? toRuntime(currentRow) : null;
+    const ownerId = hasAnyField(input, "ownerId", "owner_id")
+      ? resolveOptionalStringField(input, "ownerId", "owner_id", current?.ownerId ?? null)
+      : current?.ownerId ?? null;
+    const visibility = hasAnyField(input, "visibility")
+      ? normalizeRuntimeVisibility(input.visibility)
+      : current?.visibility ?? "private";
+    const maxConcurrency = normalizeRuntimeConcurrency(input.maxConcurrency ?? input.max_concurrency ?? current?.maxConcurrency ?? 1);
     this.db.run(
       `INSERT INTO multica_runtimes (
-        id, name, provider, workspace_id, status, max_concurrency,
+        id, name, provider, workspace_id, owner_id, visibility, status, max_concurrency,
         last_heartbeat_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'online', ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         provider = excluded.provider,
         workspace_id = excluded.workspace_id,
+        owner_id = excluded.owner_id,
+        visibility = excluded.visibility,
         status = 'online',
         max_concurrency = excluded.max_concurrency,
         last_heartbeat_at = excluded.last_heartbeat_at,
@@ -724,8 +742,10 @@ export class MulticaStore {
         id,
         input.name,
         input.provider,
-        input.workspaceId ?? null,
-        Math.max(1, input.maxConcurrency ?? 1),
+        input.workspaceId ?? input.workspace_id ?? null,
+        ownerId,
+        visibility,
+        maxConcurrency,
         now,
         now,
         now,
@@ -736,12 +756,86 @@ export class MulticaStore {
 
   getRuntime(id: string): MulticaRuntime | null {
     const row = this.db.query("SELECT * FROM multica_runtimes WHERE id = ?").get(id) as Row | null;
-    return row ? toRuntime(row) : null;
+    return row ? withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))) : null;
   }
 
   listRuntimes(): MulticaRuntime[] {
     const rows = this.db.query("SELECT * FROM multica_runtimes ORDER BY updated_at DESC").all() as Row[];
-    return rows.map((row) => withRuntimeLiveness(toRuntime(row)));
+    return rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
+  }
+
+  updateRuntime(id: string, input: UpdateRuntimeInput): MulticaRuntime {
+    const current = this.getRuntime(id);
+    if (!current) throw new Error(`Runtime not found: ${id}`);
+    const ownerId = resolveOptionalStringField(input, "ownerId", "owner_id", current.ownerId);
+    const visibility = hasAnyField(input, "visibility")
+      ? normalizeRuntimeVisibility(input.visibility)
+      : current.visibility;
+    const maxConcurrency = hasAnyField(input, "maxConcurrency", "max_concurrency")
+      ? normalizeRuntimeConcurrency(input.maxConcurrency ?? input.max_concurrency)
+      : current.maxConcurrency;
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_runtimes SET
+        name = ?,
+        owner_id = ?,
+        visibility = ?,
+        max_concurrency = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.name ?? current.name,
+        ownerId,
+        visibility,
+        maxConcurrency,
+        now,
+        id,
+      ],
+    );
+    return this.getRuntime(id)!;
+  }
+
+  listRuntimeUsage(runtimeId?: string | null): MulticaRuntimeUsage[] {
+    if (runtimeId !== undefined && runtimeId !== null && !this.getRuntime(runtimeId)) {
+      throw new Error(`Runtime not found: ${runtimeId}`);
+    }
+    const rows = runtimeId === undefined
+      ? this.db.query("SELECT id, runtime_id, usage FROM multica_tasks WHERE runtime_id IS NOT NULL").all() as Row[]
+      : runtimeId === null
+        ? this.db.query("SELECT id, runtime_id, usage FROM multica_tasks WHERE runtime_id IS NULL").all() as Row[]
+        : this.db.query("SELECT id, runtime_id, usage FROM multica_tasks WHERE runtime_id = ?").all(runtimeId) as Row[];
+    const usage = new Map<string, MulticaRuntimeUsage & { taskIds: Set<string> }>();
+    for (const row of rows) {
+      const rowRuntimeId = nullableString(row.runtime_id);
+      for (const entry of parseTaskUsageEntries(row.usage)) {
+        const key = [rowRuntimeId ?? "", entry.provider, entry.model].join("\u0000");
+        const current = usage.get(key) ?? {
+          runtimeId: rowRuntimeId,
+          provider: entry.provider,
+          model: entry.model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          taskCount: 0,
+          taskIds: new Set<string>(),
+        };
+        current.inputTokens += entry.inputTokens;
+        current.outputTokens += entry.outputTokens;
+        current.cacheReadTokens += entry.cacheReadTokens;
+        current.cacheWriteTokens += entry.cacheWriteTokens;
+        current.taskIds.add(String(row.id));
+        usage.set(key, current);
+      }
+    }
+    return [...usage.values()]
+      .map(({ taskIds, ...entry }) => ({ ...entry, taskCount: taskIds.size }))
+      .sort((left, right) =>
+        (right.inputTokens + right.outputTokens + right.cacheReadTokens + right.cacheWriteTokens) -
+        (left.inputTokens + left.outputTokens + left.cacheReadTokens + left.cacheWriteTokens) ||
+        left.provider.localeCompare(right.provider) ||
+        left.model.localeCompare(right.model),
+      );
   }
 
   heartbeatRuntime(runtimeId: string): void {
@@ -2701,6 +2795,14 @@ export class MulticaStore {
     };
   }
 
+  private hydrateRuntime(runtime: MulticaRuntime): MulticaRuntime {
+    const stats = this.runtimeUsageSummary(runtime.id);
+    return {
+      ...runtime,
+      ...stats,
+    };
+  }
+
   private hydrateIssueComment(comment: MulticaIssueComment): MulticaIssueComment {
     return {
       ...comment,
@@ -2989,6 +3091,44 @@ export class MulticaStore {
       );
     }
   }
+
+  private runtimeUsageSummary(runtimeId: string): Pick<MulticaRuntime,
+    "taskCount" |
+    "activeTaskCount" |
+    "completedTaskCount" |
+    "failedTaskCount" |
+    "inputTokens" |
+    "outputTokens" |
+    "cacheReadTokens" |
+    "cacheWriteTokens"
+  > {
+    const rows = this.db.query(
+      "SELECT id, status, usage FROM multica_tasks WHERE runtime_id = ?",
+    ).all(runtimeId) as Row[];
+    const stats = {
+      taskCount: rows.length,
+      activeTaskCount: 0,
+      completedTaskCount: 0,
+      failedTaskCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    for (const row of rows) {
+      const status = String(row.status ?? "");
+      if (status === "dispatched" || status === "running") stats.activeTaskCount += 1;
+      if (status === "completed") stats.completedTaskCount += 1;
+      if (status === "failed") stats.failedTaskCount += 1;
+      for (const entry of parseTaskUsageEntries(row.usage)) {
+        stats.inputTokens += entry.inputTokens;
+        stats.outputTokens += entry.outputTokens;
+        stats.cacheReadTokens += entry.cacheReadTokens;
+        stats.cacheWriteTokens += entry.cacheWriteTokens;
+      }
+    }
+    return stats;
+  }
 }
 
 type Row = Record<string, unknown>;
@@ -3008,6 +3148,40 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+type RuntimeUsageEntry = Required<Pick<TaskUsageEntry,
+  "provider" |
+  "model" |
+  "inputTokens" |
+  "outputTokens" |
+  "cacheReadTokens" |
+  "cacheWriteTokens"
+>>;
+
+function parseTaskUsageEntries(value: unknown): RuntimeUsageEntry[] {
+  const raw = parseJson<unknown[]>(value, []);
+  if (!Array.isArray(raw)) return [];
+  const entries: RuntimeUsageEntry[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    entries.push({
+      provider: String(record.provider ?? "unknown"),
+      model: String(record.model ?? "unknown"),
+      inputTokens: normalizeUsageNumber(record.inputTokens ?? record.input_tokens),
+      outputTokens: normalizeUsageNumber(record.outputTokens ?? record.output_tokens),
+      cacheReadTokens: normalizeUsageNumber(record.cacheReadTokens ?? record.cache_read_tokens),
+      cacheWriteTokens: normalizeUsageNumber(record.cacheWriteTokens ?? record.cache_write_tokens),
+    });
+  }
+  return entries;
+}
+
+function normalizeUsageNumber(value: unknown): number {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number < 0) return 0;
+  return Math.floor(number);
 }
 
 function formatIssueKey(number: number): string {
@@ -3069,6 +3243,18 @@ function normalizeIssueDependencyType(value: string | undefined): MulticaIssueDe
   const type = String(value ?? "related").trim().toLowerCase();
   if (type === "blocks" || type === "blocked_by" || type === "related") return type;
   throw new Error("dependency type must be one of blocks, blocked_by, or related");
+}
+
+function normalizeRuntimeVisibility(value: string | undefined): MulticaRuntimeVisibility {
+  const visibility = String(value ?? "private").trim().toLowerCase();
+  if (visibility === "private" || visibility === "public") return visibility;
+  throw new Error("visibility must be private or public");
+}
+
+function normalizeRuntimeConcurrency(value: number | null | undefined): number {
+  const concurrency = Number(value ?? 1);
+  if (!Number.isFinite(concurrency) || concurrency < 1) throw new Error("maxConcurrency must be at least 1");
+  return Math.floor(concurrency);
 }
 
 function normalizeIssuePosition(value: number | null | undefined): number {
@@ -3236,8 +3422,18 @@ function toRuntime(row: Row): MulticaRuntime {
     name: String(row.name),
     provider: String(row.provider),
     workspaceId: nullableString(row.workspace_id),
+    ownerId: nullableString(row.owner_id),
+    visibility: normalizeRuntimeVisibility(String(row.visibility ?? "private")),
     status: String(row.status) as MulticaRuntime["status"],
     maxConcurrency: Number(row.max_concurrency ?? 1),
+    taskCount: 0,
+    activeTaskCount: 0,
+    completedTaskCount: 0,
+    failedTaskCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
     lastHeartbeatAt: nullableString(row.last_heartbeat_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),

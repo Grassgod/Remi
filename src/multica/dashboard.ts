@@ -1387,6 +1387,9 @@ export function renderMulticaDashboardHtml(): string {
       selectedProjectResources: [],
       selectedAgentId: null,
       selectedAgent: null,
+      selectedRuntimeId: null,
+      selectedRuntime: null,
+      selectedRuntimeUsage: [],
       chatSessions: [],
       selectedChatId: null,
       selectedChatSession: null,
@@ -1527,6 +1530,7 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedSquadId) await loadSquadDetail(state.selectedSquadId, { silent: true });
         if (state.selectedProjectId) await loadProjectDetail(state.selectedProjectId, { silent: true });
         if (state.selectedAgentId) await loadAgentDetail(state.selectedAgentId, { silent: true });
+        if (state.selectedRuntimeId) await loadRuntimeDetail(state.selectedRuntimeId, { silent: true });
         if (state.selectedChatId) await loadChatDetail(state.selectedChatId, { silent: true });
         else if (els.chatAgent.value) {
           const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
@@ -1624,6 +1628,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedProjectId = null;
       state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
       els.taskDrawer.classList.add("open");
       renderTaskDrawer({ loading: true });
       await loadTaskDetail(id);
@@ -1635,6 +1640,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedProjectId = null;
       state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
       els.taskDrawer.classList.add("open");
       renderIssueDrawer({ loading: true });
       await loadIssueDetail(id);
@@ -1646,6 +1652,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedIssueId = null;
       state.selectedProjectId = null;
       state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
       els.taskDrawer.classList.add("open");
       renderSquadDrawer({ loading: true });
       await loadSquadDetail(id);
@@ -1657,6 +1664,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedIssueId = null;
       state.selectedSquadId = null;
       state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
       els.taskDrawer.classList.add("open");
       renderProjectDrawer({ loading: true });
       await loadProjectDetail(id);
@@ -1668,9 +1676,22 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedIssueId = null;
       state.selectedSquadId = null;
       state.selectedProjectId = null;
+      state.selectedRuntimeId = null;
       els.taskDrawer.classList.add("open");
       renderAgentDrawer({ loading: true });
       await loadAgentDetail(id);
+    }
+
+    async function openRuntime(id) {
+      state.selectedRuntimeId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      state.selectedSquadId = null;
+      state.selectedProjectId = null;
+      state.selectedAgentId = null;
+      els.taskDrawer.classList.add("open");
+      renderRuntimeDrawer({ loading: true });
+      await loadRuntimeDetail(id);
     }
 
     async function loadIssueDetail(id, options = {}) {
@@ -1740,6 +1761,7 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedTask = null;
         state.selectedIssue = null;
         state.selectedSquad = null;
+        state.selectedRuntime = null;
         renderProjectDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
@@ -1753,7 +1775,24 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedTask = null;
         state.selectedIssue = null;
         state.selectedSquad = null;
+        state.selectedRuntime = null;
         renderAgentDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function loadRuntimeDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/runtimes/" + encodeURIComponent(id));
+        state.selectedRuntime = result.runtime;
+        state.selectedRuntimeUsage = result.usage || [];
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        state.selectedSquad = null;
+        state.selectedProject = null;
+        state.selectedAgent = null;
+        renderRuntimeDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
       }
@@ -1790,6 +1829,9 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectResources = [];
       state.selectedAgentId = null;
       state.selectedAgent = null;
+      state.selectedRuntimeId = null;
+      state.selectedRuntime = null;
+      state.selectedRuntimeUsage = [];
       els.taskDrawer.classList.remove("open");
     }
 
@@ -1812,6 +1854,22 @@ export function renderMulticaDashboardHtml(): string {
         })
       });
       await loadAgentDetail(state.selectedAgent.id);
+      await refresh({ silent: true });
+    }
+
+    async function updateSelectedRuntime(event) {
+      event.preventDefault();
+      if (!state.selectedRuntime) return;
+      await api("/api/multica/runtimes/" + encodeURIComponent(state.selectedRuntime.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: document.getElementById("runtimeEditName").value,
+          ownerId: document.getElementById("runtimeOwnerId").value || null,
+          visibility: document.getElementById("runtimeVisibility").value,
+          maxConcurrency: Number(document.getElementById("runtimeMaxConcurrency").value || 1)
+        })
+      });
+      await loadRuntimeDetail(state.selectedRuntime.id);
       await refresh({ silent: true });
     }
 
@@ -2776,21 +2834,21 @@ export function renderMulticaDashboardHtml(): string {
         return;
       }
       els.runtimesGrid.innerHTML = state.runtimes.map(runtime => {
-        const tasks = state.tasks.filter(t => t.runtimeId === runtime.id);
-        const active = tasks.filter(isActiveTask).length;
         const last = runtime.lastHeartbeatAt ? timeAgo(runtime.lastHeartbeatAt) : "never";
-        return "<article class=\\"entity-card\\">" +
+        const tokens = Number(runtime.inputTokens || 0) + Number(runtime.outputTokens || 0);
+        return "<article class=\\"entity-card\\" onclick=\\"openRuntime('" + escAttr(runtime.id) + "')\\">" +
           "<div class=\\"entity-head\\">" +
             "<span class=\\"agent-avatar\\">" + esc(runtime.provider.slice(0, 1).toUpperCase()) + "</span>" +
-            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(runtime.name) + "</div><div class=\\"entity-subtitle\\">" + esc(runtime.provider) + " / " + esc(runtime.workspaceId || "local") + "</div></div>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(runtime.name) + "</div><div class=\\"entity-subtitle\\">" + esc(runtime.provider) + " / " + esc(runtime.workspaceId || "local") + " / " + esc(runtime.visibility || "private") + "</div></div>" +
             "<span class=\\"runtime-dot " + (runtime.status === "online" ? "online" : "") + "\\"></span>" +
           "</div>" +
           "<div class=\\"metric-row\\">" +
             renderMetric(runtime.maxConcurrency || 1, "capacity") +
-            renderMetric(active, "active") +
-            renderMetric(tasks.length, "tasks") +
+            renderMetric(runtime.activeTaskCount || 0, "active") +
+            renderMetric(runtime.taskCount || 0, "tasks") +
+            renderMetric(formatCompact(tokens), "tokens") +
           "</div>" +
-          "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(ownerLabel(runtime.ownerId)) + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
         "</article>";
       }).join("");
     }
@@ -2970,6 +3028,48 @@ export function renderMulticaDashboardHtml(): string {
             "<label>Instructions<textarea id=\\"agentEditInstructions\\" placeholder=\\"Optional\\">" + esc(agent.instructions || "") + "</textarea></label>" +
             "<button class=\\"outline\\" type=\\"submit\\">Save agent</button>" +
           "</form>" +
+        "</div>";
+    }
+
+    function renderRuntimeDrawer(options = {}) {
+      if (options.loading || !state.selectedRuntime) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Runtime detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const runtime = state.selectedRuntime;
+      const totalTokens = Number(runtime.inputTokens || 0) + Number(runtime.outputTokens || 0);
+      const last = runtime.lastHeartbeatAt ? timeAgo(runtime.lastHeartbeatAt) : "never";
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(runtime.name || "") + "</strong><span>" + esc(runtime.provider) + " / " + esc(shortId(runtime.id)) + "</span></div>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(runtime.maxConcurrency || 1, "capacity") +
+            renderMetric(runtime.activeTaskCount || 0, "active") +
+            renderMetric(runtime.completedTaskCount || 0, "done") +
+            renderMetric(formatCompact(totalTokens), "tokens") +
+          "</div>" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(runtime.visibility || "private") + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateSelectedRuntime(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Name<input id=\\"runtimeEditName\\" value=\\"" + escAttr(runtime.name || "") + "\\" required></label>" +
+              "<label>Owner<select id=\\"runtimeOwnerId\\">" + runtimeOwnerOptions(runtime.ownerId) + "</select></label>" +
+              "<label>Visibility<select id=\\"runtimeVisibility\\">" + runtimeVisibilityOptions(runtime.visibility) + "</select></label>" +
+              "<label>Max concurrency<input id=\\"runtimeMaxConcurrency\\" type=\\"number\\" min=\\"1\\" step=\\"1\\" value=\\"" + escAttr(runtime.maxConcurrency || 1) + "\\"></label>" +
+            "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save runtime</button>" +
+          "</form>" +
+          "<div class=\\"detail-grid\\">" +
+            renderCell("Workspace", runtime.workspaceId || "local") +
+            renderCell("Owner", ownerLabel(runtime.ownerId)) +
+            renderCell("Input tokens", formatCompact(runtime.inputTokens || 0)) +
+            renderCell("Output tokens", formatCompact(runtime.outputTokens || 0)) +
+          "</div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Usage by model</div><div class=\\"message-list\\">" + renderRuntimeUsageRows() + "</div></div>" +
         "</div>";
     }
 
@@ -3291,6 +3391,16 @@ export function renderMulticaDashboardHtml(): string {
       }).join("");
     }
 
+    function renderRuntimeUsageRows() {
+      if (!state.selectedRuntimeUsage.length) return "<div class=\\"empty-column\\">No usage</div>";
+      return state.selectedRuntimeUsage.map(row =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(row.provider) + "</span><span>" + esc(row.model) + "</span><span>" + esc(String(row.taskCount || 0)) + " tasks</span></div>" +
+          "<div class=\\"message-content\\">" + esc(formatCompact(row.inputTokens || 0)) + " in / " + esc(formatCompact(row.outputTokens || 0)) + " out / " + esc(formatCompact((row.cacheReadTokens || 0) + (row.cacheWriteTokens || 0))) + " cache</div>" +
+        "</div>"
+      ).join("");
+    }
+
     function renderRuntimeStrip() {
       if (!state.runtimes.length) {
         els.runtimeStrip.innerHTML = "<span class=\\"runtime-pill\\"><span class=\\"runtime-dot\\"></span><span>No runtime</span></span>";
@@ -3505,6 +3615,19 @@ export function renderMulticaDashboardHtml(): string {
       return agentOptions(false);
     }
 
+    function runtimeOwnerOptions(current) {
+      const empty = "<option value=\\"\\">Unassigned</option>";
+      return empty + state.members.map(member =>
+        "<option value=\\"" + escAttr(member.id) + "\\" " + (member.id === current ? "selected" : "") + ">" + esc(member.name) + " / " + esc(member.role) + "</option>"
+      ).join("");
+    }
+
+    function runtimeVisibilityOptions(current) {
+      return ["private", "public"].map(value =>
+        "<option value=\\"" + value + "\\" " + (value === current ? "selected" : "") + ">" + value + "</option>"
+      ).join("");
+    }
+
     function refreshSquadMemberOptions() {
       const type = document.getElementById("squadMemberType").value;
       document.getElementById("squadMemberId").innerHTML = squadMemberOptions(type);
@@ -3601,6 +3724,20 @@ export function renderMulticaDashboardHtml(): string {
       return totals.input + " in / " + totals.output + " out";
     }
 
+    function ownerLabel(ownerId) {
+      if (!ownerId) return "unassigned";
+      const member = state.members.find(item => item.id === ownerId);
+      return member ? member.name : shortId(ownerId);
+    }
+
+    function formatCompact(value) {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number)) return "0";
+      if (Math.abs(number) >= 1000000) return (number / 1000000).toFixed(1).replace(/\\.0$/, "") + "m";
+      if (Math.abs(number) >= 1000) return (number / 1000).toFixed(1).replace(/\\.0$/, "") + "k";
+      return String(Math.floor(number));
+    }
+
     function runningTasks() {
       return state.tasks.filter(isActiveTask);
     }
@@ -3662,6 +3799,7 @@ export function renderMulticaDashboardHtml(): string {
     window.openAgent = openAgent;
     window.openSquad = openSquad;
     window.openProject = openProject;
+    window.openRuntime = openRuntime;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
@@ -3677,6 +3815,7 @@ export function renderMulticaDashboardHtml(): string {
     window.archiveAutopilot = archiveAutopilot;
     window.archiveAgent = archiveAgent;
     window.updateSelectedAgent = updateSelectedAgent;
+    window.updateSelectedRuntime = updateSelectedRuntime;
     window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.refreshIssueAssigneeOptions = refreshIssueAssigneeOptions;

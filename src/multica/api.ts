@@ -37,12 +37,13 @@ import type {
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
-  UpdateIssueCommentInput,
-  UpdateLabelInput,
-  UpdateProjectInput,
-  UpdateSquadInput,
-  UpdateWorkspaceMemberInput,
-} from "./types.js";
+	  UpdateIssueCommentInput,
+	  UpdateLabelInput,
+	  UpdateProjectInput,
+	  UpdateRuntimeInput,
+	  UpdateSquadInput,
+	  UpdateWorkspaceMemberInput,
+	} from "./types.js";
 
 const log = createLogger("multica-api");
 const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
@@ -124,14 +125,43 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ member: store.archiveWorkspaceMember(c.req.param("id")) });
   });
 
-  app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
-  app.post("/api/multica/runtimes", async (c) => {
-    const body = await readJson<RegisterRuntimeInput>(c);
-    return c.json({ runtime: store.registerRuntime(body) }, 201);
-  });
-  app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
-    store.heartbeatRuntime(c.req.param("id"));
-    return c.json({ ok: true });
+	  app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
+	  app.post("/api/multica/runtimes", async (c) => {
+	    const body = await readJson<RegisterRuntimeInput>(c);
+	    return c.json({ runtime: store.registerRuntime(body) }, 201);
+	  });
+	  app.get("/api/multica/runtimes/:id", (c) => {
+	    const runtime = store.getRuntime(c.req.param("id"));
+	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+	    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
+	  });
+	  app.patch("/api/multica/runtimes/:id", async (c) => {
+	    const body = await readJson<UpdateRuntimeInput>(c);
+	    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
+	  });
+	  app.get("/api/multica/runtimes/:id/usage", (c) => {
+	    const runtime = store.getRuntime(c.req.param("id"));
+	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+	    return c.json({ runtimeId: runtime.id, usage: store.listRuntimeUsage(runtime.id) });
+	  });
+	  app.get("/api/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
+	  app.get("/api/runtimes/:id", (c) => {
+	    const runtime = store.getRuntime(c.req.param("id"));
+	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+	    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
+	  });
+	  app.patch("/api/runtimes/:id", async (c) => {
+	    const body = await readJson<UpdateRuntimeInput>(c);
+	    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
+	  });
+	  app.get("/api/runtimes/:id/usage", (c) => {
+	    const runtime = store.getRuntime(c.req.param("id"));
+	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+	    return c.json({ runtimeId: runtime.id, usage: store.listRuntimeUsage(runtime.id) });
+	  });
+	  app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
+	    store.heartbeatRuntime(c.req.param("id"));
+	    return c.json({ ok: true });
   });
 
   app.get("/api/multica/projects", (c) => {

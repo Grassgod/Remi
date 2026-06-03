@@ -9,6 +9,7 @@ export type MulticaTaskStatus =
   | "cancelled";
 
 export type MulticaRuntimeStatus = "online" | "offline";
+export type MulticaRuntimeVisibility = "private" | "public";
 export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaIssueDependencyType = "blocks" | "blocked_by" | "related";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
@@ -61,11 +62,32 @@ export interface MulticaRuntime {
   name: string;
   provider: MulticaAgentProvider | "any";
   workspaceId: string | null;
+  ownerId: string | null;
+  visibility: MulticaRuntimeVisibility;
   status: MulticaRuntimeStatus;
   maxConcurrency: number;
+  taskCount: number;
+  activeTaskCount: number;
+  completedTaskCount: number;
+  failedTaskCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   lastHeartbeatAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaRuntimeUsage {
+  runtimeId: string | null;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  taskCount: number;
 }
 
 export interface MulticaWorkspaceMember {
@@ -459,7 +481,21 @@ export interface RegisterRuntimeInput {
   name: string;
   provider: MulticaAgentProvider | "any";
   workspaceId?: string | null;
+  workspace_id?: string | null;
+  ownerId?: string | null;
+  owner_id?: string | null;
+  visibility?: MulticaRuntimeVisibility | string;
   maxConcurrency?: number;
+  max_concurrency?: number;
+}
+
+export interface UpdateRuntimeInput {
+  name?: string;
+  ownerId?: string | null;
+  owner_id?: string | null;
+  visibility?: MulticaRuntimeVisibility | string;
+  maxConcurrency?: number;
+  max_concurrency?: number;
 }
 
 export interface CreateIssueInput {

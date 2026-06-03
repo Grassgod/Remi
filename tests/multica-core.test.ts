@@ -91,6 +91,62 @@ describe("Bun Multica core store", () => {
     expect(store.listRuntimes()[0]?.status).toBe("offline");
   });
 
+  it("tracks runtime ownership, visibility, and usage rollups", () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({ name: "Runtime owner", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const runtime = store.registerRuntime({
+      name: "local-codex",
+      provider: "codex",
+      workspace_id: "local",
+      owner_id: member.id,
+      visibility: "public",
+      max_concurrency: 2,
+    });
+    const first = store.createTask({ agentId: agent.id, prompt: "First" });
+    const second = store.createTask({ agentId: agent.id, prompt: "Second" });
+
+    expect(runtime.ownerId).toBe(member.id);
+    expect(runtime.visibility).toBe("public");
+    expect(runtime.maxConcurrency).toBe(2);
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
+    store.startTask(first.id);
+    store.reportTaskUsage(first.id, [
+      { provider: "codex", model: "gpt-5", inputTokens: 100, outputTokens: 25, cacheReadTokens: 5 },
+      { provider: "codex", model: "gpt-5", inputTokens: 40, outputTokens: 10, cacheWriteTokens: 3 },
+    ]);
+    store.reportTaskUsage(second.id, [
+      { provider: "codex", model: "gpt-5-mini", inputTokens: 7, outputTokens: 2 },
+    ]);
+    store.completeTask(first.id, { output: "done" });
+
+    const detailed = store.getRuntime(runtime.id)!;
+    expect(detailed.taskCount).toBe(2);
+    expect(detailed.activeTaskCount).toBe(1);
+    expect(detailed.completedTaskCount).toBe(1);
+    expect(detailed.inputTokens).toBe(147);
+    expect(detailed.outputTokens).toBe(37);
+    expect(detailed.cacheReadTokens).toBe(5);
+    expect(detailed.cacheWriteTokens).toBe(3);
+
+    const usage = store.listRuntimeUsage(runtime.id);
+    expect(usage).toHaveLength(2);
+    expect(usage.find((row) => row.model === "gpt-5")?.taskCount).toBe(1);
+    expect(usage.find((row) => row.model === "gpt-5")?.inputTokens).toBe(140);
+
+    const updated = store.updateRuntime(runtime.id, {
+      name: "codex-shared",
+      ownerId: null,
+      visibility: "private",
+      maxConcurrency: 3,
+    });
+    expect(updated.name).toBe("codex-shared");
+    expect(updated.ownerId).toBeNull();
+    expect(updated.visibility).toBe("private");
+    expect(updated.maxConcurrency).toBe(3);
+  });
+
   it("updates and archives agents from scheduling surfaces", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", allowedTools: ["Read"] });
@@ -729,6 +785,64 @@ describe("Bun Multica API", () => {
 
     const status = await app.request(`/api/daemon/tasks/${task.id}/status`);
     expect((await status.json()).status).toBe("completed");
+  });
+
+  it("serves runtime metadata updates and usage endpoints", async () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({ name: "Ada", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "usage" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/runtimes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "rt_api",
+        name: "API runtime",
+        provider: "codex",
+        workspace_id: "local",
+        owner_id: member.id,
+        visibility: "public",
+        max_concurrency: 2,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.runtime.ownerId).toBe(member.id);
+    expect(createdBody.runtime.visibility).toBe("public");
+    expect(createdBody.runtime.maxConcurrency).toBe(2);
+
+    const claim = await app.request("/api/daemon/runtimes/rt_api/tasks/claim", { method: "POST" });
+    expect((await claim.json()).task.id).toBe(task.id);
+    await app.request(`/api/daemon/tasks/${task.id}/usage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        usage: [{ provider: "codex", model: "gpt-5", inputTokens: 11, outputTokens: 5, cache_read_tokens: 2 }],
+      }),
+    });
+
+    const detail = await app.request("/api/multica/runtimes/rt_api");
+    const detailBody = await detail.json();
+    expect(detailBody.runtime.taskCount).toBe(1);
+    expect(detailBody.runtime.inputTokens).toBe(11);
+    expect(detailBody.usage[0].model).toBe("gpt-5");
+
+    const usage = await app.request("/api/runtimes/rt_api/usage");
+    const usageBody = await usage.json();
+    expect(usageBody.runtimeId).toBe("rt_api");
+    expect(usageBody.usage[0].cacheReadTokens).toBe(2);
+
+    const updated = await app.request("/api/runtimes/rt_api", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner_id: null, visibility: "private", max_concurrency: 4 }),
+    });
+    const updatedBody = await updated.json();
+    expect(updatedBody.runtime.ownerId).toBeNull();
+    expect(updatedBody.runtime.visibility).toBe("private");
+    expect(updatedBody.runtime.maxConcurrency).toBe(4);
   });
 
   it("serves issues as first-class records with linked tasks", async () => {
