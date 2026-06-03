@@ -3359,6 +3359,49 @@ export class MulticaStore {
     return rows.map(toIssueActivity);
   }
 
+  recordSquadLeaderEvaluation(issueId: string, input: {
+    outcome: "action" | "no_action" | "failed" | string;
+    reason?: string | null;
+    taskId?: string | null;
+    actorId?: string | null;
+  }): MulticaIssueActivity {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const outcome = String(input.outcome ?? "").trim();
+    if (outcome !== "action" && outcome !== "no_action" && outcome !== "failed") {
+      throw new Error("outcome must be 'action', 'no_action', or 'failed'");
+    }
+    if (issue.assigneeType !== "squad" || !issue.assigneeId) throw new Error("issue is not assigned to a squad");
+    const squad = this.getSquad(issue.assigneeId);
+    if (!squad) throw new Error("squad not found");
+    const actorId = input.actorId ?? squad.leaderId;
+    if (squad.leaderId && actorId !== squad.leaderId) throw new Error("only the squad leader agent can record evaluations");
+    if (input.taskId) {
+      const task = this.getTask(input.taskId);
+      if (!task || task.issueId !== issue.id) throw new Error("task does not belong to issue");
+    }
+    const id = createId("act");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_issue_activity (id, issue_id, actor_type, actor_id, type, body, data, created_at)
+       VALUES (?, ?, 'agent', ?, 'squad_leader_evaluated', ?, ?, ?)`,
+      [
+        id,
+        issue.id,
+        actorId ?? null,
+        input.reason ?? null,
+        toJson({
+          squad_id: squad.id,
+          task_id: input.taskId ?? null,
+          outcome,
+          reason: input.reason ?? "",
+        }),
+        now,
+      ],
+    );
+    return this.listIssueActivity(issue.id).find((activity) => activity.id === id)!;
+  }
+
   listIssueTimeline(issueId: string, options: { ascending?: boolean } = {}): MulticaTimelineEntry[] {
     if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
     const entries: MulticaTimelineEntry[] = [

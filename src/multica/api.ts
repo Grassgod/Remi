@@ -325,6 +325,58 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (!result) return c.json({ error: "cloud runtime node not found" }, 404);
     return c.json(result);
   });
+  app.get("/api/cloud-billing/balance", () => cJsonCloudBillingBalance());
+  app.get("/api/cloud-billing/transactions", (c) => c.json(emptyBillingPage(c)));
+  app.get("/api/cloud-billing/batches", (c) => c.json(emptyBillingPage(c)));
+  app.get("/api/cloud-billing/topups", (c) => c.json(emptyBillingPage(c)));
+  app.get("/api/cloud-billing/price-tiers", (c) => c.json([
+    {
+      id: "local-disabled",
+      display_name: "Local Bun Multica",
+      amount_cents: 0,
+      credits: 0,
+      bonus_credits: 0,
+      disabled: true,
+      configured: false,
+    },
+  ]));
+  app.post("/api/cloud-billing/checkout-sessions", async (c) => {
+    const body = await readJson<{ tier_id?: string; customer_email?: string }>(c);
+    return c.json({
+      order_id: `local-${Date.now()}`,
+      session_id: "local-disabled",
+      url: "",
+      tier_id: body.tier_id ?? "local-disabled",
+      configured: false,
+      disabled: true,
+      error: "cloud billing is not configured in local Bun Multica",
+    }, 201);
+  });
+  app.get("/api/cloud-billing/checkout-sessions/:sessionId", (c) => c.json({
+    order_id: `local-${c.req.param("sessionId")}`,
+    status: "disabled",
+    amount_cents: 0,
+    credits: 0,
+    bonus_credits: 0,
+    currency: "usd",
+    tier_id: "local-disabled",
+    configured: false,
+  }));
+  app.post("/api/cloud-billing/portal-sessions", () => cJsonCloudBillingPortal());
+  app.post("/api/webhooks/stripe", (c) => c.json({
+    received: true,
+    configured: false,
+    mode: "local",
+  }, 202));
+  app.post("/api/contact-sales", async (c) => {
+    const body = await readJson<Record<string, unknown>>(c);
+    return c.json({
+      id: `local-contact-${Date.now()}`,
+      status: "received",
+      mode: "local",
+      request: body,
+    }, 201);
+  });
   app.get("/api/me", (c) => c.json(store.getCurrentUser()));
   app.patch("/api/me", async (c) => {
     const body = await readJson<any>(c);
@@ -413,6 +465,29 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     can_manage: true,
   }));
   app.delete("/api/workspaces/:id/github/installations/:installationId", (c) => c.body(null, 204));
+  app.get("/api/workspaces/:id/lark/installations", (c) => c.json({
+    installations: [],
+    configured: false,
+    install_supported: false,
+    workspace_id: c.req.param("id"),
+  }));
+  app.post("/api/workspaces/:id/lark/install/begin", (c) => c.json({
+    session_id: `local-lark-${Date.now()}`,
+    qr_code_url: "",
+    expires_in_seconds: 0,
+    poll_interval_seconds: 5,
+    configured: false,
+    status: "error",
+    error_reason: "not_configured",
+    error_message: "Lark integration is not configured in local Bun Multica",
+  }, 202));
+  app.get("/api/workspaces/:id/lark/install/:sessionId/status", (c) => c.json({
+    status: "error",
+    error_reason: "not_configured",
+    error_message: "Lark integration is not configured in local Bun Multica",
+    session_id: c.req.param("sessionId"),
+  }));
+  app.delete("/api/workspaces/:id/lark/installations/:installationId", (c) => c.body(null, 204));
   app.delete("/api/workspaces/:id/invitations/:invitationId", (c) => {
     const revoked = store.revokeWorkspaceInvitation(c.req.param("id"), c.req.param("invitationId"));
     if (!revoked) return c.json({ error: "invitation not found" }, 404);
@@ -433,6 +508,14 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const result = safeDeclineInvitation(store, c.req.param("id"));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.body(null, 204);
+  });
+  app.post("/api/lark/binding/redeem", async (c) => {
+    const body = await readJson<{ token?: string }>(c);
+    return c.json({
+      error: "lark integration is not configured in local Bun Multica",
+      code: "not_configured",
+      token: body.token ?? "",
+    }, 409);
   });
 
   app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
@@ -474,6 +557,27 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.put("/api/agents/:id/skills", async (c) => {
     const body = await readJson<SetAgentSkillsInput>(c);
     return c.json(store.setAgentSkills(c.req.param("id"), body).map(skillSummary));
+  });
+  app.post("/api/agents/:id/skills/add", async (c) => {
+    const body = await readJson<SetAgentSkillsInput>(c);
+    const currentSkillIds = store.listAgentSkills(c.req.param("id"), { includeFiles: false })
+      .map((skill) => skill.id)
+      .filter((id): id is string => Boolean(id));
+    const nextSkillIds = Array.from(new Set([...currentSkillIds, ...(body.skillIds ?? body.skill_ids ?? [])]));
+    return c.json(store.setAgentSkills(c.req.param("id"), { skillIds: nextSkillIds }).map(skillSummary));
+  });
+  app.get("/api/agents/:id/env", (c) => {
+    const agent = store.getAgent(c.req.param("id"));
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    return c.json(agentEnvResponse(agent.id, agent.customEnv));
+  });
+  app.put("/api/agents/:id/env", async (c) => {
+    const agent = store.getAgent(c.req.param("id"));
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    const body = await readJson<{ custom_env?: Record<string, string>; customEnv?: Record<string, string>; env?: Record<string, string> }>(c);
+    const nextEnv = mergeAgentEnv(agent.customEnv, body.custom_env ?? body.customEnv ?? body.env ?? {});
+    const updated = store.updateAgent(agent.id, { customEnv: nextEnv });
+    return c.json(agentEnvResponse(updated.id, updated.customEnv));
   });
   app.get("/api/agents", (c) => c.json(store.listAgents()));
   app.post("/api/agents", async (c) => {
@@ -558,6 +662,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const skill = store.createSkill(imported.skillInput);
     return c.json({ skill, source: imported.source, sourceUrl: imported.sourceUrl }, 201);
   });
+  app.get("/api/multica/skills/search", (c) => {
+    const result = searchSkillsResponse(store, c);
+    return c.json({ ...result, total: result.skills.length });
+  });
   app.get("/api/multica/skills/:id", (c) => {
     const skill = store.getSkill(c.req.param("id"));
     if (!skill) return c.json({ error: "skill not found" }, 404);
@@ -575,6 +683,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ skill: store.archiveSkill(c.req.param("id")) });
   });
   app.get("/api/skills", (c) => c.json(store.listSkills(c.req.query("workspaceId") ?? c.req.query("workspace_id"), { includeFiles: false }).map(skillSummary)));
+  app.get("/api/skills/search", (c) => c.json(searchSkillsResponse(store, c).skills));
   app.post("/api/skills", async (c) => {
     const body = await readJson<CreateSkillInput>(c);
     return c.json(store.createSkill(body), 201);
@@ -734,6 +843,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     return c.json(await store.createAccessToken(body), 201);
+  });
+  app.post("/api/tokens/current/renew", async (c) => {
+    const body = await readJson<Partial<CreateAccessTokenInput>>(c);
+    const token = await store.createAccessToken({
+      workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+      name: body.name ?? "Renewed local token",
+      type: body.type ?? "pat",
+      expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 30,
+    });
+    return c.json({
+      ...token,
+      access_token: token.token,
+      token_type: "bearer",
+    }, 201);
   });
   app.delete("/api/tokens/:id", (c) => {
     store.revokeAccessToken(c.req.param("id"));
@@ -936,6 +1059,30 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const deleted = store.deleteRuntime(c.req.param("id"));
     if (!deleted) return c.json({ error: "runtime not found" }, 404);
     return c.body(null, 204);
+  });
+  app.post("/api/runtimes/:id/archive-agents-and-delete", async (c) => {
+    const body = await readJson<{ expected_active_agent_ids?: string[]; expectedActiveAgentIds?: string[] }>(c);
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const expectedIds = new Set(body.expected_active_agent_ids ?? body.expectedActiveAgentIds ?? []);
+    let agentsArchived = 0;
+    let tasksCancelled = 0;
+    for (const agentId of expectedIds) {
+      const agent = store.getAgent(agentId);
+      if (!agent) continue;
+      tasksCancelled += store.cancelAgentTasks(agent.id);
+      if (!agent.archivedAt) {
+        store.archiveAgent(agent.id);
+        agentsArchived += 1;
+      }
+    }
+    const deleted = store.deleteRuntime(runtime.id);
+    if (!deleted) return c.json({ error: "runtime not found" }, 404);
+    return c.json({
+      status: "deleted",
+      agents_archived: agentsArchived,
+      tasks_cancelled: tasksCancelled,
+    });
   });
   app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
     const ack = store.heartbeatRuntime(c.req.param("id"), {
@@ -1398,6 +1545,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
     return c.json({ progress, total: progress.length });
   });
+  app.get("/api/issues/children", (c) => {
+    const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
+    const issues = parentIds.flatMap((parentId) => store.listChildIssues(parentId));
+    return c.json({ issues, total: issues.length });
+  });
+  app.get("/api/multica/issues/children", (c) => {
+    const parentIds = splitQueryList(c.req.query("parent_ids") ?? c.req.query("parentIds"));
+    const issues = parentIds.flatMap((parentId) => store.listChildIssues(parentId));
+    return c.json({ issues, total: issues.length });
+  });
   app.post("/api/multica/issues/batch-update", async (c) => {
     const body = await readJson<BatchUpdateIssuesInput>(c);
     return c.json(store.batchUpdateIssues(body));
@@ -1514,6 +1671,37 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const task = store.getTask(c.req.param("taskId"));
     if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
+  });
+  app.post("/api/issues/:id/squad-evaluated", async (c) => {
+    const body = await readJson<{
+      outcome?: string;
+      reason?: string | null;
+      task_id?: string | null;
+      taskId?: string | null;
+      actor_id?: string | null;
+      actorId?: string | null;
+    }>(c);
+    try {
+      const activity = store.recordSquadLeaderEvaluation(c.req.param("id"), {
+        outcome: body.outcome ?? "",
+        reason: body.reason ?? null,
+        taskId: c.req.header("X-Task-ID") ?? body.task_id ?? body.taskId ?? null,
+        actorId: c.req.header("X-Agent-ID") ?? body.actor_id ?? body.actorId ?? null,
+      });
+      return c.json({
+        ...activity,
+        issue_id: activity.issueId,
+        actor_type: activity.actorType,
+        actor_id: activity.actorId,
+        created_at: activity.createdAt,
+      }, 201);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith("Issue not found")) return c.json({ error: "issue not found" }, 404);
+      if (message === "squad not found") return c.json({ error: message }, 404);
+      if (message === "only the squad leader agent can record evaluations") return c.json({ error: message }, 403);
+      return c.json({ error: message }, 400);
+    }
   });
   app.get("/api/multica/issues/:id/children", (c) => {
     const children = store.listChildIssues(c.req.param("id"));
@@ -1909,6 +2097,29 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/chat/sessions/:sessionId/messages", (c) => {
     return c.json(store.listChatMessages(c.req.param("sessionId")).map(chatMessageCompatibilityResponse));
   });
+  app.get("/api/chat/sessions/:sessionId/messages/page", (c) => {
+    const limit = Math.max(1, Math.min(parseOptionalInt(c.req.query("limit")) ?? 50, 200));
+    const beforeCreatedAt = c.req.query("before_created_at");
+    const beforeId = c.req.query("before_id");
+    const messages = store.listChatMessages(c.req.param("sessionId")).map(chatMessageCompatibilityResponse);
+    const filtered = beforeCreatedAt
+      ? messages.filter((message) =>
+        message.created_at < beforeCreatedAt ||
+        (message.created_at === beforeCreatedAt && beforeId ? message.id < beforeId : false)
+      )
+      : messages;
+    const pageMessages = filtered.slice(Math.max(0, filtered.length - limit));
+    const hasMore = filtered.length > pageMessages.length;
+    const nextCursor = hasMore && pageMessages[0]
+      ? { created_at: pageMessages[0].created_at, id: pageMessages[0].id }
+      : null;
+    return c.json({
+      messages: pageMessages,
+      limit,
+      has_more: hasMore,
+      next_cursor: nextCursor,
+    });
+  });
   app.post("/api/chat/sessions/:sessionId/messages", async (c) => {
     const body = await readJson<SendChatMessageInput>(c);
     return c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(c.req.param("sessionId"), body)), 201);
@@ -1969,6 +2180,13 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/daemon/tasks/:taskId/start", (c) => {
     return c.json({ task: store.startTask(c.req.param("taskId")) });
+  });
+  app.post("/api/daemon/tasks/:taskId/wait-local-directory", async (c) => {
+    const body = await readJson<{ reason?: string }>(c);
+    store.reportProgress(c.req.param("taskId"), body.reason ? `Waiting for local directory: ${body.reason}` : "Waiting for local directory");
+    const task = store.getTask(c.req.param("taskId"));
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json(taskCompatibilityResponse(task));
   });
   app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
     const body = await readJson<{ summary?: string; step?: number; total?: number }>(c);
@@ -2139,6 +2357,94 @@ function parseOptionalInt(value: string | undefined): number | undefined {
   if (value == null || value === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function emptyBillingPage(c: { req: { query: (name: string) => string | undefined } }): {
+  items: [];
+  total: 0;
+  page: number;
+  page_size: number;
+} {
+  return {
+    items: [],
+    total: 0,
+    page: Math.max(1, parseOptionalInt(c.req.query("page")) ?? 1),
+    page_size: Math.max(1, parseOptionalInt(c.req.query("page_size") ?? c.req.query("pageSize")) ?? 20),
+  };
+}
+
+function cJsonCloudBillingBalance(): Response {
+  return Response.json({
+    owner_id: "local",
+    balance_micro: 0,
+    balance_credit: 0,
+    updated_at: new Date(0).toISOString(),
+    configured: false,
+  });
+}
+
+function cJsonCloudBillingPortal(): Response {
+  return Response.json({
+    url: "",
+    configured: false,
+    disabled: true,
+    error: "cloud billing is not configured in local Bun Multica",
+  }, { status: 201 });
+}
+
+function agentEnvResponse(agentId: string, env: Record<string, string>): {
+  agent_id: string;
+  custom_env: Record<string, string>;
+} {
+  return {
+    agent_id: agentId,
+    custom_env: { ...env },
+  };
+}
+
+function mergeAgentEnv(current: Record<string, string>, input: Record<string, string>): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [key, rawValue] of Object.entries(input)) {
+    const cleanKey = key.trim();
+    if (!cleanKey) continue;
+    const value = String(rawValue ?? "");
+    next[cleanKey] = value === "****" && current[cleanKey] !== undefined ? current[cleanKey] : value;
+  }
+  return next;
+}
+
+function searchSkillsResponse(store: MulticaStore, c: { req: { query: (name: string) => string | undefined } }): {
+  skills: Array<Omit<MulticaSkill, "content" | "files"> & {
+    url: string;
+    source: string;
+    repo: string | null;
+    github_stars: number | null;
+    install_count: number | null;
+  }>;
+} {
+  const query = String(c.req.query("q") ?? "").trim().toLowerCase();
+  const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id");
+  const limit = Math.max(1, Math.min(parseOptionalInt(c.req.query("limit")) ?? 50, 200));
+  const offset = Math.max(0, parseOptionalInt(c.req.query("offset")) ?? 0);
+  const skills = store.listSkills(workspaceId, { includeFiles: false })
+    .filter((skill) => {
+      if (!query) return true;
+      return [
+        skill.name,
+        skill.description ?? "",
+        skill.content ?? "",
+      ].some((value) => value.toLowerCase().includes(query));
+    })
+    .slice(offset, offset + limit)
+    .map((skill) => ({
+      ...skillSummary(skill),
+      url: skill.id ? `local://skills/${skill.id}` : "local://skills",
+      source: "local",
+      repo: null,
+      github_stars: null,
+      install_count: null,
+    }));
+  return { skills };
 }
 
 function issueListQuery(c: { req: { query: (name: string) => string | undefined } }): ListIssuesInput {

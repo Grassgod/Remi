@@ -2388,6 +2388,135 @@ describe("Bun Multica API", () => {
     expect((await cancelledByTaskId.json()).status).toBe("cancelled");
   });
 
+  it("serves upstream client compatibility endpoints for env, billing, lark, chat, and batched children", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const agent = store.createAgent({
+      name: "Compat Codex",
+      provider: "codex",
+      customEnv: { SECRET_TOKEN: "real-value", KEEP_ME: "yes" },
+    });
+    const skill = store.createSkill({ name: "Deploy Helper", description: "Deployment skill", content: "ship it" });
+    const parent = store.createIssue({ title: "Parent issue", workspaceId: "local" });
+    const child = store.createIssue({ title: "Child issue", workspaceId: "local", parentIssueId: parent.id });
+    const runtime = store.registerRuntime({ name: "Compat runtime", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "wait locally" });
+    const chat = store.createChatSession({ agentId: agent.id, title: "Compat chat" });
+    const squad = store.createSquad({ name: "Compat squad", leaderId: agent.id });
+    const squadIssue = store.createIssue({
+      title: "Squad evaluation",
+      workspaceId: "local",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+    const squadTask = store.createTask({ agentId: agent.id, issueId: squadIssue.id, prompt: "evaluate squad" });
+
+    const env = await app.request(`/api/agents/${agent.id}/env`);
+    expect(await env.json()).toMatchObject({ agent_id: agent.id, custom_env: { SECRET_TOKEN: "real-value" } });
+
+    const updatedEnv = await app.request(`/api/agents/${agent.id}/env`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_env: { SECRET_TOKEN: "****", ADDED: "new" } }),
+    });
+    expect((await updatedEnv.json()).custom_env).toEqual({ SECRET_TOKEN: "real-value", ADDED: "new" });
+
+    const addedSkills = await app.request(`/api/agents/${agent.id}/skills/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skill_ids: [skill.id, skill.id] }),
+    });
+    expect((await addedSkills.json()).map((item: any) => item.id)).toEqual([skill.id]);
+
+    const skillSearch = await app.request("/api/skills/search?q=deploy");
+    const skillSearchBody = await skillSearch.json();
+    expect(Array.isArray(skillSearchBody)).toBe(true);
+    expect(skillSearchBody[0].name).toBe("Deploy Helper");
+
+    const batchedChildren = await app.request(`/api/issues/children?parent_ids=${encodeURIComponent(parent.id)}`);
+    expect((await batchedChildren.json()).issues[0].id).toBe(child.id);
+
+    const squadEvaluated = await app.request(`/api/issues/${squadIssue.id}/squad-evaluated`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Agent-ID": agent.id,
+        "X-Task-ID": squadTask.id,
+      },
+      body: JSON.stringify({ outcome: "no_action", reason: "nothing to delegate" }),
+    });
+    const squadEvaluatedBody = await squadEvaluated.json();
+    expect(squadEvaluated.status).toBe(201);
+    expect(squadEvaluatedBody.type).toBe("squad_leader_evaluated");
+    expect(squadEvaluatedBody.data).toMatchObject({ outcome: "no_action", squad_id: squad.id, task_id: squadTask.id });
+
+    await app.request(`/api/chat/sessions/${chat.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "hello page" }),
+    });
+    const chatPage = await app.request(`/api/chat/sessions/${chat.id}/messages/page?limit=1`);
+    const chatPageBody = await chatPage.json();
+    expect(chatPageBody.messages[0].chat_session_id).toBe(chat.id);
+    expect(chatPageBody.limit).toBe(1);
+    expect(chatPageBody.has_more).toBe(false);
+
+    const waitLocalDirectory = await app.request(`/api/daemon/tasks/${task.id}/wait-local-directory`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "/tmp/repo" }),
+    });
+    expect((await waitLocalDirectory.json()).progress_summary).toContain("/tmp/repo");
+
+    const renew = await app.request("/api/tokens/current/renew", { method: "POST" });
+    const renewBody = await renew.json();
+    expect(renew.status).toBe(201);
+    expect(renewBody.access_token).toStartWith("mul_");
+
+    expect(await (await app.request("/api/cloud-billing/balance")).json()).toMatchObject({
+      owner_id: "local",
+      balance_micro: 0,
+      balance_credit: 0,
+      configured: false,
+    });
+    expect((await (await app.request("/api/cloud-billing/transactions?page=2&page_size=5")).json()).page).toBe(2);
+    expect((await (await app.request("/api/cloud-billing/price-tiers")).json())[0].configured).toBe(false);
+    expect((await (await app.request("/api/cloud-billing/checkout-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tier_id: "local-disabled" }),
+    })).json()).session_id).toBe("local-disabled");
+    expect((await (await app.request("/api/cloud-billing/portal-sessions", { method: "POST" })).json()).configured).toBe(false);
+
+    const larkList = await app.request("/api/workspaces/local/lark/installations");
+    expect(await larkList.json()).toMatchObject({ configured: false, install_supported: false, installations: [] });
+    expect((await (await app.request("/api/workspaces/local/lark/install/begin?agent_id=agt", { method: "POST" })).json()).error_reason).toBe("not_configured");
+    expect((await (await app.request("/api/workspaces/local/lark/install/session-1/status")).json()).status).toBe("error");
+    expect((await app.request("/api/workspaces/local/lark/installations/lin_1", { method: "DELETE" })).status).toBe(204);
+    expect((await app.request("/api/lark/binding/redeem", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "lark-token" }),
+    })).status).toBe(409);
+
+    expect((await app.request("/api/webhooks/stripe", { method: "POST" })).status).toBe(202);
+    expect((await app.request("/api/contact-sales", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "buyer@example.com" }),
+    })).status).toBe(201);
+
+    const cascade = await app.request(`/api/runtimes/${runtime.id}/archive-agents-and-delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_active_agent_ids: [agent.id] }),
+    });
+    const cascadeBody = await cascade.json();
+    expect(cascadeBody).toEqual({ status: "deleted", agents_archived: 1, tasks_cancelled: 3 });
+    expect(store.getRuntime(runtime.id)).toBeNull();
+    expect(store.getAgent(agent.id)?.archivedAt).toBeString();
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
