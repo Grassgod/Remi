@@ -1255,6 +1255,9 @@ export function renderMulticaDashboardHtml(): string {
           <div class="entity-grid" id="runtimesGrid"></div>
         </div>
       </section>
+      <section class="page" id="inboxPage">
+        <div class="list active" id="inboxList"></div>
+      </section>
       <section class="page" id="placeholderPage">
         <div class="placeholder-panel">
           <div class="placeholder-card">
@@ -1358,6 +1361,7 @@ export function renderMulticaDashboardHtml(): string {
       projects: [],
       squads: [],
       autopilots: [],
+      inboxItems: [],
       mode: "board",
       activeOnly: false,
       agentFilter: "all",
@@ -1393,6 +1397,7 @@ export function renderMulticaDashboardHtml(): string {
       autopilotsPage: document.getElementById("autopilotsPage"),
       squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
+      inboxPage: document.getElementById("inboxPage"),
       placeholderPage: document.getElementById("placeholderPage"),
       placeholderTitle: document.getElementById("placeholderTitle"),
       placeholderText: document.getElementById("placeholderText"),
@@ -1403,6 +1408,7 @@ export function renderMulticaDashboardHtml(): string {
       autopilotsGrid: document.getElementById("autopilotsGrid"),
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
+      inboxList: document.getElementById("inboxList"),
       agentSelect: document.getElementById("agentSelect"),
       chatAgent: document.getElementById("chatAgent"),
       notice: document.getElementById("notice"),
@@ -1479,7 +1485,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1488,7 +1494,8 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/projects"),
           api("/api/multica/squads"),
           api("/api/multica/autopilots"),
-          api("/api/multica/chats")
+          api("/api/multica/chats"),
+          api("/api/multica/inbox")
         ]);
         state.agents = agents.agents || [];
         state.issues = issues.issues || [];
@@ -1499,6 +1506,7 @@ export function renderMulticaDashboardHtml(): string {
         state.squads = squads.squads || [];
         state.autopilots = autopilots.autopilots || [];
         state.chatSessions = chats.sessions || [];
+        state.inboxItems = inbox.items || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
@@ -1888,6 +1896,12 @@ export function renderMulticaDashboardHtml(): string {
       const textarea = document.getElementById("issueCommentBody");
       if (!select || !textarea || !select.value) return;
       const [type, id] = select.value.split(":", 2);
+      if (type === "all") {
+        const prefixAll = textarea.value && !textarea.value.endsWith(" ") ? " " : "";
+        textarea.value += prefixAll + "@all ";
+        textarea.focus();
+        return;
+      }
       const label = select.options[select.selectedIndex]?.textContent?.split(" / ")[0] || "Target";
       const mention = "[@" + label + "](mention://" + type + "/" + id + ")";
       const prefix = textarea.value && !textarea.value.endsWith(" ") ? " " : "";
@@ -2086,6 +2100,22 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function markInboxRead(id) {
+      await api("/api/multica/inbox/" + encodeURIComponent(id) + "/read", { method: "POST" });
+      await refresh({ silent: true });
+    }
+
+    async function archiveInbox(id) {
+      await api("/api/multica/inbox/" + encodeURIComponent(id) + "/archive", { method: "POST" });
+      await refresh({ silent: true });
+    }
+
+    async function openInboxIssue(inboxId, issueId) {
+      await markInboxRead(inboxId);
+      switchPage("issues");
+      openIssue(issueId);
+    }
+
     function openSearch() {
       els.searchOverlay.classList.add("open");
       els.searchInput.value = "";
@@ -2182,6 +2212,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAutopilots();
       renderAgents();
       renderRuntimes();
+      renderInbox();
       renderRuntimeStrip();
       renderRunningPill();
       renderSearchResults();
@@ -2200,7 +2231,8 @@ export function renderMulticaDashboardHtml(): string {
       els.autopilotsPage.classList.toggle("active", state.page === "autopilots");
       els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
-      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes"].includes(state.page);
+      els.inboxPage.classList.toggle("active", state.page === "inbox");
+      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "inbox"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2507,6 +2539,26 @@ export function renderMulticaDashboardHtml(): string {
           "</div>" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
         "</article>";
+      }).join("");
+    }
+
+    function renderInbox() {
+      if (!els.inboxList) return;
+      if (!state.inboxItems.length) {
+        els.inboxList.innerHTML = "<div class=\\"empty-column\\" style=\\"margin:16px;\\">No inbox items</div>";
+        return;
+      }
+      els.inboxList.innerHTML = state.inboxItems.map(item => {
+        const issue = item.issue;
+        return "<div class=\\"list-row\\" onclick=\\"openInboxIssue('" + escAttr(item.id) + "', '" + escAttr(item.issueId) + "')\\">" +
+          "<span class=\\"priority-dot\\" style=\\"background:" + (item.read ? "transparent" : "var(--brand)") + "\\"></span>" +
+          "<span class=\\"list-id\\">" + esc(issue ? issueLabel(issue) : shortId(item.issueId)) + "</span>" +
+          "<span class=\\"list-title\\">" + esc(item.title || "") + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(item.type) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(timeAgo(item.createdAt)) + "</span>" +
+          "<button class=\\"outline\\" onclick=\\"event.stopPropagation(); markInboxRead('" + escAttr(item.id) + "')\\">Read</button>" +
+          "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveInbox('" + escAttr(item.id) + "')\\">Archive</button>" +
+        "</div>";
       }).join("");
     }
 
@@ -2947,13 +2999,16 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     function mentionOptions() {
+      const memberRows = state.members.map(member =>
+        "<option value=\\"member:" + escAttr(member.id) + "\\">" + esc(member.name) + " / member</option>"
+      ).join("");
       const agentRows = state.agents.map(agent =>
         "<option value=\\"agent:" + escAttr(agent.id) + "\\">" + esc(agent.name) + " / agent</option>"
       ).join("");
       const squadRows = state.squads.map(squad =>
         "<option value=\\"squad:" + escAttr(squad.id) + "\\">" + esc(squad.name) + " / squad</option>"
       ).join("");
-      return "<option value=\\"\\">None</option>" + agentRows + squadRows;
+      return "<option value=\\"\\">None</option><option value=\\"all:all\\">@all</option>" + memberRows + agentRows + squadRows;
     }
 
     function projectOptions(allowEmpty, selectedId = "") {
@@ -3129,6 +3184,9 @@ export function renderMulticaDashboardHtml(): string {
     window.addSelectedIssueComment = addSelectedIssueComment;
     window.setSelectedIssueMetadata = setSelectedIssueMetadata;
     window.deleteSelectedIssueMetadata = deleteSelectedIssueMetadata;
+    window.markInboxRead = markInboxRead;
+    window.archiveInbox = archiveInbox;
+    window.openInboxIssue = openInboxIssue;
   </script>
 </body>
 </html>`;

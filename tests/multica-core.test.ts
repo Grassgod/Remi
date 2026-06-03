@@ -168,6 +168,39 @@ describe("Bun Multica core store", () => {
     expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
   });
 
+  it("notifies subscribed members through inbox items", () => {
+    const store = createStore();
+    const alice = store.createWorkspaceMember({ name: "Alice Reviewer" });
+    const bob = store.createWorkspaceMember({ name: "Bob Approver" });
+    const carol = store.createWorkspaceMember({ name: "Carol Owner" });
+    const issue = store.createIssue({ title: "Notify people", createdBy: alice.id });
+
+    expect(store.listIssueSubscribers(issue.id).map((subscriber) => subscriber.memberId)).toEqual([alice.id]);
+
+    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: bob.id });
+    expect(store.listInboxItems(bob.id).some((item) => item.type === "issue_assigned")).toBe(true);
+
+    store.createIssueComment(issue.id, {
+      authorType: "member",
+      authorId: carol.id,
+      body: `Please review [@Bob Approver](mention://member/${bob.id}) and @Alice Reviewer`,
+    });
+
+    expect(store.listIssueSubscribers(issue.id).map((subscriber) => subscriber.memberId).sort()).toEqual([
+      alice.id,
+      bob.id,
+      carol.id,
+    ].sort());
+    expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_mention")).toHaveLength(1);
+    expect(store.listInboxItems(bob.id).filter((item) => item.type === "comment_created")).toHaveLength(0);
+    expect(store.listInboxItems(alice.id).some((item) => item.type === "comment_mention")).toBe(true);
+
+    const item = store.listInboxItems(bob.id)[0]!;
+    expect(store.markInboxItemRead(item.id).read).toBe(true);
+    expect(store.archiveInboxItem(item.id).archived).toBe(true);
+    expect(store.listInboxItems(bob.id).some((inboxItem) => inboxItem.id === item.id)).toBe(false);
+  });
+
   it("skips agent self-mentions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
@@ -586,6 +619,49 @@ describe("Bun Multica API", () => {
 
     const deleted = await app.request(`/api/multica/issues/${issue.id}/metadata/pipeline_status`, { method: "DELETE" });
     expect((await deleted.json()).metadata).toEqual({});
+  });
+
+  it("serves issue subscribers and member inbox endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const alice = store.createWorkspaceMember({ name: "Alice API" });
+    const bob = store.createWorkspaceMember({ name: "Bob API" });
+    const issue = store.createIssue({ title: "Inbox API", createdBy: alice.id });
+
+    const subscribed = await app.request(`/api/multica/issues/${issue.id}/subscribers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memberId: bob.id, reason: "manual" }),
+    });
+    expect(subscribed.status).toBe(201);
+    expect((await subscribed.json()).subscriber.memberId).toBe(bob.id);
+
+    const subscribers = await app.request(`/api/multica/issues/${issue.id}/subscribers`);
+    expect((await subscribers.json()).subscribers.map((subscriber: any) => subscriber.memberId).sort()).toEqual([
+      alice.id,
+      bob.id,
+    ].sort());
+
+    const commented = await app.request(`/api/multica/issues/${issue.id}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authorType: "member", authorId: alice.id, body: "Can you check this?" }),
+    });
+    expect(commented.status).toBe(201);
+
+    const inbox = await app.request(`/api/multica/inbox?memberId=${encodeURIComponent(bob.id)}`);
+    const inboxBody = await inbox.json();
+    expect(inboxBody.unread).toBe(1);
+    expect(inboxBody.items[0].issue.key).toBe(issue.key);
+
+    const read = await app.request(`/api/multica/inbox/${inboxBody.items[0].id}/read`, { method: "POST" });
+    expect((await read.json()).item.read).toBe(true);
+
+    const archived = await app.request(`/api/multica/inbox/${inboxBody.items[0].id}/archive`, { method: "POST" });
+    expect((await archived.json()).item.archived).toBe(true);
+
+    const afterArchive = await app.request(`/api/multica/inbox?memberId=${encodeURIComponent(bob.id)}`);
+    expect((await afterArchive.json()).items).toHaveLength(0);
   });
 
   it("serves chat session and message endpoints", async () => {

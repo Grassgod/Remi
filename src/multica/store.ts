@@ -21,9 +21,11 @@ import type {
   MulticaAssigneeType,
   MulticaChatMessage,
   MulticaChatSession,
+  MulticaInboxItem,
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaIssueSubscriber,
   MulticaIssueWithTasks,
   MulticaProject,
   MulticaProjectResource,
@@ -34,6 +36,7 @@ import type {
   MulticaTaskMessage,
   MulticaTaskStatus,
   MulticaTaskWithAgent,
+  MulticaSubscriptionReason,
   MulticaWorkspaceMember,
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
@@ -153,6 +156,39 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_issue_activity_issue ON multica_issue_activity(issue_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_subscribers (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT 'manual',
+        created_at TEXT NOT NULL,
+        UNIQUE(issue_id, member_id),
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(member_id) REFERENCES multica_workspace_members(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_subscribers_issue ON multica_issue_subscribers(issue_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_subscribers_member ON multica_issue_subscribers(member_id);
+
+      CREATE TABLE IF NOT EXISTS multica_inbox_items (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        issue_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL DEFAULT 'system',
+        actor_id TEXT,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT,
+        read INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(member_id) REFERENCES multica_workspace_members(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_inbox_member ON multica_inbox_items(member_id, archived, read, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_projects (
         id TEXT PRIMARY KEY,
@@ -609,6 +645,10 @@ export class MulticaStore {
       body: input.title,
       data: { projectId: input.projectId ?? null },
     });
+    if (input.createdBy) {
+      const creator = this.getWorkspaceMember(input.createdBy);
+      if (creator && !creator.archivedAt) this.addIssueSubscriber(id, input.createdBy, "created");
+    }
     return this.getIssue(id)!;
   }
 
@@ -735,6 +775,18 @@ export class MulticaStore {
         prompt: input.prompt?.trim() || current.title,
       });
     }
+    if (assigneeType === "member") {
+      this.addIssueSubscriber(id, assigneeId, "assigned");
+      this.createInboxItem({
+        issueId: id,
+        memberId: assigneeId,
+        type: "issue_assigned",
+        title: `${current.key} assigned to you`,
+        body: current.title,
+        actorType: "system",
+        actorId: null,
+      });
+    }
 
     this.appendIssueActivity(id, {
       actorType: "system",
@@ -760,14 +812,20 @@ export class MulticaStore {
       [id, issueId, input.authorType ?? "member", input.authorId ?? null, body, now, now],
     );
     this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
+    const authorType = input.authorType ?? "member";
+    if (authorType === "member" && input.authorId) {
+      this.addIssueSubscriber(issueId, input.authorId, "commented");
+    }
     this.appendIssueActivity(issueId, {
-      actorType: input.authorType ?? "member",
+      actorType: authorType,
       actorId: input.authorId ?? null,
       type: "comment_created",
       body,
       data: { commentId: id },
     });
     const comment = this.getIssueComment(id)!;
+    const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
+    this.notifySubscribedMembers(issue, "comment_created", "New comment", body, authorType, input.authorId ?? null, mentionedMemberIds);
     this.triggerCommentMentions(issue, comment);
     return comment;
   }
@@ -789,6 +847,63 @@ export class MulticaStore {
       "SELECT * FROM multica_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(issueId) as Row[];
     return rows.map(toIssueActivity);
+  }
+
+  listIssueSubscribers(issueId: string): MulticaIssueSubscriber[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_issue_subscribers WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toIssueSubscriber);
+  }
+
+  addIssueSubscriber(issueId: string, memberId: string, reason: MulticaSubscriptionReason = "manual"): MulticaIssueSubscriber {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const member = this.getWorkspaceMember(memberId);
+    if (!member) throw new Error(`Member not found: ${memberId}`);
+    if (member.archivedAt) throw new Error(`Member is archived: ${memberId}`);
+    const now = nowIso();
+    const id = createId("sub");
+    this.db.run(
+      `INSERT INTO multica_issue_subscribers (id, issue_id, member_id, reason, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(issue_id, member_id) DO UPDATE SET reason = excluded.reason`,
+      [id, issueId, memberId, reason, now],
+    );
+    const row = this.db.query(
+      "SELECT * FROM multica_issue_subscribers WHERE issue_id = ? AND member_id = ?",
+    ).get(issueId, memberId) as Row | null;
+    return toIssueSubscriber(row!);
+  }
+
+  removeIssueSubscriber(issueId: string, memberId: string): void {
+    this.db.run("DELETE FROM multica_issue_subscribers WHERE issue_id = ? AND member_id = ?", [issueId, memberId]);
+  }
+
+  listInboxItems(memberId?: string | null): MulticaInboxItem[] {
+    const resolvedMemberId = memberId ?? this.listWorkspaceMembers()[0]?.id ?? null;
+    if (!resolvedMemberId) return [];
+    const rows = this.db.query(
+      "SELECT * FROM multica_inbox_items WHERE member_id = ? AND archived = 0 ORDER BY created_at DESC",
+    ).all(resolvedMemberId) as Row[];
+    return rows.map((row) => toInboxItem(row, this.getIssue(String(row.issue_id))));
+  }
+
+  markInboxItemRead(id: string): MulticaInboxItem {
+    const existing = this.db.query("SELECT issue_id FROM multica_inbox_items WHERE id = ?").get(id) as { issue_id: string } | null;
+    if (!existing) throw new Error(`Inbox item not found: ${id}`);
+    this.db.run("UPDATE multica_inbox_items SET read = 1 WHERE id = ?", [id]);
+    const row = this.db.query("SELECT * FROM multica_inbox_items WHERE id = ?").get(id) as Row | null;
+    return toInboxItem(row!, this.getIssue(String(row!.issue_id)));
+  }
+
+  archiveInboxItem(id: string): MulticaInboxItem {
+    const rowBefore = this.db.query("SELECT issue_id FROM multica_inbox_items WHERE id = ?").get(id) as { issue_id: string } | null;
+    if (!rowBefore) throw new Error(`Inbox item not found: ${id}`);
+    this.db.run("UPDATE multica_inbox_items SET archived = 1, read = 1 WHERE id = ?", [id]);
+    const row = this.db.query("SELECT * FROM multica_inbox_items WHERE id = ?").get(id) as Row | null;
+    return toInboxItem(row!, this.getIssue(String(row!.issue_id)));
   }
 
   listIssueMetadata(issueId: string): Record<string, string | number | boolean> {
@@ -1729,6 +1844,88 @@ export class MulticaStore {
     return active.length;
   }
 
+  private createInboxItem(input: {
+    issueId: string;
+    memberId: string;
+    type: string;
+    title: string;
+    body?: string | null;
+    actorType?: string;
+    actorId?: string | null;
+  }): MulticaInboxItem | null {
+    const issue = this.getIssue(input.issueId);
+    if (!issue) throw new Error(`Issue not found: ${input.issueId}`);
+    const member = this.getWorkspaceMember(input.memberId);
+    if (!member || member.archivedAt) return null;
+    const id = createId("inb");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_inbox_items (
+        id, workspace_id, issue_id, member_id, actor_type, actor_id, type, title, body, read, archived, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`,
+      [
+        id,
+        issue.workspaceId,
+        issue.id,
+        input.memberId,
+        input.actorType ?? "system",
+        input.actorId ?? null,
+        input.type,
+        input.title,
+        input.body ?? null,
+        now,
+      ],
+    );
+    const row = this.db.query("SELECT * FROM multica_inbox_items WHERE id = ?").get(id) as Row | null;
+    return toInboxItem(row!, issue);
+  }
+
+  private notifySubscribedMembers(
+    issue: MulticaIssue,
+    type: string,
+    title: string,
+    body: string | null,
+    actorType: string,
+    actorId: string | null,
+    excludedMemberIds: string[] = [],
+  ): void {
+    const subscribers = this.listIssueSubscribers(issue.id);
+    const excluded = new Set(excludedMemberIds);
+    for (const subscriber of subscribers) {
+      if (actorType === "member" && actorId === subscriber.memberId) continue;
+      if (excluded.has(subscriber.memberId)) continue;
+      this.createInboxItem({
+        issueId: issue.id,
+        memberId: subscriber.memberId,
+        type,
+        title: `${issue.key}: ${title}`,
+        body,
+        actorType,
+        actorId,
+      });
+    }
+  }
+
+  private triggerMemberMentions(issue: MulticaIssue, comment: MulticaIssueComment): string[] {
+    const targets = this.resolveCommentMemberMentionTargets(comment.body, issue.workspaceId);
+    const notified: string[] = [];
+    for (const memberId of targets) {
+      if (comment.authorType === "member" && comment.authorId === memberId) continue;
+      this.addIssueSubscriber(issue.id, memberId, "mentioned");
+      this.createInboxItem({
+        issueId: issue.id,
+        memberId,
+        type: "comment_mention",
+        title: `${issue.key}: mentioned you`,
+        body: comment.body,
+        actorType: comment.authorType,
+        actorId: comment.authorId,
+      });
+      notified.push(memberId);
+    }
+    return notified;
+  }
+
   private triggerCommentMentions(issue: MulticaIssue, comment: MulticaIssueComment): MulticaTask[] {
     const targets = this.resolveCommentMentionTargets(comment.body);
     if (!targets.length) return [];
@@ -1785,6 +1982,33 @@ export class MulticaStore {
     }
     for (const squad of this.listSquads()) {
       if (hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
+    }
+    return targets;
+  }
+
+  private resolveCommentMemberMentionTargets(body: string, workspaceId: string): string[] {
+    const targets: string[] = [];
+    const seen = new Set<string>();
+    const addTarget = (memberId: string) => {
+      if (seen.has(memberId)) return;
+      seen.add(memberId);
+      targets.push(memberId);
+    };
+
+    const markdownMention = /mention:\/\/member\/([A-Za-z0-9_-]+)/g;
+    for (const match of body.matchAll(markdownMention)) {
+      const member = this.getWorkspaceMember(match[1]);
+      if (member && !member.archivedAt) addTarget(member.id);
+    }
+
+    const withoutLinks = body.replace(/\[[^\]]+\]\(mention:\/\/[^)]+\)/g, " ");
+    if (/(^|\s)@all(?=$|\s|[.,:;!?])/i.test(withoutLinks)) {
+      for (const member of this.listWorkspaceMembers(workspaceId)) addTarget(member.id);
+      return targets;
+    }
+
+    for (const member of this.listWorkspaceMembers(workspaceId)) {
+      if (hasPlainMention(withoutLinks, member.name)) addTarget(member.id);
     }
     return targets;
   }
@@ -2144,6 +2368,34 @@ function toIssueActivity(row: Row): MulticaIssueActivity {
     body: nullableString(row.body),
     data: row.data == null ? null : parseJson(row.data, null),
     createdAt: String(row.created_at),
+  };
+}
+
+function toIssueSubscriber(row: Row): MulticaIssueSubscriber {
+  return {
+    id: String(row.id),
+    issueId: String(row.issue_id),
+    memberId: String(row.member_id),
+    reason: String(row.reason ?? "manual") as MulticaSubscriptionReason,
+    createdAt: String(row.created_at),
+  };
+}
+
+function toInboxItem(row: Row, issue: MulticaIssue | null): MulticaInboxItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    issueId: String(row.issue_id),
+    memberId: String(row.member_id),
+    actorType: String(row.actor_type ?? "system"),
+    actorId: nullableString(row.actor_id),
+    type: String(row.type),
+    title: String(row.title ?? ""),
+    body: nullableString(row.body),
+    read: Number(row.read ?? 0) === 1,
+    archived: Number(row.archived ?? 0) === 1,
+    createdAt: String(row.created_at),
+    issue,
   };
 }
 

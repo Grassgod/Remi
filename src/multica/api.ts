@@ -22,6 +22,7 @@ import type {
   RemoveSquadMemberInput,
   RunAutopilotInput,
   SendChatMessageInput,
+  MulticaSubscriptionReason,
   UpdateAgentInput,
   UpdateAutopilotInput,
   UpdateChatSessionInput,
@@ -32,6 +33,7 @@ import type {
 } from "./types.js";
 
 const log = createLogger("multica-api");
+const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 
 export interface MulticaApiOptions {
   store?: MulticaStore;
@@ -302,6 +304,19 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(c.req.param("id"), body) }, 201);
   });
+  app.get("/api/multica/issues/:id/subscribers", (c) => {
+    return c.json({ subscribers: store.listIssueSubscribers(c.req.param("id")) });
+  });
+  app.post("/api/multica/issues/:id/subscribers", async (c) => {
+    const body = await readJson<{ memberId?: string; reason?: unknown }>(c);
+    return c.json({
+      subscriber: store.addIssueSubscriber(c.req.param("id"), body.memberId ?? "", normalizeSubscriptionReason(body.reason)),
+    }, 201);
+  });
+  app.delete("/api/multica/issues/:id/subscribers/:memberId", (c) => {
+    store.removeIssueSubscriber(c.req.param("id"), c.req.param("memberId"));
+    return c.json({ ok: true });
+  });
   app.get("/api/multica/issues/:id/metadata", (c) => {
     return c.json({ metadata: store.listIssueMetadata(c.req.param("id")) });
   });
@@ -311,6 +326,17 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/issues/:id/metadata/:key", (c) => {
     return c.json({ metadata: store.deleteIssueMetadataKey(c.req.param("id"), c.req.param("key")) });
+  });
+
+  app.get("/api/multica/inbox", (c) => {
+    const items = store.listInboxItems(c.req.query("memberId"));
+    return c.json({ items, total: items.length, unread: items.filter((item) => !item.read).length });
+  });
+  app.post("/api/multica/inbox/:id/read", (c) => {
+    return c.json({ item: store.markInboxItemRead(c.req.param("id")) });
+  });
+  app.post("/api/multica/inbox/:id/archive", (c) => {
+    return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
   });
 
   app.get("/api/multica/chats", (c) => {
@@ -442,4 +468,9 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
   } catch {
     return {} as T;
   }
+}
+
+function normalizeSubscriptionReason(value: unknown): MulticaSubscriptionReason {
+  const reason = String(value ?? "manual") as MulticaSubscriptionReason;
+  return SUBSCRIPTION_REASONS.includes(reason) ? reason : "manual";
 }

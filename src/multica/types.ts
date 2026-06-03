@@ -20,6 +20,7 @@ export type MulticaAutopilotRunStatus = "issue_created" | "running" | "completed
 export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
 export type MulticaChatSessionStatus = "active" | "archived";
 export type MulticaChatMessageRole = "user" | "assistant" | "system";
+export type MulticaSubscriptionReason = "created" | "assigned" | "commented" | "mentioned" | "manual";
 
 export interface MulticaSkillFile {
   path: string;
@@ -144,6 +145,30 @@ export interface MulticaIssueActivity {
   body: string | null;
   data: unknown | null;
   createdAt: string;
+}
+
+export interface MulticaIssueSubscriber {
+  id: string;
+  issueId: string;
+  memberId: string;
+  reason: MulticaSubscriptionReason;
+  createdAt: string;
+}
+
+export interface MulticaInboxItem {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  memberId: string;
+  actorType: string;
+  actorId: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  read: boolean;
+  archived: boolean;
+  createdAt: string;
+  issue: MulticaIssue | null;
 }
 
 export interface MulticaSquad {
