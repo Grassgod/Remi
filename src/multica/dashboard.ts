@@ -1849,11 +1849,58 @@ export function renderMulticaDashboardHtml(): string {
       const issue = state.selectedIssue || state.selectedTask?.issue;
       const body = document.getElementById("issueCommentBody").value.trim();
       if (!issue || !body) return;
+      const parentId = document.getElementById("issueCommentParent")?.value || null;
+      const attachmentIds = splitCsv(document.getElementById("issueCommentAttachmentIds")?.value || "");
       await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/comments", {
         method: "POST",
-        body: JSON.stringify({ authorType: "member", body })
+        body: JSON.stringify({ authorType: "member", body, parentId, attachmentIds })
       });
       document.getElementById("issueCommentBody").value = "";
+      if (document.getElementById("issueCommentAttachmentIds")) document.getElementById("issueCommentAttachmentIds").value = "";
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function reactToSelectedIssue(emoji) {
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/reactions", {
+        method: "POST",
+        body: JSON.stringify({ actorType: "member", actorId: "local", emoji })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function reactToComment(commentId, emoji) {
+      await api("/api/multica/comments/" + encodeURIComponent(commentId) + "/reactions", {
+        method: "POST",
+        body: JSON.stringify({ actorType: "member", actorId: "local", emoji })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function addSelectedIssueAttachment(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      const filename = document.getElementById("issueAttachmentFilename").value.trim();
+      const url = document.getElementById("issueAttachmentUrl").value.trim();
+      if (!filename || !url) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/attachments", {
+        method: "POST",
+        body: JSON.stringify({
+          filename,
+          url,
+          contentType: document.getElementById("issueAttachmentContentType").value.trim() || "application/octet-stream",
+          sizeBytes: Number(document.getElementById("issueAttachmentSize").value || 0),
+          uploaderType: "member",
+          uploaderId: "local"
+        })
+      });
+      document.getElementById("issueAttachmentFilename").value = "";
+      document.getElementById("issueAttachmentUrl").value = "";
       if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
       else await loadTaskDetail(state.selectedTaskId);
     }
@@ -2620,6 +2667,8 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") + "</div>" +
           renderDetailBlock("Description", issue.description || "") +
           renderIssueControls(issue) +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Reactions</div><div class=\\"message-list\\">" + renderReactions(issue.reactions || []) + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Attachments</div><div class=\\"message-list\\">" + renderAttachments(issue.attachments || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Tasks</div><div class=\\"message-list\\">" + renderIssueTasks(issue.tasks || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" +
@@ -2784,10 +2833,26 @@ export function renderMulticaDashboardHtml(): string {
         "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueComment(event)\\" style=\\"padding:0;\\">" +
           "<div class=\\"detail-grid\\">" +
             "<label>Mention<select id=\\"issueMentionTarget\\">" + mentionOptions() + "</select></label>" +
+            "<label>Reply to<select id=\\"issueCommentParent\\">" + commentParentOptions() + "</select></label>" +
             "<button class=\\"outline\\" type=\\"button\\" onclick=\\"insertIssueMention()\\">Insert mention</button>" +
           "</div>" +
+          "<label>Attachment IDs<input id=\\"issueCommentAttachmentIds\\" placeholder=\\"att_..., att_...\\"></label>" +
           "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
           "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
+        "</form>" +
+        "<div class=\\"issue-meta\\">" +
+          "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('👍')\\">👍</button>" +
+          "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('👀')\\">👀</button>" +
+          "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('✅')\\">✅</button>" +
+        "</div>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueAttachment(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Filename<input id=\\"issueAttachmentFilename\\" placeholder=\\"screenshot.png\\"></label>" +
+            "<label>URL<input id=\\"issueAttachmentUrl\\" placeholder=\\"https://...\\"></label>" +
+            "<label>Type<input id=\\"issueAttachmentContentType\\" placeholder=\\"image/png\\"></label>" +
+            "<label>Size<input id=\\"issueAttachmentSize\\" type=\\"number\\" min=\\"0\\" placeholder=\\"0\\"></label>" +
+          "</div>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Add attachment</button>" +
         "</form>" +
         "<div class=\\"detail-block\\" style=\\"padding:0;border:0;\\"><div class=\\"detail-label\\">Metadata</div><div class=\\"message-list\\">" + renderIssueMetadata(issue) + "</div></div>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"setSelectedIssueMetadata(event)\\" style=\\"padding:0;\\">" +
@@ -2815,8 +2880,36 @@ export function renderMulticaDashboardHtml(): string {
 
     function renderIssueComments() {
       if (!state.selectedIssueComments.length) return "<div class=\\"empty-column\\">No comments</div>";
-      return state.selectedIssueComments.map(comment =>
-        "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>" + esc(comment.authorType) + "</span><span>" + esc(timeAgo(comment.createdAt)) + "</span></div><div class=\\"message-content\\">" + esc(comment.body) + "</div></div>"
+      return state.selectedIssueComments.map(comment => {
+        const parent = comment.parentId ? state.selectedIssueComments.find(item => item.id === comment.parentId) : null;
+        return "<div class=\\"message-row\\" style=\\"" + (comment.parentId ? "margin-left:18px;" : "") + "\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(comment.authorType) + "</span><span>" + esc(timeAgo(comment.createdAt)) + "</span>" + (parent ? "<span>reply " + esc(shortId(parent.id)) + "</span>" : "") + "</div>" +
+          "<div class=\\"message-content\\">" + esc(comment.body) + "</div>" +
+          (comment.reactions?.length ? "<div class=\\"issue-meta\\">" + renderReactions(comment.reactions) + "</div>" : "") +
+          (comment.attachments?.length ? "<div class=\\"message-list\\">" + renderAttachments(comment.attachments) + "</div>" : "") +
+          "<div class=\\"issue-meta\\"><button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👍')\\">👍</button><button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👀')\\">👀</button></div>" +
+        "</div>";
+      }).join("");
+    }
+
+    function renderReactions(reactions) {
+      if (!reactions.length) return "<div class=\\"empty-column\\">No reactions</div>";
+      const counts = reactions.reduce((acc, reaction) => {
+        acc[reaction.emoji] = (acc[reaction.emoji] || 0) + 1;
+        return acc;
+      }, {});
+      return Object.entries(counts).map(([emoji, count]) =>
+        "<span class=\\"status-badge\\">" + esc(emoji) + " " + esc(count) + "</span>"
+      ).join("");
+    }
+
+    function renderAttachments(attachments) {
+      if (!attachments.length) return "<div class=\\"empty-column\\">No attachments</div>";
+      return attachments.map(attachment =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(attachment.filename) + "</span><span>" + esc(attachment.contentType || "file") + "</span><span>" + esc(shortId(attachment.id)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(attachment.url) + "</div>" +
+        "</div>"
       ).join("");
     }
 
@@ -3011,6 +3104,12 @@ export function renderMulticaDashboardHtml(): string {
       return "<option value=\\"\\">None</option><option value=\\"all:all\\">@all</option>" + memberRows + agentRows + squadRows;
     }
 
+    function commentParentOptions() {
+      return "<option value=\\"\\">New thread</option>" + state.selectedIssueComments.map(comment =>
+        "<option value=\\"" + escAttr(comment.id) + "\\">" + esc(shortId(comment.id)) + " / " + esc((comment.body || "").slice(0, 48)) + "</option>"
+      ).join("");
+    }
+
     function projectOptions(allowEmpty, selectedId = "") {
       const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
       return empty + state.projects.map(p =>
@@ -3069,6 +3168,10 @@ export function renderMulticaDashboardHtml(): string {
         throw new Error("Metadata value must be true or false");
       }
       return raw;
+    }
+
+    function splitCsv(value) {
+      return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
     }
 
     function renderDetailBlock(label, value) {
@@ -3182,6 +3285,9 @@ export function renderMulticaDashboardHtml(): string {
     window.insertIssueMention = insertIssueMention;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
+    window.reactToSelectedIssue = reactToSelectedIssue;
+    window.reactToComment = reactToComment;
+    window.addSelectedIssueAttachment = addSelectedIssueAttachment;
     window.setSelectedIssueMetadata = setSelectedIssueMetadata;
     window.deleteSelectedIssueMetadata = deleteSelectedIssueMetadata;
     window.markInboxRead = markInboxRead;

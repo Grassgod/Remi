@@ -201,6 +201,47 @@ describe("Bun Multica core store", () => {
     expect(store.listInboxItems(bob.id).some((inboxItem) => inboxItem.id === item.id)).toBe(false);
   });
 
+  it("tracks comment threads, reactions, and attachments", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Collaborate with context" });
+    const issueAttachment = store.createAttachment({
+      issueId: issue.id,
+      uploaderType: "member",
+      uploaderId: "local",
+      filename: "spec.md",
+      url: "https://example.com/spec.md",
+      contentType: "text/markdown",
+      sizeBytes: 42,
+    });
+    const root = store.createIssueComment(issue.id, { body: "Root question" });
+    const replyAttachment = store.createAttachment({
+      uploaderType: "member",
+      uploaderId: "local",
+      filename: "reply.txt",
+      url: "https://example.com/reply.txt",
+      contentType: "text/plain",
+      sizeBytes: 12,
+    });
+    const reply = store.createIssueComment(issue.id, {
+      body: "Thread reply",
+      parentId: root.id,
+      attachmentIds: [replyAttachment.id],
+    });
+
+    expect(reply.parentId).toBe(root.id);
+    expect(store.listAttachmentsForIssue(issue.id)[0]?.id).toBe(issueAttachment.id);
+    expect(store.listAttachmentsForComment(reply.id)[0]?.id).toBe(replyAttachment.id);
+
+    expect(store.addIssueReaction(issue.id, { actorType: "member", actorId: "local", emoji: "👍" }).emoji).toBe("👍");
+    store.addIssueReaction(issue.id, { actorType: "member", actorId: "local", emoji: "👍" });
+    expect(store.listIssueReactions(issue.id)).toHaveLength(1);
+
+    expect(store.addCommentReaction(reply.id, { actorType: "agent", actorId: "agt-test", emoji: "👀" }).emoji).toBe("👀");
+    expect(store.getIssueWithTasks(issue.id)?.reactions).toHaveLength(1);
+    expect(store.listIssueComments(issue.id).find((comment) => comment.id === reply.id)?.attachments).toHaveLength(1);
+    expect(store.listIssueComments(issue.id).find((comment) => comment.id === reply.id)?.reactions).toHaveLength(1);
+  });
+
   it("skips agent self-mentions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
@@ -662,6 +703,69 @@ describe("Bun Multica API", () => {
 
     const afterArchive = await app.request(`/api/multica/inbox?memberId=${encodeURIComponent(bob.id)}`);
     expect((await afterArchive.json()).items).toHaveLength(0);
+  });
+
+  it("serves comment threads, reactions, and attachments through API", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "API collaboration" });
+
+    const issueAttachment = await app.request(`/api/multica/issues/${issue.id}/attachments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: "design.png",
+        url: "https://example.com/design.png",
+        contentType: "image/png",
+        sizeBytes: 1024,
+        uploaderType: "member",
+        uploaderId: "local",
+      }),
+    });
+    expect(issueAttachment.status).toBe(201);
+    expect((await issueAttachment.json()).attachment.issueId).toBe(issue.id);
+
+    const root = await app.request(`/api/multica/issues/${issue.id}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Root API comment" }),
+    });
+    const rootBody = await root.json();
+
+    const pendingAttachment = store.createAttachment({
+      filename: "reply.md",
+      url: "https://example.com/reply.md",
+      uploaderType: "member",
+      uploaderId: "local",
+    });
+    const reply = await app.request(`/api/multica/issues/${issue.id}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Reply API comment", parentId: rootBody.comment.id, attachmentIds: [pendingAttachment.id] }),
+    });
+    const replyBody = await reply.json();
+    expect(replyBody.comment.parentId).toBe(rootBody.comment.id);
+    expect(replyBody.comment.attachments[0].id).toBe(pendingAttachment.id);
+
+    const issueReaction = await app.request(`/api/multica/issues/${issue.id}/reactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji: "👍", actor_type: "member", actor_id: "local" }),
+    });
+    expect((await issueReaction.json()).reaction.emoji).toBe("👍");
+
+    const commentReaction = await app.request(`/api/multica/comments/${replyBody.comment.id}/reactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji: "👀", actorType: "agent", actorId: "agt-api" }),
+    });
+    expect((await commentReaction.json()).reaction.emoji).toBe("👀");
+
+    const detail = await app.request(`/api/multica/issues/${issue.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.issue.reactions).toHaveLength(1);
+    expect(detailBody.issue.attachments).toHaveLength(1);
+    expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(1);
   });
 
   it("serves chat session and message endpoints", async () => {

@@ -124,6 +124,8 @@ export interface MulticaIssue {
 
 export interface MulticaIssueWithTasks extends MulticaIssue {
   tasks: MulticaTask[];
+  reactions: MulticaIssueReaction[];
+  attachments: MulticaAttachment[];
 }
 
 export interface MulticaIssueComment {
@@ -131,7 +133,10 @@ export interface MulticaIssueComment {
   issueId: string;
   authorType: string;
   authorId: string | null;
+  parentId: string | null;
   body: string;
+  reactions: MulticaCommentReaction[];
+  attachments: MulticaAttachment[];
   createdAt: string;
   updatedAt: string;
 }
@@ -169,6 +174,40 @@ export interface MulticaInboxItem {
   archived: boolean;
   createdAt: string;
   issue: MulticaIssue | null;
+}
+
+export interface MulticaIssueReaction {
+  id: string;
+  issueId: string;
+  workspaceId: string;
+  actorType: string;
+  actorId: string;
+  emoji: string;
+  createdAt: string;
+}
+
+export interface MulticaCommentReaction {
+  id: string;
+  commentId: string;
+  workspaceId: string;
+  actorType: string;
+  actorId: string;
+  emoji: string;
+  createdAt: string;
+}
+
+export interface MulticaAttachment {
+  id: string;
+  workspaceId: string;
+  issueId: string | null;
+  commentId: string | null;
+  uploaderType: string;
+  uploaderId: string;
+  filename: string;
+  url: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt: string;
 }
 
 export interface MulticaSquad {
@@ -400,7 +439,39 @@ export interface AssignIssueResult {
 export interface CreateIssueCommentInput {
   authorType?: string;
   authorId?: string | null;
+  parentId?: string | null;
+  parent_id?: string | null;
+  attachmentIds?: string[];
+  attachment_ids?: string[];
   body: string;
+}
+
+export interface CreateMulticaReactionInput {
+  actorType?: string;
+  actor_type?: string;
+  actorId?: string | null;
+  actor_id?: string | null;
+  emoji: string;
+}
+
+export interface CreateAttachmentInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  issueId?: string | null;
+  issue_id?: string | null;
+  commentId?: string | null;
+  comment_id?: string | null;
+  uploaderType?: string;
+  uploader_type?: string;
+  uploaderId?: string | null;
+  uploader_id?: string | null;
+  filename: string;
+  url: string;
+  contentType?: string | null;
+  content_type?: string | null;
+  sizeBytes?: number | null;
+  size_bytes?: number | null;
 }
 
 export interface CreateProjectInput {

@@ -7,6 +7,7 @@ import { MulticaStore } from "./store.js";
 import type {
   AddSquadMemberInput,
   AssignIssueInput,
+  CreateAttachmentInput,
   CreateAgentInput,
   CreateAutopilotInput,
   CreateChatSessionInput,
@@ -22,6 +23,7 @@ import type {
   RemoveSquadMemberInput,
   RunAutopilotInput,
   SendChatMessageInput,
+  CreateMulticaReactionInput,
   MulticaSubscriptionReason,
   UpdateAgentInput,
   UpdateAutopilotInput,
@@ -304,6 +306,26 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(c.req.param("id"), body) }, 201);
   });
+  app.get("/api/multica/issues/:id/reactions", (c) => {
+    return c.json({ reactions: store.listIssueReactions(c.req.param("id")) });
+  });
+  app.post("/api/multica/issues/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    return c.json({ reaction: store.addIssueReaction(c.req.param("id"), normalizeReactionInput(body)) }, 201);
+  });
+  app.delete("/api/multica/issues/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    store.removeIssueReaction(c.req.param("id"), normalizeReactionInput(body));
+    return c.json({ ok: true });
+  });
+  app.get("/api/multica/issues/:id/attachments", (c) => {
+    return c.json({ attachments: store.listAttachmentsForIssue(c.req.param("id")) });
+  });
+  app.post("/api/multica/issues/:id/attachments", async (c) => {
+    const body = await readJson<CreateAttachmentInput>(c);
+    const attachment = store.createAttachment({ ...body, issueId: c.req.param("id") });
+    return c.json({ attachment }, 201);
+  });
   app.get("/api/multica/issues/:id/subscribers", (c) => {
     return c.json({ subscribers: store.listIssueSubscribers(c.req.param("id")) });
   });
@@ -337,6 +359,31 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/inbox/:id/archive", (c) => {
     return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
+  });
+
+  app.get("/api/multica/comments/:id/reactions", (c) => {
+    return c.json({ reactions: store.listCommentReactions(c.req.param("id")) });
+  });
+  app.post("/api/multica/comments/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    return c.json({ reaction: store.addCommentReaction(c.req.param("id"), normalizeReactionInput(body)) }, 201);
+  });
+  app.delete("/api/multica/comments/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    store.removeCommentReaction(c.req.param("id"), normalizeReactionInput(body));
+    return c.json({ ok: true });
+  });
+  app.get("/api/multica/comments/:id/attachments", (c) => {
+    return c.json({ attachments: store.listAttachmentsForComment(c.req.param("id")) });
+  });
+  app.get("/api/multica/attachments/:id", (c) => {
+    const attachment = store.getAttachment(c.req.param("id"));
+    if (!attachment) return c.json({ error: "attachment not found" }, 404);
+    return c.json({ attachment });
+  });
+  app.post("/api/multica/attachments", async (c) => {
+    const body = await readJson<CreateAttachmentInput>(c);
+    return c.json({ attachment: store.createAttachment(body) }, 201);
   });
 
   app.get("/api/multica/chats", (c) => {
@@ -473,4 +520,12 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
 function normalizeSubscriptionReason(value: unknown): MulticaSubscriptionReason {
   const reason = String(value ?? "manual") as MulticaSubscriptionReason;
   return SUBSCRIPTION_REASONS.includes(reason) ? reason : "manual";
+}
+
+function normalizeReactionInput(input: CreateMulticaReactionInput): { actorType?: string; actorId?: string | null; emoji: string } {
+  return {
+    actorType: input.actorType ?? input.actor_type ?? "member",
+    actorId: input.actorId ?? input.actor_id ?? "local",
+    emoji: input.emoji,
+  };
 }

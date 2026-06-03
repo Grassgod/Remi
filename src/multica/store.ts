@@ -8,6 +8,7 @@ import type {
   CreateAgentInput,
   CreateAutopilotInput,
   CreateChatSessionInput,
+  CreateAttachmentInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateProjectInput,
@@ -19,12 +20,15 @@ import type {
   MulticaAutopilotRun,
   MulticaAgent,
   MulticaAssigneeType,
+  MulticaAttachment,
   MulticaChatMessage,
   MulticaChatSession,
+  MulticaCommentReaction,
   MulticaInboxItem,
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaIssueReaction,
   MulticaIssueSubscriber,
   MulticaIssueWithTasks,
   MulticaProject,
@@ -135,10 +139,12 @@ export class MulticaStore {
         issue_id TEXT NOT NULL,
         author_type TEXT NOT NULL DEFAULT 'member',
         author_id TEXT,
+        parent_id TEXT,
         body TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(parent_id) REFERENCES multica_issue_comments(id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_issue ON multica_issue_comments(issue_id, created_at);
@@ -189,6 +195,54 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_inbox_member ON multica_inbox_items(member_id, archived, read, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_reactions (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(issue_id, actor_type, actor_id, emoji),
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_reactions_issue ON multica_issue_reactions(issue_id);
+
+      CREATE TABLE IF NOT EXISTS multica_comment_reactions (
+        id TEXT PRIMARY KEY,
+        comment_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(comment_id, actor_type, actor_id, emoji),
+        FOREIGN KEY(comment_id) REFERENCES multica_issue_comments(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_comment_reactions_comment ON multica_comment_reactions(comment_id);
+
+      CREATE TABLE IF NOT EXISTS multica_attachments (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        issue_id TEXT,
+        comment_id TEXT,
+        uploader_type TEXT NOT NULL DEFAULT 'member',
+        uploader_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        url TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(comment_id) REFERENCES multica_issue_comments(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_attachments_issue ON multica_attachments(issue_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_attachments_comment ON multica_attachments(comment_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_attachments_workspace ON multica_attachments(workspace_id);
 
       CREATE TABLE IF NOT EXISTS multica_projects (
         id TEXT PRIMARY KEY,
@@ -381,7 +435,9 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
     this.addColumnIfMissing("multica_issues", "issue_number INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("multica_issues", "issue_key TEXT");
+    this.addColumnIfMissing("multica_issue_comments", "parent_id TEXT");
     this.addColumnIfMissing("multica_tasks", "chat_session_id TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_parent ON multica_issue_comments(parent_id, created_at)");
     this.backfillIssueKeys();
   }
 
@@ -660,7 +716,12 @@ export class MulticaStore {
   getIssueWithTasks(id: string): MulticaIssueWithTasks | null {
     const issue = this.getIssue(id);
     if (!issue) return null;
-    return { ...issue, tasks: this.listTasksForIssue(id) };
+    return {
+      ...issue,
+      tasks: this.listTasksForIssue(id),
+      reactions: this.listIssueReactions(id),
+      attachments: this.listAttachmentsForIssue(id),
+    };
   }
 
   listIssues(): MulticaIssue[] {
@@ -803,14 +864,21 @@ export class MulticaStore {
     if (!input.body?.trim()) throw new Error("Comment body is required");
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const parentId = input.parentId ?? input.parent_id ?? null;
+    if (parentId) {
+      const parent = this.getIssueComment(parentId);
+      if (!parent || parent.issueId !== issueId) throw new Error(`Parent comment not found: ${parentId}`);
+    }
     const id = createId("cmt");
     const now = nowIso();
     const body = input.body.trim();
     this.db.run(
-      `INSERT INTO multica_issue_comments (id, issue_id, author_type, author_id, body, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, issueId, input.authorType ?? "member", input.authorId ?? null, body, now, now],
+      `INSERT INTO multica_issue_comments (id, issue_id, author_type, author_id, parent_id, body, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, issueId, input.authorType ?? "member", input.authorId ?? null, parentId, body, now, now],
     );
+    const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
+    if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
     this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     const authorType = input.authorType ?? "member";
     if (authorType === "member" && input.authorId) {
@@ -832,14 +900,14 @@ export class MulticaStore {
 
   getIssueComment(id: string): MulticaIssueComment | null {
     const row = this.db.query("SELECT * FROM multica_issue_comments WHERE id = ?").get(id) as Row | null;
-    return row ? toIssueComment(row) : null;
+    return row ? this.hydrateIssueComment(toIssueComment(row)) : null;
   }
 
   listIssueComments(issueId: string): MulticaIssueComment[] {
     const rows = this.db.query(
       "SELECT * FROM multica_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(issueId) as Row[];
-    return rows.map(toIssueComment);
+    return rows.map((row) => this.hydrateIssueComment(toIssueComment(row)));
   }
 
   listIssueActivity(issueId: string): MulticaIssueActivity[] {
@@ -904,6 +972,151 @@ export class MulticaStore {
     this.db.run("UPDATE multica_inbox_items SET archived = 1, read = 1 WHERE id = ?", [id]);
     const row = this.db.query("SELECT * FROM multica_inbox_items WHERE id = ?").get(id) as Row | null;
     return toInboxItem(row!, this.getIssue(String(row!.issue_id)));
+  }
+
+  listIssueReactions(issueId: string): MulticaIssueReaction[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_issue_reactions WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toIssueReaction);
+  }
+
+  addIssueReaction(issueId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MulticaIssueReaction {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const actorType = input.actorType ?? "member";
+    const actorId = input.actorId ?? "local";
+    const emoji = input.emoji?.trim();
+    if (!emoji) throw new Error("emoji is required");
+    this.db.run(
+      `INSERT INTO multica_issue_reactions (id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(issue_id, actor_type, actor_id, emoji) DO NOTHING`,
+      [createId("rxn"), issueId, issue.workspaceId, actorType, actorId, emoji, nowIso()],
+    );
+    const row = this.db.query(
+      "SELECT * FROM multica_issue_reactions WHERE issue_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
+    ).get(issueId, actorType, actorId, emoji) as Row | null;
+    return toIssueReaction(row!);
+  }
+
+  removeIssueReaction(issueId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): void {
+    const actorType = input.actorType ?? "member";
+    const actorId = input.actorId ?? "local";
+    const emoji = input.emoji?.trim();
+    if (!emoji) throw new Error("emoji is required");
+    this.db.run(
+      "DELETE FROM multica_issue_reactions WHERE issue_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
+      [issueId, actorType, actorId, emoji],
+    );
+  }
+
+  listCommentReactions(commentId: string): MulticaCommentReaction[] {
+    if (!this.getRawIssueComment(commentId)) throw new Error(`Comment not found: ${commentId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_comment_reactions WHERE comment_id = ? ORDER BY created_at ASC",
+    ).all(commentId) as Row[];
+    return rows.map(toCommentReaction);
+  }
+
+  addCommentReaction(commentId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MulticaCommentReaction {
+    const comment = this.getRawIssueComment(commentId);
+    if (!comment) throw new Error(`Comment not found: ${commentId}`);
+    const issue = this.getIssue(comment.issueId);
+    const actorType = input.actorType ?? "member";
+    const actorId = input.actorId ?? "local";
+    const emoji = input.emoji?.trim();
+    if (!emoji) throw new Error("emoji is required");
+    this.db.run(
+      `INSERT INTO multica_comment_reactions (id, comment_id, workspace_id, actor_type, actor_id, emoji, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(comment_id, actor_type, actor_id, emoji) DO NOTHING`,
+      [createId("rxn"), commentId, issue?.workspaceId ?? "local", actorType, actorId, emoji, nowIso()],
+    );
+    const row = this.db.query(
+      "SELECT * FROM multica_comment_reactions WHERE comment_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
+    ).get(commentId, actorType, actorId, emoji) as Row | null;
+    return toCommentReaction(row!);
+  }
+
+  removeCommentReaction(commentId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): void {
+    const actorType = input.actorType ?? "member";
+    const actorId = input.actorId ?? "local";
+    const emoji = input.emoji?.trim();
+    if (!emoji) throw new Error("emoji is required");
+    this.db.run(
+      "DELETE FROM multica_comment_reactions WHERE comment_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
+      [commentId, actorType, actorId, emoji],
+    );
+  }
+
+  createAttachment(input: CreateAttachmentInput): MulticaAttachment {
+    if (!input.filename?.trim()) throw new Error("filename is required");
+    if (!input.url?.trim()) throw new Error("url is required");
+    const issueId = input.issueId ?? input.issue_id ?? null;
+    const commentId = input.commentId ?? input.comment_id ?? null;
+    const issue = issueId ? this.getIssue(issueId) : null;
+    const comment = commentId ? this.getRawIssueComment(commentId) : null;
+    if (issueId && !issue) throw new Error(`Issue not found: ${issueId}`);
+    if (commentId && !comment) throw new Error(`Comment not found: ${commentId}`);
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? issue?.workspaceId ?? (comment ? this.getIssue(comment.issueId)?.workspaceId : null) ?? "local";
+    const id = input.id ?? createId("att");
+    const uploaderType = input.uploaderType ?? input.uploader_type ?? "member";
+    const uploaderId = input.uploaderId ?? input.uploader_id ?? "local";
+    this.db.run(
+      `INSERT INTO multica_attachments (
+        id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        workspaceId,
+        issueId,
+        commentId,
+        uploaderType,
+        uploaderId,
+        input.filename.trim(),
+        input.url.trim(),
+        input.contentType ?? input.content_type ?? "application/octet-stream",
+        Math.max(0, Number(input.sizeBytes ?? input.size_bytes ?? 0)),
+        nowIso(),
+      ],
+    );
+    return this.getAttachment(id)!;
+  }
+
+  getAttachment(id: string): MulticaAttachment | null {
+    const row = this.db.query("SELECT * FROM multica_attachments WHERE id = ?").get(id) as Row | null;
+    return row ? toAttachment(row) : null;
+  }
+
+  listAttachmentsForIssue(issueId: string): MulticaAttachment[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_attachments WHERE issue_id = ? AND comment_id IS NULL ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toAttachment);
+  }
+
+  listAttachmentsForComment(commentId: string): MulticaAttachment[] {
+    if (!this.getRawIssueComment(commentId)) throw new Error(`Comment not found: ${commentId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_attachments WHERE comment_id = ? ORDER BY created_at ASC",
+    ).all(commentId) as Row[];
+    return rows.map(toAttachment);
+  }
+
+  linkAttachmentsToIssue(issueId: string, attachmentIds: string[]): void {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    for (const attachmentId of attachmentIds) {
+      const attachment = this.getAttachment(attachmentId);
+      if (!attachment) throw new Error(`Attachment not found: ${attachmentId}`);
+      this.db.run(
+        "UPDATE multica_attachments SET issue_id = ?, workspace_id = ? WHERE id = ? AND issue_id IS NULL",
+        [issueId, issue.workspaceId, attachmentId],
+      );
+    }
   }
 
   listIssueMetadata(issueId: string): Record<string, string | number | boolean> {
@@ -1880,6 +2093,35 @@ export class MulticaStore {
     return toInboxItem(row!, issue);
   }
 
+  private getRawIssueComment(id: string): MulticaIssueComment | null {
+    const row = this.db.query("SELECT * FROM multica_issue_comments WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueComment(row) : null;
+  }
+
+  private hydrateIssueComment(comment: MulticaIssueComment): MulticaIssueComment {
+    return {
+      ...comment,
+      reactions: this.listCommentReactions(comment.id),
+      attachments: this.listAttachmentsForComment(comment.id),
+    };
+  }
+
+  private linkAttachmentsToComment(commentId: string, issueId: string, attachmentIds: string[]): void {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    for (const attachmentId of attachmentIds) {
+      const attachment = this.getAttachment(attachmentId);
+      if (!attachment) throw new Error(`Attachment not found: ${attachmentId}`);
+      if (attachment.issueId && attachment.issueId !== issueId) throw new Error(`Attachment belongs to another issue: ${attachmentId}`);
+      this.db.run(
+        `UPDATE multica_attachments
+         SET issue_id = ?, comment_id = ?, workspace_id = ?
+         WHERE id = ? AND comment_id IS NULL`,
+        [issueId, commentId, issue.workspaceId, attachmentId],
+      );
+    }
+  }
+
   private notifySubscribedMembers(
     issue: MulticaIssue,
     type: string,
@@ -2352,7 +2594,10 @@ function toIssueComment(row: Row): MulticaIssueComment {
     issueId: String(row.issue_id),
     authorType: String(row.author_type ?? "member"),
     authorId: nullableString(row.author_id),
+    parentId: nullableString(row.parent_id),
     body: String(row.body ?? ""),
+    reactions: [],
+    attachments: [],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -2396,6 +2641,46 @@ function toInboxItem(row: Row, issue: MulticaIssue | null): MulticaInboxItem {
     archived: Number(row.archived ?? 0) === 1,
     createdAt: String(row.created_at),
     issue,
+  };
+}
+
+function toIssueReaction(row: Row): MulticaIssueReaction {
+  return {
+    id: String(row.id),
+    issueId: String(row.issue_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    actorType: String(row.actor_type ?? "member"),
+    actorId: String(row.actor_id ?? "local"),
+    emoji: String(row.emoji ?? ""),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toCommentReaction(row: Row): MulticaCommentReaction {
+  return {
+    id: String(row.id),
+    commentId: String(row.comment_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    actorType: String(row.actor_type ?? "member"),
+    actorId: String(row.actor_id ?? "local"),
+    emoji: String(row.emoji ?? ""),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toAttachment(row: Row): MulticaAttachment {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    issueId: nullableString(row.issue_id),
+    commentId: nullableString(row.comment_id),
+    uploaderType: String(row.uploader_type ?? "member"),
+    uploaderId: String(row.uploader_id ?? "local"),
+    filename: String(row.filename ?? ""),
+    url: String(row.url ?? ""),
+    contentType: String(row.content_type ?? "application/octet-stream"),
+    sizeBytes: Number(row.size_bytes ?? 0),
+    createdAt: String(row.created_at),
   };
 }
 
