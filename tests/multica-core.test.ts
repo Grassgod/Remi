@@ -134,6 +134,38 @@ describe("Bun Multica core store", () => {
     expect(store.getTask(squadAssigned.task!.id)?.status).toBe("cancelled");
   });
 
+  it("queues comment mentions without changing issue assignee", () => {
+    const store = createStore();
+    const reviewer = store.createAgent({ name: "Review Bot", provider: "codex" });
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    const squad = store.createSquad({ name: "Frontend Squad", leaderId: leader.id });
+    const issue = store.createIssue({ title: "Mention routing" });
+
+    store.createIssueComment(issue.id, {
+      body: `Please inspect this [@Review Bot](mention://agent/${reviewer.id}) and @Frontend Squad`,
+    });
+
+    const tasks = store.listTasks();
+    expect(tasks.map((task) => task.agentId).sort()).toEqual([leader.id, reviewer.id].sort());
+    expect(store.getIssue(issue.id)?.assigneeId).toBeNull();
+    expect(store.getIssue(issue.id)?.status).toBe("open");
+    expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
+  });
+
+  it("skips agent self-mentions", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
+    const issue = store.createIssue({ title: "No recursion" });
+
+    store.createIssueComment(issue.id, {
+      authorType: "agent",
+      authorId: agent.id,
+      body: `I already handled this [@Loop Guard](mention://agent/${agent.id})`,
+    });
+
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
   it("skips archived agents when resolving squad autopilots", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "codex" });

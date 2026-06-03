@@ -1783,6 +1783,18 @@ export function renderMulticaDashboardHtml(): string {
       else await loadTaskDetail(state.selectedTaskId);
     }
 
+    function insertIssueMention() {
+      const select = document.getElementById("issueMentionTarget");
+      const textarea = document.getElementById("issueCommentBody");
+      if (!select || !textarea || !select.value) return;
+      const [type, id] = select.value.split(":", 2);
+      const label = select.options[select.selectedIndex]?.textContent?.split(" / ")[0] || "Target";
+      const mention = "[@" + label + "](mention://" + type + "/" + id + ")";
+      const prefix = textarea.value && !textarea.value.endsWith(" ") ? " " : "";
+      textarea.value += prefix + mention + " ";
+      textarea.focus();
+    }
+
     function openSheet() {
       closeAgentSheet();
       closeEntitySheet();
@@ -2502,6 +2514,10 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"outline\\" type=\\"submit\\">Assign</button>" +
         "</form>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueComment(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Mention<select id=\\"issueMentionTarget\\">" + mentionOptions() + "</select></label>" +
+            "<button class=\\"outline\\" type=\\"button\\" onclick=\\"insertIssueMention()\\">Insert mention</button>" +
+          "</div>" +
           "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
           "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
         "</form>" +
@@ -2680,6 +2696,16 @@ export function renderMulticaDashboardHtml(): string {
       return squad ? "squad: " + squad.name : "squad: " + shortId(item.assigneeId);
     }
 
+    function mentionOptions() {
+      const agentRows = state.agents.map(agent =>
+        "<option value=\\"agent:" + escAttr(agent.id) + "\\">" + esc(agent.name) + " / agent</option>"
+      ).join("");
+      const squadRows = state.squads.map(squad =>
+        "<option value=\\"squad:" + escAttr(squad.id) + "\\">" + esc(squad.name) + " / squad</option>"
+      ).join("");
+      return "<option value=\\"\\">None</option>" + agentRows + squadRows;
+    }
+
     function projectOptions(allowEmpty, selectedId = "") {
       const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
       return empty + state.projects.map(p =>
@@ -2827,6 +2853,7 @@ export function renderMulticaDashboardHtml(): string {
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.refreshIssueAssigneeOptions = refreshIssueAssigneeOptions;
     window.assignSelectedIssue = assignSelectedIssue;
+    window.insertIssueMention = insertIssueMention;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
   </script>

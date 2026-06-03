@@ -678,23 +678,27 @@ export class MulticaStore {
 
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MulticaIssueComment {
     if (!input.body?.trim()) throw new Error("Comment body is required");
-    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const id = createId("cmt");
     const now = nowIso();
+    const body = input.body.trim();
     this.db.run(
       `INSERT INTO multica_issue_comments (id, issue_id, author_type, author_id, body, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, issueId, input.authorType ?? "member", input.authorId ?? null, input.body.trim(), now, now],
+      [id, issueId, input.authorType ?? "member", input.authorId ?? null, body, now, now],
     );
     this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     this.appendIssueActivity(issueId, {
       actorType: input.authorType ?? "member",
       actorId: input.authorId ?? null,
       type: "comment_created",
-      body: input.body.trim(),
+      body,
       data: { commentId: id },
     });
-    return this.getIssueComment(id)!;
+    const comment = this.getIssueComment(id)!;
+    this.triggerCommentMentions(issue, comment);
+    return comment;
   }
 
   getIssueComment(id: string): MulticaIssueComment | null {
@@ -1447,6 +1451,66 @@ export class MulticaStore {
     return active.length;
   }
 
+  private triggerCommentMentions(issue: MulticaIssue, comment: MulticaIssueComment): MulticaTask[] {
+    const targets = this.resolveCommentMentionTargets(comment.body);
+    if (!targets.length) return [];
+
+    const tasks: MulticaTask[] = [];
+    const seenAgents = new Set<string>();
+    for (const target of targets) {
+      const agent = this.resolveRunnableAgentForAssignee(target.assigneeType, target.assigneeId);
+      if (!agent || seenAgents.has(agent.id)) continue;
+      if (comment.authorType === "agent" && comment.authorId === agent.id) continue;
+      seenAgents.add(agent.id);
+      const task = this.createTask({
+        agentId: agent.id,
+        issueId: issue.id,
+        workspaceId: issue.workspaceId,
+        prompt: commentMentionPrompt(comment),
+      });
+      tasks.push(task);
+      this.appendIssueActivity(issue.id, {
+        actorType: "system",
+        actorId: null,
+        type: "comment_mention_triggered",
+        body: `Queued ${agent.name}`,
+        data: {
+          commentId: comment.id,
+          assigneeType: target.assigneeType,
+          assigneeId: target.assigneeId,
+          agentId: agent.id,
+          taskId: task.id,
+        },
+      });
+    }
+    return tasks;
+  }
+
+  private resolveCommentMentionTargets(body: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
+    const targets: Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> = [];
+    const seen = new Set<string>();
+    const addTarget = (assigneeType: "agent" | "squad", assigneeId: string) => {
+      const key = `${assigneeType}:${assigneeId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      targets.push({ assigneeType, assigneeId });
+    };
+
+    const markdownMention = /mention:\/\/(agent|squad)\/([A-Za-z0-9_-]+)/g;
+    for (const match of body.matchAll(markdownMention)) {
+      addTarget(match[1] as "agent" | "squad", match[2]);
+    }
+
+    const withoutLinks = body.replace(/\[[^\]]+\]\(mention:\/\/[^)]+\)/g, " ");
+    for (const agent of this.listAgents()) {
+      if (hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
+    }
+    for (const squad of this.listSquads()) {
+      if (hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
+    }
+    return targets;
+  }
+
   private afterTaskTerminal(task: MulticaTask, status: "completed" | "failed" | "cancelled", body: string | null): void {
     const now = nowIso();
     if (task.issueId) {
@@ -1512,6 +1576,21 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function commentMentionPrompt(comment: MulticaIssueComment): string {
+  return [
+    "A teammate mentioned you in an issue comment.",
+    "",
+    "## Triggering Comment",
+    comment.body,
+  ].join("\n");
+}
+
+function hasPlainMention(body: string, name: string): boolean {
+  const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!escaped) return false;
+  return new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[.,:;!?])`, "i").test(body);
 }
 
 function projectSelect(suffix: string): string {
