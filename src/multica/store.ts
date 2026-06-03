@@ -9,6 +9,7 @@ import type {
   CreateAutopilotInput,
   CreateChatSessionInput,
   CreateAttachmentInput,
+  CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateLabelInput,
@@ -30,6 +31,8 @@ import type {
   MulticaIssueActivity,
   MulticaIssueChildProgress,
   MulticaIssueComment,
+  MulticaIssueDependency,
+  MulticaIssueDependencyType,
   MulticaIssue,
   MulticaIssuePriority,
   MulticaIssueSearchResult,
@@ -185,6 +188,22 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_issue_activity_issue ON multica_issue_activity(issue_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_dependencies (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        issue_id TEXT NOT NULL,
+        depends_on_issue_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(issue_id, depends_on_issue_id, type),
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(depends_on_issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_dependencies_issue ON multica_issue_dependencies(issue_id, type);
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_dependencies_depends_on ON multica_issue_dependencies(depends_on_issue_id, type);
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_dependencies_workspace ON multica_issue_dependencies(workspace_id);
 
       CREATE TABLE IF NOT EXISTS multica_issue_subscribers (
         id TEXT PRIMARY KEY,
@@ -824,6 +843,7 @@ export class MulticaStore {
       attachments: this.listAttachmentsForIssue(id),
       children: this.listChildIssues(id),
       childProgress: this.getChildIssueProgress(id),
+      dependencies: this.listIssueDependencies(id),
     };
   }
 
@@ -892,6 +912,69 @@ export class MulticaStore {
        GROUP BY parent_issue_id`,
     ).get(parentIssueId) as Row | null;
     return row ? toChildIssueProgress(row) : { parentIssueId, total: 0, done: 0 };
+  }
+
+  listIssueDependencies(issueId: string): MulticaIssueDependency[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      `SELECT * FROM multica_issue_dependencies
+       WHERE issue_id = ? OR depends_on_issue_id = ?
+       ORDER BY created_at ASC`,
+    ).all(issueId, issueId) as Row[];
+    return rows.map((row) => this.hydrateIssueDependency(toIssueDependency(row)));
+  }
+
+  createIssueDependency(issueId: string, input: CreateIssueDependencyInput): MulticaIssueDependency {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const dependsOnIssueId = input.dependsOnIssueId ?? input.depends_on_issue_id ?? "";
+    const dependsOnIssue = this.getIssue(dependsOnIssueId);
+    if (!dependsOnIssue) throw new Error(`Dependent issue not found: ${dependsOnIssueId}`);
+    if (issue.id === dependsOnIssue.id) throw new Error("An issue cannot depend on itself");
+    if (issue.workspaceId !== dependsOnIssue.workspaceId) throw new Error("Issue dependency must stay within a workspace");
+    const type = normalizeIssueDependencyType(input.type);
+    const id = input.id ?? createId("dep");
+    const now = nowIso();
+    const existing = this.db.query(
+      `SELECT * FROM multica_issue_dependencies
+       WHERE issue_id = ? AND depends_on_issue_id = ? AND type = ?`,
+    ).get(issue.id, dependsOnIssue.id, type) as Row | null;
+    if (existing) return this.hydrateIssueDependency(toIssueDependency(existing));
+    this.db.run(
+      `INSERT INTO multica_issue_dependencies (
+        id, workspace_id, issue_id, depends_on_issue_id, type, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, issue.workspaceId, issue.id, dependsOnIssue.id, type, now],
+    );
+    this.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_dependency_added",
+      body: `${type} ${dependsOnIssue.key}`,
+      data: { dependencyId: id, dependsOnIssueId: dependsOnIssue.id, type },
+    });
+    return this.getIssueDependency(id)!;
+  }
+
+  getIssueDependency(id: string): MulticaIssueDependency | null {
+    const row = this.db.query("SELECT * FROM multica_issue_dependencies WHERE id = ?").get(id) as Row | null;
+    return row ? this.hydrateIssueDependency(toIssueDependency(row)) : null;
+  }
+
+  deleteIssueDependency(issueId: string, dependencyId: string): void {
+    const dependency = this.getIssueDependency(dependencyId);
+    if (!dependency) return;
+    if (dependency.issueId !== issueId && dependency.dependsOnIssueId !== issueId) {
+      throw new Error(`Dependency not found for issue: ${issueId}`);
+    }
+    this.db.run("DELETE FROM multica_issue_dependencies WHERE id = ?", [dependencyId]);
+    this.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_dependency_removed",
+      body: dependency.type,
+      data: { dependencyId, issueId: dependency.issueId, dependsOnIssueId: dependency.dependsOnIssueId, type: dependency.type },
+    });
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MulticaIssue {
@@ -2619,6 +2702,14 @@ export class MulticaStore {
     };
   }
 
+  private hydrateIssueDependency(dependency: MulticaIssueDependency): MulticaIssueDependency {
+    return {
+      ...dependency,
+      issue: this.getIssue(dependency.issueId),
+      dependsOnIssue: this.getIssue(dependency.dependsOnIssueId),
+    };
+  }
+
   private collectCommentTreeIds(commentId: string): string[] {
     const ids: string[] = [];
     const visit = (id: string) => {
@@ -2967,6 +3058,12 @@ function normalizeIssuePriority(value: string | undefined): MulticaIssuePriority
   throw new Error("priority must be one of urgent, high, medium, low, or none");
 }
 
+function normalizeIssueDependencyType(value: string | undefined): MulticaIssueDependencyType {
+  const type = String(value ?? "related").trim().toLowerCase();
+  if (type === "blocks" || type === "blocked_by" || type === "related") return type;
+  throw new Error("dependency type must be one of blocks, blocked_by, or related");
+}
+
 function normalizeIssuePosition(value: number | null | undefined): number {
   const position = Number(value ?? 0);
   if (!Number.isFinite(position)) throw new Error("position must be a finite number");
@@ -3227,6 +3324,19 @@ function toChildIssueProgress(row: Row): MulticaIssueChildProgress {
     parentIssueId: String(row.parent_issue_id),
     total: Number(row.total ?? 0),
     done: Number(row.done ?? 0),
+  };
+}
+
+function toIssueDependency(row: Row): MulticaIssueDependency {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    issueId: String(row.issue_id),
+    dependsOnIssueId: String(row.depends_on_issue_id),
+    type: normalizeIssueDependencyType(String(row.type ?? "related")),
+    issue: null,
+    dependsOnIssue: null,
+    createdAt: String(row.created_at),
   };
 }
 

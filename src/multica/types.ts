@@ -10,6 +10,7 @@ export type MulticaTaskStatus =
 
 export type MulticaRuntimeStatus = "online" | "offline";
 export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
+export type MulticaIssueDependencyType = "blocks" | "blocked_by" | "related";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
 export type MulticaProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaAssigneeType = "agent" | "member" | "squad";
@@ -138,12 +139,24 @@ export interface MulticaIssueWithTasks extends MulticaIssue {
   attachments: MulticaAttachment[];
   children: MulticaIssue[];
   childProgress: MulticaIssueChildProgress;
+  dependencies: MulticaIssueDependency[];
 }
 
 export interface MulticaIssueChildProgress {
   parentIssueId: string;
   total: number;
   done: number;
+}
+
+export interface MulticaIssueDependency {
+  id: string;
+  workspaceId: string;
+  issueId: string;
+  dependsOnIssueId: string;
+  type: MulticaIssueDependencyType;
+  issue: MulticaIssue | null;
+  dependsOnIssue: MulticaIssue | null;
+  createdAt: string;
 }
 
 export interface MulticaIssueComment {
@@ -517,6 +530,13 @@ export interface AssignIssueInput {
 export interface AssignIssueResult {
   issue: MulticaIssue;
   task: MulticaTask | null;
+}
+
+export interface CreateIssueDependencyInput {
+  id?: string;
+  dependsOnIssueId?: string;
+  depends_on_issue_id?: string;
+  type?: MulticaIssueDependencyType | string;
 }
 
 export interface CreateIssueCommentInput {

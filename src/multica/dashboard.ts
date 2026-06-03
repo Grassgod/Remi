@@ -1376,6 +1376,7 @@ export function renderMulticaDashboardHtml(): string {
       selectedIssue: null,
       selectedIssueChildren: [],
       selectedIssueChildProgress: null,
+      selectedIssueDependencies: [],
       selectedIssueComments: [],
       selectedIssueActivity: [],
       selectedSquadId: null,
@@ -1675,6 +1676,7 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedIssue = issueResult.issue;
         state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
         state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
+        state.selectedIssueDependencies = issueResult.dependencies || issueResult.issue?.dependencies || [];
         state.selectedIssueComments = issueResult.comments || [];
         state.selectedIssueActivity = issueResult.activity || [];
         state.selectedMessages = [];
@@ -1698,11 +1700,13 @@ export function renderMulticaDashboardHtml(): string {
           state.selectedTask.issue = issueResult.issue;
           state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
           state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
+          state.selectedIssueDependencies = issueResult.dependencies || issueResult.issue?.dependencies || [];
           state.selectedIssueComments = issueResult.comments || [];
           state.selectedIssueActivity = issueResult.activity || [];
         } else {
           state.selectedIssueChildren = [];
           state.selectedIssueChildProgress = null;
+          state.selectedIssueDependencies = [];
           state.selectedIssueComments = [];
           state.selectedIssueActivity = [];
         }
@@ -1771,6 +1775,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedIssue = null;
       state.selectedIssueChildren = [];
       state.selectedIssueChildProgress = null;
+      state.selectedIssueDependencies = [];
       state.selectedMessages = [];
       state.selectedIssueComments = [];
       state.selectedIssueActivity = [];
@@ -1884,6 +1889,32 @@ export function renderMulticaDashboardHtml(): string {
       if (document.getElementById("issueCommentAttachmentIds")) document.getElementById("issueCommentAttachmentIds").value = "";
       if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
       else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function addSelectedIssueDependency(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      const dependsOnIssueId = document.getElementById("issueDependencyTarget")?.value || "";
+      const type = document.getElementById("issueDependencyType")?.value || "related";
+      if (!issue || !dependsOnIssueId) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/dependencies", {
+        method: "POST",
+        body: JSON.stringify({ dependsOnIssueId, type })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+      await refresh({ silent: true });
+    }
+
+    async function deleteIssueDependency(dependencyId) {
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/dependencies/" + encodeURIComponent(dependencyId), {
+        method: "DELETE"
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+      await refresh({ silent: true });
     }
 
     async function reactToSelectedIssue(emoji) {
@@ -2828,6 +2859,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Reactions</div><div class=\\"message-list\\">" + renderReactions(issue.reactions || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Attachments</div><div class=\\"message-list\\">" + renderAttachments(issue.attachments || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Child issues</div><div class=\\"message-list\\">" + renderChildIssues() + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Dependencies</div><div class=\\"message-list\\">" + renderIssueDependencies(issue) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Tasks</div><div class=\\"message-list\\">" + renderIssueTasks(issue.tasks || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" +
@@ -3002,6 +3034,30 @@ export function renderMulticaDashboardHtml(): string {
       ).join("");
     }
 
+    function renderIssueDependencies(issue) {
+      const dependencies = state.selectedIssueDependencies || [];
+      if (!dependencies.length) return "<div class=\\"empty-column\\">No dependencies</div>";
+      return dependencies.map(dependency => {
+        const currentIsSource = dependency.issueId === issue.id;
+        const otherIssue = currentIsSource ? dependency.dependsOnIssue : dependency.issue;
+        const direction = currentIsSource ? dependency.type : inverseDependencyType(dependency.type);
+        return "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(direction) + "</span><span>" + esc(otherIssue ? issueLabel(otherIssue) : shortId(currentIsSource ? dependency.dependsOnIssueId : dependency.issueId)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(otherIssue?.title || "") + "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            (otherIssue ? "<button class=\\"outline\\" onclick=\\"openIssue('" + escAttr(otherIssue.id) + "')\\">Open</button>" : "") +
+            "<button class=\\"destructive\\" onclick=\\"deleteIssueDependency('" + escAttr(dependency.id) + "')\\">Remove</button>" +
+          "</div>" +
+        "</div>";
+      }).join("");
+    }
+
+    function inverseDependencyType(type) {
+      if (type === "blocks") return "blocked_by";
+      if (type === "blocked_by") return "blocks";
+      return "related";
+    }
+
     function renderIssueScheduleBadges(issue) {
       const parts = [];
       if (issue.startDate) parts.push("<span class=\\"status-badge\\">start " + esc(new Date(issue.startDate).toLocaleDateString()) + "</span>");
@@ -3039,6 +3095,13 @@ export function renderMulticaDashboardHtml(): string {
           "<label>Attachment IDs<input id=\\"issueCommentAttachmentIds\\" placeholder=\\"att_..., att_...\\"></label>" +
           "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
           "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
+        "</form>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueDependency(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Relation<select id=\\"issueDependencyType\\"><option value=\\"blocks\\">blocks</option><option value=\\"blocked_by\\">blocked_by</option><option value=\\"related\\">related</option></select></label>" +
+            "<label>Issue<select id=\\"issueDependencyTarget\\">" + issueDependencyTargetOptions(issue) + "</select></label>" +
+          "</div>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Add dependency</button>" +
         "</form>" +
         "<div class=\\"issue-meta\\">" +
           "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('👍')\\">👍</button>" +
@@ -3393,6 +3456,14 @@ export function renderMulticaDashboardHtml(): string {
         .filter(item => item.id !== issue.id)
         .map(item => "<option value=\\"" + escAttr(item.id) + "\\" " + (item.id === issue.parentIssueId ? "selected" : "") + ">" + esc(issueLabel(item)) + " / " + esc(item.title || "") + "</option>")
         .join("");
+    }
+
+    function issueDependencyTargetOptions(issue) {
+      const rows = state.issues
+        .filter(item => item.id !== issue.id)
+        .map(item => "<option value=\\"" + escAttr(item.id) + "\\">" + esc(issueLabel(item)) + " / " + esc(item.title || "") + "</option>")
+        .join("");
+      return rows || "<option value=\\"\\">No other issues</option>";
     }
 
     function squadOptions() {

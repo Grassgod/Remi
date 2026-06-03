@@ -11,6 +11,7 @@ import type {
   CreateAgentInput,
   CreateAutopilotInput,
   CreateChatSessionInput,
+  CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueWithTaskInput,
@@ -430,6 +431,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       issue,
       children: issue.children,
       childProgress: issue.childProgress,
+      dependencies: issue.dependencies,
       comments: store.listIssueComments(issue.id),
       activity: store.listIssueActivity(issue.id),
     });
@@ -441,6 +443,30 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/issues/:id/children", (c) => {
     const children = store.listChildIssues(c.req.param("id"));
     return c.json({ issues: children, total: children.length });
+  });
+  app.get("/api/multica/issues/:id/dependencies", (c) => {
+    const dependencies = store.listIssueDependencies(c.req.param("id"));
+    return c.json({ dependencies, total: dependencies.length });
+  });
+  app.get("/api/issues/:id/dependencies", (c) => {
+    const dependencies = store.listIssueDependencies(c.req.param("id"));
+    return c.json({ dependencies, total: dependencies.length });
+  });
+  app.post("/api/multica/issues/:id/dependencies", async (c) => {
+    const body = await readJson<CreateIssueDependencyInput>(c);
+    return c.json({ dependency: store.createIssueDependency(c.req.param("id"), body) }, 201);
+  });
+  app.post("/api/issues/:id/dependencies", async (c) => {
+    const body = await readJson<CreateIssueDependencyInput>(c);
+    return c.json({ dependency: store.createIssueDependency(c.req.param("id"), body) }, 201);
+  });
+  app.delete("/api/multica/issues/:id/dependencies/:dependencyId", (c) => {
+    store.deleteIssueDependency(c.req.param("id"), c.req.param("dependencyId"));
+    return c.json({ ok: true });
+  });
+  app.delete("/api/issues/:id/dependencies/:dependencyId", (c) => {
+    store.deleteIssueDependency(c.req.param("id"), c.req.param("dependencyId"));
+    return c.json({ ok: true });
   });
   app.patch("/api/multica/issues/:id", async (c) => {
     const body = await readJson<UpdateIssueInput>(c);

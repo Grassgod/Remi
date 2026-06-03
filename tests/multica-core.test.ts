@@ -193,6 +193,39 @@ describe("Bun Multica core store", () => {
     expect(() => store.createIssue({ title: "Cross workspace", parentIssueId: remoteParent.id, workspaceId: "local" })).toThrow("another workspace");
   });
 
+  it("manages issue dependencies with workspace and duplicate guards", () => {
+    const store = createStore();
+    const blocker = store.createIssue({ title: "Blocker" });
+    const blocked = store.createIssue({ title: "Blocked" });
+
+    const dependency = store.createIssueDependency(blocked.id, {
+      depends_on_issue_id: blocker.id,
+      type: "blocked_by",
+    });
+    expect(dependency.issueId).toBe(blocked.id);
+    expect(dependency.dependsOnIssueId).toBe(blocker.id);
+    expect(dependency.type).toBe("blocked_by");
+    expect(dependency.issue?.title).toBe("Blocked");
+    expect(dependency.dependsOnIssue?.title).toBe("Blocker");
+    expect(store.listIssueDependencies(blocked.id)).toHaveLength(1);
+    expect(store.listIssueDependencies(blocker.id)).toHaveLength(1);
+
+    const duplicate = store.createIssueDependency(blocked.id, {
+      dependsOnIssueId: blocker.id,
+      type: "blocked_by",
+    });
+    expect(duplicate.id).toBe(dependency.id);
+    expect(store.listIssueDependencies(blocked.id)).toHaveLength(1);
+
+    expect(() => store.createIssueDependency(blocked.id, { dependsOnIssueId: blocked.id })).toThrow("itself");
+    const remote = store.createIssue({ title: "Remote", workspaceId: "remote" });
+    expect(() => store.createIssueDependency(blocked.id, { dependsOnIssueId: remote.id })).toThrow("within a workspace");
+    expect(() => store.createIssueDependency(blocked.id, { dependsOnIssueId: blocker.id, type: "must" })).toThrow("dependency type");
+
+    store.deleteIssueDependency(blocked.id, dependency.id);
+    expect(store.listIssueDependencies(blocked.id)).toEqual([]);
+  });
+
   it("queues comment mentions without changing issue assignee", () => {
     const store = createStore();
     const reviewer = store.createAgent({ name: "Review Bot", provider: "codex" });
@@ -756,6 +789,35 @@ describe("Bun Multica API", () => {
 
     const progress = await app.request("/api/issues/child-progress?workspaceId=local");
     expect((await progress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+  });
+
+  it("serves issue dependency endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const blocker = store.createIssue({ title: "API blocker" });
+    const blocked = store.createIssue({ title: "API blocked" });
+
+    const created = await app.request(`/api/issues/${blocked.id}/dependencies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ depends_on_issue_id: blocker.id, type: "blocked_by" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.dependency.dependsOnIssueId).toBe(blocker.id);
+    expect(createdBody.dependency.dependsOnIssue.title).toBe("API blocker");
+
+    const listed = await app.request(`/api/multica/issues/${blocker.id}/dependencies`);
+    expect((await listed.json()).total).toBe(1);
+
+    const detail = await app.request(`/api/multica/issues/${blocked.id}`);
+    expect((await detail.json()).dependencies[0].id).toBe(createdBody.dependency.id);
+
+    const deleted = await app.request(`/api/issues/${blocked.id}/dependencies/${createdBody.dependency.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(store.listIssueDependencies(blocked.id)).toEqual([]);
   });
 
   it("assigns issues through API endpoints", async () => {
