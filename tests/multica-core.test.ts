@@ -884,6 +884,16 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("/api/multica/autopilots/");
     expect(html).toContain("updateSelectedAutopilot");
   });
+
+  it("renders a workspace members page with edit controls", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain('id="membersPage"');
+    expect(html).toContain('id="membersGrid"');
+    expect(html).toContain("function renderMembers()");
+    expect(html).toContain("function renderMemberDrawer");
+    expect(html).toContain("/api/multica/members/");
+    expect(html).toContain("updateSelectedMember");
+  });
 });
 
 describe("Bun Multica API", () => {

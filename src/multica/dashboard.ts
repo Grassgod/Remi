@@ -1205,6 +1205,7 @@ export function renderMulticaDashboardHtml(): string {
           <div class="nav-item active" data-page="issues"><span class="nav-icon issue"></span><span>Issues</span></div>
           <div class="nav-item" data-page="projects"><span class="nav-icon"></span><span>Projects</span></div>
           <div class="nav-item" data-page="autopilots"><span class="nav-icon"></span><span>Autopilots</span></div>
+          <div class="nav-item" data-page="members"><span class="nav-icon"></span><span>Members</span></div>
           <div class="nav-item" data-page="agents"><span class="nav-icon bot"></span><span>Agents</span></div>
           <div class="nav-item" data-page="squads"><span class="nav-icon bot"></span><span>Squads</span></div>
           <div class="nav-item" data-page="usage"><span class="nav-icon"></span><span>Usage</span></div>
@@ -1255,6 +1256,11 @@ export function renderMulticaDashboardHtml(): string {
       <section class="page" id="autopilotsPage">
         <div class="collection">
           <div class="entity-grid" id="autopilotsGrid"></div>
+        </div>
+      </section>
+      <section class="page" id="membersPage">
+        <div class="collection">
+          <div class="entity-grid" id="membersGrid"></div>
         </div>
       </section>
       <section class="page" id="squadsPage">
@@ -1373,6 +1379,7 @@ export function renderMulticaDashboardHtml(): string {
       issues: { title: "Issues", group: "Workspace" },
       projects: { title: "Projects", group: "Workspace" },
       autopilots: { title: "Autopilots", group: "Workspace" },
+      members: { title: "Members", group: "Workspace" },
       agents: { title: "Agents", group: "Workspace" },
       squads: { title: "Squads", group: "Workspace" },
       usage: { title: "Usage", group: "Workspace", placeholder: "Usage", text: "No usage data." },
@@ -1431,6 +1438,8 @@ export function renderMulticaDashboardHtml(): string {
       selectedAutopilotId: null,
       selectedAutopilot: null,
       selectedAutopilotRuns: [],
+      selectedMemberId: null,
+      selectedMember: null,
       chatSessions: [],
       selectedChatId: null,
       selectedChatSession: null,
@@ -1446,6 +1455,7 @@ export function renderMulticaDashboardHtml(): string {
       agentsPage: document.getElementById("agentsPage"),
       projectsPage: document.getElementById("projectsPage"),
       autopilotsPage: document.getElementById("autopilotsPage"),
+      membersPage: document.getElementById("membersPage"),
       squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
       skillsPage: document.getElementById("skillsPage"),
@@ -1462,6 +1472,7 @@ export function renderMulticaDashboardHtml(): string {
       agentsGrid: document.getElementById("agentsGrid"),
       projectsGrid: document.getElementById("projectsGrid"),
       autopilotsGrid: document.getElementById("autopilotsGrid"),
+      membersGrid: document.getElementById("membersGrid"),
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
       skillsGrid: document.getElementById("skillsGrid"),
@@ -1595,6 +1606,7 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedRuntimeId) await loadRuntimeDetail(state.selectedRuntimeId, { silent: true });
         if (state.selectedSkillId) await loadSkillDetail(state.selectedSkillId, { silent: true });
         if (state.selectedAutopilotId) await loadAutopilotDetail(state.selectedAutopilotId, { silent: true });
+        if (state.selectedMemberId) await loadMemberDetail(state.selectedMemberId, { silent: true });
         if (state.selectedChatId) await loadChatDetail(state.selectedChatId, { silent: true });
         else if (els.chatAgent.value) {
           const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
@@ -1632,17 +1644,7 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     async function createMember() {
-      const name = prompt("Member name");
-      if (!name || !name.trim()) return;
-      try {
-        await api("/api/multica/members", {
-          method: "POST",
-          body: JSON.stringify({ name: name.trim(), workspaceId: els.workspace.value || "local" })
-        });
-        await refresh();
-      } catch (err) {
-        showNotice(String(err.message || err), els.notice);
-      }
+      openEntitySheet("member");
     }
 
     async function createTask(event) {
@@ -1694,6 +1696,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderTaskDrawer({ loading: true });
       await loadTaskDetail(id);
@@ -1707,6 +1710,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderIssueDrawer({ loading: true });
       await loadIssueDetail(id);
@@ -1721,6 +1725,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderSquadDrawer({ loading: true });
       await loadSquadDetail(id);
@@ -1735,6 +1740,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderProjectDrawer({ loading: true });
       await loadProjectDetail(id);
@@ -1749,6 +1755,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderAgentDrawer({ loading: true });
       await loadAgentDetail(id);
@@ -1763,6 +1770,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedSkillId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderRuntimeDrawer({ loading: true });
       await loadRuntimeDetail(id);
@@ -1777,6 +1785,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedAutopilotId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderSkillDrawer({ loading: true });
       await loadSkillDetail(id);
@@ -1791,9 +1800,25 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
+      state.selectedMemberId = null;
       els.taskDrawer.classList.add("open");
       renderAutopilotDrawer({ loading: true });
       await loadAutopilotDetail(id);
+    }
+
+    async function openMember(id) {
+      state.selectedMemberId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      state.selectedSquadId = null;
+      state.selectedProjectId = null;
+      state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
+      state.selectedSkillId = null;
+      state.selectedAutopilotId = null;
+      els.taskDrawer.classList.add("open");
+      renderMemberDrawer({ loading: true });
+      await loadMemberDetail(id);
     }
 
     async function loadIssueDetail(id, options = {}) {
@@ -1937,6 +1962,24 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function loadMemberDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/members/" + encodeURIComponent(id));
+        state.selectedMember = result.member;
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        state.selectedSquad = null;
+        state.selectedProject = null;
+        state.selectedAgent = null;
+        state.selectedRuntime = null;
+        state.selectedSkill = null;
+        state.selectedAutopilot = null;
+        renderMemberDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
     async function loadChatDetail(id, options = {}) {
       try {
         const result = await api("/api/multica/chats/" + encodeURIComponent(id));
@@ -1976,6 +2019,8 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAutopilotId = null;
       state.selectedAutopilot = null;
       state.selectedAutopilotRuns = [];
+      state.selectedMemberId = null;
+      state.selectedMember = null;
       els.taskDrawer.classList.remove("open");
     }
 
@@ -2066,6 +2111,22 @@ export function renderMulticaDashboardHtml(): string {
         })
       });
       await loadAutopilotDetail(state.selectedAutopilot.id);
+      await refresh({ silent: true });
+    }
+
+    async function updateSelectedMember(event) {
+      event.preventDefault();
+      if (!state.selectedMember) return;
+      await api("/api/multica/members/" + encodeURIComponent(state.selectedMember.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: document.getElementById("memberEditName").value,
+          email: document.getElementById("memberEditEmail").value || null,
+          role: document.getElementById("memberEditRole").value || "member",
+          workspaceId: document.getElementById("memberEditWorkspace").value || "local"
+        })
+      });
+      await loadMemberDetail(state.selectedMember.id);
       await refresh({ silent: true });
     }
 
@@ -2387,7 +2448,7 @@ export function renderMulticaDashboardHtml(): string {
       closeSheet();
       closeAgentSheet();
       els.entitySheet.dataset.kind = kind;
-      els.entitySheetTitle.textContent = kind === "project" ? "New project" : kind === "squad" ? "New squad" : kind === "skill" ? "New skill" : "New autopilot";
+      els.entitySheetTitle.textContent = kind === "project" ? "New project" : kind === "squad" ? "New squad" : kind === "skill" ? "New skill" : kind === "member" ? "New member" : "New autopilot";
       els.entityForm.innerHTML = entityFormHtml(kind);
       els.entitySheet.classList.add("open");
       setTimeout(() => els.entityForm.querySelector("input, textarea, select")?.focus(), 50);
@@ -2441,6 +2502,16 @@ export function renderMulticaDashboardHtml(): string {
               description: document.getElementById("entityDescription").value || "",
               content: document.getElementById("entityContent").value || "",
               files: parseSkillFiles(document.getElementById("entityFiles").value)
+            })
+          });
+        } else if (kind === "member") {
+          await api("/api/multica/members", {
+            method: "POST",
+            body: JSON.stringify({
+              name: document.getElementById("entityTitle").value,
+              email: document.getElementById("entityEmail").value || null,
+              role: document.getElementById("entityRole").value || "member",
+              workspaceId: document.getElementById("entityWorkspace").value || "local"
             })
           });
         } else if (kind === "autopilot") {
@@ -2587,6 +2658,16 @@ export function renderMulticaDashboardHtml(): string {
       try {
         await api("/api/multica/autopilots/" + encodeURIComponent(id), { method: "DELETE" });
         if (state.selectedAutopilotId === id) closeDrawer();
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function archiveMember(id) {
+      try {
+        await api("/api/multica/members/" + encodeURIComponent(id), { method: "DELETE" });
+        if (state.selectedMemberId === id) closeDrawer();
         await refresh();
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
@@ -2751,6 +2832,7 @@ export function renderMulticaDashboardHtml(): string {
       renderProjects();
       renderSquads();
       renderAutopilots();
+      renderMembers();
       renderAgents();
       renderRuntimes();
       renderSkills();
@@ -2775,13 +2857,14 @@ export function renderMulticaDashboardHtml(): string {
       els.agentsPage.classList.toggle("active", state.page === "agents");
       els.projectsPage.classList.toggle("active", state.page === "projects");
       els.autopilotsPage.classList.toggle("active", state.page === "autopilots");
+      els.membersPage.classList.toggle("active", state.page === "members");
       els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
       els.skillsPage.classList.toggle("active", state.page === "skills");
       els.settingsPage.classList.toggle("active", state.page === "settings");
       els.inboxPage.classList.toggle("active", state.page === "inbox");
       els.usagePage.classList.toggle("active", state.page === "usage");
-      const isPlaceholder = !["issues", "my-issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "settings", "inbox", "usage"].includes(state.page);
+      const isPlaceholder = !["issues", "my-issues", "agents", "projects", "autopilots", "members", "squads", "runtimes", "skills", "settings", "inbox", "usage"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2893,6 +2976,13 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newAutopilot\\">New autopilot</button></div>";
         document.getElementById("refresh").addEventListener("click", () => refresh());
         document.getElementById("newAutopilot").addEventListener("click", () => openEntitySheet("autopilot"));
+      } else if (state.page === "members") {
+        const assigned = state.issues.filter(issue => issue.assigneeType === "member").length;
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\"><span class=\\"status-badge\\">" + state.members.length + " members</span><span class=\\"status-badge\\">" + assigned + " assigned issues</span></div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newMember\\">New member</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newMember").addEventListener("click", () => openEntitySheet("member"));
       } else if (state.page === "runtimes") {
         els.toolbar.innerHTML =
           "<div class=\\"toolbar-left\\">" +
@@ -3157,6 +3247,31 @@ export function renderMulticaDashboardHtml(): string {
               "<button class=\\"outline\\" onclick=\\"event.stopPropagation(); setAutopilotStatus('" + escAttr(autopilot.id) + "', 'active')\\">Resume</button>") +
             "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveAutopilot('" + escAttr(autopilot.id) + "')\\">Archive</button>" +
           "</div>" +
+        "</article>";
+      }).join("");
+    }
+
+    function renderMembers() {
+      if (!state.members.length) {
+        els.membersGrid.innerHTML = "<div class=\\"empty-column\\">No members</div>";
+        return;
+      }
+      els.membersGrid.innerHTML = state.members.map(member => {
+        const assigned = state.issues.filter(issue => issue.assigneeType === "member" && issue.assigneeId === member.id);
+        const active = assigned.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status)).length;
+        const runtimes = state.runtimes.filter(runtime => runtime.ownerId === member.id).length;
+        return "<article class=\\"entity-card\\" onclick=\\"openMember('" + escAttr(member.id) + "')\\">" +
+          "<div class=\\"entity-head\\">" +
+            "<span class=\\"agent-avatar\\">" + esc(initials(member.name)) + "</span>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(member.name) + "</div><div class=\\"entity-subtitle\\">" + esc(member.role || "member") + " / " + esc(member.workspaceId || "local") + "</div></div>" +
+          "</div>" +
+          "<div class=\\"entity-body\\">" + esc(member.email || "No email") + "</div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(assigned.length, "assigned") +
+            renderMetric(active, "active") +
+            renderMetric(runtimes, "runtimes") +
+          "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveMember('" + escAttr(member.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -3680,6 +3795,63 @@ export function renderMulticaDashboardHtml(): string {
       ).join("");
     }
 
+    function renderMemberDrawer(options = {}) {
+      if (options.loading || !state.selectedMember) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Member detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const member = state.selectedMember;
+      const assigned = state.issues.filter(issue => issue.assigneeType === "member" && issue.assigneeId === member.id);
+      const active = assigned.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status));
+      const runtimes = state.runtimes.filter(runtime => runtime.ownerId === member.id);
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(member.name || "") + "</strong><span>" + esc(member.role || "member") + " / " + esc(shortId(member.id)) + "</span></div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveMember('" + escAttr(member.id) + "')\\">Archive</button>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(assigned.length, "assigned") +
+            renderMetric(active.length, "active") +
+            renderMetric(runtimes.length, "runtimes") +
+          "</div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateSelectedMember(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Name<input id=\\"memberEditName\\" value=\\"" + escAttr(member.name || "") + "\\" required></label>" +
+              "<label>Email<input id=\\"memberEditEmail\\" type=\\"email\\" value=\\"" + escAttr(member.email || "") + "\\" placeholder=\\"name@example.com\\"></label>" +
+              "<label>Role<select id=\\"memberEditRole\\">" + memberRoleOptions(member.role) + "</select></label>" +
+              "<label>Workspace<input id=\\"memberEditWorkspace\\" value=\\"" + escAttr(member.workspaceId || "local") + "\\"></label>" +
+            "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save member</button>" +
+          "</form>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Assigned issues</div><div class=\\"message-list\\">" + renderMemberIssues(assigned) + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Owned runtimes</div><div class=\\"message-list\\">" + renderMemberRuntimes(runtimes) + "</div></div>" +
+        "</div>";
+    }
+
+    function renderMemberIssues(issues) {
+      if (!issues.length) return "<div class=\\"empty-column\\">No assigned issues</div>";
+      return issues.map(issue =>
+        "<div class=\\"message-row\\" onclick=\\"openIssue('" + escAttr(issue.id) + "')\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(issueLabel(issue)) + "</span><span>" + esc(statusLabel(issue.status)) + "</span><span>" + esc(issue.priority || "none") + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(issue.title || "") + "</div>" +
+        "</div>"
+      ).join("");
+    }
+
+    function renderMemberRuntimes(runtimes) {
+      if (!runtimes.length) return "<div class=\\"empty-column\\">No owned runtimes</div>";
+      return runtimes.map(runtime =>
+        "<div class=\\"message-row\\" onclick=\\"openRuntime('" + escAttr(runtime.id) + "')\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(runtime.name) + "</span><span>" + esc(runtime.provider) + "</span><span>" + esc(runtime.status) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(String(runtime.activeTaskCount || 0)) + " active / " + esc(String(runtime.maxConcurrency || 1)) + " capacity</div>" +
+        "</div>"
+      ).join("");
+    }
+
     function renderSquadDrawer(options = {}) {
       if (options.loading || !state.selectedSquad) {
         els.taskDrawer.innerHTML =
@@ -4033,6 +4205,7 @@ export function renderMulticaDashboardHtml(): string {
       pages.issues && rows.push({ type: "Page", title: "Issues", subtitle: state.issues.length + " issues", action: () => switchPage("issues") });
       pages.projects && rows.push({ type: "Page", title: "Projects", subtitle: state.projects.length + " projects", action: () => switchPage("projects") });
       pages.autopilots && rows.push({ type: "Page", title: "Autopilots", subtitle: state.autopilots.length + " autopilots", action: () => switchPage("autopilots") });
+      pages.members && rows.push({ type: "Page", title: "Members", subtitle: state.members.length + " members", action: () => switchPage("members") });
       pages.agents && rows.push({ type: "Page", title: "Agents", subtitle: state.agents.length + " agents", action: () => switchPage("agents") });
       pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
@@ -4042,7 +4215,7 @@ export function renderMulticaDashboardHtml(): string {
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => { switchPage("autopilots"); openAutopilot(a.id); } }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => { switchPage("agents"); openAgent(a.id); } }));
-      state.members.forEach(m => rows.push({ type: "Member", title: m.name, subtitle: m.role + " / " + m.workspaceId, action: () => { state.agentFilter = "members"; switchPage("issues"); } }));
+      state.members.forEach(m => rows.push({ type: "Member", title: m.name, subtitle: m.role + " / " + m.workspaceId, action: () => { switchPage("members"); openMember(m.id); } }));
       state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => { switchPage("squads"); openSquad(s.id); } }));
       state.runtimes.forEach(r => rows.push({ type: "Runtime", title: r.name, subtitle: r.provider + " / " + r.status, action: () => switchPage("runtimes") }));
       state.skills.forEach(s => rows.push({ type: "Skill", title: s.name, subtitle: (s.description || "No description"), action: () => { switchPage("skills"); openSkill(s.id); } }));
@@ -4110,6 +4283,13 @@ export function renderMulticaDashboardHtml(): string {
           "<label>SKILL.md<textarea id=\\"entityContent\\" placeholder=\\"Skill instructions\\"></textarea></label>" +
           "<label>Supporting files<textarea id=\\"entityFiles\\" placeholder=\\"path/to/file.md\\n---\\ncontent\\n===\\nnotes.md\\n---\\nmore content\\"></textarea></label>" +
           "<button class=\\"primary\\" type=\\"submit\\">Create skill</button><div class=\\"notice\\"></div>";
+      }
+      if (kind === "member") {
+        return "<label>Name<input id=\\"entityTitle\\" required placeholder=\\"Member name\\"></label>" +
+          "<label>Email<input id=\\"entityEmail\\" type=\\"email\\" placeholder=\\"name@example.com\\"></label>" +
+          "<label>Role<select id=\\"entityRole\\">" + memberRoleOptions("member") + "</select></label>" +
+          "<label>Workspace<input id=\\"entityWorkspace\\" value=\\"local\\"></label>" +
+          "<button class=\\"primary\\" type=\\"submit\\">Create member</button><div class=\\"notice\\"></div>";
       }
       return "<label>Title<input id=\\"entityTitle\\" required placeholder=\\"Autopilot title\\"></label>" +
         "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
@@ -4217,6 +4397,13 @@ export function renderMulticaDashboardHtml(): string {
     function myIssueMemberOptions() {
       return "<option value=\\"all\\">All members</option>" + state.members.map(member =>
         "<option value=\\"" + escAttr(member.id) + "\\" " + (member.id === state.myIssueMemberId ? "selected" : "") + ">" + esc(member.name) + " / " + esc(member.role) + "</option>"
+      ).join("");
+    }
+
+    function memberRoleOptions(current) {
+      const roles = ["member", "admin", "reviewer", "observer"];
+      return roles.map(role =>
+        "<option value=\\"" + role + "\\" " + (role === (current || "member") ? "selected" : "") + ">" + role + "</option>"
       ).join("");
     }
 
@@ -4556,6 +4743,7 @@ export function renderMulticaDashboardHtml(): string {
     window.openRuntime = openRuntime;
     window.openSkill = openSkill;
     window.openAutopilot = openAutopilot;
+    window.openMember = openMember;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
@@ -4569,6 +4757,7 @@ export function renderMulticaDashboardHtml(): string {
     window.removeSquadMember = removeSquadMember;
     window.setAutopilotStatus = setAutopilotStatus;
     window.archiveAutopilot = archiveAutopilot;
+    window.archiveMember = archiveMember;
     window.archiveAgent = archiveAgent;
     window.archiveSkill = archiveSkill;
     window.createToken = createToken;
@@ -4578,6 +4767,7 @@ export function renderMulticaDashboardHtml(): string {
     window.updateSelectedRuntime = updateSelectedRuntime;
     window.updateSelectedSkill = updateSelectedSkill;
     window.updateSelectedAutopilot = updateSelectedAutopilot;
+    window.updateSelectedMember = updateSelectedMember;
     window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.refreshAutopilotAssigneeOptions = refreshAutopilotAssigneeOptions;
