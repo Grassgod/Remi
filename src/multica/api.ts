@@ -153,15 +153,27 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const skills = store.listAgentSkills(c.req.param("id"));
     return c.json({ skills, total: skills.length });
   });
+  app.get("/api/multica/agents/:id/tasks", (c) => {
+    const tasks = store.listAgentTasks(c.req.param("id"));
+    return c.json({ tasks, total: tasks.length });
+  });
   app.put("/api/multica/agents/:id/skills", async (c) => {
     const body = await readJson<SetAgentSkillsInput>(c);
     const skills = store.setAgentSkills(c.req.param("id"), body);
     return c.json({ skills, total: skills.length });
   });
+  app.get("/api/agents/:id/tasks", (c) => c.json(store.listAgentTasks(c.req.param("id"))));
   app.get("/api/agents/:id/skills", (c) => c.json(store.listAgentSkills(c.req.param("id"), { includeFiles: false })));
   app.put("/api/agents/:id/skills", async (c) => {
     const body = await readJson<SetAgentSkillsInput>(c);
     return c.json(store.setAgentSkills(c.req.param("id"), body).map(skillSummary));
+  });
+  app.get("/api/multica/agent-task-snapshot", (c) => {
+    const tasks = store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    return c.json({ tasks, total: tasks.length });
+  });
+  app.get("/api/agent-task-snapshot", (c) => {
+    return c.json(store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
   });
 
   app.get("/api/multica/skills", (c) => {

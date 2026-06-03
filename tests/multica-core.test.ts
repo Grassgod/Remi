@@ -1074,6 +1074,74 @@ describe("Bun Multica API", () => {
     expect((await status.json()).status).toBe("completed");
   });
 
+  it("serves agent task history and workspace task snapshots", async () => {
+    const store = createStore();
+    const agentA = store.createAgent({ name: "Snapshot A", provider: "codex" });
+    const agentB = store.createAgent({ name: "Snapshot B", provider: "claude" });
+    const agentC = store.createAgent({ name: "Snapshot C", provider: "codex" });
+    const runtime = store.registerRuntime({ name: "snapshot-runtime", provider: "any" });
+    const app = createMulticaApp({ store });
+
+    const queued = store.createTask({ agentId: agentA.id, prompt: "A queued" });
+    const running = store.createTask({ agentId: agentA.id, prompt: "A running" });
+    db!.run("UPDATE multica_tasks SET status = 'running', runtime_id = ?, started_at = ?, updated_at = ? WHERE id = ?", [
+      runtime.id,
+      "2026-06-04T01:00:00.000Z",
+      "2026-06-04T01:00:00.000Z",
+      running.id,
+    ]);
+    const oldFailed = store.createTask({ agentId: agentA.id, prompt: "A old failed" });
+    db!.run("UPDATE multica_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+      "2026-06-04T01:01:00.000Z",
+      "2026-06-04T01:01:00.000Z",
+      oldFailed.id,
+    ]);
+    const latestCompleted = store.createTask({ agentId: agentA.id, prompt: "A latest completed" });
+    db!.run("UPDATE multica_tasks SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?", [
+      "2026-06-04T01:02:00.000Z",
+      "2026-06-04T01:02:00.000Z",
+      latestCompleted.id,
+    ]);
+    const staleFailure = store.createTask({ agentId: agentB.id, prompt: "B stale failed" });
+    db!.run("UPDATE multica_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+      "2026-06-04T00:50:00.000Z",
+      "2026-06-04T00:50:00.000Z",
+      staleFailure.id,
+    ]);
+    const failureBeforeCancel = store.createTask({ agentId: agentC.id, prompt: "C failure" });
+    db!.run("UPDATE multica_tasks SET status = 'failed', failed_at = ?, updated_at = ? WHERE id = ?", [
+      "2026-06-04T00:55:00.000Z",
+      "2026-06-04T00:55:00.000Z",
+      failureBeforeCancel.id,
+    ]);
+    const cancelled = store.createTask({ agentId: agentC.id, prompt: "C cancelled" });
+    db!.run("UPDATE multica_tasks SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?", [
+      "2026-06-04T01:03:00.000Z",
+      "2026-06-04T01:03:00.000Z",
+      cancelled.id,
+    ]);
+
+    const snapshot = await app.request("/api/agent-task-snapshot?workspace_id=local");
+    const snapshotBody = await snapshot.json();
+    const ids = snapshotBody.map((task: any) => task.id).sort();
+    expect(ids).toEqual([queued.id, running.id, latestCompleted.id, staleFailure.id, failureBeforeCancel.id].sort());
+    expect(ids).not.toContain(oldFailed.id);
+    expect(ids).not.toContain(cancelled.id);
+
+    const multicaSnapshot = await app.request("/api/multica/agent-task-snapshot?workspace_id=local");
+    const multicaSnapshotBody = await multicaSnapshot.json();
+    expect(multicaSnapshotBody.total).toBe(5);
+    expect(multicaSnapshotBody.tasks.map((task: any) => task.id).sort()).toEqual(ids);
+
+    const agentTasks = await app.request(`/api/agents/${agentA.id}/tasks`);
+    const agentTaskBody = await agentTasks.json();
+    expect(agentTaskBody.map((task: any) => task.id)).toContain(queued.id);
+
+    const multicaAgentTasks = await app.request(`/api/multica/agents/${agentA.id}/tasks`);
+    const multicaAgentTaskBody = await multicaAgentTasks.json();
+    expect(multicaAgentTaskBody.total).toBe(4);
+  });
+
   it("protects APIs with bearer auth and accepts created local tokens", async () => {
     const store = createStore();
     const app = createMulticaApp({ store, authToken: "root-secret" });

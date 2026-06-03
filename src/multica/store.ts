@@ -3508,6 +3508,31 @@ export class MulticaStore {
     return rows.map(toTask);
   }
 
+  listAgentTasks(agentId: string): MulticaTask[] {
+    if (!this.getAgent(agentId)) throw new Error(`Agent not found: ${agentId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_tasks WHERE agent_id = ? ORDER BY created_at DESC",
+    ).all(agentId) as Row[];
+    return rows.map(toTask);
+  }
+
+  listWorkspaceAgentTaskSnapshot(workspaceId = "local"): MulticaTask[] {
+    const tasks = this.listTasks().filter((task) => task.workspaceId === workspaceId);
+    const snapshot = new Map<string, MulticaTask>();
+    for (const task of tasks) {
+      if (task.status === "queued" || task.status === "dispatched" || task.status === "running") {
+        snapshot.set(task.id, task);
+      }
+    }
+    const latestOutcomeByAgent = new Map<string, MulticaTask>();
+    for (const task of tasks.filter((item) => item.status === "completed" || item.status === "failed")) {
+      const current = latestOutcomeByAgent.get(task.agentId);
+      if (!current || outcomeTime(task) > outcomeTime(current)) latestOutcomeByAgent.set(task.agentId, task);
+    }
+    for (const task of latestOutcomeByAgent.values()) snapshot.set(task.id, task);
+    return [...snapshot.values()].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  }
+
   claimTask(runtimeId: string): MulticaTaskWithAgent | null {
     const tx = this.db.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
@@ -4732,6 +4757,10 @@ function quickCreateTaskPrompt(prompt: string, projectId: string | null): string
     "",
     prompt,
   ].join("\n");
+}
+
+function outcomeTime(task: MulticaTask): number {
+  return Date.parse(task.completedAt ?? task.failedAt ?? task.updatedAt ?? task.createdAt);
 }
 
 function normalizeIssuePosition(value: number | null | undefined): number {
