@@ -1261,6 +1261,12 @@ export function renderMulticaDashboardHtml(): string {
           <div class="entity-grid" id="skillsGrid"></div>
         </div>
       </section>
+      <section class="page" id="settingsPage">
+        <div class="collection">
+          <div class="entity-grid" id="settingsGrid"></div>
+          <div class="list active" id="tokenList"></div>
+        </div>
+      </section>
       <section class="page" id="inboxPage">
         <div class="list active" id="inboxList"></div>
       </section>
@@ -1361,7 +1367,7 @@ export function renderMulticaDashboardHtml(): string {
       usage: { title: "Usage", group: "Workspace", placeholder: "Usage", text: "No usage data." },
       runtimes: { title: "Runtimes", group: "Configure" },
       skills: { title: "Skills", group: "Configure" },
-      settings: { title: "Settings", group: "Configure", placeholder: "Settings", text: "No local settings." }
+      settings: { title: "Settings", group: "Configure" }
     };
 
     const state = {
@@ -1374,6 +1380,8 @@ export function renderMulticaDashboardHtml(): string {
       squads: [],
       autopilots: [],
       skills: [],
+      tokens: [],
+      createdToken: null,
       labels: [],
       pins: [],
       inboxItems: [],
@@ -1424,6 +1432,7 @@ export function renderMulticaDashboardHtml(): string {
       squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
       skillsPage: document.getElementById("skillsPage"),
+      settingsPage: document.getElementById("settingsPage"),
       inboxPage: document.getElementById("inboxPage"),
       usagePage: document.getElementById("usagePage"),
       placeholderPage: document.getElementById("placeholderPage"),
@@ -1437,6 +1446,8 @@ export function renderMulticaDashboardHtml(): string {
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
       skillsGrid: document.getElementById("skillsGrid"),
+      settingsGrid: document.getElementById("settingsGrid"),
+      tokenList: document.getElementById("tokenList"),
       inboxList: document.getElementById("inboxList"),
       usageSummaryGrid: document.getElementById("usageSummaryGrid"),
       usageList: document.getElementById("usageList"),
@@ -1520,7 +1531,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, tokens, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1530,6 +1541,7 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/squads"),
           api("/api/multica/autopilots"),
           api("/api/multica/skills"),
+          api("/api/multica/tokens"),
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
           api("/api/multica/labels"),
@@ -1547,6 +1559,7 @@ export function renderMulticaDashboardHtml(): string {
         state.squads = squads.squads || [];
         state.autopilots = autopilots.autopilots || [];
         state.skills = skills.skills || [];
+        state.tokens = tokens.tokens || [];
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
@@ -2508,6 +2521,33 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function createToken(event) {
+      if (event?.preventDefault) event.preventDefault();
+      const nameInput = document.getElementById("tokenName");
+      if (!nameInput) return;
+      try {
+        const result = await api("/api/multica/tokens", {
+          method: "POST",
+          body: JSON.stringify({
+            name: nameInput.value.trim() || "Local token",
+            type: document.getElementById("tokenType").value,
+            expiresInDays: document.getElementById("tokenExpires").value ? Number(document.getElementById("tokenExpires").value) : null,
+          })
+        });
+        state.createdToken = result.token?.token || null;
+        await refresh({ silent: true });
+        state.createdToken = result.token?.token || state.createdToken;
+        renderSettings();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function revokeToken(id) {
+      await api("/api/multica/tokens/" + encodeURIComponent(id), { method: "DELETE" });
+      await refresh({ silent: true });
+    }
+
     async function markInboxRead(id) {
       await api("/api/multica/inbox/" + encodeURIComponent(id) + "/read", { method: "POST" });
       await refresh({ silent: true });
@@ -2621,6 +2661,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAgents();
       renderRuntimes();
       renderSkills();
+      renderSettings();
       renderInbox();
       renderUsage();
       renderPinnedNav();
@@ -2643,9 +2684,10 @@ export function renderMulticaDashboardHtml(): string {
       els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
       els.skillsPage.classList.toggle("active", state.page === "skills");
+      els.settingsPage.classList.toggle("active", state.page === "settings");
       els.inboxPage.classList.toggle("active", state.page === "inbox");
       els.usagePage.classList.toggle("active", state.page === "usage");
-      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "inbox", "usage"].includes(state.page);
+      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "settings", "inbox", "usage"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2753,6 +2795,15 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newSkill\\">New skill</button></div>";
         document.getElementById("refresh").addEventListener("click", () => refresh());
         document.getElementById("newSkill").addEventListener("click", () => openEntitySheet("skill"));
+      } else if (state.page === "settings") {
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\">" +
+            "<span class=\\"status-badge\\">" + state.tokens.length + " tokens</span>" +
+            "<span class=\\"status-badge\\">local workspace</span>" +
+          "</div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newToken\\">New token</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newToken").addEventListener("click", () => document.getElementById("tokenName")?.focus());
       } else if (state.page === "usage") {
         const totals = usageTotals(state.usageDaily);
         els.toolbar.innerHTML =
@@ -3017,6 +3068,39 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"issue-meta\\">" + agents.slice(0, 3).map(agent => "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>").join("") + "</div>" +
         "</article>";
       }).join("");
+    }
+
+    function renderSettings() {
+      const origin = window.location.origin;
+      els.settingsGrid.innerHTML =
+        "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">S</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Server</div><div class=\\"entity-subtitle\\">Bun Multica local API</div></div></div>" +
+          "<div class=\\"detail-grid\\">" +
+            renderCell("Browser URL", origin) +
+            renderCell("Daemon URL", origin) +
+            renderCell("Workspace", "local") +
+            renderCell("Auth mode", state.tokens.length ? "local tokens available" : "open local mode") +
+          "</div>" +
+        "</article>" +
+        "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">T</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Access token</div><div class=\\"entity-subtitle\\">Personal and daemon tokens</div></div></div>" +
+          (state.createdToken ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Created token</div><div class=\\"detail-text\\">" + esc(state.createdToken) + "</div></div>" : "") +
+          "<form class=\\"sheet-form\\" onsubmit=\\"createToken(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Name<input id=\\"tokenName\\" placeholder=\\"Local daemon\\"></label>" +
+              "<label>Type<select id=\\"tokenType\\"><option value=\\"daemon\\">daemon</option><option value=\\"pat\\">pat</option></select></label>" +
+              "<label>Expires in days<input id=\\"tokenExpires\\" type=\\"number\\" min=\\"1\\" placeholder=\\"Never\\"></label>" +
+            "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Create token</button>" +
+          "</form>" +
+        "</article>";
+      els.tokenList.innerHTML = state.tokens.length ? state.tokens.map(token =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(token.name) + "</span><span>" + esc(token.type) + "</span><span>" + esc(token.revokedAt ? "revoked" : "active") + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(token.tokenPrefix || "") + " / last used " + esc(token.lastUsedAt ? timeAgo(token.lastUsedAt) : "never") + (token.expiresAt ? " / expires " + esc(shortDate(token.expiresAt)) : "") + "</div>" +
+          (token.revokedAt ? "" : "<button class=\\"destructive\\" onclick=\\"revokeToken('" + escAttr(token.id) + "')\\">Revoke</button>") +
+        "</div>"
+      ).join("") : "<div class=\\"empty-column\\">No access tokens</div>";
     }
 
     function renderInbox() {
@@ -3714,6 +3798,7 @@ export function renderMulticaDashboardHtml(): string {
       pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
       pages.skills && rows.push({ type: "Page", title: "Skills", subtitle: state.skills.length + " skills", action: () => switchPage("skills") });
+      pages.settings && rows.push({ type: "Page", title: "Settings", subtitle: state.tokens.length + " tokens", action: () => switchPage("settings") });
       state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || issueLabel(i), subtitle: issueLabel(i) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
@@ -4169,6 +4254,8 @@ export function renderMulticaDashboardHtml(): string {
     window.archiveAutopilot = archiveAutopilot;
     window.archiveAgent = archiveAgent;
     window.archiveSkill = archiveSkill;
+    window.createToken = createToken;
+    window.revokeToken = revokeToken;
     window.updateSelectedAgent = updateSelectedAgent;
     window.updateSelectedAgentSkills = updateSelectedAgentSkills;
     window.updateSelectedRuntime = updateSelectedRuntime;

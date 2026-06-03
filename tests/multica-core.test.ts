@@ -857,6 +857,15 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("/api/multica/skills");
     expect(html).toContain("updateSelectedAgentSkills");
   });
+
+  it("renders a real settings page with token controls", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain('id="settingsPage"');
+    expect(html).toContain('id="tokenList"');
+    expect(html).toContain("function renderSettings()");
+    expect(html).toContain("/api/multica/tokens");
+    expect(html).toContain("function revokeToken");
+  });
 });
 
 describe("Bun Multica API", () => {
