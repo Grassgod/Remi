@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMulticaProviders } from "../src/cli/multica.js";
 import { createMulticaApp } from "../src/multica/api.js";
+import { renderMulticaDashboardHtml } from "../src/multica/dashboard.js";
 import { writeProjectResourceContext } from "../src/multica/daemon.js";
 import { buildTaskPrompt } from "../src/multica/prompt.js";
 import { MulticaScheduler } from "../src/multica/scheduler.js";
@@ -134,6 +135,13 @@ describe("Bun Multica core store", () => {
     expect(usage).toHaveLength(2);
     expect(usage.find((row) => row.model === "gpt-5")?.taskCount).toBe(1);
     expect(usage.find((row) => row.model === "gpt-5")?.inputTokens).toBe(140);
+
+    const daily = store.listUsageDaily({ runtimeId: runtime.id });
+    expect(daily.reduce((sum, row) => sum + row.inputTokens, 0)).toBe(147);
+    expect(store.listUsageByAgent({ runtimeId: runtime.id })[0]?.agentId).toBe(agent.id);
+    expect(store.listUsageByHour({ runtimeId: runtime.id })[0]?.hour).toBeNumber();
+    expect(store.listTaskActivityByHour({ runtimeId: runtime.id })).not.toHaveLength(0);
+    expect(store.listRuntimeDaily({ runtimeId: runtime.id }).reduce((sum, row) => sum + row.taskCount, 0)).toBe(2);
 
     const updated = store.updateRuntime(runtime.id, {
       name: "codex-shared",
@@ -760,6 +768,16 @@ describe("Bun Multica CLI", () => {
   });
 });
 
+describe("Bun Multica dashboard", () => {
+  it("renders a real usage page instead of the placeholder", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain('id="usagePage"');
+    expect(html).toContain('id="usageSummaryGrid"');
+    expect(html).toContain("function renderUsage()");
+    expect(html).toContain("/api/dashboard/usage/daily");
+  });
+});
+
 describe("Bun Multica API", () => {
   it("serves daemon claim/start/complete endpoints", async () => {
     const store = createStore();
@@ -831,8 +849,22 @@ describe("Bun Multica API", () => {
 
     const usage = await app.request("/api/runtimes/rt_api/usage");
     const usageBody = await usage.json();
-    expect(usageBody.runtimeId).toBe("rt_api");
-    expect(usageBody.usage[0].cacheReadTokens).toBe(2);
+    expect(usageBody[0].runtimeId).toBe("rt_api");
+    expect(usageBody[0].cacheReadTokens).toBe(2);
+
+    const byAgent = await app.request("/api/runtimes/rt_api/usage/by-agent");
+    const byAgentBody = await byAgent.json();
+    expect(byAgentBody[0].agentId).toBe(agent.id);
+
+    const byHour = await app.request("/api/multica/runtimes/rt_api/usage/by-hour");
+    const byHourBody = await byHour.json();
+    expect(byHourBody.usage[0].model).toBe("gpt-5");
+
+    const activity = await app.request("/api/runtimes/rt_api/task-activity");
+    expect((await activity.json())[0].count).toBe(1);
+
+    const dashboardUsage = await app.request("/api/dashboard/usage/daily");
+    expect((await dashboardUsage.json())[0].model).toBe("gpt-5");
 
     const updated = await app.request("/api/runtimes/rt_api", {
       method: "PATCH",

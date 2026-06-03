@@ -125,44 +125,79 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ member: store.archiveWorkspaceMember(c.req.param("id")) });
   });
 
-	  app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
-	  app.post("/api/multica/runtimes", async (c) => {
-	    const body = await readJson<RegisterRuntimeInput>(c);
-	    return c.json({ runtime: store.registerRuntime(body) }, 201);
-	  });
-	  app.get("/api/multica/runtimes/:id", (c) => {
-	    const runtime = store.getRuntime(c.req.param("id"));
-	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-	    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
-	  });
-	  app.patch("/api/multica/runtimes/:id", async (c) => {
-	    const body = await readJson<UpdateRuntimeInput>(c);
-	    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
-	  });
-	  app.get("/api/multica/runtimes/:id/usage", (c) => {
-	    const runtime = store.getRuntime(c.req.param("id"));
-	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-	    return c.json({ runtimeId: runtime.id, usage: store.listRuntimeUsage(runtime.id) });
-	  });
-	  app.get("/api/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
-	  app.get("/api/runtimes/:id", (c) => {
-	    const runtime = store.getRuntime(c.req.param("id"));
-	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-	    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
-	  });
-	  app.patch("/api/runtimes/:id", async (c) => {
-	    const body = await readJson<UpdateRuntimeInput>(c);
-	    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
-	  });
-	  app.get("/api/runtimes/:id/usage", (c) => {
-	    const runtime = store.getRuntime(c.req.param("id"));
-	    if (!runtime) return c.json({ error: "runtime not found" }, 404);
-	    return c.json({ runtimeId: runtime.id, usage: store.listRuntimeUsage(runtime.id) });
-	  });
-	  app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
-	    store.heartbeatRuntime(c.req.param("id"));
-	    return c.json({ ok: true });
+  app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
+  app.post("/api/multica/runtimes", async (c) => {
+    const body = await readJson<RegisterRuntimeInput>(c);
+    return c.json({ runtime: store.registerRuntime(body) }, 201);
   });
+  app.get("/api/multica/runtimes/:id", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
+  });
+  app.patch("/api/multica/runtimes/:id", async (c) => {
+    const body = await readJson<UpdateRuntimeInput>(c);
+    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
+  });
+  app.get("/api/multica/runtimes/:id/usage", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ runtimeId: runtime.id, usage: store.listRuntimeUsage(runtime.id) });
+  });
+  app.get("/api/multica/runtimes/:id/usage/by-agent", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ usage: store.listUsageByAgent(usageQuery(c, { runtimeId: runtime.id })) });
+  });
+  app.get("/api/multica/runtimes/:id/usage/by-hour", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ usage: store.listUsageByHour(usageQuery(c, { runtimeId: runtime.id })) });
+  });
+  app.get("/api/multica/runtimes/:id/task-activity", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ activity: store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })) });
+  });
+  app.get("/api/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
+  app.get("/api/runtimes/:id", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ runtime, usage: store.listRuntimeUsage(runtime.id) });
+  });
+  app.patch("/api/runtimes/:id", async (c) => {
+    const body = await readJson<UpdateRuntimeInput>(c);
+    return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
+  });
+  app.get("/api/runtimes/:id/usage", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.listUsageDaily(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.get("/api/runtimes/:id/usage/by-agent", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.listUsageByAgent(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.get("/api/runtimes/:id/usage/by-hour", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.listUsageByHour(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.get("/api/runtimes/:id/task-activity", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
+    store.heartbeatRuntime(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/dashboard/usage/daily", (c) => c.json(store.listUsageDaily(usageQuery(c))));
+  app.get("/api/dashboard/usage/by-agent", (c) => c.json(store.listUsageByAgent(usageQuery(c))));
+  app.get("/api/dashboard/agent-runtime", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
+  app.get("/api/dashboard/runtime/daily", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
 
   app.get("/api/multica/projects", (c) => {
     const projects = store.listProjects(c.req.query("workspaceId"));
@@ -875,6 +910,20 @@ function parseOptionalInt(value: string | undefined): number | undefined {
   if (value == null || value === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function usageQuery(c: { req: { query: (name: string) => string | undefined } }, extra: { runtimeId?: string | null } = {}): {
+  workspaceId?: string | null;
+  projectId?: string | null;
+  runtimeId?: string | null;
+  days?: number;
+} {
+  return {
+    workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local",
+    projectId: c.req.query("projectId") ?? c.req.query("project_id") ?? null,
+    runtimeId: extra.runtimeId,
+    days: parseOptionalInt(c.req.query("days")),
+  };
 }
 
 function normalizeReactionInput(input: CreateMulticaReactionInput): { actorType?: string; actorId?: string | null; emoji: string } {

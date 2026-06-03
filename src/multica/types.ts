@@ -90,6 +90,49 @@ export interface MulticaRuntimeUsage {
   taskCount: number;
 }
 
+export interface MulticaUsageDaily {
+  date: string;
+  runtimeId?: string | null;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  taskCount: number;
+}
+
+export interface MulticaUsageByAgent {
+  agentId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  taskCount: number;
+}
+
+export interface MulticaUsageByHour {
+  hour: number;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  taskCount: number;
+}
+
+export interface MulticaRuntimeDaily {
+  date: string;
+  totalSeconds: number;
+  taskCount: number;
+  failedCount: number;
+}
+
+export interface MulticaTaskActivityByHour {
+  hour: number;
+  count: number;
+}
+
 export interface MulticaWorkspaceMember {
   id: string;
   workspaceId: string;

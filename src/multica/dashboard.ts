@@ -1259,6 +1259,12 @@ export function renderMulticaDashboardHtml(): string {
       <section class="page" id="inboxPage">
         <div class="list active" id="inboxList"></div>
       </section>
+      <section class="page" id="usagePage">
+        <div class="collection">
+          <div class="entity-grid" id="usageSummaryGrid"></div>
+          <div class="list active" id="usageList"></div>
+        </div>
+      </section>
       <section class="page" id="placeholderPage">
         <div class="placeholder-panel">
           <div class="placeholder-card">
@@ -1365,6 +1371,9 @@ export function renderMulticaDashboardHtml(): string {
       labels: [],
       pins: [],
       inboxItems: [],
+      usageDaily: [],
+      usageByAgent: [],
+      runtimeDaily: [],
       mode: "board",
       activeOnly: false,
       agentFilter: "all",
@@ -1407,6 +1416,7 @@ export function renderMulticaDashboardHtml(): string {
       squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
       inboxPage: document.getElementById("inboxPage"),
+      usagePage: document.getElementById("usagePage"),
       placeholderPage: document.getElementById("placeholderPage"),
       placeholderTitle: document.getElementById("placeholderTitle"),
       placeholderText: document.getElementById("placeholderText"),
@@ -1418,6 +1428,8 @@ export function renderMulticaDashboardHtml(): string {
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
       inboxList: document.getElementById("inboxList"),
+      usageSummaryGrid: document.getElementById("usageSummaryGrid"),
+      usageList: document.getElementById("usageList"),
       pinnedNav: document.getElementById("pinnedNav"),
       agentSelect: document.getElementById("agentSelect"),
       chatAgent: document.getElementById("chatAgent"),
@@ -1498,7 +1510,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels, pins] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1510,7 +1522,10 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
           api("/api/multica/labels"),
-          api("/api/multica/pins")
+          api("/api/multica/pins"),
+          api("/api/dashboard/usage/daily"),
+          api("/api/dashboard/usage/by-agent"),
+          api("/api/dashboard/runtime/daily")
         ]);
         state.agents = agents.agents || [];
         state.issues = issues.issues || [];
@@ -1524,6 +1539,9 @@ export function renderMulticaDashboardHtml(): string {
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
         state.pins = pins.pins || [];
+        state.usageDaily = usageDaily || [];
+        state.usageByAgent = usageByAgent || [];
+        state.runtimeDaily = runtimeDaily || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
@@ -2504,6 +2522,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAgents();
       renderRuntimes();
       renderInbox();
+      renderUsage();
       renderPinnedNav();
       renderRuntimeStrip();
       renderRunningPill();
@@ -2524,7 +2543,8 @@ export function renderMulticaDashboardHtml(): string {
       els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
       els.inboxPage.classList.toggle("active", state.page === "inbox");
-      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "inbox"].includes(state.page);
+      els.usagePage.classList.toggle("active", state.page === "usage");
+      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "inbox", "usage"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2619,6 +2639,15 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"toolbar-left\\">" +
             "<span class=\\"status-badge\\">" + state.runtimes.length + " runtimes</span>" +
             "<span class=\\"status-badge\\">" + runningTasks().length + " active tasks</span>" +
+          "</div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+      } else if (state.page === "usage") {
+        const totals = usageTotals(state.usageDaily);
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\">" +
+            "<span class=\\"status-badge\\">" + esc(formatCompact(totals.tokens)) + " tokens</span>" +
+            "<span class=\\"status-badge\\">" + esc(String(totals.tasks)) + " tasks</span>" +
           "</div>" +
           "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button></div>";
         document.getElementById("refresh").addEventListener("click", () => refresh());
@@ -2871,6 +2900,62 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveInbox('" + escAttr(item.id) + "')\\">Archive</button>" +
         "</div>";
       }).join("");
+    }
+
+    function renderUsage() {
+      if (!els.usageSummaryGrid || !els.usageList) return;
+      const totals = usageTotals(state.usageDaily);
+      const runtimeTotals = state.runtimeDaily.reduce((acc, row) => {
+        acc.seconds += Number(row.totalSeconds || row.total_seconds || 0);
+        acc.failed += Number(row.failedCount || row.failed_count || 0);
+        return acc;
+      }, { seconds: 0, failed: 0 });
+      els.usageSummaryGrid.innerHTML =
+        "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">T</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Tokens</div><div class=\\"entity-subtitle\\">workspace usage</div></div></div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(formatCompact(totals.input), "input") +
+            renderMetric(formatCompact(totals.output), "output") +
+            renderMetric(formatCompact(totals.cache), "cache") +
+            renderMetric(formatCompact(totals.tokens), "total") +
+          "</div>" +
+        "</article>" +
+        "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">R</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Runtime</div><div class=\\"entity-subtitle\\">terminal task time</div></div></div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(totals.tasks, "usage tasks") +
+            renderMetric(formatDuration(runtimeTotals.seconds), "time") +
+            renderMetric(runtimeTotals.failed, "failed") +
+          "</div>" +
+        "</article>";
+
+      const dailyRows = state.usageDaily.slice(-14).reverse().map(row =>
+        "<div class=\\"list-row\\">" +
+          "<span class=\\"list-id\\">" + esc(row.date) + "</span>" +
+          "<span class=\\"list-title\\">" + esc(row.model) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(formatCompact((row.inputTokens || 0) + (row.outputTokens || 0))) + " tokens</span>" +
+          "<span class=\\"status-badge\\">" + esc(String(row.taskCount || 0)) + " tasks</span>" +
+        "</div>"
+      );
+      const agentRows = state.usageByAgent.slice(0, 12).map(row => {
+        const agent = state.agents.find(item => item.id === (row.agentId || row.agent_id));
+        return "<div class=\\"list-row\\">" +
+          "<span class=\\"list-id\\">agent</span>" +
+          "<span class=\\"list-title\\">" + esc(agent ? agent.name : shortId(row.agentId || row.agent_id)) + " / " + esc(row.model) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(formatCompact((row.inputTokens || 0) + (row.outputTokens || 0))) + " tokens</span>" +
+          "<span class=\\"status-badge\\">" + esc(String(row.taskCount || 0)) + " tasks</span>" +
+        "</div>";
+      });
+      const runtimeRows = state.runtimeDaily.slice(-10).reverse().map(row =>
+        "<div class=\\"list-row\\">" +
+          "<span class=\\"list-id\\">runtime</span>" +
+          "<span class=\\"list-title\\">" + esc(row.date) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(formatDuration(row.totalSeconds || row.total_seconds || 0)) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(String(row.taskCount || row.task_count || 0)) + " tasks</span>" +
+        "</div>"
+      );
+      const rows = dailyRows.concat(agentRows, runtimeRows);
+      els.usageList.innerHTML = rows.length ? rows.join("") : "<div class=\\"empty-column\\" style=\\"margin:16px;\\">No usage data</div>";
     }
 
     function renderTaskDrawer(options = {}) {
@@ -3724,6 +3809,20 @@ export function renderMulticaDashboardHtml(): string {
       return totals.input + " in / " + totals.output + " out";
     }
 
+    function usageTotals(rows) {
+      return (rows || []).reduce((acc, row) => {
+        const input = Number(row.inputTokens || row.input_tokens || 0);
+        const output = Number(row.outputTokens || row.output_tokens || 0);
+        const cache = Number(row.cacheReadTokens || row.cache_read_tokens || 0) + Number(row.cacheWriteTokens || row.cache_write_tokens || 0);
+        acc.input += input;
+        acc.output += output;
+        acc.cache += cache;
+        acc.tokens += input + output + cache;
+        acc.tasks += Number(row.taskCount || row.task_count || 0);
+        return acc;
+      }, { input: 0, output: 0, cache: 0, tokens: 0, tasks: 0 });
+    }
+
     function ownerLabel(ownerId) {
       if (!ownerId) return "unassigned";
       const member = state.members.find(item => item.id === ownerId);
@@ -3736,6 +3835,13 @@ export function renderMulticaDashboardHtml(): string {
       if (Math.abs(number) >= 1000000) return (number / 1000000).toFixed(1).replace(/\\.0$/, "") + "m";
       if (Math.abs(number) >= 1000) return (number / 1000).toFixed(1).replace(/\\.0$/, "") + "k";
       return String(Math.floor(number));
+    }
+
+    function formatDuration(seconds) {
+      const value = Math.max(0, Number(seconds || 0));
+      if (value >= 3600) return (value / 3600).toFixed(1).replace(/\\.0$/, "") + "h";
+      if (value >= 60) return Math.floor(value / 60) + "m";
+      return Math.floor(value) + "s";
     }
 
     function runningTasks() {
