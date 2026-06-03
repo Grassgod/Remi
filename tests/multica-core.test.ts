@@ -50,6 +50,24 @@ describe("Bun Multica core store", () => {
     expect(store.getTask(codexTask.id)?.usage[0].inputTokens).toBe(10);
   });
 
+  it("honors runtime max concurrency and derives stale liveness", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const first = store.createTask({ agentId: agent.id, prompt: "First" });
+    const second = store.createTask({ agentId: agent.id, prompt: "Second" });
+    const runtime = store.registerRuntime({ name: "local-codex", provider: "codex", maxConcurrency: 1 });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(first.id);
+    expect(store.claimTask(runtime.id)).toBeNull();
+
+    store.completeTask(first.id, { output: "done" });
+    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
+
+    const stale = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    db!.run("UPDATE multica_runtimes SET last_heartbeat_at = ?, updated_at = ? WHERE id = ?", [stale, stale, runtime.id]);
+    expect(store.listRuntimes()[0]?.status).toBe("offline");
+  });
+
   it("recovers dispatched and running tasks for a runtime", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -173,5 +191,63 @@ describe("Bun Multica API", () => {
     const detailBody = await detail.json();
     expect(detailBody.issue.tasks).toHaveLength(1);
     expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+  });
+
+  it("updates and archives workspace objects", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const project = store.createProject({ title: "Ops" });
+    const squad = store.createSquad({ name: "Ops squad", leaderId: agent.id });
+    const autopilot = store.createAutopilot({
+      title: "Ops auto",
+      projectId: project.id,
+      assigneeType: "squad",
+      assigneeId: squad.id,
+    });
+
+    expect(store.updateSquad(squad.id, { name: "Ops team" }).name).toBe("Ops team");
+    store.removeSquadMember(squad.id, { memberType: "agent", memberId: agent.id });
+    expect(store.listSquadMembers(squad.id)).toHaveLength(0);
+    expect(store.getSquad(squad.id)?.leaderId).toBeNull();
+
+    expect(store.updateAutopilot(autopilot.id, { status: "paused" }).status).toBe("paused");
+    expect(store.archiveAutopilot(autopilot.id).status).toBe("archived");
+    expect(store.listAutopilots()).toHaveLength(0);
+
+    expect(store.archiveProject(project.id).status).toBe("cancelled");
+    expect(store.archiveSquad(squad.id).archivedAt).toBeString();
+    expect(store.listSquads()).toHaveLength(0);
+  });
+
+  it("triggers autopilots through API and webhook endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Webhook triage",
+      assigneeId: agent.id,
+      triggerKind: "webhook",
+    });
+    const app = createMulticaApp({ store });
+
+    const apiTrigger = await app.request(`/api/multica/autopilots/${autopilot.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "API prompt", payload: { source: "suite" } }),
+    });
+    expect(apiTrigger.status).toBe(201);
+    const apiBody = await apiTrigger.json();
+    expect(apiBody.run.source).toBe("api");
+    expect(store.getTask(apiBody.run.taskId)?.prompt).toBe("API prompt");
+
+    const webhookTrigger = await app.request(`/api/multica/autopilots/${autopilot.id}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Webhook prompt", event: "opened" }),
+    });
+    expect(webhookTrigger.status).toBe(201);
+    const webhookBody = await webhookTrigger.json();
+    expect(webhookBody.run.source).toBe("webhook");
+    expect(webhookBody.run.payload.event).toBe("opened");
+    expect(store.getIssue(webhookBody.run.issueId)?.title).toBe("Webhook prompt");
   });
 });

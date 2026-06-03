@@ -1738,6 +1738,45 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function archiveProject(id) {
+      try {
+        await api("/api/multica/projects/" + encodeURIComponent(id), { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function archiveSquad(id) {
+      try {
+        await api("/api/multica/squads/" + encodeURIComponent(id), { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function setAutopilotStatus(id, status) {
+      try {
+        await api("/api/multica/autopilots/" + encodeURIComponent(id), {
+          method: "PATCH",
+          body: JSON.stringify({ status })
+        });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function archiveAutopilot(id) {
+      try {
+        await api("/api/multica/autopilots/" + encodeURIComponent(id), { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
     function openSearch() {
       els.searchOverlay.classList.add("open");
       els.searchInput.value = "";
@@ -2011,6 +2050,7 @@ export function renderMulticaDashboardHtml(): string {
             (lead ? "<span class=\\"status-badge\\">" + esc(lead.name) + "</span>" : "") +
             "<span class=\\"status-badge\\">" + esc(timeAgo(project.updatedAt)) + "</span>" +
           "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveProject('" + escAttr(project.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -2034,6 +2074,7 @@ export function renderMulticaDashboardHtml(): string {
             renderMetric(active, "active") +
             renderMetric(timeAgo(squad.updatedAt), "updated") +
           "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveSquad('" + escAttr(squad.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -2060,7 +2101,13 @@ export function renderMulticaDashboardHtml(): string {
             (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") +
             (autopilot.lastRunAt ? "<span class=\\"status-badge\\">" + esc(timeAgo(autopilot.lastRunAt)) + "</span>" : "") +
           "</div>" +
-          "<button class=\\"outline\\" onclick=\\"runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
+          "<div class=\\"issue-meta\\">" +
+            "<button class=\\"outline\\" onclick=\\"runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
+            (autopilot.status === "active" ?
+              "<button class=\\"outline\\" onclick=\\"setAutopilotStatus('" + escAttr(autopilot.id) + "', 'paused')\\">Pause</button>" :
+              "<button class=\\"outline\\" onclick=\\"setAutopilotStatus('" + escAttr(autopilot.id) + "', 'active')\\">Resume</button>") +
+            "<button class=\\"destructive\\" onclick=\\"archiveAutopilot('" + escAttr(autopilot.id) + "')\\">Archive</button>" +
+          "</div>" +
         "</article>";
       }).join("");
     }
@@ -2445,6 +2492,10 @@ export function renderMulticaDashboardHtml(): string {
     window.openTask = openTask;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
+    window.archiveProject = archiveProject;
+    window.archiveSquad = archiveSquad;
+    window.setAutopilotStatus = setAutopilotStatus;
+    window.archiveAutopilot = archiveAutopilot;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;

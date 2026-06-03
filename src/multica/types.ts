@@ -308,10 +308,22 @@ export interface CreateSquadInput {
   memberIds?: string[];
 }
 
+export interface UpdateSquadInput {
+  name?: string;
+  description?: string | null;
+  instructions?: string | null;
+  leaderId?: string | null;
+}
+
 export interface AddSquadMemberInput {
   memberType: MulticaSquadMemberType;
   memberId: string;
   role?: string;
+}
+
+export interface RemoveSquadMemberInput {
+  memberType: MulticaSquadMemberType;
+  memberId: string;
 }
 
 export interface CreateAutopilotInput {
@@ -322,6 +334,20 @@ export interface CreateAutopilotInput {
   workspaceId?: string | null;
   assigneeType?: MulticaAutopilotAssigneeType;
   assigneeId: string;
+  status?: MulticaAutopilotStatus;
+  executionMode?: MulticaAutopilotExecutionMode;
+  issueTitleTemplate?: string | null;
+  triggerKind?: string;
+  triggerLabel?: string | null;
+  cronExpression?: string | null;
+}
+
+export interface UpdateAutopilotInput {
+  title?: string;
+  description?: string | null;
+  projectId?: string | null;
+  assigneeType?: MulticaAutopilotAssigneeType;
+  assigneeId?: string;
   status?: MulticaAutopilotStatus;
   executionMode?: MulticaAutopilotExecutionMode;
   issueTitleTemplate?: string | null;

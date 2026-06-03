@@ -26,14 +26,18 @@ import type {
   MulticaTaskStatus,
   MulticaTaskWithAgent,
   RegisterRuntimeInput,
+  RemoveSquadMemberInput,
   RunAutopilotInput,
   TaskMessageInput,
   TaskUsageEntry,
+  UpdateAutopilotInput,
   UpdateIssueInput,
   UpdateProjectInput,
+  UpdateSquadInput,
 } from "./types.js";
 
 const TERMINAL_STATUSES: MulticaTaskStatus[] = ["completed", "failed", "cancelled"];
+const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 
 export class MulticaStore {
   private db: Database;
@@ -342,7 +346,7 @@ export class MulticaStore {
 
   listRuntimes(): MulticaRuntime[] {
     const rows = this.db.query("SELECT * FROM multica_runtimes ORDER BY updated_at DESC").all() as Row[];
-    return rows.map(toRuntime);
+    return rows.map((row) => withRuntimeLiveness(toRuntime(row)));
   }
 
   heartbeatRuntime(runtimeId: string): void {
@@ -577,6 +581,10 @@ export class MulticaStore {
     return this.getProject(id)!;
   }
 
+  archiveProject(id: string): MulticaProject {
+    return this.updateProject(id, { status: "cancelled" });
+  }
+
   createSquad(input: CreateSquadInput): MulticaSquad {
     if (!input.name?.trim()) throw new Error("Squad name is required");
     if (input.leaderId && !this.getAgent(input.leaderId)) throw new Error(`Agent not found: ${input.leaderId}`);
@@ -618,6 +626,39 @@ export class MulticaStore {
     return rows.map(toSquad);
   }
 
+  updateSquad(id: string, input: UpdateSquadInput): MulticaSquad {
+    const current = this.getSquad(id);
+    if (!current) throw new Error(`Squad not found: ${id}`);
+    if (input.leaderId && !this.getAgent(input.leaderId)) throw new Error(`Agent not found: ${input.leaderId}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_squads SET
+        name = ?,
+        description = ?,
+        instructions = ?,
+        leader_id = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.name ?? current.name,
+        input.description === undefined ? current.description : input.description ?? "",
+        input.instructions === undefined ? current.instructions : input.instructions ?? "",
+        input.leaderId === undefined ? current.leaderId : input.leaderId,
+        now,
+        id,
+      ],
+    );
+    if (input.leaderId) this.addSquadMember(id, { memberType: "agent", memberId: input.leaderId, role: "leader" });
+    return this.getSquad(id)!;
+  }
+
+  archiveSquad(id: string): MulticaSquad {
+    if (!this.getSquad(id)) throw new Error(`Squad not found: ${id}`);
+    const now = nowIso();
+    this.db.run("UPDATE multica_squads SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    return this.getSquad(id)!;
+  }
+
   addSquadMember(squadId: string, input: AddSquadMemberInput): MulticaSquadMember {
     const squad = this.getSquad(squadId);
     if (!squad) throw new Error(`Squad not found: ${squadId}`);
@@ -643,6 +684,20 @@ export class MulticaStore {
     );
     this.db.run("UPDATE multica_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
     return this.getSquadMember(id)!;
+  }
+
+  removeSquadMember(squadId: string, input: RemoveSquadMemberInput): void {
+    const now = nowIso();
+    this.db.run(
+      "DELETE FROM multica_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
+      [squadId, input.memberType, input.memberId],
+    );
+    const squad = this.getSquad(squadId);
+    if (squad?.leaderId === input.memberId && input.memberType === "agent") {
+      this.db.run("UPDATE multica_squads SET leader_id = NULL, updated_at = ? WHERE id = ?", [now, squadId]);
+    } else {
+      this.db.run("UPDATE multica_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
+    }
   }
 
   getSquadMember(id: string): MulticaSquadMember | null {
@@ -702,6 +757,53 @@ export class MulticaStore {
       ? this.db.query("SELECT * FROM multica_autopilots WHERE workspace_id = ? AND status != 'archived' ORDER BY updated_at DESC").all(workspaceId) as Row[]
       : this.db.query("SELECT * FROM multica_autopilots WHERE status != 'archived' ORDER BY updated_at DESC").all() as Row[];
     return rows.map(toAutopilot);
+  }
+
+  updateAutopilot(id: string, input: UpdateAutopilotInput): MulticaAutopilot {
+    const current = this.getAutopilot(id);
+    if (!current) throw new Error(`Autopilot not found: ${id}`);
+    const nextAssigneeType = input.assigneeType ?? current.assigneeType;
+    const nextAssigneeId = input.assigneeId ?? current.assigneeId;
+    if (nextAssigneeType === "agent" && !this.getAgent(nextAssigneeId)) throw new Error(`Agent not found: ${nextAssigneeId}`);
+    if (nextAssigneeType === "squad" && !this.getSquad(nextAssigneeId)) throw new Error(`Squad not found: ${nextAssigneeId}`);
+    if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_autopilots SET
+        title = ?,
+        description = ?,
+        project_id = ?,
+        assignee_type = ?,
+        assignee_id = ?,
+        status = ?,
+        execution_mode = ?,
+        issue_title_template = ?,
+        trigger_kind = ?,
+        trigger_label = ?,
+        cron_expression = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.title ?? current.title,
+        input.description === undefined ? current.description : input.description,
+        input.projectId === undefined ? current.projectId : input.projectId,
+        nextAssigneeType,
+        nextAssigneeId,
+        input.status ?? current.status,
+        input.executionMode ?? current.executionMode,
+        input.issueTitleTemplate === undefined ? current.issueTitleTemplate : input.issueTitleTemplate,
+        input.triggerKind ?? current.triggerKind,
+        input.triggerLabel === undefined ? current.triggerLabel : input.triggerLabel,
+        input.cronExpression === undefined ? current.cronExpression : input.cronExpression,
+        now,
+        id,
+      ],
+    );
+    return this.getAutopilot(id)!;
+  }
+
+  archiveAutopilot(id: string): MulticaAutopilot {
+    return this.updateAutopilot(id, { status: "archived" });
   }
 
   listAutopilotRuns(autopilotId: string): MulticaAutopilotRun[] {
@@ -838,6 +940,11 @@ export class MulticaStore {
       const runtime = this.getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
       this.heartbeatRuntime(runtimeId);
+
+      const active = this.db.query(
+        "SELECT COUNT(*) AS count FROM multica_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running')",
+      ).get(runtimeId) as { count: number } | null;
+      if (Number(active?.count ?? 0) >= runtime.maxConcurrency) return null;
 
       const workspaceFilter = runtime.workspaceId ? "AND t.workspace_id = ?" : "";
       const params = runtime.workspaceId
@@ -1158,6 +1265,14 @@ function toRuntime(row: Row): MulticaRuntime {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function withRuntimeLiveness(runtime: MulticaRuntime): MulticaRuntime {
+  if (runtime.status === "offline") return runtime;
+  if (!runtime.lastHeartbeatAt) return { ...runtime, status: "offline" };
+  const heartbeat = Date.parse(runtime.lastHeartbeatAt);
+  if (!Number.isFinite(heartbeat)) return { ...runtime, status: "offline" };
+  return Date.now() - heartbeat > RUNTIME_HEARTBEAT_STALE_MS ? { ...runtime, status: "offline" } : runtime;
 }
 
 function toProject(row: Row): MulticaProject {
