@@ -25,6 +25,7 @@ import type {
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
+  CreateWorkspaceInvitationInput,
   CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
   MulticaAutopilot,
@@ -110,6 +111,7 @@ import type {
   MulticaUsageDaily,
   MulticaUser,
   MulticaWorkspace,
+  MulticaWorkspaceInvitation,
   MulticaWorkspaceMember,
   RegisterRuntimeInput,
   ReorderPinnedItemInput,
@@ -330,6 +332,22 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_workspace_invitations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        inviter_id TEXT NOT NULL,
+        invitee_email TEXT NOT NULL,
+        invitee_user_id TEXT,
+        role TEXT NOT NULL DEFAULT 'member',
+        status TEXT NOT NULL DEFAULT 'pending',
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_workspace_invitations_workspace ON multica_workspace_invitations(workspace_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_multica_workspace_invitations_invitee ON multica_workspace_invitations(invitee_email, invitee_user_id, status);
 
       CREATE TABLE IF NOT EXISTS multica_workspace_members (
         id TEXT PRIMARY KEY,
@@ -1323,6 +1341,127 @@ export class MulticaStore {
     const existing = this.getWorkspace("local");
     if (existing) return existing;
     return this.createWorkspace({ id: "local", name: "Local Workspace", slug: "local", issuePrefix: "MUL" });
+  }
+
+  createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput): MulticaWorkspaceInvitation {
+    const workspace = this.getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    const email = String(input.email ?? input.inviteeEmail ?? input.invitee_email ?? "").trim().toLowerCase();
+    if (!email) throw new Error("email is required");
+    const role = normalizeWorkspaceInvitationRole(input.role ?? "member");
+    if (role === "owner") throw new Error("cannot invite as owner");
+    const currentUser = this.getCurrentUser();
+    if (email === currentUser.email.toLowerCase()) {
+      const existingMember = this.listWorkspaceMembers(workspaceId).find((member) => member.email?.toLowerCase() === email);
+      if (existingMember) throw new Error("user is already a member");
+    }
+    const pending = this.db.query(
+      "SELECT * FROM multica_workspace_invitations WHERE workspace_id = ? AND invitee_email = ? AND status = 'pending'",
+    ).get(workspaceId, email) as Row | null;
+    if (pending) throw new Error("invitation already pending for this email");
+    const id = createId("inv");
+    const now = nowIso();
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    this.db.run(
+      `INSERT INTO multica_workspace_invitations (
+        id, workspace_id, inviter_id, invitee_email, invitee_user_id, role, status,
+        expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [
+        id,
+        workspaceId,
+        currentUser.id,
+        email,
+        email === currentUser.email.toLowerCase() ? currentUser.id : null,
+        role,
+        expiresAt,
+        now,
+        now,
+      ],
+    );
+    return this.hydrateInvitation(this.getInvitation(id)!)!;
+  }
+
+  listWorkspaceInvitations(workspaceId: string): MulticaWorkspaceInvitation[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_workspace_invitations WHERE workspace_id = ? AND status = 'pending' ORDER BY created_at DESC",
+    ).all(workspaceId) as Row[];
+    return rows.map((row) => this.hydrateInvitation(toInvitation(row))!);
+  }
+
+  listCurrentUserInvitations(): MulticaWorkspaceInvitation[] {
+    const user = this.getCurrentUser();
+    const rows = this.db.query(
+      `SELECT * FROM multica_workspace_invitations
+       WHERE status = 'pending' AND (invitee_user_id = ? OR invitee_email = ?)
+       ORDER BY created_at DESC`,
+    ).all(user.id, user.email.toLowerCase()) as Row[];
+    return rows.map((row) => this.hydrateInvitation(toInvitation(row))!);
+  }
+
+  getInvitation(id: string): MulticaWorkspaceInvitation | null {
+    const row = this.db.query("SELECT * FROM multica_workspace_invitations WHERE id = ?").get(id) as Row | null;
+    return row ? toInvitation(row) : null;
+  }
+
+  revokeWorkspaceInvitation(workspaceId: string, invitationId: string): boolean {
+    const invitation = this.getInvitation(invitationId);
+    if (!invitation || invitation.workspaceId !== workspaceId || invitation.status !== "pending") return false;
+    this.updateInvitationStatus(invitationId, "revoked");
+    return true;
+  }
+
+  acceptInvitation(invitationId: string): MulticaWorkspaceInvitation | null {
+    const invitation = this.hydrateInvitation(this.getInvitation(invitationId));
+    if (!invitation || invitation.status !== "pending") return null;
+    const user = this.getCurrentUser();
+    if (invitation.inviteeEmail !== user.email.toLowerCase() && invitation.inviteeUserId !== user.id) {
+      throw new Error("invitation does not belong to you");
+    }
+    const accepted = this.updateInvitationStatus(invitationId, "accepted");
+    const memberId = `mem_${invitation.workspaceId}_${user.id}`;
+    if (!this.getWorkspaceMember(memberId)) {
+      this.createWorkspaceMember({
+        id: memberId,
+        workspaceId: invitation.workspaceId,
+        name: user.name,
+        email: user.email,
+        role: invitation.role,
+      });
+    }
+    this.markCurrentUserOnboarded();
+    return this.hydrateInvitation(accepted)!;
+  }
+
+  declineInvitation(invitationId: string): MulticaWorkspaceInvitation | null {
+    const invitation = this.getInvitation(invitationId);
+    if (!invitation || invitation.status !== "pending") return null;
+    const user = this.getCurrentUser();
+    if (invitation.inviteeEmail !== user.email.toLowerCase() && invitation.inviteeUserId !== user.id) {
+      throw new Error("invitation does not belong to you");
+    }
+    return this.hydrateInvitation(this.updateInvitationStatus(invitationId, "declined"))!;
+  }
+
+  private updateInvitationStatus(invitationId: string, status: MulticaWorkspaceInvitation["status"]): MulticaWorkspaceInvitation {
+    const now = nowIso();
+    this.db.run("UPDATE multica_workspace_invitations SET status = ?, updated_at = ? WHERE id = ?", [status, now, invitationId]);
+    return this.getInvitation(invitationId)!;
+  }
+
+  private hydrateInvitation(invitation: MulticaWorkspaceInvitation | null): MulticaWorkspaceInvitation | null {
+    if (!invitation) return null;
+    const inviter = this.getUser(invitation.inviterId);
+    const workspace = this.getWorkspace(invitation.workspaceId);
+    return {
+      ...invitation,
+      inviterName: inviter?.name,
+      inviter_name: inviter?.name,
+      inviterEmail: inviter?.email,
+      inviter_email: inviter?.email,
+      workspaceName: workspace?.name,
+      workspace_name: workspace?.name,
+    };
   }
 
   getNotificationPreferences(input: { workspaceId?: string | null; memberId?: string | null } = {}): MulticaNotificationPreferenceResponse {
@@ -5473,6 +5612,12 @@ function generateIssuePrefix(name: string): string {
   return letters.slice(0, Math.min(letters.length, 3));
 }
 
+function normalizeWorkspaceInvitationRole(value: unknown): string {
+  const role = String(value ?? "member").trim().toLowerCase() || "member";
+  if (role === "owner" || role === "admin" || role === "member") return role;
+  throw new Error("invalid member role");
+}
+
 function normalizeRuntimeModels(models: MulticaRuntimeModel[], provider: string): MulticaRuntimeModel[] {
   const seen = new Set<string>();
   return (models ?? []).map((model) => {
@@ -6014,6 +6159,29 @@ function toWorkspace(row: Row): MulticaWorkspace {
     created_at: String(row.created_at),
     updatedAt: String(row.updated_at),
     updated_at: String(row.updated_at),
+  };
+}
+
+function toInvitation(row: Row): MulticaWorkspaceInvitation {
+  const status = String(row.status ?? "pending") as MulticaWorkspaceInvitation["status"];
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    workspace_id: String(row.workspace_id),
+    inviterId: String(row.inviter_id),
+    inviter_id: String(row.inviter_id),
+    inviteeEmail: String(row.invitee_email),
+    invitee_email: String(row.invitee_email),
+    inviteeUserId: nullableString(row.invitee_user_id),
+    invitee_user_id: nullableString(row.invitee_user_id),
+    role: String(row.role ?? "member"),
+    status,
+    createdAt: String(row.created_at),
+    created_at: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    updated_at: String(row.updated_at),
+    expiresAt: String(row.expires_at),
+    expires_at: String(row.expires_at),
   };
 }
 

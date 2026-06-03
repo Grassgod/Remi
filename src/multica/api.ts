@@ -223,7 +223,34 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(workspace);
   });
   app.get("/api/workspaces/:id/members", (c) => c.json(store.listWorkspaceMembers(c.req.param("id"))));
-  app.get("/api/invitations", (c) => c.json([]));
+  app.post("/api/workspaces/:id/members", async (c) => {
+    const body = await readJson<any>(c);
+    const result = safeCreateInvitation(store, c.req.param("id"), body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result, 201);
+  });
+  app.get("/api/workspaces/:id/invitations", (c) => c.json(store.listWorkspaceInvitations(c.req.param("id"))));
+  app.delete("/api/workspaces/:id/invitations/:invitationId", (c) => {
+    const revoked = store.revokeWorkspaceInvitation(c.req.param("id"), c.req.param("invitationId"));
+    if (!revoked) return c.json({ error: "invitation not found" }, 404);
+    return c.body(null, 204);
+  });
+  app.get("/api/invitations", (c) => c.json(store.listCurrentUserInvitations()));
+  app.get("/api/invitations/:id", (c) => {
+    const invitation = store.getInvitation(c.req.param("id"));
+    if (!invitation) return c.json({ error: "invitation not found" }, 404);
+    return c.json(invitation);
+  });
+  app.post("/api/invitations/:id/accept", (c) => {
+    const result = safeAcceptInvitation(store, c.req.param("id"));
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/api/invitations/:id/decline", (c) => {
+    const result = safeDeclineInvitation(store, c.req.param("id"));
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.body(null, 204);
+  });
 
   app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
   app.post("/api/multica/agents", async (c) => {
@@ -1728,6 +1755,56 @@ function safeCreateWorkspace(
       return { error: "workspace slug already exists", status: 409 };
     }
     throw error;
+  }
+}
+
+function safeCreateInvitation(
+  store: MulticaStore,
+  workspaceId: string,
+  input: any,
+): NonNullable<ReturnType<MulticaStore["createWorkspaceInvitation"]>> | { error: string; status: 400 | 404 | 409 } {
+  try {
+    return store.createWorkspaceInvitation(workspaceId, input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Workspace not found")) return { error: "workspace not found", status: 404 };
+    if (message === "email is required" || message === "invalid member role" || message === "cannot invite as owner") {
+      return { error: message, status: 400 };
+    }
+    if (message === "user is already a member" || message === "invitation already pending for this email") {
+      return { error: message, status: 409 };
+    }
+    throw error;
+  }
+}
+
+function safeAcceptInvitation(
+  store: MulticaStore,
+  invitationId: string,
+): NonNullable<ReturnType<MulticaStore["acceptInvitation"]>> | { error: string; status: 400 | 403 | 404 } {
+  try {
+    const invitation = store.acceptInvitation(invitationId);
+    if (!invitation) return { error: "invitation not found", status: 404 };
+    return invitation;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "invitation does not belong to you") return { error: message, status: 403 };
+    return { error: message, status: 400 };
+  }
+}
+
+function safeDeclineInvitation(
+  store: MulticaStore,
+  invitationId: string,
+): NonNullable<ReturnType<MulticaStore["declineInvitation"]>> | { error: string; status: 400 | 403 | 404 } {
+  try {
+    const invitation = store.declineInvitation(invitationId);
+    if (!invitation) return { error: "invitation not found", status: 404 };
+    return invitation;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "invitation does not belong to you") return { error: message, status: 403 };
+    return { error: message, status: 400 };
   }
 }
 

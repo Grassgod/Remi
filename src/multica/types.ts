@@ -365,6 +365,34 @@ export interface MulticaWorkspace {
   updated_at: string;
 }
 
+export type MulticaWorkspaceInvitationStatus = "pending" | "accepted" | "declined" | "revoked" | "expired";
+
+export interface MulticaWorkspaceInvitation {
+  id: string;
+  workspaceId: string;
+  workspace_id: string;
+  inviterId: string;
+  inviter_id: string;
+  inviteeEmail: string;
+  invitee_email: string;
+  inviteeUserId: string | null;
+  invitee_user_id: string | null;
+  role: string;
+  status: MulticaWorkspaceInvitationStatus;
+  createdAt: string;
+  created_at: string;
+  updatedAt: string;
+  updated_at: string;
+  expiresAt: string;
+  expires_at: string;
+  inviterName?: string;
+  inviter_name?: string;
+  inviterEmail?: string;
+  inviter_email?: string;
+  workspaceName?: string;
+  workspace_name?: string;
+}
+
 export type MulticaAccessTokenType = "pat" | "daemon";
 
 export interface MulticaAccessToken {
@@ -1032,6 +1060,13 @@ export interface CreateWorkspaceInput {
   repos?: unknown[];
   issuePrefix?: string;
   issue_prefix?: string;
+}
+
+export interface CreateWorkspaceInvitationInput {
+  email?: string;
+  inviteeEmail?: string;
+  invitee_email?: string;
+  role?: string;
 }
 
 export interface UpdateRuntimeInput {

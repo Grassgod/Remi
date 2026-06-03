@@ -2015,6 +2015,78 @@ describe("Bun Multica API", () => {
     expect(await invitations.json()).toEqual([]);
   });
 
+  it("serves local workspace invitation compatibility endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const workspace = store.createWorkspace({ name: "Invite Team", slug: "invite-team" });
+
+    const invalid = await app.request(`/api/workspaces/${workspace.id}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "member" }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const created = await app.request(`/api/workspaces/${workspace.id}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "teammate@example.com", role: "admin" }),
+    });
+    const createdBody = await created.json();
+    expect(created.status).toBe(201);
+    expect(createdBody).toMatchObject({
+      workspace_id: workspace.id,
+      inviter_id: "local",
+      invitee_email: "teammate@example.com",
+      role: "admin",
+      status: "pending",
+      workspace_name: "Invite Team",
+      inviter_email: "local@multica.local",
+    });
+
+    const duplicate = await app.request(`/api/workspaces/${workspace.id}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "teammate@example.com", role: "member" }),
+    });
+    expect(duplicate.status).toBe(409);
+
+    const workspaceInvitations = await app.request(`/api/workspaces/${workspace.id}/invitations`);
+    const workspaceInvitationsBody = await workspaceInvitations.json();
+    expect(workspaceInvitationsBody[0].id).toBe(createdBody.id);
+
+    const fetched = await app.request(`/api/invitations/${createdBody.id}`);
+    expect((await fetched.json()).invitee_email).toBe("teammate@example.com");
+
+    const revoked = await app.request(`/api/workspaces/${workspace.id}/invitations/${createdBody.id}`, { method: "DELETE" });
+    expect(revoked.status).toBe(204);
+
+    db!.run(
+      `INSERT INTO multica_workspaces (
+        id, name, slug, settings, repos, issue_prefix, created_at, updated_at
+      ) VALUES ('ws_external_invite', 'External Invite', 'external-invite', '{}', '[]', 'EXT', '2026-06-04T00:00:00.000Z', '2026-06-04T00:00:00.000Z')`,
+    );
+    const acceptInvite = await app.request("/api/workspaces/ws_external_invite/members", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "local@multica.local", role: "member" }),
+    });
+    const acceptInviteBody = await acceptInvite.json();
+    const myInvites = await app.request("/api/invitations");
+    expect((await myInvites.json())[0].id).toBe(acceptInviteBody.id);
+
+    const accepted = await app.request(`/api/invitations/${acceptInviteBody.id}/accept`, { method: "POST" });
+    expect((await accepted.json()).status).toBe("accepted");
+    expect(store.listWorkspaceMembers("ws_external_invite").some((member) => member.email === "local@multica.local")).toBe(true);
+
+    const declineInvite = await app.request("/api/workspaces/ws_external_invite/members", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "local@multica.local", role: "admin" }),
+    });
+    expect(declineInvite.status).toBe(409);
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
