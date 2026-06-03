@@ -224,6 +224,24 @@ export interface MulticaTaskActivityByHour {
   count: number;
 }
 
+export interface MulticaAgentRunCount {
+  agentId: string;
+  agent_id?: string;
+  runCount: number;
+  run_count?: number;
+}
+
+export interface MulticaAgentActivityBucket {
+  agentId: string;
+  agent_id?: string;
+  bucketAt: string;
+  bucket_at?: string;
+  taskCount: number;
+  task_count?: number;
+  failedCount: number;
+  failed_count?: number;
+}
+
 export interface MulticaWorkspaceMember {
   id: string;
   workspaceId: string;

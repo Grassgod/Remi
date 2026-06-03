@@ -36,6 +36,8 @@ import type {
   MulticaCreatedAccessToken,
   MulticaAccessTokenType,
   MulticaAgent,
+  MulticaAgentActivityBucket,
+  MulticaAgentRunCount,
   MulticaAssigneeType,
   MulticaAttachment,
   MulticaChatMessage,
@@ -3791,6 +3793,55 @@ export class MulticaStore {
     return [...snapshot.values()].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   }
 
+  listWorkspaceAgentRunCounts(workspaceId = "local", days = 30): MulticaAgentRunCount[] {
+    const since = trailingWindowStart(days);
+    const rows = this.db.query(
+      `SELECT agent_id, COUNT(*) AS run_count
+       FROM multica_tasks
+       WHERE workspace_id = ? AND created_at > ?
+       GROUP BY agent_id
+       ORDER BY agent_id ASC`,
+    ).all(workspaceId, since) as Row[];
+    return rows.map((row) => {
+      const agentId = String(row.agent_id);
+      const runCount = Number(row.run_count ?? 0);
+      return { agentId, agent_id: agentId, runCount, run_count: runCount };
+    });
+  }
+
+  listWorkspaceAgentActivity30d(workspaceId = "local"): MulticaAgentActivityBucket[] {
+    const since = trailingWindowStart(30);
+    const rows = this.db.query(
+      `SELECT
+         agent_id,
+         substr(completed_at, 1, 10) AS bucket_date,
+         COUNT(*) AS task_count,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count
+       FROM multica_tasks
+       WHERE workspace_id = ?
+         AND completed_at IS NOT NULL
+         AND completed_at > ?
+       GROUP BY agent_id, bucket_date
+       ORDER BY agent_id ASC, bucket_date ASC`,
+    ).all(workspaceId, since) as Row[];
+    return rows.map((row) => {
+      const agentId = String(row.agent_id);
+      const bucketAt = `${String(row.bucket_date)}T00:00:00.000Z`;
+      const taskCount = Number(row.task_count ?? 0);
+      const failedCount = Number(row.failed_count ?? 0);
+      return {
+        agentId,
+        agent_id: agentId,
+        bucketAt,
+        bucket_at: bucketAt,
+        taskCount,
+        task_count: taskCount,
+        failedCount,
+        failed_count: failedCount,
+      };
+    });
+  }
+
   claimTask(runtimeId: string): MulticaTaskWithAgent | null {
     const tx = this.db.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
@@ -4749,6 +4800,11 @@ function usageSince(days: number | undefined): string | null {
   const value = Number(days ?? 30);
   if (!Number.isFinite(value) || value <= 0) return null;
   const capped = Math.min(365, Math.floor(value));
+  return new Date(Date.now() - capped * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function trailingWindowStart(days: number): string {
+  const capped = Math.max(1, Math.min(365, Math.floor(days)));
   return new Date(Date.now() - capped * 24 * 60 * 60 * 1000).toISOString();
 }
 

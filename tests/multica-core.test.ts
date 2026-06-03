@@ -1142,6 +1142,73 @@ describe("Bun Multica API", () => {
     expect(multicaAgentTaskBody.total).toBe(4);
   });
 
+  it("serves workspace agent run counts and 30 day activity buckets", async () => {
+    const store = createStore();
+    const agentA = store.createAgent({ name: "Activity A", provider: "codex" });
+    const agentB = store.createAgent({ name: "Activity B", provider: "claude" });
+    const app = createMulticaApp({ store });
+
+    const now = Date.now();
+    const recentCreated = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const oldCreated = new Date(now - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const recentCompletedA = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    const recentCompletedB = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString();
+
+    const completed = store.createTask({ agentId: agentA.id, prompt: "completed" });
+    db!.run("UPDATE multica_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+      recentCreated,
+      recentCompletedA,
+      recentCompletedA,
+      completed.id,
+    ]);
+    const failed = store.createTask({ agentId: agentA.id, prompt: "failed" });
+    db!.run("UPDATE multica_tasks SET status = 'failed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+      recentCreated,
+      recentCompletedA,
+      recentCompletedA,
+      failed.id,
+    ]);
+    const inFlight = store.createTask({ agentId: agentA.id, prompt: "in flight" });
+    db!.run("UPDATE multica_tasks SET created_at = ?, updated_at = ? WHERE id = ?", [recentCreated, recentCreated, inFlight.id]);
+    const old = store.createTask({ agentId: agentA.id, prompt: "old" });
+    db!.run("UPDATE multica_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+      oldCreated,
+      oldCreated,
+      oldCreated,
+      old.id,
+    ]);
+    const otherAgent = store.createTask({ agentId: agentB.id, prompt: "other agent" });
+    db!.run("UPDATE multica_tasks SET status = 'completed', created_at = ?, completed_at = ?, updated_at = ? WHERE id = ?", [
+      recentCreated,
+      recentCompletedB,
+      recentCompletedB,
+      otherAgent.id,
+    ]);
+
+    const runCounts = await app.request("/api/agent-run-counts?workspace_id=local");
+    const runCountBody = await runCounts.json();
+    expect(runCountBody.find((row: any) => row.agent_id === agentA.id)?.run_count).toBe(3);
+    expect(runCountBody.find((row: any) => row.agent_id === agentB.id)?.run_count).toBe(1);
+
+    const multicaRunCounts = await app.request("/api/multica/agent-run-counts?workspace_id=local");
+    const multicaRunCountBody = await multicaRunCounts.json();
+    expect(multicaRunCountBody.total).toBe(2);
+    expect(multicaRunCountBody.counts.find((row: any) => row.agentId === agentA.id)?.runCount).toBe(3);
+
+    const activity = await app.request("/api/agent-activity-30d?workspace_id=local");
+    const activityBody = await activity.json();
+    const agentABucket = activityBody.find((row: any) => row.agent_id === agentA.id);
+    expect(agentABucket.task_count).toBe(2);
+    expect(agentABucket.failed_count).toBe(1);
+    expect(agentABucket.bucket_at).toEndWith("T00:00:00.000Z");
+    expect(activityBody.find((row: any) => row.agent_id === agentB.id)?.task_count).toBe(1);
+
+    const multicaActivity = await app.request("/api/multica/agent-activity-30d?workspace_id=local");
+    const multicaActivityBody = await multicaActivity.json();
+    expect(multicaActivityBody.total).toBe(2);
+    expect(multicaActivityBody.activity.find((row: any) => row.agentId === agentA.id)?.failedCount).toBe(1);
+  });
+
   it("protects APIs with bearer auth and accepts created local tokens", async () => {
     const store = createStore();
     const app = createMulticaApp({ store, authToken: "root-secret" });

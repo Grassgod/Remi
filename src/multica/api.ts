@@ -188,6 +188,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/agent-task-snapshot", (c) => {
     return c.json(store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
   });
+  app.get("/api/multica/agent-run-counts", (c) => {
+    const counts = store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    return c.json({ counts, total: counts.length });
+  });
+  app.get("/api/agent-run-counts", (c) => {
+    return c.json(store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+  });
+  app.get("/api/multica/agent-activity-30d", (c) => {
+    const activity = store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    return c.json({ activity, total: activity.length });
+  });
+  app.get("/api/agent-activity-30d", (c) => {
+    return c.json(store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+  });
 
   app.get("/api/multica/skills", (c) => {
     const includeFiles = c.req.query("includeFiles") === "true";
