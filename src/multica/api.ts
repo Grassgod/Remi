@@ -9,6 +9,7 @@ import type {
   AssignIssueInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateChatSessionInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueWithTaskInput,
@@ -20,8 +21,10 @@ import type {
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
+  SendChatMessageInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
+  UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateSquadInput,
@@ -308,6 +311,31 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/issues/:id/metadata/:key", (c) => {
     return c.json({ metadata: store.deleteIssueMetadataKey(c.req.param("id"), c.req.param("key")) });
+  });
+
+  app.get("/api/multica/chats", (c) => {
+    const sessions = store.listChatSessions(c.req.query("workspaceId"));
+    return c.json({ sessions, total: sessions.length });
+  });
+  app.post("/api/multica/chats", async (c) => {
+    const body = await readJson<CreateChatSessionInput>(c);
+    return c.json({ session: store.createChatSession(body) }, 201);
+  });
+  app.get("/api/multica/chats/:id", (c) => {
+    const session = store.getChatSession(c.req.param("id"));
+    if (!session) return c.json({ error: "chat session not found" }, 404);
+    return c.json({ session, messages: store.listChatMessages(session.id) });
+  });
+  app.patch("/api/multica/chats/:id", async (c) => {
+    const body = await readJson<UpdateChatSessionInput>(c);
+    return c.json({ session: store.updateChatSession(c.req.param("id"), body) });
+  });
+  app.get("/api/multica/chats/:id/messages", (c) => {
+    return c.json({ messages: store.listChatMessages(c.req.param("id")) });
+  });
+  app.post("/api/multica/chats/:id/messages", async (c) => {
+    const body = await readJson<SendChatMessageInput>(c);
+    return c.json(store.sendChatMessage(c.req.param("id"), body), 201);
   });
 
   app.get("/api/multica/tasks", (c) => {

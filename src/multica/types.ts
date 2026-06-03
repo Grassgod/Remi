@@ -18,6 +18,8 @@ export type MulticaAutopilotExecutionMode = "create_issue" | "run_only";
 export type MulticaAutopilotAssigneeType = "agent" | "squad";
 export type MulticaAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
 export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
+export type MulticaChatSessionStatus = "active" | "archived";
+export type MulticaChatMessageRole = "user" | "assistant" | "system";
 
 export interface MulticaSkillFile {
   path: string;
@@ -199,11 +201,34 @@ export interface MulticaAutopilotRun {
   createdAt: string;
 }
 
+export interface MulticaChatSession {
+  id: string;
+  workspaceId: string;
+  agentId: string;
+  title: string;
+  status: MulticaChatSessionStatus;
+  sessionId: string | null;
+  workDir: string | null;
+  latestTaskId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MulticaChatMessage {
+  id: string;
+  chatSessionId: string;
+  taskId: string | null;
+  role: MulticaChatMessageRole;
+  body: string;
+  createdAt: string;
+}
+
 export interface MulticaTask {
   id: string;
   agentId: string;
   runtimeId: string | null;
   issueId: string | null;
+  chatSessionId: string | null;
   workspaceId: string;
   status: MulticaTaskStatus;
   priority: number;
@@ -454,6 +479,7 @@ export interface CreateTaskInput {
   id?: string;
   agentId: string;
   issueId?: string | null;
+  chatSessionId?: string | null;
   workspaceId?: string | null;
   priority?: number;
   prompt: string;
@@ -468,4 +494,26 @@ export interface TaskMessageInput {
   content?: string | null;
   input?: Record<string, unknown> | null;
   output?: string | null;
+}
+
+export interface CreateChatSessionInput {
+  id?: string;
+  agentId: string;
+  workspaceId?: string | null;
+  title?: string | null;
+}
+
+export interface UpdateChatSessionInput {
+  title?: string;
+  status?: MulticaChatSessionStatus;
+}
+
+export interface SendChatMessageInput {
+  body: string;
+}
+
+export interface SendChatMessageResult {
+  session: MulticaChatSession;
+  message: MulticaChatMessage;
+  task: MulticaTask;
 }

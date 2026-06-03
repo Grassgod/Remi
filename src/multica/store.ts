@@ -7,6 +7,7 @@ import type {
   AssignIssueResult,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateChatSessionInput,
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateProjectInput,
@@ -18,6 +19,8 @@ import type {
   MulticaAutopilotRun,
   MulticaAgent,
   MulticaAssigneeType,
+  MulticaChatMessage,
+  MulticaChatSession,
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
@@ -35,10 +38,13 @@ import type {
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
+  SendChatMessageInput,
+  SendChatMessageResult,
   TaskMessageInput,
   TaskUsageEntry,
   UpdateAgentInput,
   UpdateAutopilotInput,
+  UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateSquadInput,
@@ -249,11 +255,42 @@ export class MulticaStore {
 
       CREATE INDEX IF NOT EXISTS idx_multica_autopilot_runs_autopilot ON multica_autopilot_runs(autopilot_id, created_at);
 
+      CREATE TABLE IF NOT EXISTS multica_chat_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        agent_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        session_id TEXT,
+        work_dir TEXT,
+        latest_task_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(agent_id) REFERENCES multica_agents(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_chat_sessions_workspace ON multica_chat_sessions(workspace_id, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_multica_chat_sessions_agent ON multica_chat_sessions(agent_id);
+
+      CREATE TABLE IF NOT EXISTS multica_chat_messages (
+        id TEXT PRIMARY KEY,
+        chat_session_id TEXT NOT NULL,
+        task_id TEXT,
+        role TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(chat_session_id) REFERENCES multica_chat_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(task_id) REFERENCES multica_tasks(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_chat_messages_session ON multica_chat_messages(chat_session_id, created_at);
+
       CREATE TABLE IF NOT EXISTS multica_tasks (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
         runtime_id TEXT,
         issue_id TEXT,
+        chat_session_id TEXT,
         workspace_id TEXT NOT NULL DEFAULT 'local',
         status TEXT NOT NULL DEFAULT 'queued',
         priority INTEGER NOT NULL DEFAULT 0,
@@ -275,7 +312,8 @@ export class MulticaStore {
         failed_at TEXT,
         cancelled_at TEXT,
         FOREIGN KEY(agent_id) REFERENCES multica_agents(id),
-        FOREIGN KEY(issue_id) REFERENCES multica_issues(id)
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id),
+        FOREIGN KEY(chat_session_id) REFERENCES multica_chat_sessions(id) ON DELETE SET NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_tasks_status ON multica_tasks(status);
@@ -303,6 +341,7 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_issues", "assignee_type TEXT");
     this.addColumnIfMissing("multica_issues", "assignee_id TEXT");
     this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
+    this.addColumnIfMissing("multica_tasks", "chat_session_id TEXT");
   }
 
   createAgent(input: CreateAgentInput): MulticaAgent {
@@ -1254,29 +1293,120 @@ export class MulticaStore {
     return row ? toAutopilotRun(row) : null;
   }
 
+  createChatSession(input: CreateChatSessionInput): MulticaChatSession {
+    const agent = this.getAgent(input.agentId);
+    if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
+    if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
+    const id = input.id ?? createId("chat");
+    const now = nowIso();
+    const title = input.title?.trim() || `Chat with ${agent.name}`;
+    this.db.run(
+      `INSERT INTO multica_chat_sessions (
+        id, workspace_id, agent_id, title, status, session_id, work_dir, latest_task_id,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'active', NULL, NULL, NULL, ?, ?)`,
+      [id, input.workspaceId ?? "local", input.agentId, title, now, now],
+    );
+    return this.getChatSession(id)!;
+  }
+
+  listChatSessions(workspaceId?: string | null): MulticaChatSession[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_chat_sessions WHERE workspace_id = ? AND status != 'archived' ORDER BY updated_at DESC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_chat_sessions WHERE status != 'archived' ORDER BY updated_at DESC").all() as Row[];
+    return rows.map(toChatSession);
+  }
+
+  getChatSession(id: string): MulticaChatSession | null {
+    const row = this.db.query("SELECT * FROM multica_chat_sessions WHERE id = ?").get(id) as Row | null;
+    return row ? toChatSession(row) : null;
+  }
+
+  updateChatSession(id: string, input: UpdateChatSessionInput): MulticaChatSession {
+    const current = this.getChatSession(id);
+    if (!current) throw new Error(`Chat session not found: ${id}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_chat_sessions
+       SET title = ?, status = ?, updated_at = ?
+       WHERE id = ?`,
+      [input.title?.trim() || current.title, input.status ?? current.status, now, id],
+    );
+    return this.getChatSession(id)!;
+  }
+
+  listChatMessages(chatSessionId: string): MulticaChatMessage[] {
+    if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_chat_messages WHERE chat_session_id = ? ORDER BY created_at ASC",
+    ).all(chatSessionId) as Row[];
+    return rows.map(toChatMessage);
+  }
+
+  sendChatMessage(chatSessionId: string, input: SendChatMessageInput): SendChatMessageResult {
+    const session = this.getChatSession(chatSessionId);
+    if (!session) throw new Error(`Chat session not found: ${chatSessionId}`);
+    if (session.status === "archived") throw new Error(`Chat session is archived: ${chatSessionId}`);
+    const body = input.body?.trim();
+    if (!body) throw new Error("Chat message body is required");
+    const now = nowIso();
+    const messageId = createId("msg");
+    const task = this.createTask({
+      agentId: session.agentId,
+      chatSessionId: session.id,
+      workspaceId: session.workspaceId,
+      prompt: body,
+      sessionId: session.sessionId,
+      workDir: session.workDir,
+    });
+    this.db.run(
+      `INSERT INTO multica_chat_messages (id, chat_session_id, task_id, role, body, created_at)
+       VALUES (?, ?, ?, 'user', ?, ?)`,
+      [messageId, session.id, task.id, body, now],
+    );
+    this.db.run(
+      "UPDATE multica_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
+      [task.id, now, session.id],
+    );
+    return {
+      session: this.getChatSession(session.id)!,
+      message: this.getChatMessage(messageId)!,
+      task,
+    };
+  }
+
+  getChatMessage(id: string): MulticaChatMessage | null {
+    const row = this.db.query("SELECT * FROM multica_chat_messages WHERE id = ?").get(id) as Row | null;
+    return row ? toChatMessage(row) : null;
+  }
+
   createTask(input: CreateTaskInput): MulticaTask {
     const agent = this.getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
     const issue = input.issueId ? this.getIssue(input.issueId) : null;
     if (input.issueId && !issue) throw new Error(`Issue not found: ${input.issueId}`);
+    const chatSession = input.chatSessionId ? this.getChatSession(input.chatSessionId) : null;
+    if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
+    if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
 
     const id = input.id ?? createId("tsk");
     const now = nowIso();
     this.db.run(
       `INSERT INTO multica_tasks (
-        id, agent_id, issue_id, workspace_id, status, priority, prompt,
+        id, agent_id, issue_id, chat_session_id, workspace_id, status, priority, prompt,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.agentId,
         input.issueId ?? null,
-        input.workspaceId ?? issue?.workspaceId ?? "local",
+        input.chatSessionId ?? null,
+        input.workspaceId ?? issue?.workspaceId ?? chatSession?.workspaceId ?? "local",
         input.priority ?? 0,
         input.prompt,
-        input.sessionId ?? null,
-        input.workDir ?? agent.cwd ?? null,
+        input.sessionId ?? chatSession?.sessionId ?? null,
+        input.workDir ?? chatSession?.workDir ?? agent.cwd ?? null,
         now,
         now,
       ],
@@ -1651,6 +1781,25 @@ export class MulticaStore {
 
   private afterTaskTerminal(task: MulticaTask, status: "completed" | "failed" | "cancelled", body: string | null): void {
     const now = nowIso();
+    if (task.chatSessionId) {
+      const role = status === "completed" ? "assistant" : "system";
+      const messageBody = status === "completed" ? (body || "Task completed.") : (body || `Task ${status}`);
+      this.db.run(
+        `INSERT INTO multica_chat_messages (id, chat_session_id, task_id, role, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [createId("msg"), task.chatSessionId, task.id, role, messageBody, now],
+      );
+      this.db.run(
+        `UPDATE multica_chat_sessions
+         SET session_id = COALESCE(?, session_id),
+             work_dir = COALESCE(?, work_dir),
+             latest_task_id = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [task.sessionId ?? null, task.workDir ?? null, task.id, now, task.chatSessionId],
+      );
+    }
+
     if (task.issueId) {
       const issueStatus = status === "completed" ? "done" : status;
       this.db.run(
@@ -2025,12 +2174,39 @@ function toAutopilotRun(row: Row): MulticaAutopilotRun {
   };
 }
 
+function toChatSession(row: Row): MulticaChatSession {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    agentId: String(row.agent_id),
+    title: String(row.title ?? ""),
+    status: String(row.status ?? "active") as MulticaChatSession["status"],
+    sessionId: nullableString(row.session_id),
+    workDir: nullableString(row.work_dir),
+    latestTaskId: nullableString(row.latest_task_id),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toChatMessage(row: Row): MulticaChatMessage {
+  return {
+    id: String(row.id),
+    chatSessionId: String(row.chat_session_id),
+    taskId: nullableString(row.task_id),
+    role: String(row.role ?? "system") as MulticaChatMessage["role"],
+    body: String(row.body ?? ""),
+    createdAt: String(row.created_at),
+  };
+}
+
 function toTask(row: Row): MulticaTask {
   return {
     id: String(row.id),
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
     issueId: nullableString(row.issue_id),
+    chatSessionId: nullableString(row.chat_session_id),
     workspaceId: String(row.workspace_id ?? "local"),
     status: String(row.status) as MulticaTaskStatus,
     priority: Number(row.priority ?? 0),

@@ -1149,7 +1149,7 @@ export function renderMulticaDashboardHtml(): string {
       font-size: 12px;
     }
     .chat-entry.user { margin-left: 34px; background: var(--muted); }
-    .chat-entry.system { margin-right: 34px; }
+    .chat-entry.system, .chat-entry.assistant { margin-right: 34px; }
     .chat-entry span { color: var(--muted-foreground); font-size: 11px; }
     .chat-form {
       border-top: 1px solid var(--border);
@@ -1377,6 +1377,10 @@ export function renderMulticaDashboardHtml(): string {
       selectedProjectResources: [],
       selectedAgentId: null,
       selectedAgent: null,
+      chatSessions: [],
+      selectedChatId: null,
+      selectedChatSession: null,
+      selectedChatMessages: [],
       chatEntries: []
     };
 
@@ -1443,6 +1447,14 @@ export function renderMulticaDashboardHtml(): string {
     els.chatFab.addEventListener("click", toggleChat);
     document.getElementById("closeChat").addEventListener("click", closeChat);
     document.getElementById("chatForm").addEventListener("submit", submitChat);
+    els.chatAgent.addEventListener("change", async () => {
+      state.selectedChatId = null;
+      state.selectedChatSession = null;
+      state.selectedChatMessages = [];
+      const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
+      if (existing) await loadChatDetail(existing.id, { silent: true });
+      renderChat();
+    });
     document.addEventListener("keydown", event => {
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && key === "k") {
@@ -1467,7 +1479,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1475,7 +1487,8 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/members"),
           api("/api/multica/projects"),
           api("/api/multica/squads"),
-          api("/api/multica/autopilots")
+          api("/api/multica/autopilots"),
+          api("/api/multica/chats")
         ]);
         state.agents = agents.agents || [];
         state.issues = issues.issues || [];
@@ -1485,12 +1498,18 @@ export function renderMulticaDashboardHtml(): string {
         state.projects = projects.projects || [];
         state.squads = squads.squads || [];
         state.autopilots = autopilots.autopilots || [];
+        state.chatSessions = chats.sessions || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
         if (state.selectedSquadId) await loadSquadDetail(state.selectedSquadId, { silent: true });
         if (state.selectedProjectId) await loadProjectDetail(state.selectedProjectId, { silent: true });
         if (state.selectedAgentId) await loadAgentDetail(state.selectedAgentId, { silent: true });
+        if (state.selectedChatId) await loadChatDetail(state.selectedChatId, { silent: true });
+        else if (els.chatAgent.value) {
+          const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
+          if (existing) await loadChatDetail(existing.id, { silent: true });
+        }
       } catch (err) {
         showNotice(String(err.message || err), options.agent ? els.agentNotice : els.notice);
       } finally {
@@ -1704,6 +1723,18 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedIssue = null;
         state.selectedSquad = null;
         renderAgentDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function loadChatDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/chats/" + encodeURIComponent(id));
+        state.selectedChatId = id;
+        state.selectedChatSession = result.session;
+        state.selectedChatMessages = result.messages || [];
+        if (!options.silent) renderChat();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
       }
@@ -2081,17 +2112,45 @@ export function renderMulticaDashboardHtml(): string {
       const prompt = els.chatPrompt.value.trim();
       const agentId = els.chatAgent.value;
       if (!prompt || !agentId) return;
-      state.chatEntries.push({ role: "user", text: prompt });
       els.chatPrompt.value = "";
       renderChat();
       try {
-        const task = await postTask({ agentId, workspaceId: "local", prompt });
-        state.chatEntries.push({ role: "system", text: "Created " + shortId(task.id) });
+        const session = await ensureChatSession(agentId, prompt);
+        const result = await api("/api/multica/chats/" + encodeURIComponent(session.id) + "/messages", {
+          method: "POST",
+          body: JSON.stringify({ body: prompt })
+        });
+        state.selectedChatId = session.id;
+        state.selectedChatSession = result.session;
+        await loadChatDetail(session.id, { silent: true });
         await refresh();
       } catch (err) {
-        state.chatEntries.push({ role: "system", text: String(err.message || err) });
+        state.chatEntries = [{ role: "system", text: String(err.message || err) }];
       }
       renderChat();
+    }
+
+    async function ensureChatSession(agentId, firstPrompt) {
+      const existing = state.selectedChatSession && state.selectedChatSession.agentId === agentId
+        ? state.selectedChatSession
+        : state.chatSessions.find(session => session.agentId === agentId);
+      if (existing) {
+        if (!state.selectedChatId) await loadChatDetail(existing.id, { silent: true });
+        return existing;
+      }
+      const result = await api("/api/multica/chats", {
+        method: "POST",
+        body: JSON.stringify({
+          agentId,
+          workspaceId: "local",
+          title: firstPrompt.length > 60 ? firstPrompt.slice(0, 57) + "..." : firstPrompt
+        })
+      });
+      state.chatSessions.unshift(result.session);
+      state.selectedChatId = result.session.id;
+      state.selectedChatSession = result.session;
+      state.selectedChatMessages = [];
+      return result.session;
     }
 
     function switchPage(page) {
@@ -2778,12 +2837,22 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     function renderChat() {
-      if (!state.chatEntries.length) {
-        els.chatLog.innerHTML = "<div class=\\"chat-entry system\\"><span>Multica</span><div>Ready</div></div>";
+      const entries = state.selectedChatMessages.length
+        ? state.selectedChatMessages.map(message => ({
+          role: message.role,
+          text: message.body,
+          label: message.role === "user" ? "You" : message.role === "assistant" ? "Agent" : "Multica"
+        }))
+        : state.chatEntries;
+      if (!entries.length) {
+        const latest = els.chatAgent.value ? state.chatSessions.find(session => session.agentId === els.chatAgent.value) : null;
+        els.chatLog.innerHTML = latest
+          ? "<div class=\\"chat-entry system\\"><span>Multica</span><div>Open chat: " + esc(latest.title) + "</div></div>"
+          : "<div class=\\"chat-entry system\\"><span>Multica</span><div>Ready</div></div>";
         return;
       }
-      els.chatLog.innerHTML = state.chatEntries.slice(-8).map(entry =>
-        "<div class=\\"chat-entry " + esc(entry.role) + "\\"><span>" + esc(entry.role === "user" ? "You" : "Multica") + "</span><div>" + esc(entry.text) + "</div></div>"
+      els.chatLog.innerHTML = entries.slice(-12).map(entry =>
+        "<div class=\\"chat-entry " + esc(entry.role) + "\\"><span>" + esc(entry.label || (entry.role === "user" ? "You" : "Multica")) + "</span><div>" + esc(entry.text) + "</div></div>"
       ).join("");
     }
 

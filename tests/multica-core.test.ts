@@ -326,6 +326,32 @@ describe("Bun Multica core store", () => {
     });
   });
 
+  it("persists chat sessions and resumes provider context across turns", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "Private plan" });
+
+    const first = store.sendChatMessage(session.id, { body: "How should we approach this?" });
+    expect(first.message.role).toBe("user");
+    expect(first.task.chatSessionId).toBe(session.id);
+
+    store.startTask(first.task.id);
+    store.completeTask(first.task.id, {
+      output: "Start with a small patch.",
+      sessionId: "provider-session-1",
+      workDir: "/tmp/multica-chat",
+    });
+
+    const messages = store.listChatMessages(session.id);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messages[1]?.body).toBe("Start with a small patch.");
+    expect(store.getChatSession(session.id)?.sessionId).toBe("provider-session-1");
+
+    const second = store.sendChatMessage(session.id, { body: "Continue" });
+    expect(second.task.sessionId).toBe("provider-session-1");
+    expect(second.task.workDir).toBe("/tmp/multica-chat");
+  });
+
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -549,6 +575,38 @@ describe("Bun Multica API", () => {
 
     const deleted = await app.request(`/api/multica/issues/${issue.id}/metadata/pipeline_status`, { method: "DELETE" });
     expect((await deleted.json()).metadata).toEqual({});
+  });
+
+  it("serves chat session and message endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/chats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, title: "API chat" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+
+    const sent = await app.request(`/api/multica/chats/${createdBody.session.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Hello" }),
+    });
+    expect(sent.status).toBe(201);
+    const sentBody = await sent.json();
+    expect(sentBody.task.chatSessionId).toBe(createdBody.session.id);
+
+    const detail = await app.request(`/api/multica/chats/${createdBody.session.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.messages[0].body).toBe("Hello");
+
+    store.startTask(sentBody.task.id);
+    store.completeTask(sentBody.task.id, { output: "Hi there", sessionId: "sess-chat" });
+    const messages = await app.request(`/api/multica/chats/${createdBody.session.id}/messages`);
+    expect((await messages.json()).messages.map((message: any) => message.role)).toEqual(["user", "assistant"]);
   });
 
   it("triggers autopilots through API and webhook endpoints", async () => {
