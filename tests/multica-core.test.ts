@@ -1345,6 +1345,77 @@ describe("Bun Multica API", () => {
     expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
   });
 
+  it("serves issue compatibility list, grouped, and batch endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Issue owner" });
+    const project = store.createProject({ title: "Batch project" });
+    const app = createMulticaApp({ store });
+
+    const first = store.createIssue({
+      title: "Batch first",
+      workspaceId: "local",
+      projectId: project.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      status: "open",
+      priority: "low",
+      position: 2,
+    });
+    const second = store.createIssue({
+      title: "Batch second",
+      workspaceId: "local",
+      assigneeType: "member",
+      assigneeId: member.id,
+      status: "open",
+      priority: "medium",
+      position: 1,
+    });
+    store.createIssue({ title: "Other workspace", workspaceId: "other", status: "open" });
+
+    const listed = await app.request("/api/issues?workspace_id=local&status=open");
+    const listedBody = await listed.json();
+    expect(listedBody.total).toBe(2);
+    expect(listedBody.issues.map((issue: any) => issue.id).sort()).toEqual([first.id, second.id].sort());
+
+    const grouped = await app.request("/api/issues/grouped?workspace_id=local&statuses=open&limit=10");
+    const groupedBody = await grouped.json();
+    expect(groupedBody.groups.map((group: any) => group.id)).toEqual([
+      `member:${member.id}`,
+      `agent:${agent.id}`,
+    ]);
+    expect(groupedBody.groups[0].total).toBe(1);
+    expect(groupedBody.groups[1].issues[0].id).toBe(first.id);
+
+    const noMutation = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [first.id], updates: {} }),
+    });
+    expect(await noMutation.json()).toEqual({ updated: 0 });
+
+    const updated = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        issue_ids: [first.id, "missing", second.id],
+        updates: { status: "done", priority: "urgent", project_id: project.id },
+      }),
+    });
+    expect(await updated.json()).toEqual({ updated: 2 });
+    expect(store.getIssue(first.id)?.status).toBe("done");
+    expect(store.getIssue(second.id)?.priority).toBe("urgent");
+
+    const deleted = await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [first.id, second.id, "missing"] }),
+    });
+    expect(await deleted.json()).toEqual({ deleted: 2 });
+    expect(store.getIssue(first.id)).toBeNull();
+    expect(store.getIssue(second.id)).toBeNull();
+  });
+
   it("serves issue hierarchy and planning fields through API endpoints", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

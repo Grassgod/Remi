@@ -17,6 +17,8 @@ import type {
   CreateAttachmentInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  BatchDeleteIssuesInput,
+  BatchUpdateIssuesInput,
   CreateChatSessionInput,
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
@@ -31,6 +33,7 @@ import type {
   CreateTaskInput,
   CreateWorkspaceMemberInput,
   ImportSkillInput,
+  ListIssuesInput,
   RegisterRuntimeInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
@@ -693,8 +696,8 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ ok: true });
   });
 
-  app.get("/api/multica/issues", (c) => {
-    const issues = store.listIssues().map((issue) => {
+  const listIssuesResponse = (query: ListIssuesInput = {}) => {
+    const issues = store.listIssues(query).map((issue) => {
       const tasks = store.listTasksForIssue(issue.id);
       return {
         ...issue,
@@ -703,8 +706,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
         latestTaskId: tasks[0]?.id ?? null,
       };
     });
+    return { issues, total: issues.length };
+  };
+
+  app.get("/api/multica/issues", (c) => {
+    const { issues } = listIssuesResponse(issueListQuery(c));
     return c.json({ issues });
   });
+  app.get("/api/issues", (c) => c.json(listIssuesResponse(issueListQuery(c))));
+  app.get("/api/multica/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(c))));
+  app.get("/api/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(c))));
   app.get("/api/multica/issues/search", (c) => {
     const result = store.searchIssues({
       q: c.req.query("q") ?? "",
@@ -733,6 +744,23 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
     return c.json({ progress, total: progress.length });
   });
+  app.post("/api/multica/issues/batch-update", async (c) => {
+    const body = await readJson<BatchUpdateIssuesInput>(c);
+    return c.json(store.batchUpdateIssues(body));
+  });
+  app.post("/api/issues/batch-update", async (c) => {
+    const body = await readJson<BatchUpdateIssuesInput>(c);
+    const result = store.batchUpdateIssues(body);
+    return c.json({ updated: result.updated });
+  });
+  app.post("/api/multica/issues/batch-delete", async (c) => {
+    const body = await readJson<BatchDeleteIssuesInput>(c);
+    return c.json(store.batchDeleteIssues(body));
+  });
+  app.post("/api/issues/batch-delete", async (c) => {
+    const body = await readJson<BatchDeleteIssuesInput>(c);
+    return c.json(store.batchDeleteIssues(body));
+  });
   app.post("/api/multica/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
@@ -755,6 +783,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     }
     return c.json({ issue, task }, 201);
   });
+  app.post("/api/issues", async (c) => {
+    const body = await readJson<CreateIssueWithTaskInput>(c);
+    return c.json(store.createIssue(body), 201);
+  });
   app.get("/api/multica/issues/:id", (c) => {
     const issue = store.getIssueWithTasks(c.req.param("id"));
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -766,6 +798,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       comments: store.listIssueComments(issue.id),
       activity: store.listIssueActivity(issue.id),
     });
+  });
+  app.get("/api/issues/:id", (c) => {
+    const issue = store.getIssueWithTasks(c.req.param("id"));
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json(issue);
   });
   app.get("/api/multica/issues/:id/children", (c) => {
     const children = store.listChildIssues(c.req.param("id"));
@@ -802,6 +839,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.patch("/api/multica/issues/:id", async (c) => {
     const body = await readJson<UpdateIssueInput>(c);
     return c.json({ issue: store.updateIssue(c.req.param("id"), body) });
+  });
+  app.patch("/api/issues/:id", async (c) => {
+    const body = await readJson<UpdateIssueInput>(c);
+    return c.json(store.updateIssue(c.req.param("id"), body));
+  });
+  app.delete("/api/multica/issues/:id", (c) => {
+    const deleted = store.deleteIssue(c.req.param("id"));
+    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    return c.json({ ok: true });
+  });
+  app.delete("/api/issues/:id", (c) => {
+    const deleted = store.deleteIssue(c.req.param("id"));
+    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    return c.body(null, 204);
   });
   app.post("/api/multica/issues/:id/assign", async (c) => {
     const body = await readJson<AssignIssueInput>(c);
@@ -1171,6 +1222,27 @@ function parseOptionalInt(value: string | undefined): number | undefined {
   if (value == null || value === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function issueListQuery(c: { req: { query: (name: string) => string | undefined } }): ListIssuesInput {
+  return {
+    workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local",
+    statuses: splitQueryList(c.req.query("statuses") ?? c.req.query("status")),
+    priorities: splitQueryList(c.req.query("priorities") ?? c.req.query("priority")),
+    assigneeTypes: splitQueryList(c.req.query("assigneeTypes") ?? c.req.query("assignee_types")) as ListIssuesInput["assigneeTypes"],
+    assigneeId: c.req.query("assigneeId") ?? c.req.query("assignee_id") ?? null,
+    assigneeIds: splitQueryList(c.req.query("assigneeIds") ?? c.req.query("assignee_ids")),
+    projectId: c.req.query("projectId") ?? c.req.query("project_id") ?? null,
+    projectIds: splitQueryList(c.req.query("projectIds") ?? c.req.query("project_ids")),
+    includeNoAssignee: c.req.query("includeNoAssignee") === "true" || c.req.query("include_no_assignee") === "true",
+    includeNoProject: c.req.query("includeNoProject") === "true" || c.req.query("include_no_project") === "true",
+    limit: parseOptionalInt(c.req.query("limit")),
+    offset: parseOptionalInt(c.req.query("offset")),
+  };
+}
+
+function splitQueryList(value: string | undefined): string[] {
+  return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function usageQuery(c: { req: { query: (name: string) => string | undefined } }, extra: { runtimeId?: string | null } = {}): {

@@ -13,6 +13,8 @@ import type {
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  BatchDeleteIssuesInput,
+  BatchUpdateIssuesInput,
   CreateLabelInput,
   CreatePinnedItemInput,
   CreateProjectInput,
@@ -44,6 +46,7 @@ import type {
   MulticaIssueDependency,
   MulticaIssueDependencyType,
   MulticaIssue,
+  MulticaIssueAssigneeGroup,
   MulticaIssuePriority,
   MulticaIssueSearchResult,
   MulticaGitHubChecksConclusion,
@@ -59,6 +62,7 @@ import type {
   MulticaIssueReaction,
   MulticaIssueSubscriber,
   MulticaIssueWithTasks,
+  ListIssuesInput,
   MulticaProject,
   MulticaProjectResource,
   MulticaProjectSearchResult,
@@ -1681,9 +1685,85 @@ export class MulticaStore {
     };
   }
 
-  listIssues(): MulticaIssue[] {
+  listIssues(input: ListIssuesInput = {}): MulticaIssue[] {
     const rows = this.db.query("SELECT * FROM multica_issues ORDER BY updated_at DESC").all() as Row[];
-    return rows.map((row) => this.hydrateIssue(toIssue(row)));
+    const offset = normalizeListOffset(input.offset);
+    const limit = input.limit === undefined ? Number.POSITIVE_INFINITY : normalizeListLimit(input.limit);
+    return rows
+      .map((row) => this.hydrateIssue(toIssue(row)))
+      .filter((issue) => issueMatchesListFilter(issue, input))
+      .slice(offset, offset + limit);
+  }
+
+  listGroupedIssues(input: ListIssuesInput = {}): { groups: MulticaIssueAssigneeGroup[] } {
+    const limit = normalizeListLimit(input.limit, 50, 100);
+    const offset = normalizeListOffset(input.offset);
+    const issues = this.listIssues({ ...input, limit: undefined, offset: undefined })
+      .sort((left, right) => {
+        const typeRank = assigneeGroupRank(left.assigneeType) - assigneeGroupRank(right.assigneeType);
+        if (typeRank !== 0) return typeRank;
+        return String(left.assigneeId ?? "").localeCompare(String(right.assigneeId ?? ""))
+          || left.position - right.position
+          || Date.parse(right.createdAt) - Date.parse(left.createdAt);
+      });
+    const groups = new Map<string, MulticaIssueAssigneeGroup>();
+    for (const issue of issues) {
+      const id = assigneeGroupId(issue.assigneeType, issue.assigneeId);
+      const group = groups.get(id) ?? {
+        id,
+        assigneeType: issue.assigneeType,
+        assigneeId: issue.assigneeId,
+        issues: [],
+        total: 0,
+      };
+      group.total += 1;
+      if (group.total > offset && group.issues.length < limit) group.issues.push(issue);
+      groups.set(id, group);
+    }
+    return { groups: [...groups.values()] };
+  }
+
+  batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MulticaIssue[] } {
+    const issueIds = input.issueIds ?? input.issue_ids ?? [];
+    const updates = input.updates ?? {};
+    if (issueIds.length === 0) throw new Error("issue_ids is required");
+    if (!hasIssueMutation(updates)) return { updated: 0, issues: [] };
+    const issues: MulticaIssue[] = [];
+    for (const issueId of issueIds) {
+      try {
+        issues.push(this.updateIssue(issueId, updates));
+      } catch {
+        // Match Multica's batch behavior: skip invalid or inaccessible rows.
+      }
+    }
+    return { updated: issues.length, issues };
+  }
+
+  deleteIssue(id: string): boolean {
+    const issue = this.getIssue(id);
+    if (!issue) return false;
+    this.db.transaction(() => {
+      this.cancelActiveIssueTasks(id, "issue_deleted");
+      this.db.run("UPDATE multica_autopilot_runs SET status = 'failed', completed_at = ?, failure_reason = ? WHERE issue_id = ? AND completed_at IS NULL", [
+        nowIso(),
+        "issue deleted",
+        id,
+      ]);
+      this.db.run("UPDATE multica_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+      this.db.run("DELETE FROM multica_issues WHERE id = ?", [id]);
+      if (issue.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [nowIso(), issue.projectId]);
+    })();
+    return true;
+  }
+
+  batchDeleteIssues(input: BatchDeleteIssuesInput): { deleted: number } {
+    const issueIds = input.issueIds ?? input.issue_ids ?? [];
+    if (issueIds.length === 0) throw new Error("issue_ids is required");
+    let deleted = 0;
+    for (const issueId of issueIds) {
+      if (this.deleteIssue(issueId)) deleted += 1;
+    }
+    return { deleted };
   }
 
   searchIssues(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { issues: MulticaIssueSearchResult[]; total: number } {
@@ -4509,6 +4589,85 @@ async function hashAccessToken(token: string): Promise<string> {
   const bytes = new TextEncoder().encode(token);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function issueMatchesListFilter(issue: MulticaIssue, input: ListIssuesInput): boolean {
+  const workspaceId = input.workspaceId ?? input.workspace_id;
+  if (workspaceId && issue.workspaceId !== workspaceId) return false;
+  const statuses = normalizeStringList(input.statuses ?? input.status);
+  if (statuses.length && !statuses.includes(issue.status)) return false;
+  const priorities = normalizeStringList(input.priorities ?? input.priority);
+  if (priorities.length && !priorities.includes(issue.priority)) return false;
+  const assigneeTypes = normalizeStringList(input.assigneeTypes ?? input.assignee_types);
+  if (assigneeTypes.length && (!issue.assigneeType || !assigneeTypes.includes(issue.assigneeType))) return false;
+  const assigneeId = input.assigneeId ?? input.assignee_id;
+  if (assigneeId && issue.assigneeId !== assigneeId) return false;
+  const assigneeIds = normalizeStringList(input.assigneeIds ?? input.assignee_ids);
+  if (assigneeIds.length && (!issue.assigneeId || !assigneeIds.includes(issue.assigneeId))) return false;
+  if (input.includeNoAssignee && issue.assigneeId !== null) return false;
+  const projectId = input.projectId ?? input.project_id;
+  if (projectId && issue.projectId !== projectId) return false;
+  const projectIds = normalizeStringList(input.projectIds ?? input.project_ids);
+  if (projectIds.length && (!issue.projectId || !projectIds.includes(issue.projectId))) return false;
+  if (input.includeNoProject && issue.projectId !== null) return false;
+  return true;
+}
+
+function normalizeStringList(value: string[] | string | undefined | null): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
+}
+
+function normalizeListOffset(value: number | undefined): number {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function normalizeListLimit(value: number | undefined, fallback = 200, max = 500): number {
+  const number = Number(value ?? fallback);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(0, Math.floor(number)));
+}
+
+function assigneeGroupId(type: MulticaAssigneeType | null, id: string | null): string {
+  return type && id ? `${type}:${id}` : "none";
+}
+
+function assigneeGroupRank(type: MulticaAssigneeType | null): number {
+  if (type === "member") return 0;
+  if (type === "agent") return 1;
+  if (type === "squad") return 2;
+  return 3;
+}
+
+function hasIssueMutation(input: UpdateIssueInput): boolean {
+  return hasAnyField(
+    input,
+    "title",
+    "description",
+    "status",
+    "priority",
+    "projectId",
+    "project_id",
+    "workspaceId",
+    "workspace_id",
+    "parentIssueId",
+    "parent_issue_id",
+    "assigneeType",
+    "assignee_type",
+    "assigneeId",
+    "assignee_id",
+    "position",
+    "startDate",
+    "start_date",
+    "dueDate",
+    "due_date",
+    "acceptanceCriteria",
+    "acceptance_criteria",
+    "contextRefs",
+    "context_refs",
+  );
 }
 
 function normalizeIssuePosition(value: number | null | undefined): number {

@@ -331,6 +331,14 @@ export interface MulticaIssueWithTasks extends MulticaIssue {
   dependencies: MulticaIssueDependency[];
 }
 
+export interface MulticaIssueAssigneeGroup {
+  id: string;
+  assigneeType: MulticaAssigneeType | null;
+  assigneeId: string | null;
+  issues: MulticaIssue[];
+  total: number;
+}
+
 export interface MulticaIssueChildProgress {
   parentIssueId: string;
   total: number;
@@ -798,6 +806,40 @@ export interface UpdateIssueInput {
   acceptance_criteria?: unknown[];
   contextRefs?: unknown[];
   context_refs?: unknown[];
+}
+
+export interface BatchUpdateIssuesInput {
+  issueIds?: string[];
+  issue_ids?: string[];
+  updates?: UpdateIssueInput;
+}
+
+export interface BatchDeleteIssuesInput {
+  issueIds?: string[];
+  issue_ids?: string[];
+}
+
+export interface ListIssuesInput {
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  statuses?: string[];
+  status?: string[];
+  priorities?: string[];
+  priority?: string[];
+  assigneeTypes?: MulticaAssigneeType[];
+  assignee_types?: MulticaAssigneeType[];
+  assigneeId?: string | null;
+  assignee_id?: string | null;
+  assigneeIds?: string[];
+  assignee_ids?: string[];
+  projectId?: string | null;
+  project_id?: string | null;
+  projectIds?: string[];
+  project_ids?: string[];
+  includeNoAssignee?: boolean;
+  includeNoProject?: boolean;
+  limit?: number;
+  offset?: number;
 }
 
 export interface AssignIssueInput {
