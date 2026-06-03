@@ -6,6 +6,7 @@ import { MulticaScheduler } from "./scheduler.js";
 import { MulticaStore } from "./store.js";
 import type {
   AddSquadMemberInput,
+  AssignIssueInput,
   CreateAgentInput,
   CreateAutopilotInput,
   CreateIssueCommentInput,
@@ -247,15 +248,17 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
-    const issue = store.createIssue(body);
+    const assigneeType = body.assigneeType ?? (body.agentId ? "agent" : null);
+    const assigneeId = body.assigneeId ?? body.agentId ?? null;
+    const issue = store.createIssue({ ...body, assigneeType: null, assigneeId: null });
     let task = null;
-    if (body.agentId && body.prompt) {
-      task = store.createTask({
-        agentId: body.agentId,
-        issueId: issue.id,
-        workspaceId: issue.workspaceId,
-        prompt: body.prompt,
+    if (assigneeType && assigneeId) {
+      const assigned = store.assignIssue(issue.id, {
+        assigneeType,
+        assigneeId,
+        prompt: body.prompt ?? body.title,
       });
+      return c.json({ issue: assigned.issue, task: assigned.task }, 201);
     }
     return c.json({ issue, task }, 201);
   });
@@ -271,6 +274,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.patch("/api/multica/issues/:id", async (c) => {
     const body = await readJson<UpdateIssueInput>(c);
     return c.json({ issue: store.updateIssue(c.req.param("id"), body) });
+  });
+  app.post("/api/multica/issues/:id/assign", async (c) => {
+    const body = await readJson<AssignIssueInput>(c);
+    return c.json(store.assignIssue(c.req.param("id"), body));
   });
   app.get("/api/multica/issues/:id/comments", (c) => {
     return c.json({ comments: store.listIssueComments(c.req.param("id")) });

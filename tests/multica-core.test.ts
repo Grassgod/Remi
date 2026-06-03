@@ -106,6 +106,34 @@ describe("Bun Multica core store", () => {
     expect(() => store.addSquadMember(squad.id, { memberType: "member", memberId: member.id })).toThrow("Member is archived");
   });
 
+  it("assigns issues to members, agents, and squads", () => {
+    const store = createStore();
+    const codex = store.createAgent({ name: "Codex", provider: "codex" });
+    const leader = store.createAgent({ name: "Squad lead", provider: "claude" });
+    const member = store.createWorkspaceMember({ name: "Human reviewer", role: "member" });
+    const squad = store.createSquad({ name: "Feature squad", leaderId: leader.id });
+    const issue = store.createIssue({ title: "Implement assignment" });
+
+    const memberAssigned = store.assignIssue(issue.id, { assigneeType: "member", assigneeId: member.id });
+    expect(memberAssigned.issue.assigneeType).toBe("member");
+    expect(memberAssigned.task).toBeNull();
+
+    const agentAssigned = store.assignIssue(issue.id, { assigneeType: "agent", assigneeId: codex.id, prompt: "Run codex" });
+    expect(agentAssigned.issue.assigneeType).toBe("agent");
+    expect(agentAssigned.task?.agentId).toBe(codex.id);
+    expect(agentAssigned.task?.prompt).toBe("Run codex");
+
+    const squadAssigned = store.assignIssue(issue.id, { assigneeType: "squad", assigneeId: squad.id });
+    expect(squadAssigned.issue.assigneeId).toBe(squad.id);
+    expect(squadAssigned.task?.agentId).toBe(leader.id);
+    expect(store.getTask(agentAssigned.task!.id)?.status).toBe("cancelled");
+
+    const unassigned = store.assignIssue(issue.id, {});
+    expect(unassigned.issue.assigneeType).toBeNull();
+    expect(unassigned.task).toBeNull();
+    expect(store.getTask(squadAssigned.task!.id)?.status).toBe("cancelled");
+  });
+
   it("skips archived agents when resolving squad autopilots", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "codex" });
@@ -279,6 +307,34 @@ describe("Bun Multica API", () => {
     const detailBody = await detail.json();
     expect(detailBody.issue.tasks).toHaveLength(1);
     expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+  });
+
+  it("assigns issues through API endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Grace Hopper" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Assignable issue", assigneeType: "member", assigneeId: member.id }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.issue.assigneeType).toBe("member");
+    expect(createdBody.task).toBeNull();
+
+    const assigned = await app.request(`/api/multica/issues/${createdBody.issue.id}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigneeType: "agent", assigneeId: agent.id, prompt: "Please implement" }),
+    });
+    expect(assigned.status).toBe(200);
+    const assignedBody = await assigned.json();
+    expect(assignedBody.issue.assigneeId).toBe(agent.id);
+    expect(assignedBody.task.agentId).toBe(agent.id);
+    expect(assignedBody.task.prompt).toBe("Please implement");
   });
 
   it("updates and archives workspace objects", async () => {

@@ -1270,7 +1270,8 @@ export function renderMulticaDashboardHtml(): string {
           <button class="outline" id="closeSheet">Close</button>
         </div>
         <form class="sheet-form" id="taskForm">
-          <label>Agent<select id="agentSelect" required></select></label>
+          <label>Assignee type<select id="issueAssigneeType"><option value="agent">agent</option><option value="member">member</option><option value="squad">squad</option><option value="">none</option></select></label>
+          <label>Assignee<select id="agentSelect"></select></label>
           <label>Workspace<input id="workspace" value="local"></label>
           <label>Title<textarea id="prompt" required placeholder="Describe the issue"></textarea></label>
           <button class="primary" type="submit">Create</button>
@@ -1426,6 +1427,7 @@ export function renderMulticaDashboardHtml(): string {
     document.getElementById("quickCreate").addEventListener("click", openSheet);
     document.getElementById("closeSheet").addEventListener("click", closeSheet);
     document.getElementById("taskForm").addEventListener("submit", createTask);
+    document.getElementById("issueAssigneeType").addEventListener("change", refreshCreateAssigneeOptions);
     document.getElementById("closeAgentSheet").addEventListener("click", closeAgentSheet);
     document.getElementById("agentForm").addEventListener("submit", createAgent);
     document.getElementById("closeEntitySheet").addEventListener("click", closeEntitySheet);
@@ -1533,12 +1535,15 @@ export function renderMulticaDashboardHtml(): string {
     async function createTask(event) {
       event.preventDefault();
       try {
+        const assigneeType = document.getElementById("issueAssigneeType").value || null;
+        const assigneeId = els.agentSelect.value || null;
         const result = await api("/api/multica/issues", {
           method: "POST",
           body: JSON.stringify({
             title: els.prompt.value,
             description: "",
-            agentId: els.agentSelect.value || undefined,
+            assigneeType,
+            assigneeId,
             prompt: els.prompt.value,
             workspaceId: els.workspace.value || "local"
           })
@@ -1745,6 +1750,22 @@ export function renderMulticaDashboardHtml(): string {
         })
       });
       if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      await refresh();
+    }
+
+    async function assignSelectedIssue(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      const assigneeType = document.getElementById("issueAssigneeTypeEdit").value || null;
+      const assigneeId = document.getElementById("issueAssigneeIdEdit").value || null;
+      const prompt = document.getElementById("issueAssignPrompt").value || issue.title;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/assign", {
+        method: "POST",
+        body: JSON.stringify({ assigneeType, assigneeId, prompt })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId);
       await refresh();
     }
 
@@ -2090,10 +2111,10 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     function renderAgentSelects() {
+      refreshCreateAssigneeOptions();
       const html = state.agents.length
         ? state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("")
         : "<option value=\\"\\">No agents</option>";
-      els.agentSelect.innerHTML = html;
       els.chatAgent.innerHTML = html;
     }
 
@@ -2103,9 +2124,9 @@ export function renderMulticaDashboardHtml(): string {
         tasks = tasks.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status));
       }
       if (state.agentFilter === "agents") {
-        tasks = tasks.filter(issue => Boolean(issue.latestTaskId));
+        tasks = tasks.filter(issue => issue.assigneeType === "agent" || issue.assigneeType === "squad" || Boolean(issue.latestTaskId));
       } else if (state.agentFilter === "members") {
-        tasks = tasks.filter(issue => !issue.latestTaskId || (issue.createdBy && state.members.some(member => member.id === issue.createdBy)));
+        tasks = tasks.filter(issue => issue.assigneeType === "member" || (!issue.assigneeType && !issue.latestTaskId));
       }
       return tasks.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     }
@@ -2132,6 +2153,7 @@ export function renderMulticaDashboardHtml(): string {
       const project = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
       const latestTask = t.latestTaskId ? state.tasks.find(task => task.id === t.latestTaskId) : null;
       const agent = latestTask ? state.agents.find(a => a.id === latestTask.agentId) : null;
+      const assignee = assigneeLabel(t);
       const cancellable = latestTask && isActiveTask(latestTask);
       return "<article class=\\"issue-card\\" onclick=\\"openIssue('" + escAttr(t.id) + "')\\">" +
         "<div class=\\"issue-id\\">" + esc(shortId(t.id)) + "</div>" +
@@ -2141,6 +2163,7 @@ export function renderMulticaDashboardHtml(): string {
           "<span class=\\"agent-avatar\\">" + esc(agentInitial(agent)) + "</span>" +
           "<span class=\\"status-badge " + esc(t.latestTaskStatus || t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
           "<span class=\\"status-badge\\">" + esc(project ? project.title : "no project") + "</span>" +
+          (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") +
           (agent ? "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>" : "") +
           (cancellable ? "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); cancelTask('" + escAttr(latestTask.id) + "')\\">Cancel</button>" : "") +
         "</div>" +
@@ -2161,6 +2184,7 @@ export function renderMulticaDashboardHtml(): string {
           "<span class=\\"list-id\\">" + esc(shortId(t.id)) + "</span>" +
           "<span class=\\"list-title\\">" + esc(t.title || "") + "</span>" +
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(assigneeLabel(t) || "unassigned") + "</span>" +
           "<span class=\\"list-right\\">" + esc(project ? project.title : "no project") + "</span>" +
         "</div>";
       }).join("");
@@ -2354,13 +2378,14 @@ export function renderMulticaDashboardHtml(): string {
       }
       const issue = state.selectedIssue;
       const project = issue.projectId ? state.projects.find(p => p.id === issue.projectId) : null;
+      const assignee = assigneeLabel(issue);
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
           "<div class=\\"drawer-title\\"><strong>" + esc(issue.title || "") + "</strong><span>" + esc(shortId(issue.id)) + "</span></div>" +
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
         "<div class=\\"drawer-body\\">" +
-          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + "</div>" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") + "</div>" +
           renderDetailBlock("Description", issue.description || "") +
           renderIssueControls(issue) +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Tasks</div><div class=\\"message-list\\">" + renderIssueTasks(issue.tasks || []) + "</div></div>" +
@@ -2468,6 +2493,14 @@ export function renderMulticaDashboardHtml(): string {
           "<label>Project<select id=\\"issueProject\\">" + projectOptions(true, issue.projectId) + "</select></label>" +
         "</div>" +
         "<button class=\\"outline\\" onclick=\\"updateSelectedIssue()\\">Save issue</button>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"assignSelectedIssue(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Assignee type<select id=\\"issueAssigneeTypeEdit\\" onchange=\\"refreshIssueAssigneeOptions()\\">" + assigneeTypeOptions(issue.assigneeType) + "</select></label>" +
+            "<label>Assignee<select id=\\"issueAssigneeIdEdit\\">" + assigneeOptions(issue.assigneeType || "agent", true, issue.assigneeId) + "</select></label>" +
+          "</div>" +
+          "<label>Prompt<textarea id=\\"issueAssignPrompt\\" placeholder=\\"Prompt for agent or squad\\">" + esc(issue.title || "") + "</textarea></label>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Assign</button>" +
+        "</form>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueComment(event)\\" style=\\"padding:0;\\">" +
           "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
           "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
@@ -2594,6 +2627,57 @@ export function renderMulticaDashboardHtml(): string {
     function agentOptions(allowEmpty) {
       const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
       return empty + state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("");
+    }
+
+    function assigneeTypeOptions(current) {
+      const values = [
+        ["", "none"],
+        ["agent", "agent"],
+        ["member", "member"],
+        ["squad", "squad"]
+      ];
+      return values.map(([value, label]) =>
+        "<option value=\\"" + escAttr(value) + "\\" " + (value === (current || "") ? "selected" : "") + ">" + esc(label) + "</option>"
+      ).join("");
+    }
+
+    function assigneeOptions(type, allowEmpty, selectedId = "") {
+      const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
+      if (!type) return empty;
+      if (type === "member") {
+        const rows = state.members.map(m => "<option value=\\"" + escAttr(m.id) + "\\" " + (m.id === selectedId ? "selected" : "") + ">" + esc(m.name) + " / " + esc(m.role) + "</option>").join("");
+        return empty + (rows || "<option value=\\"\\">No members</option>");
+      }
+      if (type === "squad") {
+        const rows = state.squads.map(s => "<option value=\\"" + escAttr(s.id) + "\\" " + (s.id === selectedId ? "selected" : "") + ">" + esc(s.name) + "</option>").join("");
+        return empty + (rows || "<option value=\\"\\">No squads</option>");
+      }
+      const rows = state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\" " + (a.id === selectedId ? "selected" : "") + ">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("");
+      return empty + (rows || "<option value=\\"\\">No agents</option>");
+    }
+
+    function refreshCreateAssigneeOptions() {
+      const type = document.getElementById("issueAssigneeType")?.value || "";
+      if (els.agentSelect) els.agentSelect.innerHTML = assigneeOptions(type, true);
+    }
+
+    function refreshIssueAssigneeOptions() {
+      const type = document.getElementById("issueAssigneeTypeEdit").value || "";
+      document.getElementById("issueAssigneeIdEdit").innerHTML = assigneeOptions(type, true);
+    }
+
+    function assigneeLabel(item) {
+      if (!item.assigneeType || !item.assigneeId) return "";
+      if (item.assigneeType === "agent") {
+        const agent = state.agents.find(a => a.id === item.assigneeId);
+        return agent ? "agent: " + agent.name : "agent: " + shortId(item.assigneeId);
+      }
+      if (item.assigneeType === "member") {
+        const member = state.members.find(m => m.id === item.assigneeId);
+        return member ? "member: " + member.name : "member: " + shortId(item.assigneeId);
+      }
+      const squad = state.squads.find(s => s.id === item.assigneeId);
+      return squad ? "squad: " + squad.name : "squad: " + shortId(item.assigneeId);
     }
 
     function projectOptions(allowEmpty, selectedId = "") {
@@ -2741,6 +2825,8 @@ export function renderMulticaDashboardHtml(): string {
     window.updateSelectedAgent = updateSelectedAgent;
     window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
+    window.refreshIssueAssigneeOptions = refreshIssueAssigneeOptions;
+    window.assignSelectedIssue = assignSelectedIssue;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
   </script>

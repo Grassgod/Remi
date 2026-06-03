@@ -11,6 +11,7 @@ export type MulticaTaskStatus =
 export type MulticaRuntimeStatus = "online" | "offline";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
 export type MulticaProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
+export type MulticaAssigneeType = "agent" | "member" | "squad";
 export type MulticaSquadMemberType = "agent" | "member";
 export type MulticaAutopilotStatus = "active" | "paused" | "archived";
 export type MulticaAutopilotExecutionMode = "create_issue" | "run_only";
@@ -95,6 +96,8 @@ export interface MulticaIssue {
   status: string;
   workspaceId: string;
   projectId: string | null;
+  assigneeType: MulticaAssigneeType | null;
+  assigneeId: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -295,6 +298,8 @@ export interface CreateIssueInput {
   description?: string | null;
   workspaceId?: string | null;
   projectId?: string | null;
+  assigneeType?: MulticaAssigneeType | null;
+  assigneeId?: string | null;
   createdBy?: string | null;
 }
 
@@ -309,6 +314,19 @@ export interface UpdateIssueInput {
   status?: string;
   projectId?: string | null;
   workspaceId?: string | null;
+  assigneeType?: MulticaAssigneeType | null;
+  assigneeId?: string | null;
+}
+
+export interface AssignIssueInput {
+  assigneeType?: MulticaAssigneeType | null;
+  assigneeId?: string | null;
+  prompt?: string | null;
+}
+
+export interface AssignIssueResult {
+  issue: MulticaIssue;
+  task: MulticaTask | null;
 }
 
 export interface CreateIssueCommentInput {

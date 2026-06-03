@@ -3,6 +3,8 @@ import { getDb } from "../db/index.js";
 import { createId, nowIso } from "./ids.js";
 import type {
   AddSquadMemberInput,
+  AssignIssueInput,
+  AssignIssueResult,
   CreateAgentInput,
   CreateAutopilotInput,
   CreateIssueCommentInput,
@@ -14,6 +16,7 @@ import type {
   MulticaAutopilot,
   MulticaAutopilotRun,
   MulticaAgent,
+  MulticaAssigneeType,
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
@@ -104,6 +107,8 @@ export class MulticaStore {
         status TEXT NOT NULL DEFAULT 'open',
         workspace_id TEXT NOT NULL DEFAULT 'local',
         project_id TEXT,
+        assignee_type TEXT,
+        assignee_id TEXT,
         created_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -274,6 +279,8 @@ export class MulticaStore {
       CREATE INDEX IF NOT EXISTS idx_multica_messages_task ON multica_task_messages(task_id, seq);
     `);
     this.addColumnIfMissing("multica_agents", "archived_at TEXT");
+    this.addColumnIfMissing("multica_issues", "assignee_type TEXT");
+    this.addColumnIfMissing("multica_issues", "assignee_id TEXT");
   }
 
   createAgent(input: CreateAgentInput): MulticaAgent {
@@ -498,18 +505,24 @@ export class MulticaStore {
     if (input.projectId && !this.getProject(input.projectId)) {
       throw new Error(`Project not found: ${input.projectId}`);
     }
+    if (input.assigneeType || input.assigneeId) {
+      this.validateIssueAssignee(input.assigneeType ?? null, input.assigneeId ?? null);
+    }
     const id = input.id ?? createId("iss");
     const now = nowIso();
     this.db.run(
       `INSERT INTO multica_issues (
-        id, title, description, status, workspace_id, project_id, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
+        id, title, description, status, workspace_id, project_id, assignee_type, assignee_id,
+        created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.title,
         input.description ?? null,
         input.workspaceId ?? "local",
         input.projectId ?? null,
+        input.assigneeType ?? null,
+        input.assigneeId ?? null,
         input.createdBy ?? null,
         now,
         now,
@@ -555,6 +568,12 @@ export class MulticaStore {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
     if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    if (input.assigneeType !== undefined || input.assigneeId !== undefined) {
+      this.validateIssueAssignee(
+        input.assigneeType === undefined ? current.assigneeType : input.assigneeType,
+        input.assigneeId === undefined ? current.assigneeId : input.assigneeId,
+      );
+    }
     const now = nowIso();
     this.db.run(
       `UPDATE multica_issues SET
@@ -563,6 +582,8 @@ export class MulticaStore {
         status = ?,
         workspace_id = ?,
         project_id = ?,
+        assignee_type = ?,
+        assignee_id = ?,
         updated_at = ?
        WHERE id = ?`,
       [
@@ -571,6 +592,8 @@ export class MulticaStore {
         input.status ?? current.status,
         input.workspaceId ?? current.workspaceId,
         input.projectId === undefined ? current.projectId : input.projectId,
+        input.assigneeType === undefined ? current.assigneeType : input.assigneeType,
+        input.assigneeId === undefined ? current.assigneeId : input.assigneeId,
         now,
         id,
       ],
@@ -585,6 +608,72 @@ export class MulticaStore {
     if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
     if (input.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
     return this.getIssue(id)!;
+  }
+
+  assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`Issue not found: ${id}`);
+    const assigneeType = input.assigneeType ?? null;
+    const assigneeId = input.assigneeId ?? null;
+    const now = nowIso();
+
+    if (Boolean(assigneeType) !== Boolean(assigneeId)) {
+      throw new Error("Assignee type and id are required together");
+    }
+    if (!assigneeType || !assigneeId) {
+      const cancelled = this.cancelActiveIssueTasks(id, "issue_unassigned");
+      this.db.run(
+        "UPDATE multica_issues SET assignee_type = NULL, assignee_id = NULL, updated_at = ? WHERE id = ?",
+        [now, id],
+      );
+      this.appendIssueActivity(id, {
+        actorType: "system",
+        actorId: null,
+        type: "issue_unassigned",
+        body: null,
+        data: { cancelled },
+      });
+      return { issue: this.getIssue(id)!, task: null };
+    }
+
+    this.validateIssueAssignee(assigneeType, assigneeId);
+    const taskAgent = assigneeType === "member" ? null : this.resolveRunnableAgentForAssignee(assigneeType, assigneeId);
+    if (assigneeType !== "member" && !taskAgent) {
+      throw new Error(`No runnable agent for ${assigneeType}: ${assigneeId}`);
+    }
+    const cancelled = this.cancelActiveIssueTasks(id, "issue_reassigned");
+    this.db.run(
+      `UPDATE multica_issues
+       SET assignee_type = ?, assignee_id = ?, status = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        assigneeType,
+        assigneeId,
+        taskAgent ? "in_progress" : current.status,
+        now,
+        id,
+      ],
+    );
+
+    let task: MulticaTask | null = null;
+    if (taskAgent) {
+      task = this.createTask({
+        agentId: taskAgent.id,
+        issueId: id,
+        workspaceId: current.workspaceId,
+        prompt: input.prompt?.trim() || current.title,
+      });
+    }
+
+    this.appendIssueActivity(id, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_assigned",
+      body: taskAgent ? `Queued ${taskAgent.name}` : null,
+      data: { assigneeType, assigneeId, taskId: task?.id ?? null, cancelled },
+    });
+    if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
+    return { issue: this.getIssue(id)!, task };
   }
 
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MulticaIssueComment {
@@ -1290,13 +1379,15 @@ export class MulticaStore {
     return result.changes;
   }
 
-  private resolveAutopilotAgent(autopilot: MulticaAutopilot): MulticaAgent | null {
-    if (autopilot.assigneeType === "agent") {
-      const agent = this.getAgent(autopilot.assigneeId);
+  private resolveRunnableAgentForAssignee(assigneeType: MulticaAssigneeType, assigneeId: string): MulticaAgent | null {
+    if (assigneeType === "agent") {
+      const agent = this.getAgent(assigneeId);
       return agent?.archivedAt ? null : agent;
     }
-    const squad = this.getSquad(autopilot.assigneeId);
+    if (assigneeType !== "squad") return null;
+    const squad = this.getSquad(assigneeId);
     if (!squad) return null;
+    if (squad.archivedAt) return null;
     if (squad.leaderId) {
       const leader = this.getAgent(squad.leaderId);
       if (leader && !leader.archivedAt) return leader;
@@ -1306,6 +1397,54 @@ export class MulticaStore {
       if (agent && !agent.archivedAt) return agent;
     }
     return null;
+  }
+
+  private resolveAutopilotAgent(autopilot: MulticaAutopilot): MulticaAgent | null {
+    return this.resolveRunnableAgentForAssignee(autopilot.assigneeType, autopilot.assigneeId);
+  }
+
+  private validateIssueAssignee(assigneeType: MulticaAssigneeType | null, assigneeId: string | null): void {
+    if (!assigneeType && !assigneeId) return;
+    if (!assigneeType || !assigneeId) throw new Error("Assignee type and id are required together");
+    if (assigneeType === "agent") {
+      const agent = this.getAgent(assigneeId);
+      if (!agent) throw new Error(`Agent not found: ${assigneeId}`);
+      if (agent.archivedAt) throw new Error(`Agent is archived: ${assigneeId}`);
+    } else if (assigneeType === "member") {
+      const member = this.getWorkspaceMember(assigneeId);
+      if (!member) throw new Error(`Member not found: ${assigneeId}`);
+      if (member.archivedAt) throw new Error(`Member is archived: ${assigneeId}`);
+    } else if (assigneeType === "squad") {
+      const squad = this.getSquad(assigneeId);
+      if (!squad) throw new Error(`Squad not found: ${assigneeId}`);
+      if (squad.archivedAt) throw new Error(`Squad is archived: ${assigneeId}`);
+    } else {
+      throw new Error(`Unsupported assignee type: ${assigneeType}`);
+    }
+  }
+
+  private cancelActiveIssueTasks(issueId: string, reason: string): number {
+    const active = this.db.query(
+      "SELECT * FROM multica_tasks WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
+    ).all(issueId) as Row[];
+    if (!active.length) return 0;
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_tasks
+       SET status = 'cancelled', cancelled_at = ?, updated_at = ?
+       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+      [now, now, issueId],
+    );
+    for (const row of active) {
+      this.appendIssueActivity(issueId, {
+        actorType: "system",
+        actorId: null,
+        type: "task_cancelled",
+        body: reason,
+        data: { taskId: String(row.id), agentId: nullableString(row.agent_id) },
+      });
+    }
+    return active.length;
   }
 
   private afterTaskTerminal(task: MulticaTask, status: "completed" | "failed" | "cancelled", body: string | null): void {
@@ -1477,6 +1616,8 @@ function toIssue(row: Row): MulticaIssue {
     status: String(row.status),
     workspaceId: String(row.workspace_id ?? "local"),
     projectId: nullableString(row.project_id),
+    assigneeType: nullableString(row.assignee_type) as MulticaIssue["assigneeType"],
+    assigneeId: nullableString(row.assignee_id),
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
