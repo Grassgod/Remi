@@ -2036,6 +2036,42 @@ describe("Bun Multica API", () => {
     expect(await invitations.json()).toEqual([]);
   });
 
+  it("serves workspace, runtime, auth, webhook, and setup compatibility fallbacks", async () => {
+    const store = createStore();
+    const workspace = store.createWorkspace({ name: "Fallback Team", slug: "fallback-team" });
+    const runtime = store.registerRuntime({ name: "Fallback Runtime", provider: "codex", workspaceId: workspace.id });
+    const app = createMulticaApp({ store });
+
+    const updated = await app.request(`/api/workspaces/${workspace.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Fallback Renamed", issue_prefix: "FB" }),
+    });
+    expect((await updated.json()).issue_prefix).toBe("FB");
+
+    const leave = await app.request(`/api/workspaces/${workspace.id}/leave`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ member_id: `mem_${workspace.id}_local` }),
+    });
+    expect(leave.status).toBe(204);
+
+    expect((await app.request("/auth/send-code", { method: "POST" })).status).toBe(501);
+    expect((await app.request("/auth/verify-code", { method: "POST" })).status).toBe(501);
+    expect((await app.request("/auth/google", { method: "POST" })).status).toBe(501);
+    expect((await (await app.request("/health/realtime")).json()).enabled).toBe(false);
+    expect((await (await app.request("/api/github/setup")).json()).configured).toBe(false);
+    expect((await app.request("/api/webhooks/github", { method: "POST" })).status).toBe(202);
+    expect((await app.request("/api/webhooks/autopilots/missing", { method: "POST" })).status).toBe(404);
+    expect((await app.request("/api/daemon/ws")).status).toBe(501);
+
+    expect((await app.request(`/api/runtimes/${runtime.id}/activity`)).status).toBe(200);
+    expect((await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" })).status).toBe(204);
+
+    const removable = store.createWorkspace({ name: "Removable Team", slug: "removable-team" });
+    expect((await app.request(`/api/workspaces/${removable.id}`, { method: "DELETE" })).status).toBe(204);
+  });
+
   it("serves local workspace invitation compatibility endpoints", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

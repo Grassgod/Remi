@@ -1390,6 +1390,60 @@ export class MulticaStore {
     return this.getWorkspace(id)!;
   }
 
+  updateWorkspace(id: string, input: Partial<CreateWorkspaceInput>): MulticaWorkspace {
+    const current = this.getWorkspace(id);
+    if (!current) throw new Error(`Workspace not found: ${id}`);
+    const nextName = input.name === undefined ? current.name : String(input.name ?? "").trim();
+    if (!nextName) throw new Error("name is required");
+    const nextSlug = input.slug === undefined ? current.slug : normalizeWorkspaceSlug(input.slug);
+    const issuePrefix = input.issuePrefix ?? input.issue_prefix ?? current.issuePrefix;
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_workspaces SET
+        name = ?,
+        slug = ?,
+        description = ?,
+        context = ?,
+        settings = ?,
+        repos = ?,
+        issue_prefix = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        nextName,
+        nextSlug,
+        input.description === undefined ? current.description : input.description,
+        input.context === undefined ? current.context : input.context,
+        input.settings === undefined ? toJson(current.settings) : toJson(input.settings),
+        input.repos === undefined ? toJson(current.repos) : toJson(input.repos),
+        String(issuePrefix ?? "MUL").trim().toUpperCase() || "MUL",
+        now,
+        id,
+      ],
+    );
+    return this.getWorkspace(id)!;
+  }
+
+  deleteWorkspace(id: string): boolean {
+    if (id === "local") throw new Error("local workspace cannot be deleted");
+    const result = this.db.run("DELETE FROM multica_workspaces WHERE id = ?", [id]);
+    if (result.changes === 0) return false;
+    const now = nowIso();
+    this.db.run("UPDATE multica_workspace_members SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE workspace_id = ?", [
+      now,
+      now,
+      id,
+    ]);
+    return true;
+  }
+
+  leaveWorkspace(id: string, memberId = `mem_${id}_local`): boolean {
+    const member = this.getWorkspaceMember(memberId) ?? this.listWorkspaceMembers(id).find((item) => item.email === this.getCurrentUser().email);
+    if (!member || member.workspaceId !== id) return false;
+    this.archiveWorkspaceMember(member.id);
+    return true;
+  }
+
   ensureLocalWorkspace(): MulticaWorkspace {
     const existing = this.getWorkspace("local");
     if (existing) return existing;
@@ -1912,6 +1966,11 @@ export class MulticaStore {
       [now, id],
     );
     return this.getRuntime(id);
+  }
+
+  deleteRuntime(id: string): boolean {
+    const result = this.db.run("DELETE FROM multica_runtimes WHERE id = ?", [id]);
+    return result.changes > 0;
   }
 
   listRuntimeModels(runtimeId: string): MulticaRuntimeModel[] {

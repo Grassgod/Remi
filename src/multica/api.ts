@@ -36,6 +36,7 @@ import type {
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
+  CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
   ImportSkillInput,
   ListIssuesInput,
@@ -197,6 +198,13 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ token: token.token });
   });
   app.post("/auth/logout", (c) => c.json({ message: "logged out" }));
+  app.post("/auth/send-code", (c) => c.json({ error: "email auth is not configured in local Bun Multica" }, 501));
+  app.post("/auth/verify-code", (c) => c.json({ error: "email auth is not configured in local Bun Multica" }, 501));
+  app.post("/auth/google", (c) => c.json({ error: "google auth is not configured in local Bun Multica" }, 501));
+  app.get("/health/realtime", (c) => c.json({ connections: 0, enabled: false }));
+  app.get("/api/github/setup", (c) => c.json({ configured: false }));
+  app.post("/api/webhooks/github", (c) => c.json({ configured: false }, 202));
+  app.post("/api/webhooks/autopilots/:token", (c) => c.json({ error: "autopilot token webhook is not configured in local Bun Multica" }, 404));
   app.get("/api/multica/health", (c) => c.json({ ok: true }));
   app.post("/api/daemon/register", async (c) => {
     const body = await readJson<DaemonRegisterRequestBody>(c);
@@ -224,6 +232,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     return c.json(workspaceReposResponse(c.req.param("workspaceId")));
   });
+  app.get("/api/daemon/ws", (c) => c.json({ error: "daemon websocket is not implemented in local Bun Multica" }, 501));
   app.get("/api/cloud-runtime", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
   app.get("/api/cloud-runtime/healthz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
   app.get("/api/cloud-runtime/readyz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
@@ -276,6 +285,25 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const workspace = store.getWorkspace(c.req.param("id"));
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(workspace);
+  });
+  app.put("/api/workspaces/:id", async (c) => {
+    const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    return c.json(store.updateWorkspace(c.req.param("id"), body));
+  });
+  app.patch("/api/workspaces/:id", async (c) => {
+    const body = await readJson<Partial<CreateWorkspaceInput>>(c);
+    return c.json(store.updateWorkspace(c.req.param("id"), body));
+  });
+  app.delete("/api/workspaces/:id", (c) => {
+    const deleted = store.deleteWorkspace(c.req.param("id"));
+    if (!deleted) return c.json({ error: "workspace not found" }, 404);
+    return c.body(null, 204);
+  });
+  app.post("/api/workspaces/:id/leave", async (c) => {
+    const body = await readJson<{ memberId?: string; member_id?: string }>(c);
+    const left = store.leaveWorkspace(c.req.param("id"), body.memberId ?? body.member_id ?? undefined);
+    if (!left) return c.json({ error: "member not found" }, 404);
+    return c.body(null, 204);
   });
   app.get("/api/workspaces/:id/members", (c) => c.json(store.listWorkspaceMembers(c.req.param("id"))));
   app.patch("/api/workspaces/:id/members/:memberId", async (c) => {
@@ -833,6 +861,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const runtime = store.getRuntime(c.req.param("id"));
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
     return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.get("/api/runtimes/:id/activity", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })));
+  });
+  app.delete("/api/runtimes/:id", (c) => {
+    const deleted = store.deleteRuntime(c.req.param("id"));
+    if (!deleted) return c.json({ error: "runtime not found" }, 404);
+    return c.body(null, 204);
   });
   app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
     const ack = store.heartbeatRuntime(c.req.param("id"), {
