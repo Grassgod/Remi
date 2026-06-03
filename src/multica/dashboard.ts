@@ -72,6 +72,22 @@ export function renderMulticaDashboardHtml(): string {
     button.primary:hover { background: color-mix(in oklab, var(--primary) 86%, transparent); }
     button.outline { border-color: var(--border); background: var(--background); }
     button.outline:hover { background: var(--muted); }
+    a.outline {
+      min-height: 32px;
+      border: 1px solid var(--border);
+      border-radius: calc(var(--radius) * .8);
+      background: var(--background);
+      color: var(--foreground);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: 500;
+      text-decoration: none;
+    }
+    a.outline:hover { background: var(--muted); }
     button.destructive { background: color-mix(in oklab, var(--destructive) 10%, transparent); color: var(--destructive); }
     button.icon {
       width: 32px;
@@ -1401,6 +1417,7 @@ export function renderMulticaDashboardHtml(): string {
       tokens: [],
       createdToken: null,
       notificationPreferences: {},
+      githubSettings: { enabled: true, prSidebar: true, coAuthor: true, autoLinkPRs: true, updatedAt: null },
       labels: [],
       pins: [],
       inboxItems: [],
@@ -1423,6 +1440,7 @@ export function renderMulticaDashboardHtml(): string {
       selectedIssueDependencies: [],
       selectedIssueComments: [],
       selectedIssueActivity: [],
+      selectedIssuePullRequests: [],
       selectedSquadId: null,
       selectedSquad: null,
       selectedSquadMembers: [],
@@ -1562,7 +1580,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, tokens, notifications, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, tokens, notifications, githubSettings, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1574,6 +1592,7 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/skills"),
           api("/api/multica/tokens"),
           api("/api/multica/notification-preferences"),
+          api("/api/multica/github/settings"),
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
           api("/api/multica/labels"),
@@ -1593,6 +1612,7 @@ export function renderMulticaDashboardHtml(): string {
         state.skills = skills.skills || [];
         state.tokens = tokens.tokens || [];
         state.notificationPreferences = notifications.preferences || {};
+        state.githubSettings = githubSettings.settings || defaultGitHubSettings();
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
@@ -1826,13 +1846,17 @@ export function renderMulticaDashboardHtml(): string {
 
     async function loadIssueDetail(id, options = {}) {
       try {
-        const issueResult = await api("/api/multica/issues/" + encodeURIComponent(id));
+        const [issueResult, githubResult] = await Promise.all([
+          api("/api/multica/issues/" + encodeURIComponent(id)),
+          api("/api/multica/github/pull-requests?issueId=" + encodeURIComponent(id))
+        ]);
         state.selectedIssue = issueResult.issue;
         state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
         state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
         state.selectedIssueDependencies = issueResult.dependencies || issueResult.issue?.dependencies || [];
         state.selectedIssueComments = issueResult.comments || [];
         state.selectedIssueActivity = issueResult.activity || [];
+        state.selectedIssuePullRequests = githubResult.pullRequests || [];
         state.selectedMessages = [];
         state.selectedTask = null;
         renderIssueDrawer();
@@ -1850,19 +1874,24 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedTask = taskResult.task;
         state.selectedMessages = messageResult.messages || [];
         if (state.selectedTask?.issueId) {
-          const issueResult = await api("/api/multica/issues/" + encodeURIComponent(state.selectedTask.issueId));
+          const [issueResult, githubResult] = await Promise.all([
+            api("/api/multica/issues/" + encodeURIComponent(state.selectedTask.issueId)),
+            api("/api/multica/github/pull-requests?issueId=" + encodeURIComponent(state.selectedTask.issueId))
+          ]);
           state.selectedTask.issue = issueResult.issue;
           state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
           state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
           state.selectedIssueDependencies = issueResult.dependencies || issueResult.issue?.dependencies || [];
           state.selectedIssueComments = issueResult.comments || [];
           state.selectedIssueActivity = issueResult.activity || [];
+          state.selectedIssuePullRequests = githubResult.pullRequests || [];
         } else {
           state.selectedIssueChildren = [];
           state.selectedIssueChildProgress = null;
           state.selectedIssueDependencies = [];
           state.selectedIssueComments = [];
           state.selectedIssueActivity = [];
+          state.selectedIssuePullRequests = [];
         }
         renderTaskDrawer();
       } catch (err) {
@@ -2006,6 +2035,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedMessages = [];
       state.selectedIssueComments = [];
       state.selectedIssueActivity = [];
+      state.selectedIssuePullRequests = [];
       state.selectedSquadId = null;
       state.selectedSquad = null;
       state.selectedSquadMembers = [];
@@ -2738,6 +2768,22 @@ export function renderMulticaDashboardHtml(): string {
       renderSettings();
     }
 
+    async function updateGitHubSettings(event) {
+      event.preventDefault();
+      const settings = {
+        enabled: Boolean(document.getElementById("github_enabled")?.checked),
+        prSidebar: Boolean(document.getElementById("github_prSidebar")?.checked),
+        coAuthor: Boolean(document.getElementById("github_coAuthor")?.checked),
+        autoLinkPRs: Boolean(document.getElementById("github_autoLinkPRs")?.checked)
+      };
+      const result = await api("/api/multica/github/settings", {
+        method: "PUT",
+        body: JSON.stringify(settings)
+      });
+      state.githubSettings = result.settings || settings;
+      renderSettings();
+    }
+
     async function markInboxRead(id) {
       await api("/api/multica/inbox/" + encodeURIComponent(id) + "/read", { method: "POST" });
       await refresh({ silent: true });
@@ -3393,6 +3439,13 @@ export function renderMulticaDashboardHtml(): string {
           "</form>" +
         "</article>" +
         "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">G</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">GitHub</div><div class=\\"entity-subtitle\\">Pull request sync and issue linking</div></div></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateGitHubSettings(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"message-list\\">" + renderGitHubSettings() + "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save GitHub</button>" +
+          "</form>" +
+        "</article>" +
+        "<article class=\\"entity-card\\">" +
           "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">T</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Access token</div><div class=\\"entity-subtitle\\">Personal and daemon tokens</div></div></div>" +
           (state.createdToken ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Created token</div><div class=\\"detail-text\\">" + esc(state.createdToken) + "</div></div>" : "") +
           "<form class=\\"sheet-form\\" onsubmit=\\"createToken(event)\\" style=\\"padding:0;\\">" +
@@ -3419,6 +3472,23 @@ export function renderMulticaDashboardHtml(): string {
         return "<label class=\\"message-row\\" style=\\"display:flex; gap:10px; align-items:flex-start;\\">" +
           "<input id=\\"notification_" + escAttr(group.key) + "\\" type=\\"checkbox\\" " + (enabled ? "checked" : "") + ">" +
           "<span><strong>" + esc(group.label) + "</strong><span class=\\"message-content\\">" + esc(group.description) + "</span></span>" +
+        "</label>";
+      }).join("");
+    }
+
+    function renderGitHubSettings() {
+      const settings = state.githubSettings || defaultGitHubSettings();
+      const rows = [
+        { key: "enabled", label: "Integration", description: "Accept GitHub pull request records and webhook payloads." },
+        { key: "prSidebar", label: "PR sidebar", description: "Show linked pull requests in issue and task detail." },
+        { key: "autoLinkPRs", label: "Auto-link PRs", description: "Match issue keys in pull request titles and branches." },
+        { key: "coAuthor", label: "Co-author", description: "Keep GitHub co-author behavior enabled for compatible runtimes." }
+      ];
+      return rows.map(row => {
+        const enabled = settings[row.key] !== false;
+        return "<label class=\\"message-row\\" style=\\"display:flex; gap:10px; align-items:flex-start;\\">" +
+          "<input id=\\"github_" + escAttr(row.key) + "\\" type=\\"checkbox\\" " + (enabled ? "checked" : "") + ">" +
+          "<span><strong>" + esc(row.label) + "</strong><span class=\\"message-content\\">" + esc(row.description) + "</span></span>" +
         "</label>";
       }).join("");
     }
@@ -3521,6 +3591,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span><span class=\\"status-badge\\">" + esc(agent ? agent.name : "agent") + "</span></div>" +
           renderDetailBlock("Prompt", t.prompt || "") +
           (issue ? renderIssueControls(issue) : "") +
+          (issue && githubSidebarEnabled() ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Pull requests</div><div class=\\"message-list\\">" + renderGitHubPullRequests() + "</div></div>" : "") +
           (t.result ? renderDetailBlock("Result", t.result) : "") +
           (t.error ? renderDetailBlock("Error", t.error) : "") +
           (t.progressSummary ? renderDetailBlock("Progress", progressText(t)) : "") +
@@ -3561,6 +3632,7 @@ export function renderMulticaDashboardHtml(): string {
           renderDetailBlock("Description", issue.description || "") +
           renderIssuePlanning(issue) +
           renderIssueControls(issue) +
+          (githubSidebarEnabled() ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Pull requests</div><div class=\\"message-list\\">" + renderGitHubPullRequests() + "</div></div>" : "") +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Reactions</div><div class=\\"message-list\\">" + renderReactions(issue.reactions || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Attachments</div><div class=\\"message-list\\">" + renderAttachments(issue.attachments || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Child issues</div><div class=\\"message-list\\">" + renderChildIssues() + "</div></div>" +
@@ -3936,6 +4008,31 @@ export function renderMulticaDashboardHtml(): string {
         return "<div class=\\"message-row\\" onclick=\\"openTask('" + escAttr(task.id) + "')\\">" +
           "<div class=\\"message-head\\"><span>" + esc(statusLabel(task.status)) + "</span><span>" + esc(agent ? agent.name : "agent") + "</span><span>" + esc(shortId(task.id)) + "</span></div>" +
           "<div class=\\"message-content\\">" + esc(task.prompt || task.result || task.error || "") + "</div>" +
+        "</div>";
+      }).join("");
+    }
+
+    function renderGitHubPullRequests() {
+      const pullRequests = state.selectedIssuePullRequests || [];
+      if (!pullRequests.length) return "<div class=\\"empty-column\\">No pull requests</div>";
+      return pullRequests.map(pr => {
+        const repo = [pr.repoOwner, pr.repoName].filter(Boolean).join("/");
+        const checks = [
+          pr.checksPassed ? formatCompact(pr.checksPassed) + " passed" : "",
+          pr.checksFailed ? formatCompact(pr.checksFailed) + " failed" : "",
+          pr.checksPending ? formatCompact(pr.checksPending) + " pending" : ""
+        ].filter(Boolean).join(" / ") || (pr.checksConclusion || "no checks");
+        const stats = "+" + formatCompact(pr.additions || 0) + " / -" + formatCompact(pr.deletions || 0) + " / " + formatCompact(pr.changedFiles || 0) + " files";
+        return "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(repo ? repo + "#" + pr.number : "PR #" + pr.number) + "</span><span>" + esc(githubPullRequestStatus(pr)) + "</span><span>" + esc(timeAgo(pr.prUpdatedAt || pr.updatedAt)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(pr.title || "") + "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            "<span class=\\"status-badge\\">" + esc(pr.branch || "branch unknown") + "</span>" +
+            (pr.authorLogin ? "<span class=\\"status-badge\\">@" + esc(pr.authorLogin) + "</span>" : "") +
+            "<span class=\\"status-badge\\">" + esc(checks) + "</span>" +
+            "<span class=\\"status-badge\\">" + esc(stats) + "</span>" +
+          "</div>" +
+          "<div class=\\"issue-meta\\"><a class=\\"outline\\" href=\\"" + escAttr(pr.htmlUrl || "#") + "\\" target=\\"_blank\\" rel=\\"noreferrer\\">Open PR</a></div>" +
         "</div>";
       }).join("");
     }
@@ -4452,6 +4549,27 @@ export function renderMulticaDashboardHtml(): string {
       ];
     }
 
+    function defaultGitHubSettings() {
+      return { enabled: true, prSidebar: true, coAuthor: true, autoLinkPRs: true, updatedAt: null };
+    }
+
+    function githubSidebarEnabled() {
+      const settings = state.githubSettings || defaultGitHubSettings();
+      return settings.enabled !== false && settings.prSidebar !== false;
+    }
+
+    function githubPullRequestStatus(pr) {
+      if (pr.state === "merged" || pr.mergedAt) return "merged";
+      if (pr.state === "draft") return "draft";
+      if (pr.state === "closed") return "closed";
+      if (pr.mergeableState === "dirty") return "conflicts";
+      if (pr.checksConclusion === "failed" || Number(pr.checksFailed || 0) > 0) return "checks failed";
+      if (pr.checksConclusion === "pending" || Number(pr.checksPending || 0) > 0) return "checks pending";
+      if (pr.checksConclusion === "passed" || Number(pr.checksPassed || 0) > 0) return "checks passed";
+      if (pr.mergeableState === "clean") return "ready";
+      return pr.state || "open";
+    }
+
     function mentionOptions() {
       const memberRows = state.members.map(member =>
         "<option value=\\"member:" + escAttr(member.id) + "\\">" + esc(member.name) + " / member</option>"
@@ -4808,6 +4926,7 @@ export function renderMulticaDashboardHtml(): string {
     window.createToken = createToken;
     window.revokeToken = revokeToken;
     window.updateNotificationPreferences = updateNotificationPreferences;
+    window.updateGitHubSettings = updateGitHubSettings;
     window.updateSelectedAgent = updateSelectedAgent;
     window.updateSelectedAgentSkills = updateSelectedAgentSkills;
     window.updateSelectedRuntime = updateSelectedRuntime;

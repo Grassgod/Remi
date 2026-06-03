@@ -276,6 +276,54 @@ describe("Bun Multica core store", () => {
     expect(second.key).toBe("MUL-2");
   });
 
+  it("links GitHub pull requests by issue key and closes merged issues", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Implement GitHub linking" });
+
+    const pullRequest = store.upsertGitHubPullRequest({
+      repoOwner: "example",
+      repoName: "remi",
+      number: 17,
+      title: `${issue.key} add linked pull request sidebar`,
+      branch: `feature/${issue.key}-github-links`,
+      state: "open",
+      checksConclusion: "pending",
+      checksPending: 1,
+      additions: 12,
+      deletions: 3,
+      changedFiles: 2,
+    });
+
+    expect(pullRequest.issueId).toBe(issue.id);
+    expect(pullRequest.htmlUrl).toBe("https://github.com/example/remi/pull/17");
+    expect(store.listGitHubPullRequests({ issueId: issue.id })[0]?.number).toBe(17);
+
+    const merged = store.upsertGitHubPullRequest({
+      repoOwner: "example",
+      repoName: "remi",
+      number: 17,
+      title: `${issue.key} add linked pull request sidebar`,
+      branch: `feature/${issue.key}-github-links`,
+      state: "merged",
+      checksConclusion: "passed",
+      checksPassed: 4,
+      mergedAt: "2026-06-03T00:00:00.000Z",
+    });
+
+    expect(merged.id).toBe(pullRequest.id);
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+
+    store.updateGitHubSettings({ enabled: false });
+    const ignoredIssue = store.createIssue({ title: "Disabled GitHub linking" });
+    const ignored = store.upsertGitHubPullRequest({
+      repoOwner: "example",
+      repoName: "remi",
+      number: 18,
+      title: `${ignoredIssue.key} should not auto-link`,
+    });
+    expect(ignored.issueId).toBeNull();
+  });
+
   it("manages issue hierarchy, priority, scheduling, and planning fields", () => {
     const store = createStore();
     const project = store.createProject({ title: "Hierarchy project" });
@@ -881,6 +929,17 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("function revokeToken");
     expect(html).toContain("function renderNotificationPreferences");
     expect(html).toContain("/api/multica/notification-preferences");
+    expect(html).toContain("function renderGitHubSettings");
+    expect(html).toContain("/api/multica/github/settings");
+    expect(html).toContain("updateGitHubSettings");
+  });
+
+  it("renders GitHub pull requests in issue and task detail", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain("function renderGitHubPullRequests");
+    expect(html).toContain("function githubPullRequestStatus");
+    expect(html).toContain("/api/multica/github/pull-requests?issueId=");
+    expect(html).toContain("Pull requests");
   });
 
   it("renders a real my issues page with member filtering", () => {
@@ -1743,5 +1802,97 @@ describe("Bun Multica API", () => {
 
     const listed = await app.request("/api/multica/notification-preferences");
     expect((await listed.json()).preferences.assignments).toBe("muted");
+  });
+
+  it("serves GitHub settings, pull request, and webhook endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "GitHub API issue" });
+
+    const settings = await app.request("/api/multica/github/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prSidebar: false, coAuthor: false }),
+    });
+    expect(settings.status).toBe(200);
+    const settingsBody = await settings.json();
+    expect(settingsBody.settings.enabled).toBe(true);
+    expect(settingsBody.settings.prSidebar).toBe(false);
+    expect(settingsBody.settings.coAuthor).toBe(false);
+
+    const created = await app.request("/api/multica/github/pull-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repo_owner: "example",
+        repo_name: "remi",
+        number: 7,
+        title: `${issue.key} API linked PR`,
+        branch: `feature/${issue.key}-api-pr`,
+        checksConclusion: "passed",
+        checksPassed: 2,
+        additions: 5,
+        deletions: 1,
+        changedFiles: 2,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.pullRequest.issueId).toBe(issue.id);
+    expect(createdBody.pullRequest.checksPassed).toBe(2);
+
+    const listed = await app.request(`/api/multica/github/pull-requests?issueId=${encodeURIComponent(issue.id)}`);
+    const listedBody = await listed.json();
+    expect(listedBody.total).toBe(1);
+    expect(listedBody.pullRequests[0].number).toBe(7);
+
+    const merged = await app.request("/api/multica/github/pull-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repoOwner: "example",
+        repoName: "remi",
+        number: 7,
+        title: `${issue.key} API linked PR`,
+        state: "merged",
+        mergedAt: "2026-06-03T00:00:00.000Z",
+      }),
+    });
+    expect(merged.status).toBe(201);
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+
+    const ping = await app.request("/api/multica/github/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zen: "Keep it logically awesome." }),
+    });
+    expect((await ping.json()).ok).toBe("pong");
+
+    const webhookIssue = store.createIssue({ title: "GitHub webhook issue" });
+    const webhook = await app.request("/api/multica/github/webhook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repository: { name: "remi", owner: { login: "example" } },
+        pull_request: {
+          number: 8,
+          title: `${webhookIssue.key} webhook linked PR`,
+          state: "open",
+          draft: false,
+          merged: false,
+          html_url: "https://github.com/example/remi/pull/8",
+          head: { ref: `feature/${webhookIssue.key}-webhook` },
+          user: { login: "octocat", avatar_url: "https://example.com/avatar.png" },
+          created_at: "2026-06-03T00:00:00.000Z",
+          updated_at: "2026-06-03T01:00:00.000Z",
+          mergeable_state: "clean",
+          additions: 3,
+          deletions: 0,
+          changed_files: 1,
+        },
+      }),
+    });
+    expect(webhook.status).toBe(202);
+    expect((await webhook.json()).pullRequest.issueId).toBe(webhookIssue.id);
   });
 });

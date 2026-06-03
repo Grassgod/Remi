@@ -37,6 +37,7 @@ import type {
   MulticaNotificationPreferences,
   MulticaSkill,
   MulticaSubscriptionReason,
+  MulticaGitHubPullRequestState,
   SetAgentSkillsInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
@@ -54,6 +55,32 @@ import type {
 const log = createLogger("multica-api");
 const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
+
+type NormalizedGitHubPullRequestBody = {
+  workspaceId: string | null;
+  issueId: string | null;
+  repoOwner: string;
+  repoName: string;
+  number: number;
+  title: string;
+  state?: MulticaGitHubPullRequestState | string;
+  htmlUrl: string | null;
+  branch: string | null;
+  authorLogin: string | null;
+  authorAvatarUrl: string | null;
+  mergedAt: string | null;
+  closedAt: string | null;
+  prCreatedAt: string | null;
+  prUpdatedAt: string | null;
+  mergeableState: string | null;
+  checksConclusion: string | null;
+  checksPassed: number;
+  checksFailed: number;
+  checksPending: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+};
 
 export interface MulticaApiOptions {
   store?: MulticaStore;
@@ -224,6 +251,60 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? body,
     }));
+  });
+  app.get("/api/multica/github/settings", (c) => {
+    return c.json({ settings: store.getGitHubSettings(c.req.query("workspaceId") ?? "local") });
+  });
+  app.put("/api/multica/github/settings", async (c) => {
+    const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; enabled?: boolean; prSidebar?: boolean; pr_sidebar?: boolean; coAuthor?: boolean; co_author?: boolean; autoLinkPRs?: boolean; auto_link_prs?: boolean }>(c);
+    return c.json({
+      settings: store.updateGitHubSettings({
+        workspaceId: body.workspaceId ?? body.workspace_id,
+        enabled: body.enabled,
+        prSidebar: body.prSidebar ?? body.pr_sidebar,
+        coAuthor: body.coAuthor ?? body.co_author,
+        autoLinkPRs: body.autoLinkPRs ?? body.auto_link_prs,
+      }),
+    });
+  });
+  app.get("/api/multica/github/pull-requests", (c) => {
+    const pullRequests = store.listGitHubPullRequests({
+      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      issueId: c.req.query("issueId") ?? c.req.query("issue_id"),
+    });
+    return c.json({ pullRequests, total: pullRequests.length });
+  });
+  app.post("/api/multica/github/pull-requests", async (c) => {
+    const body = await readJson<any>(c);
+    return c.json({ pullRequest: store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody(body)) }, 201);
+  });
+  app.post("/api/multica/github/webhook", async (c) => {
+    const body = await readJson<any>(c);
+    if (body.zen) return c.json({ ok: "pong" });
+    const pr = body.pull_request;
+    const repo = body.repository;
+    if (!pr || !repo) return c.json({ ok: true, ignored: true });
+    const pullRequest = store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody({
+      workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+      repoOwner: repo.owner?.login,
+      repoName: repo.name,
+      number: pr.number,
+      title: pr.title,
+      state: pr.merged ? "merged" : pr.draft ? "draft" : pr.state,
+      htmlUrl: pr.html_url,
+      branch: pr.head?.ref,
+      authorLogin: pr.user?.login,
+      authorAvatarUrl: pr.user?.avatar_url,
+      mergedAt: pr.merged_at,
+      closedAt: pr.closed_at,
+      prCreatedAt: pr.created_at,
+      prUpdatedAt: pr.updated_at,
+      mergeableState: pr.mergeable_state,
+      additions: pr.additions,
+      deletions: pr.deletions,
+      changedFiles: pr.changed_files,
+    }));
+    return c.json({ pullRequest }, 202);
   });
   app.get("/api/tokens", (c) => {
     const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
@@ -1063,6 +1144,38 @@ function normalizeReactionInput(input: CreateMulticaReactionInput): { actorType?
     actorId: input.actorId ?? input.actor_id ?? "local",
     emoji: input.emoji,
   };
+}
+
+function normalizeGitHubPullRequestBody(body: any): NormalizedGitHubPullRequestBody {
+  return {
+    workspaceId: stringOrDefault(body.workspaceId ?? body.workspace_id, "local"),
+    issueId: body.issueId ?? body.issue_id ?? null,
+    repoOwner: stringOrDefault(body.repoOwner ?? body.repo_owner ?? body.owner, ""),
+    repoName: stringOrDefault(body.repoName ?? body.repo_name ?? body.repository, ""),
+    number: Number(body.number),
+    title: String(body.title ?? ""),
+    state: body.state,
+    htmlUrl: body.htmlUrl ?? body.html_url ?? null,
+    branch: body.branch ?? null,
+    authorLogin: body.authorLogin ?? body.author_login ?? null,
+    authorAvatarUrl: body.authorAvatarUrl ?? body.author_avatar_url ?? null,
+    mergedAt: body.mergedAt ?? body.merged_at ?? null,
+    closedAt: body.closedAt ?? body.closed_at ?? null,
+    prCreatedAt: body.prCreatedAt ?? body.pr_created_at ?? null,
+    prUpdatedAt: body.prUpdatedAt ?? body.pr_updated_at ?? null,
+    mergeableState: body.mergeableState ?? body.mergeable_state ?? null,
+    checksConclusion: body.checksConclusion ?? body.checks_conclusion ?? null,
+    checksPassed: Number(body.checksPassed ?? body.checks_passed ?? 0),
+    checksFailed: Number(body.checksFailed ?? body.checks_failed ?? 0),
+    checksPending: Number(body.checksPending ?? body.checks_pending ?? 0),
+    additions: Number(body.additions ?? 0),
+    deletions: Number(body.deletions ?? 0),
+    changedFiles: Number(body.changedFiles ?? body.changed_files ?? 0),
+  };
+}
+
+function stringOrDefault(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
 }
 
 function uploadRoot(): string {

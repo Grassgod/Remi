@@ -34,6 +34,8 @@ export type MulticaNotificationGroupKey =
   | "system_notifications";
 export type MulticaNotificationGroupValue = "all" | "muted";
 export type MulticaNotificationPreferences = Partial<Record<MulticaNotificationGroupKey, MulticaNotificationGroupValue>>;
+export type MulticaGitHubPullRequestState = "open" | "closed" | "merged" | "draft";
+export type MulticaGitHubChecksConclusion = "passed" | "failed" | "pending" | null;
 
 export interface MulticaSkillFile {
   id?: string;
@@ -211,6 +213,44 @@ export interface MulticaNotificationPreferenceResponse {
   memberId: string | null;
   preferences: MulticaNotificationPreferences;
   updatedAt: string | null;
+}
+
+export interface MulticaGitHubSettings {
+  workspaceId: string;
+  enabled: boolean;
+  prSidebar: boolean;
+  coAuthor: boolean;
+  autoLinkPRs: boolean;
+  updatedAt: string | null;
+}
+
+export interface MulticaGitHubPullRequest {
+  id: string;
+  workspaceId: string;
+  issueId: string | null;
+  repoOwner: string;
+  repoName: string;
+  number: number;
+  title: string;
+  state: MulticaGitHubPullRequestState;
+  htmlUrl: string;
+  branch: string | null;
+  authorLogin: string | null;
+  authorAvatarUrl: string | null;
+  mergedAt: string | null;
+  closedAt: string | null;
+  prCreatedAt: string;
+  prUpdatedAt: string;
+  mergeableState: string | null;
+  checksConclusion: MulticaGitHubChecksConclusion;
+  checksPassed: number;
+  checksFailed: number;
+  checksPending: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CreateAccessTokenInput {
