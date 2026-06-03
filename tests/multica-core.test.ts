@@ -2326,6 +2326,27 @@ describe("Bun Multica API", () => {
     expect(detailBody.issue.attachments).toHaveLength(1);
     expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(1);
 
+    const timeline = await app.request(`/api/issues/${issue.id}/timeline`);
+    const timelineBody = await timeline.json();
+    const timelineIds = timelineBody.map((entry: any) => entry.id);
+    expect(timelineIds).toContain(rootBody.comment.id);
+    expect(timelineIds).toContain(replyBody.comment.id);
+    expect(timelineBody.find((entry: any) => entry.id === replyBody.comment.id).attachments[0].id).toBe(pendingAttachment.id);
+    for (let index = 1; index < timelineBody.length; index++) {
+      expect(timelineBody[index - 1].created_at <= timelineBody[index].created_at).toBe(true);
+    }
+
+    const wrappedTimeline = await app.request(`/api/multica/issues/${issue.id}/timeline?limit=50&around=${encodeURIComponent(rootBody.comment.id)}`);
+    const wrappedTimelineBody = await wrappedTimeline.json();
+    expect(wrappedTimelineBody.next_cursor).toBeNull();
+    expect(wrappedTimelineBody.prev_cursor).toBeNull();
+    expect(wrappedTimelineBody.has_more_before).toBe(false);
+    expect(wrappedTimelineBody.has_more_after).toBe(false);
+    expect(wrappedTimelineBody.entries[wrappedTimelineBody.target_index].id).toBe(rootBody.comment.id);
+    for (let index = 1; index < wrappedTimelineBody.entries.length; index++) {
+      expect(wrappedTimelineBody.entries[index - 1].created_at >= wrappedTimelineBody.entries[index].created_at).toBe(true);
+    }
+
     const deleted = await app.request(`/api/multica/comments/${replyBody.comment.id}`, { method: "DELETE" });
     expect(deleted.status).toBe(200);
     expect(store.getIssueComment(replyBody.comment.id)).toBeNull();

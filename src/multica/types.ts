@@ -514,6 +514,43 @@ export interface MulticaIssueActivity {
   createdAt: string;
 }
 
+export interface MulticaTimelineEntry {
+  type: "activity" | "comment";
+  id: string;
+  actorType: string;
+  actor_type?: string;
+  actorId: string | null;
+  actor_id?: string | null;
+  createdAt: string;
+  created_at?: string;
+  action?: string | null;
+  details?: unknown | null;
+  content?: string | null;
+  parentId?: string | null;
+  parent_id?: string | null;
+  updatedAt?: string | null;
+  updated_at?: string | null;
+  commentType?: string | null;
+  comment_type?: string | null;
+  reactions?: MulticaCommentReaction[];
+  attachments?: MulticaAttachment[];
+  resolvedAt?: string | null;
+  resolved_at?: string | null;
+  resolvedByType?: string | null;
+  resolved_by_type?: string | null;
+  resolvedById?: string | null;
+  resolved_by_id?: string | null;
+}
+
+export interface MulticaTimelinePage {
+  entries: MulticaTimelineEntry[];
+  next_cursor: null;
+  prev_cursor: null;
+  has_more_before: false;
+  has_more_after: false;
+  target_index?: number;
+}
+
 export interface MulticaIssueSubscriber {
   id: string;
   issueId: string;

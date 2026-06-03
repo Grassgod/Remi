@@ -100,6 +100,7 @@ import type {
   MulticaTaskMessage,
   MulticaTaskStatus,
   MulticaTaskWithAgent,
+  MulticaTimelineEntry,
   MulticaSubscriptionReason,
   MulticaUsageByAgent,
   MulticaUsageByHour,
@@ -2685,6 +2686,21 @@ export class MulticaStore {
       "SELECT * FROM multica_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(issueId) as Row[];
     return rows.map(toIssueActivity);
+  }
+
+  listIssueTimeline(issueId: string, options: { ascending?: boolean } = {}): MulticaTimelineEntry[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const entries: MulticaTimelineEntry[] = [
+      ...this.listIssueComments(issueId).map(commentToTimelineEntry),
+      ...this.listIssueActivity(issueId).map(activityToTimelineEntry),
+    ];
+    const ascending = options.ascending !== false;
+    return entries.sort((left, right) => {
+      if (left.createdAt !== right.createdAt) {
+        return ascending ? left.createdAt.localeCompare(right.createdAt) : right.createdAt.localeCompare(left.createdAt);
+      }
+      return ascending ? left.id.localeCompare(right.id) : right.id.localeCompare(left.id);
+    });
   }
 
   listIssueSubscribers(issueId: string): MulticaIssueSubscriber[] {
@@ -5823,6 +5839,49 @@ function toIssueActivity(row: Row): MulticaIssueActivity {
     body: nullableString(row.body),
     data: row.data == null ? null : parseJson(row.data, null),
     createdAt: String(row.created_at),
+  };
+}
+
+function commentToTimelineEntry(comment: MulticaIssueComment): MulticaTimelineEntry {
+  return {
+    type: "comment",
+    id: comment.id,
+    actorType: comment.authorType,
+    actor_type: comment.authorType,
+    actorId: comment.authorId,
+    actor_id: comment.authorId,
+    createdAt: comment.createdAt,
+    created_at: comment.createdAt,
+    content: comment.body,
+    parentId: comment.parentId,
+    parent_id: comment.parentId,
+    updatedAt: comment.updatedAt,
+    updated_at: comment.updatedAt,
+    commentType: "comment",
+    comment_type: "comment",
+    reactions: comment.reactions,
+    attachments: comment.attachments,
+    resolvedAt: comment.resolvedAt,
+    resolved_at: comment.resolvedAt,
+    resolvedByType: comment.resolvedByType,
+    resolved_by_type: comment.resolvedByType,
+    resolvedById: comment.resolvedById,
+    resolved_by_id: comment.resolvedById,
+  };
+}
+
+function activityToTimelineEntry(activity: MulticaIssueActivity): MulticaTimelineEntry {
+  return {
+    type: "activity",
+    id: activity.id,
+    actorType: activity.actorType,
+    actor_type: activity.actorType,
+    actorId: activity.actorId,
+    actor_id: activity.actorId,
+    createdAt: activity.createdAt,
+    created_at: activity.createdAt,
+    action: activity.type,
+    details: activity.data ?? (activity.body == null ? null : { body: activity.body }),
   };
 }
 

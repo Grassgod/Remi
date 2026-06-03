@@ -54,6 +54,7 @@ import type {
   MulticaSkill,
   MulticaSubscriptionReason,
   MulticaGitHubPullRequestState,
+  MulticaTimelineEntry,
   MulticaWebhookDeliveryResult,
   MulticaWebhookProvider,
   MulticaWebhookSignatureStatus,
@@ -1017,6 +1018,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     return c.json(issue);
   });
+  app.get("/api/multica/issues/:id/timeline", (c) => {
+    const response = issueTimelineResponse(store, c.req.param("id"), c);
+    if (!response) return c.json({ error: "issue not found" }, 404);
+    return c.json(response);
+  });
+  app.get("/api/issues/:id/timeline", (c) => {
+    const response = issueTimelineResponse(store, c.req.param("id"), c);
+    if (!response) return c.json({ error: "issue not found" }, 404);
+    return c.json(response);
+  });
   app.get("/api/multica/issues/:id/children", (c) => {
     const children = store.listChildIssues(c.req.param("id"));
     return c.json({ issues: children, total: children.length });
@@ -1456,6 +1467,44 @@ function issueListQuery(c: { req: { query: (name: string) => string | undefined 
 
 function splitQueryList(value: string | undefined): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function issueTimelineResponse(
+  store: MulticaStore,
+  issueId: string,
+  c: { req: { query: (name: string) => string | undefined } },
+): MulticaTimelineEntry[] | {
+  entries: MulticaTimelineEntry[];
+  next_cursor: null;
+  prev_cursor: null;
+  has_more_before: false;
+  has_more_after: false;
+  target_index?: number;
+} | null {
+  if (!store.getIssue(issueId)) return null;
+  const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
+  if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true });
+  const entries = store.listIssueTimeline(issueId, { ascending: false });
+  const response: {
+    entries: MulticaTimelineEntry[];
+    next_cursor: null;
+    prev_cursor: null;
+    has_more_before: false;
+    has_more_after: false;
+    target_index?: number;
+  } = {
+    entries,
+    next_cursor: null,
+    prev_cursor: null,
+    has_more_before: false,
+    has_more_after: false,
+  };
+  const anchor = c.req.query("around");
+  if (anchor) {
+    const index = entries.findIndex((entry) => entry.id === anchor);
+    if (index >= 0) response.target_index = index;
+  }
+  return response;
 }
 
 function withFeedbackRequestMetadata(
