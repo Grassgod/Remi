@@ -171,6 +171,23 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
 
   app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/api/config", (c) => c.json({
+    cdn_domain: "",
+    allow_signup: true,
+    google_client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+    posthog_key: process.env.ANALYTICS_DISABLED === "true" || process.env.ANALYTICS_DISABLED === "1" ? "" : process.env.POSTHOG_API_KEY ?? "",
+    posthog_host: process.env.POSTHOG_HOST ?? "",
+    analytics_environment: process.env.NODE_ENV ?? "development",
+  }));
+  app.post("/api/cli-token", async (c) => {
+    const token = await store.createAccessToken({
+      workspaceId: "local",
+      name: "CLI token",
+      type: "pat",
+    });
+    return c.json({ token: token.token });
+  });
+  app.post("/auth/logout", (c) => c.json({ message: "logged out" }));
   app.get("/api/multica/health", (c) => c.json({ ok: true }));
   app.post("/api/daemon/register", async (c) => {
     const body = await readJson<DaemonRegisterRequestBody>(c);
@@ -210,6 +227,24 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(store.patchCurrentUserOnboarding(body.questionnaire ?? body.onboarding_questionnaire ?? {}));
   });
   app.post("/api/me/onboarding/complete", (c) => c.json(store.markCurrentUserOnboarded()));
+  app.post("/api/me/onboarding/cloud-waitlist", async (c) => {
+    const body = await readJson<{ email?: string; reason?: string }>(c);
+    const result = safeJoinCloudWaitlist(body, store);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/api/me/onboarding/runtime-bootstrap", async (c) => {
+    const body = await readJson<{ workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string }>(c);
+    const result = safeRuntimeOnboardingBootstrap(store, body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/api/me/onboarding/no-runtime-bootstrap", async (c) => {
+    const body = await readJson<{ workspace_id?: string; workspaceId?: string }>(c);
+    const result = safeNoRuntimeOnboardingBootstrap(store, body);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
   app.get("/api/workspaces", (c) => c.json(store.listWorkspaces()));
   app.post("/api/workspaces", async (c) => {
     const body = await readJson<any>(c);
@@ -1825,6 +1860,84 @@ function safeDeclineInvitation(
     if (message === "invitation does not belong to you") return { error: message, status: 403 };
     return { error: message, status: 400 };
   }
+}
+
+function safeJoinCloudWaitlist(
+  body: { email?: string; reason?: string },
+  store: MulticaStore,
+): ReturnType<MulticaStore["updateCurrentUser"]> | { error: string; status: 400 } {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!email) return { error: "email is required", status: 400 };
+  if (email.length > 254) return { error: "email is too long", status: 400 };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is invalid", status: 400 };
+  const reason = String(body.reason ?? "").trim();
+  if (reason.length > 1000) return { error: "reason is too long", status: 400 };
+  const user = store.getCurrentUser();
+  return store.updateCurrentUser({
+    onboardingQuestionnaire: {
+      ...user.onboardingQuestionnaire,
+      cloud_waitlist_email: email,
+      cloud_waitlist_reason: reason,
+    },
+  });
+}
+
+function safeRuntimeOnboardingBootstrap(
+  store: MulticaStore,
+  body: { workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string },
+): { workspace_id: string; agent_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
+  const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
+  const runtimeId = body.runtime_id ?? body.runtimeId ?? "";
+  if (!workspaceId) return { error: "workspace_id is required", status: 400 };
+  if (!runtimeId) return { error: "runtime_id is required", status: 400 };
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
+  const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
+  const agent = store.ensureDefaultAgent(provider);
+  const issue = createOnboardingIssue(store, workspaceId, "Connect your local runtime", `Use ${runtime.name} to run your first task.`);
+  store.createTask({
+    agentId: agent.id,
+    issueId: issue.id,
+    workspaceId,
+    prompt: "Help complete onboarding and verify the local runtime is ready.",
+  });
+  store.markCurrentUserOnboarded();
+  return { workspace_id: workspaceId, agent_id: agent.id, issue_id: issue.id };
+}
+
+function safeNoRuntimeOnboardingBootstrap(
+  store: MulticaStore,
+  body: { workspace_id?: string; workspaceId?: string },
+): { workspace_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
+  const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
+  if (!workspaceId) return { error: "workspace_id is required", status: 400 };
+  if (!store.getWorkspace(workspaceId)) return { error: "workspace not found", status: 404 };
+  const issue = createOnboardingIssue(
+    store,
+    workspaceId,
+    "Install a local runtime",
+    "Install and register a local Claude or Codex runtime to start running tasks.",
+  );
+  store.markCurrentUserOnboarded();
+  return { workspace_id: workspaceId, issue_id: issue.id };
+}
+
+function createOnboardingIssue(
+  store: MulticaStore,
+  workspaceId: string,
+  title: string,
+  description: string,
+): ReturnType<MulticaStore["createIssue"]> {
+  const existing = store.listIssues({ workspaceId }).find((issue) => issue.title === title);
+  if (existing) return existing;
+  return store.createIssue({
+    title,
+    description,
+    workspaceId,
+    createdBy: "local",
+    priority: "medium",
+    contextRefs: [{ type: "onboarding" }],
+  });
 }
 
 function registerDaemonRuntimes(store: MulticaStore, body: DaemonRegisterRequestBody):

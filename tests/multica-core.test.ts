@@ -2108,6 +2108,63 @@ describe("Bun Multica API", () => {
     expect(declineInvite.status).toBe(409);
   });
 
+  it("serves config, cli token, logout, and onboarding bootstrap compatibility endpoints", async () => {
+    const store = createStore();
+    const workspace = store.createWorkspace({ name: "Onboarding Team", slug: "onboarding-team" });
+    const runtime = store.registerRuntime({ name: "Codex Runtime", provider: "codex", workspaceId: workspace.id });
+    const app = createMulticaApp({ store });
+
+    const config = await app.request("/api/config");
+    const configBody = await config.json();
+    expect(config.status).toBe(200);
+    expect(configBody.allow_signup).toBe(true);
+    expect(configBody.cdn_domain).toBe("");
+
+    const cliToken = await app.request("/api/cli-token", { method: "POST" });
+    const cliTokenBody = await cliToken.json();
+    expect(cliToken.status).toBe(200);
+    expect(cliTokenBody.token).toStartWith("mul_");
+
+    const logout = await app.request("/auth/logout", { method: "POST" });
+    expect(await logout.json()).toEqual({ message: "logged out" });
+
+    const badWaitlist = await app.request("/api/me/onboarding/cloud-waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "not-email" }),
+    });
+    expect(badWaitlist.status).toBe(400);
+
+    const waitlist = await app.request("/api/me/onboarding/cloud-waitlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "local@example.com", reason: "cloud please" }),
+    });
+    expect((await waitlist.json()).onboarding_questionnaire.cloud_waitlist_email).toBe("local@example.com");
+
+    const runtimeBootstrap = await app.request("/api/me/onboarding/runtime-bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: workspace.id, runtime_id: runtime.id }),
+    });
+    const runtimeBootstrapBody = await runtimeBootstrap.json();
+    expect(runtimeBootstrap.status).toBe(200);
+    expect(runtimeBootstrapBody.workspace_id).toBe(workspace.id);
+    expect(runtimeBootstrapBody.agent_id).toBe("agt_default_codex");
+    expect(store.getIssue(runtimeBootstrapBody.issue_id)?.title).toBe("Connect your local runtime");
+    expect(store.listTasks().some((task) => task.issueId === runtimeBootstrapBody.issue_id)).toBe(true);
+
+    const noRuntimeBootstrap = await app.request("/api/me/onboarding/no-runtime-bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace_id: workspace.id }),
+    });
+    const noRuntimeBootstrapBody = await noRuntimeBootstrap.json();
+    expect(noRuntimeBootstrap.status).toBe(200);
+    expect(store.getIssue(noRuntimeBootstrapBody.issue_id)?.title).toBe("Install a local runtime");
+    expect(store.getCurrentUser().onboardedAt).toBeString();
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
