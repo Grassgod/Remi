@@ -866,6 +866,15 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("/api/multica/tokens");
     expect(html).toContain("function revokeToken");
   });
+
+  it("renders a real my issues page with member filtering", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain('id="myIssuesPage"');
+    expect(html).toContain('id="myIssueList"');
+    expect(html).toContain("function renderMyIssues()");
+    expect(html).toContain("function visibleMyIssues()");
+    expect(html).toContain("myIssueMemberId");
+  });
 });
 
 describe("Bun Multica API", () => {

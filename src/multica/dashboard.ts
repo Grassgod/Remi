@@ -410,6 +410,11 @@ export function renderMulticaDashboardHtml(): string {
       gap: 6px;
       flex-wrap: wrap;
     }
+    .toolbar-select {
+      width: min(220px, 100%);
+      height: 32px;
+      padding: 0 30px 0 10px;
+    }
     .tabs {
       display: flex;
       align-items: center;
@@ -1231,6 +1236,12 @@ export function renderMulticaDashboardHtml(): string {
         <div class="board" id="board"></div>
         <div class="list" id="list"></div>
       </section>
+      <section class="page" id="myIssuesPage">
+        <div class="collection">
+          <div class="entity-grid" id="myIssueSummaryGrid"></div>
+          <div class="list active" id="myIssueList"></div>
+        </div>
+      </section>
       <section class="page" id="agentsPage">
         <div class="collection">
           <div class="entity-grid" id="agentsGrid"></div>
@@ -1358,7 +1369,7 @@ export function renderMulticaDashboardHtml(): string {
   <script>
     const pages = {
       inbox: { title: "Inbox", group: "Personal", placeholder: "Inbox", text: "No inbox items." },
-      "my-issues": { title: "My Issues", group: "Personal", placeholder: "My Issues", text: "No assigned issues." },
+      "my-issues": { title: "My Issues", group: "Personal" },
       issues: { title: "Issues", group: "Workspace" },
       projects: { title: "Projects", group: "Workspace" },
       autopilots: { title: "Autopilots", group: "Workspace" },
@@ -1390,6 +1401,8 @@ export function renderMulticaDashboardHtml(): string {
       runtimeDaily: [],
       mode: "board",
       activeOnly: false,
+      myIssuesActiveOnly: true,
+      myIssueMemberId: "all",
       agentFilter: "all",
       page: "issues",
       selectedTaskId: null,
@@ -1426,6 +1439,7 @@ export function renderMulticaDashboardHtml(): string {
       toolbar: document.getElementById("toolbar"),
       pageTitle: document.getElementById("pageTitle"),
       issuesPage: document.getElementById("issuesPage"),
+      myIssuesPage: document.getElementById("myIssuesPage"),
       agentsPage: document.getElementById("agentsPage"),
       projectsPage: document.getElementById("projectsPage"),
       autopilotsPage: document.getElementById("autopilotsPage"),
@@ -1440,6 +1454,8 @@ export function renderMulticaDashboardHtml(): string {
       placeholderText: document.getElementById("placeholderText"),
       board: document.getElementById("board"),
       list: document.getElementById("list"),
+      myIssueSummaryGrid: document.getElementById("myIssueSummaryGrid"),
+      myIssueList: document.getElementById("myIssueList"),
       agentsGrid: document.getElementById("agentsGrid"),
       projectsGrid: document.getElementById("projectsGrid"),
       autopilotsGrid: document.getElementById("autopilotsGrid"),
@@ -2655,6 +2671,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAgentSelects();
       renderBoard();
       renderList();
+      renderMyIssues();
       renderProjects();
       renderSquads();
       renderAutopilots();
@@ -2678,6 +2695,7 @@ export function renderMulticaDashboardHtml(): string {
         item.classList.toggle("active", item.dataset.page === state.page);
       });
       els.issuesPage.classList.toggle("active", state.page === "issues");
+      els.myIssuesPage.classList.toggle("active", state.page === "my-issues");
       els.agentsPage.classList.toggle("active", state.page === "agents");
       els.projectsPage.classList.toggle("active", state.page === "projects");
       els.autopilotsPage.classList.toggle("active", state.page === "autopilots");
@@ -2687,7 +2705,7 @@ export function renderMulticaDashboardHtml(): string {
       els.settingsPage.classList.toggle("active", state.page === "settings");
       els.inboxPage.classList.toggle("active", state.page === "inbox");
       els.usagePage.classList.toggle("active", state.page === "usage");
-      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "settings", "inbox", "usage"].includes(state.page);
+      const isPlaceholder = !["issues", "my-issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "settings", "inbox", "usage"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2743,6 +2761,28 @@ export function renderMulticaDashboardHtml(): string {
         document.getElementById("newMember").addEventListener("click", createMember);
         document.getElementById("boardMode").addEventListener("click", () => setMode("board"));
         document.getElementById("listMode").addEventListener("click", () => setMode("list"));
+        document.getElementById("newIssue").addEventListener("click", openSheet);
+      } else if (state.page === "my-issues") {
+        const items = visibleMyIssues();
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\">" +
+            "<select class=\\"toolbar-select\\" id=\\"myIssueMember\\">" + myIssueMemberOptions() + "</select>" +
+            "<span class=\\"status-badge\\">" + items.length + " assigned</span>" +
+          "</div>" +
+          "<div class=\\"toolbar-right\\">" +
+            "<button class=\\"chip-button " + (state.myIssuesActiveOnly ? "active" : "") + "\\" id=\\"myIssuesActiveOnly\\">Active</button>" +
+            "<button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button>" +
+            "<button class=\\"primary\\" id=\\"newIssue\\">New issue</button>" +
+          "</div>";
+        document.getElementById("myIssueMember").addEventListener("change", event => {
+          state.myIssueMemberId = event.target.value || "all";
+          render();
+        });
+        document.getElementById("myIssuesActiveOnly").addEventListener("click", () => {
+          state.myIssuesActiveOnly = !state.myIssuesActiveOnly;
+          render();
+        });
+        document.getElementById("refresh").addEventListener("click", () => refresh());
         document.getElementById("newIssue").addEventListener("click", openSheet);
       } else if (state.page === "agents") {
         els.toolbar.innerHTML =
@@ -2842,6 +2882,21 @@ export function renderMulticaDashboardHtml(): string {
       return tasks.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     }
 
+    function visibleMyIssues() {
+      let issues = state.issues.filter(issue => issue.assigneeType === "member");
+      if (state.myIssueMemberId !== "all") {
+        issues = issues.filter(issue => issue.assigneeId === state.myIssueMemberId);
+      }
+      if (state.myIssuesActiveOnly) {
+        issues = issues.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status));
+      }
+      return issues.slice().sort((a, b) => {
+        const priority = priorityRank(a.priority) - priorityRank(b.priority);
+        if (priority !== 0) return priority;
+        return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+      });
+    }
+
     function renderBoard() {
       const groups = [
         { key: "open", title: "Open", test: t => t.status === "open" },
@@ -2898,6 +2953,46 @@ export function renderMulticaDashboardHtml(): string {
           renderLabelChips(t.labels || []) +
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
           "<span class=\\"status-badge\\">" + esc(assigneeLabel(t) || "unassigned") + "</span>" +
+          "<span class=\\"list-right\\">" + esc(project ? project.title : "no project") + "</span>" +
+        "</div>";
+      }).join("");
+    }
+
+    function renderMyIssues() {
+      if (!els.myIssueSummaryGrid || !els.myIssueList) return;
+      const issues = visibleMyIssues();
+      const allMemberIssues = state.issues.filter(issue => issue.assigneeType === "member");
+      const scopedMemberIssues = state.myIssueMemberId === "all"
+        ? allMemberIssues
+        : allMemberIssues.filter(issue => issue.assigneeId === state.myIssueMemberId);
+      const active = scopedMemberIssues.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status));
+      const blocked = scopedMemberIssues.filter(issue => issue.status === "blocked" || issue.status === "failed");
+      const dueSoon = scopedMemberIssues.filter(issue => isDueSoon(issue));
+      const selectedMember = state.myIssueMemberId === "all" ? null : state.members.find(member => member.id === state.myIssueMemberId);
+      els.myIssueSummaryGrid.innerHTML =
+        "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">M</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(selectedMember ? selectedMember.name : "All members") + "</div><div class=\\"entity-subtitle\\">Assigned workspace issues</div></div></div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(scopedMemberIssues.length, "assigned") +
+            renderMetric(active.length, "active") +
+            renderMetric(blocked.length, "blocked") +
+            renderMetric(dueSoon.length, "due soon") +
+          "</div>" +
+        "</article>";
+      if (!issues.length) {
+        els.myIssueList.innerHTML = "<div class=\\"empty-column\\" style=\\"margin:16px;\\">No assigned issues</div>";
+        return;
+      }
+      els.myIssueList.innerHTML = issues.map(issue => {
+        const project = issue.projectId ? state.projects.find(project => project.id === issue.projectId) : null;
+        return "<div class=\\"list-row\\" onclick=\\"openIssue('" + escAttr(issue.id) + "')\\">" +
+          "<span class=\\"priority-dot\\" style=\\"background:" + priorityColor(issue.priority) + "\\"></span>" +
+          "<span class=\\"list-id\\">" + esc(issueLabel(issue)) + "</span>" +
+          "<span class=\\"list-title\\">" + esc(issue.title || "") + "</span>" +
+          renderLabelChips(issue.labels || []) +
+          "<span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(assigneeLabel(issue) || "unassigned") + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(issue.dueDate ? "due " + shortDate(issue.dueDate) : "no due date") + "</span>" +
           "<span class=\\"list-right\\">" + esc(project ? project.title : "no project") + "</span>" +
         "</div>";
       }).join("");
@@ -3791,6 +3886,7 @@ export function renderMulticaDashboardHtml(): string {
       if (!els.searchOverlay.classList.contains("open")) return;
       const q = els.searchInput.value.trim().toLowerCase();
       const rows = [];
+      pages["my-issues"] && rows.push({ type: "Page", title: "My Issues", subtitle: visibleMyIssues().length + " assigned issues", action: () => switchPage("my-issues") });
       pages.issues && rows.push({ type: "Page", title: "Issues", subtitle: state.issues.length + " issues", action: () => switchPage("issues") });
       pages.projects && rows.push({ type: "Page", title: "Projects", subtitle: state.projects.length + " projects", action: () => switchPage("projects") });
       pages.autopilots && rows.push({ type: "Page", title: "Autopilots", subtitle: state.autopilots.length + " autopilots", action: () => switchPage("autopilots") });
@@ -3940,6 +4036,12 @@ export function renderMulticaDashboardHtml(): string {
       return squad ? "squad: " + squad.name : "squad: " + shortId(item.assigneeId);
     }
 
+    function myIssueMemberOptions() {
+      return "<option value=\\"all\\">All members</option>" + state.members.map(member =>
+        "<option value=\\"" + escAttr(member.id) + "\\" " + (member.id === state.myIssueMemberId ? "selected" : "") + ">" + esc(member.name) + " / " + esc(member.role) + "</option>"
+      ).join("");
+    }
+
     function mentionOptions() {
       const memberRows = state.members.map(member =>
         "<option value=\\"member:" + escAttr(member.id) + "\\">" + esc(member.name) + " / member</option>"
@@ -4041,6 +4143,27 @@ export function renderMulticaDashboardHtml(): string {
       return ["urgent", "high", "medium", "low", "none"].map(priority =>
         "<option value=\\"" + priority + "\\" " + (priority === current ? "selected" : "") + ">" + priority + "</option>"
       ).join("");
+    }
+
+    function priorityRank(priority) {
+      return { urgent: 0, high: 1, medium: 2, low: 3, none: 4 }[priority || "none"] ?? 4;
+    }
+
+    function priorityColor(priority) {
+      if (priority === "urgent") return "var(--destructive)";
+      if (priority === "high") return "var(--warning)";
+      if (priority === "medium") return "var(--brand)";
+      if (priority === "low") return "var(--success)";
+      return "var(--muted-foreground)";
+    }
+
+    function isDueSoon(issue) {
+      if (!issue.dueDate || ["done", "completed", "failed", "cancelled"].includes(issue.status)) return false;
+      const time = Date.parse(issue.dueDate);
+      if (!Number.isFinite(time)) return false;
+      const now = Date.now();
+      const soon = now + 7 * 24 * 60 * 60 * 1000;
+      return time <= soon;
     }
 
     function activitySummary(item) {
