@@ -14,6 +14,7 @@ import type {
   CreateProjectInput,
   CreateSquadInput,
   CreateTaskInput,
+  CreateWorkspaceMemberInput,
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -22,6 +23,7 @@ import type {
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateSquadInput,
+  UpdateWorkspaceMemberInput,
 } from "./types.js";
 
 const log = createLogger("multica-api");
@@ -79,6 +81,27 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/agents/:id", (c) => {
     return c.json({ agent: store.archiveAgent(c.req.param("id")) });
+  });
+
+  app.get("/api/multica/members", (c) => {
+    const members = store.listWorkspaceMembers(c.req.query("workspaceId"));
+    return c.json({ members, total: members.length });
+  });
+  app.post("/api/multica/members", async (c) => {
+    const body = await readJson<CreateWorkspaceMemberInput>(c);
+    return c.json({ member: store.createWorkspaceMember(body) }, 201);
+  });
+  app.get("/api/multica/members/:id", (c) => {
+    const member = store.getWorkspaceMember(c.req.param("id"));
+    if (!member) return c.json({ error: "member not found" }, 404);
+    return c.json({ member });
+  });
+  app.patch("/api/multica/members/:id", async (c) => {
+    const body = await readJson<UpdateWorkspaceMemberInput>(c);
+    return c.json({ member: store.updateWorkspaceMember(c.req.param("id"), body) });
+  });
+  app.delete("/api/multica/members/:id", (c) => {
+    return c.json({ member: store.archiveWorkspaceMember(c.req.param("id")) });
   });
 
   app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));

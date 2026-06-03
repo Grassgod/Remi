@@ -10,6 +10,7 @@ import type {
   CreateProjectInput,
   CreateSquadInput,
   CreateTaskInput,
+  CreateWorkspaceMemberInput,
   MulticaAutopilot,
   MulticaAutopilotRun,
   MulticaAgent,
@@ -25,6 +26,7 @@ import type {
   MulticaTaskMessage,
   MulticaTaskStatus,
   MulticaTaskWithAgent,
+  MulticaWorkspaceMember,
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -35,6 +37,7 @@ import type {
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateSquadInput,
+  UpdateWorkspaceMemberInput,
 } from "./types.js";
 
 const TERMINAL_STATUSES: MulticaTaskStatus[] = ["completed", "failed", "cancelled"];
@@ -80,6 +83,19 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_workspace_members (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        email TEXT,
+        role TEXT NOT NULL DEFAULT 'member',
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_workspace_members_workspace ON multica_workspace_members(workspace_id);
 
       CREATE TABLE IF NOT EXISTS multica_issues (
         id TEXT PRIMARY KEY,
@@ -364,6 +380,70 @@ export class MulticaStore {
   listAgents(): MulticaAgent[] {
     const rows = this.db.query("SELECT * FROM multica_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
     return rows.map(toAgent);
+  }
+
+  createWorkspaceMember(input: CreateWorkspaceMemberInput): MulticaWorkspaceMember {
+    if (!input.name?.trim()) throw new Error("Member name is required");
+    const id = input.id ?? createId("mem");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_workspace_members (
+        id, workspace_id, name, email, role, archived_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+      [
+        id,
+        input.workspaceId ?? "local",
+        input.name.trim(),
+        input.email ?? null,
+        input.role ?? "member",
+        now,
+        now,
+      ],
+    );
+    return this.getWorkspaceMember(id)!;
+  }
+
+  getWorkspaceMember(id: string): MulticaWorkspaceMember | null {
+    const row = this.db.query("SELECT * FROM multica_workspace_members WHERE id = ?").get(id) as Row | null;
+    return row ? toWorkspaceMember(row) : null;
+  }
+
+  listWorkspaceMembers(workspaceId?: string | null): MulticaWorkspaceMember[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_workspace_members WHERE workspace_id = ? AND archived_at IS NULL ORDER BY name ASC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_workspace_members WHERE archived_at IS NULL ORDER BY workspace_id ASC, name ASC").all() as Row[];
+    return rows.map(toWorkspaceMember);
+  }
+
+  updateWorkspaceMember(id: string, input: UpdateWorkspaceMemberInput): MulticaWorkspaceMember {
+    const current = this.getWorkspaceMember(id);
+    if (!current) throw new Error(`Member not found: ${id}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_workspace_members SET
+        workspace_id = ?,
+        name = ?,
+        email = ?,
+        role = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.workspaceId ?? current.workspaceId,
+        input.name ?? current.name,
+        input.email === undefined ? current.email : input.email,
+        input.role ?? current.role,
+        now,
+        id,
+      ],
+    );
+    return this.getWorkspaceMember(id)!;
+  }
+
+  archiveWorkspaceMember(id: string): MulticaWorkspaceMember {
+    if (!this.getWorkspaceMember(id)) throw new Error(`Member not found: ${id}`);
+    const now = nowIso();
+    this.db.run("UPDATE multica_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    return this.getWorkspaceMember(id)!;
   }
 
   registerRuntime(input: RegisterRuntimeInput): MulticaRuntime {
@@ -723,6 +803,10 @@ export class MulticaStore {
       const agent = this.getAgent(input.memberId);
       if (!agent) throw new Error(`Agent not found: ${input.memberId}`);
       if (agent.archivedAt) throw new Error(`Agent is archived: ${input.memberId}`);
+    } else if (input.memberType === "member") {
+      const member = this.getWorkspaceMember(input.memberId);
+      if (!member) throw new Error(`Member not found: ${input.memberId}`);
+      if (member.archivedAt) throw new Error(`Member is archived: ${input.memberId}`);
     }
     const now = nowIso();
     const existing = this.db.query(
@@ -1352,6 +1436,19 @@ function withRuntimeLiveness(runtime: MulticaRuntime): MulticaRuntime {
   const heartbeat = Date.parse(runtime.lastHeartbeatAt);
   if (!Number.isFinite(heartbeat)) return { ...runtime, status: "offline" };
   return Date.now() - heartbeat > RUNTIME_HEARTBEAT_STALE_MS ? { ...runtime, status: "offline" } : runtime;
+}
+
+function toWorkspaceMember(row: Row): MulticaWorkspaceMember {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    name: String(row.name),
+    email: nullableString(row.email),
+    role: String(row.role ?? "member"),
+    archivedAt: nullableString(row.archived_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
 }
 
 function toProject(row: Row): MulticaProject {

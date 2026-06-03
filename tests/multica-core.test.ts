@@ -91,6 +91,21 @@ describe("Bun Multica core store", () => {
     expect(store.ensureDefaultAgent("codex").archivedAt).toBeNull();
   });
 
+  it("manages workspace members and squad membership", () => {
+    const store = createStore();
+    const squad = store.createSquad({ name: "Product squad" });
+    const member = store.createWorkspaceMember({ name: "Ada Lovelace", email: "ada@example.com", role: "owner" });
+
+    expect(store.listWorkspaceMembers()).toHaveLength(1);
+    expect(store.updateWorkspaceMember(member.id, { role: "reviewer" }).role).toBe("reviewer");
+    expect(store.addSquadMember(squad.id, { memberType: "member", memberId: member.id, role: "reviewer" }).memberType).toBe("member");
+    expect(store.listSquadMembers(squad.id)[0]?.memberId).toBe(member.id);
+
+    expect(store.archiveWorkspaceMember(member.id).archivedAt).toBeString();
+    expect(store.listWorkspaceMembers()).toHaveLength(0);
+    expect(() => store.addSquadMember(squad.id, { memberType: "member", memberId: member.id })).toThrow("Member is archived");
+  });
+
   it("skips archived agents when resolving squad autopilots", () => {
     const store = createStore();
     const leader = store.createAgent({ name: "Leader", provider: "codex" });
@@ -358,5 +373,31 @@ describe("Bun Multica API", () => {
     expect(paused.status).toBe(200);
     expect(scheduler.scheduledIds()).not.toContain(createdBody.autopilot.id);
     scheduler.stop();
+  });
+
+  it("serves workspace member endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/members", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Grace Hopper", email: "grace@example.com", role: "admin" }),
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json();
+
+    const listed = await app.request("/api/multica/members");
+    expect((await listed.json()).members[0].id).toBe(body.member.id);
+
+    const updated = await app.request(`/api/multica/members/${body.member.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "reviewer" }),
+    });
+    expect((await updated.json()).member.role).toBe("reviewer");
+
+    const archived = await app.request(`/api/multica/members/${body.member.id}`, { method: "DELETE" });
+    expect((await archived.json()).member.archivedAt).toBeString();
   });
 });

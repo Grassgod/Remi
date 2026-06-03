@@ -61,6 +61,17 @@ export interface MulticaRuntime {
   updatedAt: string;
 }
 
+export interface MulticaWorkspaceMember {
+  id: string;
+  workspaceId: string;
+  name: string;
+  email: string | null;
+  role: string;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MulticaProject {
   id: string;
   workspaceId: string;
@@ -238,6 +249,21 @@ export interface CreateAgentInput {
   customArgs?: string[];
   mcpConfig?: unknown | null;
   thinkingLevel?: string | null;
+}
+
+export interface CreateWorkspaceMemberInput {
+  id?: string;
+  workspaceId?: string | null;
+  name: string;
+  email?: string | null;
+  role?: string;
+}
+
+export interface UpdateWorkspaceMemberInput {
+  name?: string;
+  email?: string | null;
+  role?: string;
+  workspaceId?: string | null;
 }
 
 export interface UpdateAgentInput {

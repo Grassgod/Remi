@@ -1353,6 +1353,7 @@ export function renderMulticaDashboardHtml(): string {
       issues: [],
       tasks: [],
       runtimes: [],
+      members: [],
       projects: [],
       squads: [],
       autopilots: [],
@@ -1461,11 +1462,12 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, projects, squads, autopilots] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
           api("/api/multica/runtimes"),
+          api("/api/multica/members"),
           api("/api/multica/projects"),
           api("/api/multica/squads"),
           api("/api/multica/autopilots")
@@ -1474,6 +1476,7 @@ export function renderMulticaDashboardHtml(): string {
         state.issues = issues.issues || [];
         state.tasks = tasks.tasks || [];
         state.runtimes = runtimes.runtimes || [];
+        state.members = members.members || [];
         state.projects = projects.projects || [];
         state.squads = squads.squads || [];
         state.autopilots = autopilots.autopilots || [];
@@ -1511,6 +1514,20 @@ export function renderMulticaDashboardHtml(): string {
       document.getElementById("agentForm").reset();
       closeAgentSheet();
       await refresh();
+    }
+
+    async function createMember() {
+      const name = prompt("Member name");
+      if (!name || !name.trim()) return;
+      try {
+        await api("/api/multica/members", {
+          method: "POST",
+          body: JSON.stringify({ name: name.trim(), workspaceId: els.workspace.value || "local" })
+        });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
     }
 
     async function createTask(event) {
@@ -1695,12 +1712,13 @@ export function renderMulticaDashboardHtml(): string {
     async function addSquadMember(event) {
       event.preventDefault();
       if (!state.selectedSquad) return;
-      const memberId = document.getElementById("squadMemberAgent").value;
+      const memberType = document.getElementById("squadMemberType").value;
+      const memberId = document.getElementById("squadMemberId").value;
       const role = document.getElementById("squadMemberRole").value || "member";
       if (!memberId) return;
       await api("/api/multica/squads/" + encodeURIComponent(state.selectedSquad.id) + "/members", {
         method: "POST",
-        body: JSON.stringify({ memberType: "agent", memberId, role })
+        body: JSON.stringify({ memberType, memberId, role })
       });
       await loadSquadDetail(state.selectedSquad.id);
       await refresh({ silent: true });
@@ -2003,6 +2021,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"toolbar-right\\">" +
             "<button class=\\"chip-button " + (state.activeOnly ? "active" : "") + "\\" id=\\"filterActive\\">Filter</button>" +
             "<button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button>" +
+            "<button class=\\"chip-button\\" id=\\"newMember\\">New member</button>" +
             "<div class=\\"view-toggle\\">" +
               "<button id=\\"boardMode\\" class=\\"" + (state.mode === "board" ? "active" : "") + "\\">Board</button>" +
               "<button id=\\"listMode\\" class=\\"" + (state.mode === "list" ? "active" : "") + "\\">List</button>" +
@@ -2017,6 +2036,7 @@ export function renderMulticaDashboardHtml(): string {
           render();
         });
         document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newMember").addEventListener("click", createMember);
         document.getElementById("boardMode").addEventListener("click", () => setMode("board"));
         document.getElementById("listMode").addEventListener("click", () => setMode("list"));
         document.getElementById("newIssue").addEventListener("click", openSheet);
@@ -2085,7 +2105,7 @@ export function renderMulticaDashboardHtml(): string {
       if (state.agentFilter === "agents") {
         tasks = tasks.filter(issue => Boolean(issue.latestTaskId));
       } else if (state.agentFilter === "members") {
-        tasks = [];
+        tasks = tasks.filter(issue => !issue.latestTaskId || (issue.createdBy && state.members.some(member => member.id === issue.createdBy)));
       }
       return tasks.slice().sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     }
@@ -2407,7 +2427,8 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Members</div><div class=\\"message-list\\">" + renderSquadMembers() + "</div></div>" +
           "<form class=\\"sheet-form\\" onsubmit=\\"addSquadMember(event)\\" style=\\"padding:0;\\">" +
             "<div class=\\"detail-grid\\">" +
-              "<label>Agent<select id=\\"squadMemberAgent\\">" + agentOptions(false) + "</select></label>" +
+              "<label>Type<select id=\\"squadMemberType\\" onchange=\\"refreshSquadMemberOptions()\\"><option value=\\"agent\\">agent</option><option value=\\"member\\">member</option></select></label>" +
+              "<label>Member<select id=\\"squadMemberId\\">" + squadMemberOptions("agent") + "</select></label>" +
               "<label>Role<select id=\\"squadMemberRole\\"><option value=\\"member\\">member</option><option value=\\"leader\\">leader</option><option value=\\"reviewer\\">reviewer</option></select></label>" +
             "</div>" +
             "<button class=\\"outline\\" type=\\"submit\\">Add member</button>" +
@@ -2419,9 +2440,10 @@ export function renderMulticaDashboardHtml(): string {
       if (!state.selectedSquadMembers.length) return "<div class=\\"empty-column\\">No members</div>";
       return state.selectedSquadMembers.map(member => {
         const agent = member.memberType === "agent" ? state.agents.find(a => a.id === member.memberId) : null;
+        const workspaceMember = member.memberType === "member" ? state.members.find(item => item.id === member.memberId) : null;
         return "<div class=\\"message-row\\">" +
           "<div class=\\"message-head\\"><span>" + esc(member.role || "member") + "</span><span>" + esc(member.memberType) + "</span><span>" + esc(shortId(member.memberId)) + "</span></div>" +
-          "<div class=\\"message-content\\">" + esc(agent ? agent.name + " / " + agent.provider : member.memberId) + "</div>" +
+          "<div class=\\"message-content\\">" + esc(agent ? agent.name + " / " + agent.provider : workspaceMember ? workspaceMember.name + " / " + workspaceMember.role : member.memberId) + "</div>" +
           "<button class=\\"destructive\\" onclick=\\"removeSquadMember('" + escAttr(member.memberType) + "', '" + escAttr(member.memberId) + "')\\">Remove</button>" +
         "</div>";
       }).join("");
@@ -2509,6 +2531,7 @@ export function renderMulticaDashboardHtml(): string {
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => { switchPage("agents"); openAgent(a.id); } }));
+      state.members.forEach(m => rows.push({ type: "Member", title: m.name, subtitle: m.role + " / " + m.workspaceId, action: () => { state.agentFilter = "members"; switchPage("issues"); } }));
       state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => { switchPage("squads"); openSquad(s.id); } }));
       state.runtimes.forEach(r => rows.push({ type: "Runtime", title: r.name, subtitle: r.provider + " / " + r.status, action: () => switchPage("runtimes") }));
       const filtered = rows.filter(row => !q || (row.title + " " + row.subtitle + " " + row.type).toLowerCase().includes(q)).slice(0, 18);
@@ -2582,6 +2605,20 @@ export function renderMulticaDashboardHtml(): string {
 
     function squadOptions() {
       return state.squads.map(s => "<option value=\\"" + escAttr(s.id) + "\\">" + esc(s.name) + "</option>").join("");
+    }
+
+    function squadMemberOptions(type) {
+      if (type === "member") {
+        return state.members.length
+          ? state.members.map(m => "<option value=\\"" + escAttr(m.id) + "\\">" + esc(m.name) + " / " + esc(m.role) + "</option>").join("")
+          : "<option value=\\"\\">No members</option>";
+      }
+      return agentOptions(false);
+    }
+
+    function refreshSquadMemberOptions() {
+      const type = document.getElementById("squadMemberType").value;
+      document.getElementById("squadMemberId").innerHTML = squadMemberOptions(type);
     }
 
     function refreshAssigneeOptions() {
@@ -2702,6 +2739,7 @@ export function renderMulticaDashboardHtml(): string {
     window.archiveAutopilot = archiveAutopilot;
     window.archiveAgent = archiveAgent;
     window.updateSelectedAgent = updateSelectedAgent;
+    window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
