@@ -8,6 +8,7 @@ import type {
   CreateAccessTokenInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateAutopilotTriggerInput,
   CreateChatSessionInput,
   CreateAttachmentInput,
   CreateFeedbackInput,
@@ -30,6 +31,7 @@ import type {
   CreateWorkspaceMemberInput,
   MulticaAutopilot,
   MulticaAutopilotRun,
+  MulticaAutopilotTrigger,
   MulticaWebhookDelivery,
   MulticaWebhookDeliveryResult,
   MulticaWebhookDeliveryStatus,
@@ -124,6 +126,7 @@ import type {
   TaskUsageEntry,
   UpdateAgentInput,
   UpdateAutopilotInput,
+  UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateIssueCommentInput,
@@ -715,6 +718,29 @@ export class MulticaStore {
 
       CREATE INDEX IF NOT EXISTS idx_multica_autopilots_workspace ON multica_autopilots(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_multica_autopilots_assignee ON multica_autopilots(assignee_type, assignee_id);
+
+      CREATE TABLE IF NOT EXISTS multica_autopilot_triggers (
+        id TEXT PRIMARY KEY,
+        autopilot_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'webhook',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        cron_expression TEXT,
+        timezone TEXT,
+        next_run_at TEXT,
+        webhook_token TEXT UNIQUE,
+        webhook_url TEXT,
+        label TEXT,
+        signing_secret_hash TEXT,
+        last_fired_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(autopilot_id) REFERENCES multica_autopilots(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_autopilot_triggers_autopilot
+        ON multica_autopilot_triggers(autopilot_id, enabled, kind);
+      CREATE INDEX IF NOT EXISTS idx_multica_autopilot_triggers_token
+        ON multica_autopilot_triggers(webhook_token);
 
       CREATE TABLE IF NOT EXISTS multica_autopilot_runs (
         id TEXT PRIMARY KEY,
@@ -4157,6 +4183,114 @@ export class MulticaStore {
     return this.updateAutopilot(id, { status: "archived" });
   }
 
+  listAutopilotTriggers(autopilotId: string): MulticaAutopilotTrigger[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_autopilot_triggers WHERE autopilot_id = ? ORDER BY created_at ASC",
+    ).all(autopilotId) as Row[];
+    return rows.map(toAutopilotTrigger);
+  }
+
+  getAutopilotTrigger(id: string): MulticaAutopilotTrigger | null {
+    const row = this.db.query("SELECT * FROM multica_autopilot_triggers WHERE id = ?").get(id) as Row | null;
+    return row ? toAutopilotTrigger(row) : null;
+  }
+
+  getAutopilotTriggerByWebhookToken(token: string): MulticaAutopilotTrigger | null {
+    const row = this.db.query("SELECT * FROM multica_autopilot_triggers WHERE webhook_token = ?").get(token) as Row | null;
+    return row ? toAutopilotTrigger(row) : null;
+  }
+
+  createAutopilotTrigger(autopilotId: string, input: CreateAutopilotTriggerInput = {}): MulticaAutopilotTrigger {
+    const autopilot = this.getAutopilot(autopilotId);
+    if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+    const kind = input.kind ?? (input.cronExpression || input.cron_expression ? "schedule" : "webhook");
+    const id = createId("trg");
+    const now = nowIso();
+    const webhookToken = kind === "webhook" ? createId("awt", 18) : null;
+    this.db.run(
+      `INSERT INTO multica_autopilot_triggers (
+        id, autopilot_id, kind, enabled, cron_expression, timezone, next_run_at,
+        webhook_token, webhook_url, label, signing_secret_hash, last_fired_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, NULL, NULL, ?, ?)`,
+      [
+        id,
+        autopilotId,
+        kind,
+        input.enabled === false ? 0 : 1,
+        input.cronExpression ?? input.cron_expression ?? null,
+        input.timezone ?? null,
+        webhookToken,
+        input.label ?? null,
+        now,
+        now,
+      ],
+    );
+    this.db.run(
+      "UPDATE multica_autopilots SET trigger_kind = ?, trigger_label = ?, cron_expression = ?, updated_at = ? WHERE id = ?",
+      [kind, input.label ?? autopilot.triggerLabel, input.cronExpression ?? input.cron_expression ?? autopilot.cronExpression, now, autopilotId],
+    );
+    return this.getAutopilotTrigger(id)!;
+  }
+
+  updateAutopilotTrigger(autopilotId: string, triggerId: string, input: UpdateAutopilotTriggerInput): MulticaAutopilotTrigger {
+    const current = this.getAutopilotTrigger(triggerId);
+    if (!current || current.autopilotId !== autopilotId) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_autopilot_triggers SET
+        enabled = ?,
+        cron_expression = ?,
+        timezone = ?,
+        label = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.enabled === undefined ? (current.enabled ? 1 : 0) : input.enabled ? 1 : 0,
+        input.cronExpression ?? input.cron_expression ?? current.cronExpression,
+        input.timezone === undefined ? current.timezone : input.timezone,
+        input.label === undefined ? current.label : input.label,
+        now,
+        triggerId,
+      ],
+    );
+    this.db.run(
+      "UPDATE multica_autopilots SET trigger_label = ?, cron_expression = ?, updated_at = ? WHERE id = ?",
+      [
+        input.label === undefined ? current.label : input.label,
+        input.cronExpression ?? input.cron_expression ?? current.cronExpression,
+        now,
+        autopilotId,
+      ],
+    );
+    return this.getAutopilotTrigger(triggerId)!;
+  }
+
+  deleteAutopilotTrigger(autopilotId: string, triggerId: string): boolean {
+    const result = this.db.run("DELETE FROM multica_autopilot_triggers WHERE id = ? AND autopilot_id = ?", [triggerId, autopilotId]);
+    return result.changes > 0;
+  }
+
+  rotateAutopilotTriggerWebhookToken(autopilotId: string, triggerId: string): MulticaAutopilotTrigger {
+    const current = this.getAutopilotTrigger(triggerId);
+    if (!current || current.autopilotId !== autopilotId) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+    const token = createId("awt", 18);
+    this.db.run(
+      "UPDATE multica_autopilot_triggers SET webhook_token = ?, updated_at = ? WHERE id = ?",
+      [token, nowIso(), triggerId],
+    );
+    return this.getAutopilotTrigger(triggerId)!;
+  }
+
+  setAutopilotTriggerSigningSecret(autopilotId: string, triggerId: string, secret: string | null | undefined): MulticaAutopilotTrigger {
+    const current = this.getAutopilotTrigger(triggerId);
+    if (!current || current.autopilotId !== autopilotId) throw new Error(`Autopilot trigger not found: ${triggerId}`);
+    this.db.run(
+      "UPDATE multica_autopilot_triggers SET signing_secret_hash = ?, updated_at = ? WHERE id = ?",
+      [secret ? "local-secret-set" : null, nowIso(), triggerId],
+    );
+    return this.getAutopilotTrigger(triggerId)!;
+  }
+
   listAutopilotRuns(autopilotId: string): MulticaAutopilotRun[] {
     const rows = this.db.query(
       "SELECT * FROM multica_autopilot_runs WHERE autopilot_id = ? ORDER BY created_at DESC LIMIT 20",
@@ -4264,15 +4398,18 @@ export class MulticaStore {
     provider?: MulticaWebhookProvider | string | null;
     signatureStatus?: MulticaWebhookSignatureStatus | string | null;
     replayedFromDeliveryId?: string | null;
+    triggerId?: string | null;
   } = {}): MulticaWebhookDeliveryResult {
     const autopilot = this.getAutopilot(autopilotId);
     if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+    const trigger = input.triggerId ? this.getAutopilotTrigger(input.triggerId) : null;
+    if (input.triggerId && (!trigger || trigger.autopilotId !== autopilotId)) throw new Error(`Autopilot trigger not found: ${input.triggerId}`);
     const provider = normalizeWebhookProvider(input.provider);
     const headers = normalizeWebhookHeaders(input.headers ?? {});
     const event = inferWebhookEvent(provider, headers, input.payload);
     const [dedupeKey, dedupeSource] = webhookDedupeKey(provider, headers);
     const signatureStatus = normalizeWebhookSignatureStatus(input.signatureStatus);
-    const triggerId = autopilot.id;
+    const triggerId = trigger?.id ?? autopilot.id;
     const now = nowIso();
     if (dedupeKey) {
       const duplicate = this.db.query(
@@ -4331,8 +4468,12 @@ export class MulticaStore {
       return { status: "rejected", duplicate: false, delivery, run: null };
     }
 
-    if (autopilot.status !== "active" || autopilot.triggerKind !== "webhook") {
-      const reason = autopilot.status !== "active" ? `autopilot_${autopilot.status}` : "trigger_not_webhook";
+    if (autopilot.status !== "active" || (trigger && !trigger.enabled) || (trigger && trigger.kind !== "webhook") || (!trigger && autopilot.triggerKind !== "webhook")) {
+      const reason = autopilot.status !== "active"
+        ? `autopilot_${autopilot.status}`
+        : trigger && !trigger.enabled
+          ? "trigger_disabled"
+          : "trigger_not_webhook";
       const responseBody = { status: "ignored", deliveryId, reason };
       const delivery = this.finalizeWebhookDelivery(deliveryId, {
         status: "ignored",
@@ -4349,6 +4490,9 @@ export class MulticaStore {
         payload: input.payload ?? null,
         source: "webhook",
       });
+      if (trigger) {
+        this.db.run("UPDATE multica_autopilot_triggers SET last_fired_at = ?, updated_at = ? WHERE id = ?", [now, now, trigger.id]);
+      }
       const responseStatus = run.status === "skipped" ? 200 : 201;
       const responseBody = { status: run.status === "skipped" ? "skipped" : "accepted", deliveryId, runId: run.id };
       const delivery = this.finalizeWebhookDelivery(deliveryId, {
@@ -4386,6 +4530,19 @@ export class MulticaStore {
       signatureStatus: delivery.signatureStatus,
       replayedFromDeliveryId: delivery.id,
     });
+  }
+
+  handleAutopilotWebhookByToken(token: string, input: {
+    payload?: unknown | null;
+    rawBody?: string | null;
+    headers?: Record<string, string | null | undefined>;
+    prompt?: string | null;
+    provider?: MulticaWebhookProvider | string | null;
+    signatureStatus?: MulticaWebhookSignatureStatus | string | null;
+  } = {}): MulticaWebhookDeliveryResult | null {
+    const trigger = this.getAutopilotTriggerByWebhookToken(token);
+    if (!trigger) return null;
+    return this.handleAutopilotWebhook(trigger.autopilotId, { ...input, triggerId: trigger.id });
   }
 
   private finalizeWebhookDelivery(id: string, input: {
@@ -6778,6 +6935,29 @@ function toAutopilot(row: Row): MulticaAutopilot {
     triggerLabel: nullableString(row.trigger_label),
     cronExpression: nullableString(row.cron_expression),
     lastRunAt: nullableString(row.last_run_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toAutopilotTrigger(row: Row): MulticaAutopilotTrigger {
+  const webhookToken = nullableString(row.webhook_token);
+  const webhookPath = webhookToken ? `/api/webhooks/autopilots/${webhookToken}` : null;
+  const webhookUrl = nullableString(row.webhook_url);
+  return {
+    id: String(row.id),
+    autopilotId: String(row.autopilot_id),
+    kind: String(row.kind ?? "webhook") as MulticaAutopilotTrigger["kind"],
+    enabled: Boolean(Number(row.enabled ?? 1)),
+    cronExpression: nullableString(row.cron_expression),
+    timezone: nullableString(row.timezone),
+    nextRunAt: nullableString(row.next_run_at),
+    webhookToken,
+    webhookPath,
+    webhookUrl,
+    label: nullableString(row.label),
+    signingSecretSet: row.signing_secret_hash != null,
+    lastFiredAt: nullableString(row.last_fired_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

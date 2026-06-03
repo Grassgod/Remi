@@ -2281,6 +2281,10 @@ describe("Bun Multica API", () => {
 
     const gc = await app.request(`/api/daemon/issues/${issue.id}/gc-check`);
     expect((await gc.json()).updated_at).toBeString();
+
+    const cancelledByTaskId = await app.request(`/api/tasks/${task.id}/cancel`, { method: "POST" });
+    expect(cancelledByTaskId.status).toBe(200);
+    expect((await cancelledByTaskId.json()).status).toBe("cancelled");
   });
 
   it("serves issues as first-class records with linked tasks", async () => {
@@ -2305,6 +2309,13 @@ describe("Bun Multica API", () => {
     const detailBody = await detail.json();
     expect(detailBody.issue.tasks).toHaveLength(1);
     expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+
+    const updated = await app.request(`/api/issues/${createdBody.issue.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priority: "high" }),
+    });
+    expect((await updated.json()).priority).toBe("high");
   });
 
   it("serves issue compatibility list, grouped, and batch endpoints", async () => {
@@ -2651,8 +2662,19 @@ describe("Bun Multica API", () => {
     expect(runBody.source).toBe("api");
     expect((await (await app.request(`/api/autopilots/${autopilotBody.id}/runs/${runBody.id}`)).json()).id).toBe(runBody.id);
 
-    const trigger = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, { method: "POST" });
-    expect((await trigger.json()).configured).toBe(false);
+    const trigger = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "webhook", label: "Original Webhook" }),
+    });
+    const triggerBody = await trigger.json();
+    expect(trigger.status).toBe(201);
+    expect(triggerBody.autopilot_id).toBe(autopilotBody.id);
+    expect(triggerBody.webhook_token).toStartWith("awt_");
+    expect(triggerBody.webhook_path).toBe(`/api/webhooks/autopilots/${triggerBody.webhook_token}`);
+
+    const triggerDetail = await app.request(`/api/autopilots/${autopilotBody.id}`);
+    expect((await triggerDetail.json()).triggers[0].id).toBe(triggerBody.id);
 
     expect((await app.request(`/api/projects/${projectBody.id}/resources/${resourceBody.id}`, { method: "DELETE" })).status).toBe(204);
     expect((await app.request(`/api/squads/${squadBody.id}`, { method: "DELETE" })).status).toBe(204);
@@ -2718,6 +2740,20 @@ describe("Bun Multica API", () => {
       method: "DELETE",
     });
     expect((await detached.json()).labels).toHaveLength(0);
+  });
+
+  it("serves direct skill PUT compatibility endpoint", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const skill = store.createSkill({ name: "api-skill", content: "# API Skill" });
+
+    const updated = await app.request(`/api/skills/${skill.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: "Updated through direct PUT" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).description).toBe("Updated through direct PUT");
   });
 
   it("serves pinned item endpoints", async () => {
@@ -3149,6 +3185,47 @@ describe("Bun Multica API", () => {
 
     const detail = await app.request(`/api/multica/autopilots/${autopilot.id}`);
     expect((await detail.json()).deliveries[0].id).toBe(webhookBody.deliveryId);
+
+    const trigger = await app.request(`/api/autopilots/${autopilot.id}/triggers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "webhook", label: "Token webhook" }),
+    });
+    const triggerBody = await trigger.json();
+    expect(trigger.status).toBe(201);
+    expect(triggerBody.webhook_token).toStartWith("awt_");
+
+    const tokenWebhook = await app.request(triggerBody.webhook_path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "token-delivery-1" },
+      body: JSON.stringify({ prompt: "Token webhook prompt", payload: { via: "token" } }),
+    });
+    const tokenWebhookBody = await tokenWebhook.json();
+    expect(tokenWebhook.status).toBe(201);
+    expect(tokenWebhookBody.status).toBe("accepted");
+    expect(tokenWebhookBody.delivery.triggerId).toBe(triggerBody.id);
+    expect(tokenWebhookBody.run.payload.via).toBe("token");
+
+    const rotated = await app.request(`/api/autopilots/${autopilot.id}/triggers/${triggerBody.id}/rotate-webhook-token`, { method: "POST" });
+    const rotatedBody = await rotated.json();
+    expect(rotatedBody.webhook_token).not.toBe(triggerBody.webhook_token);
+    expect((await app.request(triggerBody.webhook_path, { method: "POST" })).status).toBe(404);
+
+    const disabled = await app.request(`/api/autopilots/${autopilot.id}/triggers/${triggerBody.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect((await disabled.json()).enabled).toBe(false);
+    const ignored = await app.request(rotatedBody.webhook_path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "token-delivery-2" },
+      body: JSON.stringify({ prompt: "Ignored token" }),
+    });
+    const ignoredBody = await ignored.json();
+    expect(ignored.status).toBe(200);
+    expect(ignoredBody.status).toBe("ignored");
+    expect(ignoredBody.delivery.error).toBe("trigger_disabled");
 
     const replay = await app.request(`/api/multica/autopilots/${autopilot.id}/deliveries/${webhookBody.deliveryId}/replay`, { method: "POST" });
     expect(replay.status).toBe(201);

@@ -22,6 +22,7 @@ export type MulticaSquadMemberType = "agent" | "member";
 export type MulticaAutopilotStatus = "active" | "paused" | "archived";
 export type MulticaAutopilotExecutionMode = "create_issue" | "run_only";
 export type MulticaAutopilotAssigneeType = "agent" | "squad";
+export type MulticaAutopilotTriggerKind = "schedule" | "webhook" | "api";
 export type MulticaAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
 export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
 export type MulticaWebhookProvider = "generic" | "github";
@@ -778,6 +779,24 @@ export interface MulticaAutopilot {
   updatedAt: string;
 }
 
+export interface MulticaAutopilotTrigger {
+  id: string;
+  autopilotId: string;
+  kind: MulticaAutopilotTriggerKind;
+  enabled: boolean;
+  cronExpression: string | null;
+  timezone: string | null;
+  nextRunAt: string | null;
+  webhookToken: string | null;
+  webhookPath: string | null;
+  webhookUrl: string | null;
+  label: string | null;
+  signingSecretSet: boolean;
+  lastFiredAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MulticaAutopilotRun {
   id: string;
   autopilotId: string;
@@ -1415,6 +1434,23 @@ export interface CreateAutopilotInput {
   triggerKind?: string;
   triggerLabel?: string | null;
   cronExpression?: string | null;
+}
+
+export interface CreateAutopilotTriggerInput {
+  kind?: MulticaAutopilotTriggerKind;
+  cronExpression?: string | null;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  label?: string | null;
+  enabled?: boolean;
+}
+
+export interface UpdateAutopilotTriggerInput {
+  enabled?: boolean;
+  cronExpression?: string | null;
+  cron_expression?: string | null;
+  timezone?: string | null;
+  label?: string | null;
 }
 
 export interface UpdateAutopilotInput {

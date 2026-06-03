@@ -18,6 +18,7 @@ import type {
   CreateAttachmentInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateAutopilotTriggerInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateAgentFromTemplateInput,
@@ -51,6 +52,7 @@ import type {
   RunAutopilotInput,
   SendChatMessageInput,
   CreateMulticaReactionInput,
+  MulticaAutopilotTrigger,
   MulticaNotificationPreferences,
   MulticaGitHubPullRequest,
   MulticaChatMessage,
@@ -71,6 +73,7 @@ import type {
   SetAgentSkillsInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
+  UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateIssueCommentInput,
@@ -204,7 +207,29 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/health/realtime", (c) => c.json({ connections: 0, enabled: false }));
   app.get("/api/github/setup", (c) => c.json({ configured: false }));
   app.post("/api/webhooks/github", (c) => c.json({ configured: false }, 202));
-  app.post("/api/webhooks/autopilots/:token", (c) => c.json({ error: "autopilot token webhook is not configured in local Bun Multica" }, 404));
+  app.post("/api/webhooks/autopilots/:token", async (c) => {
+    const rawBody = await c.req.raw.text();
+    let body: RunAutopilotInput & { payload?: unknown };
+    try {
+      body = parseJsonBody<RunAutopilotInput & { payload?: unknown }>(rawBody);
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const headers = headersToRecord(c.req.raw.headers);
+    const provider = headers["x-github-event"] ? "github" : "generic";
+    const signatureStatus = webhookSignatureStatus(provider, headers, rawBody);
+    const result = store.handleAutopilotWebhookByToken(c.req.param("token"), {
+      prompt: body.prompt ?? null,
+      payload: body.payload ?? body,
+      rawBody,
+      headers,
+      provider,
+      signatureStatus,
+    });
+    if (!result) return c.json({ error: "autopilot webhook token not found" }, 404);
+    const statusCode = result.status === "rejected" ? 401 : result.status === "accepted" ? 201 : result.status === "failed" ? 500 : 200;
+    return c.json(webhookDeliveryResponse(result), statusCode);
+  });
   app.get("/api/multica/health", (c) => c.json({ ok: true }));
   app.post("/api/daemon/register", async (c) => {
     const body = await readJson<DaemonRegisterRequestBody>(c);
@@ -486,6 +511,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<UpdateSkillInput>(c);
     return c.json({ skill: store.updateSkill(c.req.param("id"), body) });
   });
+  app.put("/api/multica/skills/:id", async (c) => {
+    const body = await readJson<UpdateSkillInput>(c);
+    return c.json({ skill: store.updateSkill(c.req.param("id"), body) });
+  });
   app.delete("/api/multica/skills/:id", (c) => {
     return c.json({ skill: store.archiveSkill(c.req.param("id")) });
   });
@@ -505,6 +534,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(skill);
   });
   app.patch("/api/skills/:id", async (c) => {
+    const body = await readJson<UpdateSkillInput>(c);
+    return c.json(store.updateSkill(c.req.param("id"), body));
+  });
+  app.put("/api/skills/:id", async (c) => {
     const body = await readJson<UpdateSkillInput>(c);
     return c.json(store.updateSkill(c.req.param("id"), body));
   });
@@ -1057,6 +1090,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
     return c.json({
       autopilot,
+      triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerResponse),
       runs: store.listAutopilotRuns(autopilot.id),
       deliveries: store.listWebhookDeliveries(autopilot.id),
     });
@@ -1134,7 +1168,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/autopilots/:id", (c) => {
     const autopilot = store.getAutopilot(c.req.param("id"));
     if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
-    return c.json(autopilot);
+    return c.json({
+      autopilot,
+      triggers: store.listAutopilotTriggers(autopilot.id).map(autopilotTriggerResponse),
+    });
   });
   app.patch("/api/autopilots/:id", async (c) => {
     const body = await readJson<UpdateAutopilotInput>(c);
@@ -1167,14 +1204,35 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
     return c.json(webhookDeliveryResponse(result), 201);
   });
-  app.post("/api/autopilots/:id/triggers", (c) => c.json(autopilotTriggerPlaceholder(c.req.param("id")), 201));
-  app.patch("/api/autopilots/:id/triggers/:triggerId", (c) => c.json(autopilotTriggerPlaceholder(c.req.param("id"), c.req.param("triggerId"))));
-  app.delete("/api/autopilots/:id/triggers/:triggerId", (c) => c.body(null, 204));
-  app.post("/api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", (c) => c.json({
-    ...autopilotTriggerPlaceholder(c.req.param("id"), c.req.param("triggerId")),
-    webhook_token: c.req.param("triggerId"),
-  }));
-  app.put("/api/autopilots/:id/triggers/:triggerId/signing-secret", (c) => c.body(null, 204));
+  app.post("/api/autopilots/:id/triggers", async (c) => {
+    const body = await readJson<CreateAutopilotTriggerInput>(c);
+    const trigger = store.createAutopilotTrigger(c.req.param("id"), body);
+    scheduler?.sync();
+    return c.json(autopilotTriggerResponse(trigger), 201);
+  });
+  app.patch("/api/autopilots/:id/triggers/:triggerId", async (c) => {
+    const body = await readJson<UpdateAutopilotTriggerInput>(c);
+    const trigger = store.updateAutopilotTrigger(c.req.param("id"), c.req.param("triggerId"), body);
+    scheduler?.sync();
+    return c.json(autopilotTriggerResponse(trigger));
+  });
+  app.delete("/api/autopilots/:id/triggers/:triggerId", (c) => {
+    const deleted = store.deleteAutopilotTrigger(c.req.param("id"), c.req.param("triggerId"));
+    if (!deleted) return c.json({ error: "autopilot trigger not found" }, 404);
+    scheduler?.sync();
+    return c.body(null, 204);
+  });
+  app.post("/api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", (c) => {
+    return c.json(autopilotTriggerResponse(store.rotateAutopilotTriggerWebhookToken(c.req.param("id"), c.req.param("triggerId"))));
+  });
+  app.put("/api/autopilots/:id/triggers/:triggerId/signing-secret", async (c) => {
+    const body = await readJson<{ secret?: string | null; signing_secret?: string | null }>(c);
+    return c.json(autopilotTriggerResponse(store.setAutopilotTriggerSigningSecret(
+      c.req.param("id"),
+      c.req.param("triggerId"),
+      body.secret ?? body.signing_secret ?? null,
+    )));
+  });
 
   app.get("/api/multica/labels", (c) => {
     const labels = store.listLabels(c.req.query("workspaceId"));
@@ -1462,6 +1520,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ issue: store.updateIssue(c.req.param("id"), body) });
   });
   app.patch("/api/issues/:id", async (c) => {
+    const body = await readJson<UpdateIssueInput>(c);
+    return c.json(store.updateIssue(c.req.param("id"), body));
+  });
+  app.put("/api/issues/:id", async (c) => {
     const body = await readJson<UpdateIssueInput>(c);
     return c.json(store.updateIssue(c.req.param("id"), body));
   });
@@ -1848,6 +1910,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/tasks/:id/cancel", (c) => {
     return c.json({ task: store.cancelTask(c.req.param("id")) });
+  });
+  app.post("/api/tasks/:id/cancel", (c) => {
+    return c.json(taskCompatibilityResponse(store.cancelTask(c.req.param("id"))));
   });
   app.get("/api/multica/tasks/:id/messages", (c) => {
     return c.json({ messages: store.listTaskMessages(c.req.param("id")) });
@@ -2505,17 +2570,30 @@ function squadMemberStatusResponse(store: MulticaStore, squadId: string): Array<
   });
 }
 
-function autopilotTriggerPlaceholder(autopilotId: string, triggerId = `trg_${autopilotId}`): {
-  id: string;
+function autopilotTriggerResponse(trigger: MulticaAutopilotTrigger): MulticaAutopilotTrigger & {
   autopilot_id: string;
-  kind: string;
-  configured: false;
+  cron_expression: string | null;
+  next_run_at: string | null;
+  webhook_token: string | null;
+  webhook_path: string | null;
+  webhook_url: string | null;
+  signing_secret_set: boolean;
+  last_fired_at: string | null;
+  created_at: string;
+  updated_at: string;
 } {
   return {
-    id: triggerId,
-    autopilot_id: autopilotId,
-    kind: "webhook",
-    configured: false,
+    ...trigger,
+    autopilot_id: trigger.autopilotId,
+    cron_expression: trigger.cronExpression,
+    next_run_at: trigger.nextRunAt,
+    webhook_token: trigger.webhookToken,
+    webhook_path: trigger.webhookPath,
+    webhook_url: trigger.webhookUrl,
+    signing_secret_set: trigger.signingSecretSet,
+    last_fired_at: trigger.lastFiredAt,
+    created_at: trigger.createdAt,
+    updated_at: trigger.updatedAt,
   };
 }
 
