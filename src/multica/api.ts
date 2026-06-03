@@ -9,6 +9,7 @@ import type {
   CreateAutopilotInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  CreateIssueWithTaskInput,
   CreateProjectInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -136,9 +137,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
   });
 
-  app.get("/api/multica/issues", (c) => c.json({ issues: store.listIssues() }));
+  app.get("/api/multica/issues", (c) => {
+    const issues = store.listIssues().map((issue) => {
+      const tasks = store.listTasksForIssue(issue.id);
+      return {
+        ...issue,
+        taskCount: tasks.length,
+        latestTaskStatus: tasks[0]?.status ?? null,
+        latestTaskId: tasks[0]?.id ?? null,
+      };
+    });
+    return c.json({ issues });
+  });
   app.post("/api/multica/issues", async (c) => {
-    const body = await readJson<CreateIssueInput & { agentId?: string; prompt?: string }>(c);
+    const body = await readJson<CreateIssueWithTaskInput>(c);
     const issue = store.createIssue(body);
     let task = null;
     if (body.agentId && body.prompt) {
@@ -152,7 +164,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ issue, task }, 201);
   });
   app.get("/api/multica/issues/:id", (c) => {
-    const issue = store.getIssue(c.req.param("id"));
+    const issue = store.getIssueWithTasks(c.req.param("id"));
     if (!issue) return c.json({ error: "issue not found" }, 404);
     return c.json({
       issue,

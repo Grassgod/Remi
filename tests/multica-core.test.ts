@@ -150,4 +150,28 @@ describe("Bun Multica API", () => {
     const status = await app.request(`/api/daemon/tasks/${task.id}/status`);
     expect((await status.json()).status).toBe("completed");
   });
+
+  it("serves issues as first-class records with linked tasks", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "First class issue", agentId: agent.id, prompt: "Do it" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+
+    const listed = await app.request("/api/multica/issues");
+    const listBody = await listed.json();
+    expect(listBody.issues[0].taskCount).toBe(1);
+    expect(listBody.issues[0].latestTaskId).toBe(createdBody.task.id);
+
+    const detail = await app.request(`/api/multica/issues/${createdBody.issue.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.issue.tasks).toHaveLength(1);
+    expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+  });
 });

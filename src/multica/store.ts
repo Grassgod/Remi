@@ -16,6 +16,7 @@ import type {
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaIssueWithTasks,
   MulticaProject,
   MulticaRuntime,
   MulticaSquad,
@@ -391,9 +392,22 @@ export class MulticaStore {
     return row ? toIssue(row) : null;
   }
 
+  getIssueWithTasks(id: string): MulticaIssueWithTasks | null {
+    const issue = this.getIssue(id);
+    if (!issue) return null;
+    return { ...issue, tasks: this.listTasksForIssue(id) };
+  }
+
   listIssues(): MulticaIssue[] {
     const rows = this.db.query("SELECT * FROM multica_issues ORDER BY updated_at DESC").all() as Row[];
     return rows.map(toIssue);
+  }
+
+  listTasksForIssue(issueId: string): MulticaTask[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_tasks WHERE issue_id = ? ORDER BY created_at DESC",
+    ).all(issueId) as Row[];
+    return rows.map(toTask);
   }
 
   updateIssue(id: string, input: UpdateIssueInput): MulticaIssue {

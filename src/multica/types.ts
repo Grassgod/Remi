@@ -88,6 +88,10 @@ export interface MulticaIssue {
   updatedAt: string;
 }
 
+export interface MulticaIssueWithTasks extends MulticaIssue {
+  tasks: MulticaTask[];
+}
+
 export interface MulticaIssueComment {
   id: string;
   issueId: string;
@@ -250,6 +254,11 @@ export interface CreateIssueInput {
   workspaceId?: string | null;
   projectId?: string | null;
   createdBy?: string | null;
+}
+
+export interface CreateIssueWithTaskInput extends CreateIssueInput {
+  agentId?: string;
+  prompt?: string;
 }
 
 export interface UpdateIssueInput {

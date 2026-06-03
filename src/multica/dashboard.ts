@@ -1350,6 +1350,7 @@ export function renderMulticaDashboardHtml(): string {
 
     const state = {
       agents: [],
+      issues: [],
       tasks: [],
       runtimes: [],
       projects: [],
@@ -1362,6 +1363,8 @@ export function renderMulticaDashboardHtml(): string {
       selectedTaskId: null,
       selectedTask: null,
       selectedMessages: [],
+      selectedIssueId: null,
+      selectedIssue: null,
       selectedIssueComments: [],
       selectedIssueActivity: [],
       chatEntries: []
@@ -1453,8 +1456,9 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, tasks, runtimes, projects, squads, autopilots] = await Promise.all([
+        const [agents, issues, tasks, runtimes, projects, squads, autopilots] = await Promise.all([
           api("/api/multica/agents"),
+          api("/api/multica/issues"),
           api("/api/multica/tasks"),
           api("/api/multica/runtimes"),
           api("/api/multica/projects"),
@@ -1462,6 +1466,7 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/autopilots")
         ]);
         state.agents = agents.agents || [];
+        state.issues = issues.issues || [];
         state.tasks = tasks.tasks || [];
         state.runtimes = runtimes.runtimes || [];
         state.projects = projects.projects || [];
@@ -1469,6 +1474,7 @@ export function renderMulticaDashboardHtml(): string {
         state.autopilots = autopilots.autopilots || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
+        if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
       } catch (err) {
         showNotice(String(err.message || err), options.agent ? els.agentNotice : els.notice);
       } finally {
@@ -1503,17 +1509,22 @@ export function renderMulticaDashboardHtml(): string {
     async function createTask(event) {
       event.preventDefault();
       try {
-        const task = await postTask({
-          agentId: els.agentSelect.value,
-          workspaceId: els.workspace.value || "local",
-          prompt: els.prompt.value
+        const result = await api("/api/multica/issues", {
+          method: "POST",
+          body: JSON.stringify({
+            title: els.prompt.value,
+            description: "",
+            agentId: els.agentSelect.value || undefined,
+            prompt: els.prompt.value,
+            workspaceId: els.workspace.value || "local"
+          })
         });
         els.prompt.value = "";
-        showNotice("Created " + shortId(task.id), els.notice);
+        showNotice("Created " + shortId(result.issue.id), els.notice);
         closeSheet();
         switchPage("issues");
         await refresh();
-        openTask(task.id);
+        openIssue(result.issue.id);
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
       }
@@ -1535,9 +1546,32 @@ export function renderMulticaDashboardHtml(): string {
 
     async function openTask(id) {
       state.selectedTaskId = id;
+      state.selectedIssueId = null;
       els.taskDrawer.classList.add("open");
       renderTaskDrawer({ loading: true });
       await loadTaskDetail(id);
+    }
+
+    async function openIssue(id) {
+      state.selectedIssueId = id;
+      state.selectedTaskId = null;
+      els.taskDrawer.classList.add("open");
+      renderIssueDrawer({ loading: true });
+      await loadIssueDetail(id);
+    }
+
+    async function loadIssueDetail(id, options = {}) {
+      try {
+        const issueResult = await api("/api/multica/issues/" + encodeURIComponent(id));
+        state.selectedIssue = issueResult.issue;
+        state.selectedIssueComments = issueResult.comments || [];
+        state.selectedIssueActivity = issueResult.activity || [];
+        state.selectedMessages = [];
+        state.selectedTask = null;
+        renderIssueDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
     }
 
     async function loadTaskDetail(id, options = {}) {
@@ -1566,6 +1600,8 @@ export function renderMulticaDashboardHtml(): string {
     function closeDrawer() {
       state.selectedTaskId = null;
       state.selectedTask = null;
+      state.selectedIssueId = null;
+      state.selectedIssue = null;
       state.selectedMessages = [];
       state.selectedIssueComments = [];
       state.selectedIssueActivity = [];
@@ -1573,7 +1609,7 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     async function updateSelectedIssue() {
-      const issue = state.selectedTask?.issue;
+      const issue = state.selectedIssue || state.selectedTask?.issue;
       if (!issue) return;
       await api("/api/multica/issues/" + encodeURIComponent(issue.id), {
         method: "PATCH",
@@ -1582,12 +1618,13 @@ export function renderMulticaDashboardHtml(): string {
           projectId: document.getElementById("issueProject").value || null
         })
       });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
       await refresh();
     }
 
     async function addSelectedIssueComment(event) {
       event.preventDefault();
-      const issue = state.selectedTask?.issue;
+      const issue = state.selectedIssue || state.selectedTask?.issue;
       const body = document.getElementById("issueCommentBody").value.trim();
       if (!issue || !body) return;
       await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/comments", {
@@ -1595,7 +1632,8 @@ export function renderMulticaDashboardHtml(): string {
         body: JSON.stringify({ authorType: "member", body })
       });
       document.getElementById("issueCommentBody").value = "";
-      await loadTaskDetail(state.selectedTaskId);
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
     }
 
     function openSheet() {
@@ -1882,11 +1920,12 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     function visibleTasks() {
-      let tasks = state.activeOnly
-        ? state.tasks.filter(t => ["queued", "dispatched", "running"].includes(t.status))
-        : state.tasks;
+      let tasks = state.issues.slice();
+      if (state.activeOnly) {
+        tasks = tasks.filter(issue => ["open", "in_progress", "blocked"].includes(issue.status));
+      }
       if (state.agentFilter === "agents") {
-        tasks = tasks.filter(t => Boolean(state.agents.find(a => a.id === t.agentId)));
+        tasks = tasks.filter(issue => Boolean(issue.latestTaskId));
       } else if (state.agentFilter === "members") {
         tasks = [];
       }
@@ -1895,10 +1934,10 @@ export function renderMulticaDashboardHtml(): string {
 
     function renderBoard() {
       const groups = [
-        { key: "queued", title: "Queued", test: t => t.status === "queued" },
-        { key: "running", title: "Running", test: t => t.status === "running" || t.status === "dispatched" },
-        { key: "completed", title: "Completed", test: t => t.status === "completed" },
-        { key: "blocked", title: "Blocked", test: t => t.status === "failed" || t.status === "cancelled" }
+        { key: "open", title: "Open", test: t => t.status === "open" },
+        { key: "running", title: "In progress", test: t => t.status === "in_progress" || t.latestTaskStatus === "running" || t.latestTaskStatus === "dispatched" || t.latestTaskStatus === "queued" },
+        { key: "completed", title: "Done", test: t => t.status === "done" || t.status === "completed" },
+        { key: "blocked", title: "Blocked", test: t => t.status === "blocked" || t.status === "failed" || t.status === "cancelled" }
       ];
       const tasks = visibleTasks();
       els.board.style.display = state.mode === "board" ? "grid" : "none";
@@ -1912,17 +1951,20 @@ export function renderMulticaDashboardHtml(): string {
     }
 
     function renderTaskCard(t) {
-      const agent = state.agents.find(a => a.id === t.agentId);
-      const cancellable = isActiveTask(t);
-      return "<article class=\\"issue-card\\" onclick=\\"openTask('" + escAttr(t.id) + "')\\">" +
+      const project = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
+      const latestTask = t.latestTaskId ? state.tasks.find(task => task.id === t.latestTaskId) : null;
+      const agent = latestTask ? state.agents.find(a => a.id === latestTask.agentId) : null;
+      const cancellable = latestTask && isActiveTask(latestTask);
+      return "<article class=\\"issue-card\\" onclick=\\"openIssue('" + escAttr(t.id) + "')\\">" +
         "<div class=\\"issue-id\\">" + esc(shortId(t.id)) + "</div>" +
-        "<div class=\\"issue-title\\">" + esc(t.prompt || "") + "</div>" +
-        "<div class=\\"issue-desc\\">" + esc(t.result || t.error || t.progressSummary || "") + "</div>" +
+        "<div class=\\"issue-title\\">" + esc(t.title || "") + "</div>" +
+        "<div class=\\"issue-desc\\">" + esc(t.description || project?.title || "") + "</div>" +
         "<div class=\\"issue-meta\\">" +
           "<span class=\\"agent-avatar\\">" + esc(agentInitial(agent)) + "</span>" +
-          "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
-          "<span class=\\"status-badge\\">" + esc(agent ? agent.name : "agent") + "</span>" +
-          (cancellable ? "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); cancelTask('" + escAttr(t.id) + "')\\">Cancel</button>" : "") +
+          "<span class=\\"status-badge " + esc(t.latestTaskStatus || t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
+          "<span class=\\"status-badge\\">" + esc(project ? project.title : "no project") + "</span>" +
+          (agent ? "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>" : "") +
+          (cancellable ? "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); cancelTask('" + escAttr(latestTask.id) + "')\\">Cancel</button>" : "") +
         "</div>" +
       "</article>";
     }
@@ -1935,13 +1977,13 @@ export function renderMulticaDashboardHtml(): string {
         return;
       }
       els.list.innerHTML = tasks.map(t => {
-        const agent = state.agents.find(a => a.id === t.agentId);
-        return "<div class=\\"list-row\\" onclick=\\"openTask('" + escAttr(t.id) + "')\\">" +
+        const project = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
+        return "<div class=\\"list-row\\" onclick=\\"openIssue('" + escAttr(t.id) + "')\\">" +
           "<span class=\\"priority-dot\\"></span>" +
           "<span class=\\"list-id\\">" + esc(shortId(t.id)) + "</span>" +
-          "<span class=\\"list-title\\">" + esc(t.prompt || "") + "</span>" +
+          "<span class=\\"list-title\\">" + esc(t.title || "") + "</span>" +
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
-          "<span class=\\"list-right\\">" + esc(agent ? agent.name : "agent") + "</span>" +
+          "<span class=\\"list-right\\">" + esc(project ? project.title : "no project") + "</span>" +
         "</div>";
       }).join("");
     }
@@ -2115,6 +2157,41 @@ export function renderMulticaDashboardHtml(): string {
         "</div>";
     }
 
+    function renderIssueDrawer(options = {}) {
+      if (options.loading || !state.selectedIssue) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Issue detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const issue = state.selectedIssue;
+      const project = issue.projectId ? state.projects.find(p => p.id === issue.projectId) : null;
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(issue.title || "") + "</strong><span>" + esc(shortId(issue.id)) + "</span></div>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + "</div>" +
+          renderDetailBlock("Description", issue.description || "") +
+          renderIssueControls(issue) +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Tasks</div><div class=\\"message-list\\">" + renderIssueTasks(issue.tasks || []) + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" +
+        "</div>";
+    }
+
+    function renderIssueTasks(tasks) {
+      if (!tasks.length) return "<div class=\\"empty-column\\">No tasks</div>";
+      return tasks.map(task => {
+        const agent = state.agents.find(a => a.id === task.agentId);
+        return "<div class=\\"message-row\\" onclick=\\"openTask('" + escAttr(task.id) + "')\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(statusLabel(task.status)) + "</span><span>" + esc(agent ? agent.name : "agent") + "</span><span>" + esc(shortId(task.id)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(task.prompt || task.result || task.error || "") + "</div>" +
+        "</div>";
+      }).join("");
+    }
+
     function renderIssueControls(issue) {
       return "<div class=\\"detail-block\\">" +
         "<div class=\\"detail-label\\">Issue</div>" +
@@ -2176,13 +2253,13 @@ export function renderMulticaDashboardHtml(): string {
       if (!els.searchOverlay.classList.contains("open")) return;
       const q = els.searchInput.value.trim().toLowerCase();
       const rows = [];
-      pages.issues && rows.push({ type: "Page", title: "Issues", subtitle: state.tasks.length + " issues", action: () => switchPage("issues") });
+      pages.issues && rows.push({ type: "Page", title: "Issues", subtitle: state.issues.length + " issues", action: () => switchPage("issues") });
       pages.projects && rows.push({ type: "Page", title: "Projects", subtitle: state.projects.length + " projects", action: () => switchPage("projects") });
       pages.autopilots && rows.push({ type: "Page", title: "Autopilots", subtitle: state.autopilots.length + " autopilots", action: () => switchPage("autopilots") });
       pages.agents && rows.push({ type: "Page", title: "Agents", subtitle: state.agents.length + " agents", action: () => switchPage("agents") });
       pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
-      state.tasks.forEach(t => rows.push({ type: "Issue", title: t.prompt || shortId(t.id), subtitle: shortId(t.id) + " / " + statusLabel(t.status), action: () => { switchPage("issues"); openTask(t.id); } }));
+      state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || shortId(i.id), subtitle: shortId(i.id) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => switchPage("agents") }));
