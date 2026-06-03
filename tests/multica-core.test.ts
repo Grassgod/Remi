@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMulticaProviders } from "../src/cli/multica.js";
-import { createMulticaApp } from "../src/multica/api.js";
+import { createMulticaApp, startMulticaServer } from "../src/multica/api.js";
 import { renderMulticaDashboardHtml } from "../src/multica/dashboard.js";
 import { writeAgentSkillContext, writeProjectResourceContext } from "../src/multica/daemon.js";
 import { buildTaskPrompt } from "../src/multica/prompt.js";
@@ -53,6 +53,20 @@ function jsonResponse(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+function nextWebSocketMessage(socket: WebSocket): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for websocket message")), 2000);
+    socket.addEventListener("message", (event) => {
+      clearTimeout(timeout);
+      resolve(JSON.parse(String(event.data)));
+    }, { once: true });
+    socket.addEventListener("error", () => {
+      clearTimeout(timeout);
+      reject(new Error("WebSocket error"));
+    }, { once: true });
   });
 }
 
@@ -1086,6 +1100,30 @@ describe("Bun Multica dashboard", () => {
 });
 
 describe("Bun Multica API", () => {
+  it("serves daemon websocket upgrades and realtime health", async () => {
+    const server = startMulticaServer({ store: createStore(), scheduler: null, port: 0, hostname: "127.0.0.1" });
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_id=rt_ws`);
+      const ready = await nextWebSocketMessage(ws);
+      expect(ready).toMatchObject({ type: "ready", transport: "websocket", runtime_id: "rt_ws" });
+
+      const connectedHealth = await fetch(`${baseUrl}/health/realtime`);
+      expect(await connectedHealth.json()).toMatchObject({ enabled: true, connections: 1, transport: "websocket" });
+
+      ws.send(JSON.stringify({ type: "ping", runtime_id: "rt_ws" }));
+      const pong = await nextWebSocketMessage(ws);
+      expect(pong).toMatchObject({ type: "pong", received_type: "ping", runtime_id: "rt_ws", ok: true });
+      ws.close();
+      await Bun.sleep(25);
+
+      const closedHealth = await fetch(`${baseUrl}/health/realtime`);
+      expect(await closedHealth.json()).toMatchObject({ enabled: true, connections: 0, transport: "websocket" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("serves daemon claim/start/complete endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -2082,11 +2120,14 @@ describe("Bun Multica API", () => {
     const googleLoginBody = await googleLogin.json();
     expect(googleLogin.status).toBe(200);
     expect(googleLoginBody.user.name).toBe("Google User");
-    expect((await (await app.request("/health/realtime")).json()).enabled).toBe(false);
+    const realtimeHealth = await app.request("/health/realtime");
+    expect(await realtimeHealth.json()).toMatchObject({ enabled: true, connections: 0, transport: "websocket" });
     expect((await (await app.request("/api/github/setup")).json()).configured).toBe(false);
     expect((await app.request("/api/webhooks/github", { method: "POST" })).status).toBe(202);
     expect((await app.request("/api/webhooks/autopilots/missing", { method: "POST" })).status).toBe(404);
-    expect((await app.request("/api/daemon/ws")).status).toBe(501);
+    const wsFallback = await app.request("/api/daemon/ws");
+    expect(wsFallback.status).toBe(426);
+    expect((await wsFallback.json()).upgrade_required).toBe(true);
 
     expect((await app.request(`/api/runtimes/${runtime.id}/activity`)).status).toBe(200);
     expect((await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" })).status).toBe(204);

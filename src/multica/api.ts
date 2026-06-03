@@ -150,12 +150,24 @@ export interface MulticaApiOptions {
   scheduler?: MulticaScheduler | null;
   authToken?: string | null;
   hostname?: string;
+  realtimeState?: MulticaRealtimeState;
+}
+
+interface MulticaRealtimeState {
+  enabled: boolean;
+  connections: number;
+}
+
+type DaemonWebSocketData = {
+  connectedAt: string;
+  runtimeId: string | null;
 }
 
 export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   const store = options.store ?? new MulticaStore();
   const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTICA_TOKEN ?? "";
+  const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const app = new Hono();
 
   app.use("*", cors());
@@ -219,7 +231,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
-  app.get("/health/realtime", (c) => c.json({ connections: 0, enabled: false }));
+  app.get("/health/realtime", (c) => c.json({
+    connections: realtimeState.connections,
+    enabled: realtimeState.enabled,
+    transport: "websocket",
+  }));
   app.get("/api/github/setup", (c) => c.json(githubSetupResponse(c.req.query("installation_id"), c.req.query("state"))));
   app.post("/api/webhooks/github", async (c) => c.json(handleGitHubWebhook(store, await readJson(c)), 202));
   app.post("/api/webhooks/autopilots/:token", async (c) => {
@@ -272,7 +288,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     return c.json(workspaceReposResponse(c.req.param("workspaceId")));
   });
-  app.get("/api/daemon/ws", (c) => c.json({ error: "daemon websocket is not implemented in local Bun Multica" }, 501));
+  app.get("/api/daemon/ws", (c) => c.json({
+    error: "websocket upgrade required",
+    enabled: realtimeState.enabled,
+    upgrade_required: true,
+  }, 426));
   app.get("/api/cloud-runtime", (c) => c.json({ configured: true, mode: "local" }));
   app.get("/api/cloud-runtime/healthz", (c) => c.json({ ok: true, configured: true, mode: "local" }));
   app.get("/api/cloud-runtime/readyz", (c) => c.json({ ok: true, configured: true, mode: "local" }));
@@ -2030,10 +2050,55 @@ export function startMulticaServer(options: MulticaApiOptions & { port?: number 
   const store = options.store ?? new MulticaStore();
   const scheduler = options.scheduler === undefined ? new MulticaScheduler({ store }) : options.scheduler;
   scheduler?.start();
-  const app = createMulticaApp({ ...options, store, scheduler });
+  const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
+  const app = createMulticaApp({ ...options, store, scheduler, realtimeState });
   const port = options.port ?? parseInt(process.env.MULTICA_PORT ?? "6130", 10);
   const hostname = options.hostname ?? process.env.MULTICA_HOST ?? "0.0.0.0";
-  const server = Bun.serve({ port, hostname, fetch: app.fetch });
+  const server = Bun.serve<DaemonWebSocketData>({
+    port,
+    hostname,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/daemon/ws") {
+        const upgraded = server.upgrade(req, {
+          data: {
+            connectedAt: new Date().toISOString(),
+            runtimeId: url.searchParams.get("runtime_id") ?? url.searchParams.get("runtimeId"),
+          },
+        });
+        if (upgraded) return undefined;
+        return app.fetch(req);
+      }
+      return app.fetch(req);
+    },
+    websocket: {
+      open(ws) {
+        realtimeState.connections += 1;
+        ws.sendText(JSON.stringify({
+          type: "ready",
+          transport: "websocket",
+          runtime_id: ws.data.runtimeId,
+          connected_at: ws.data.connectedAt,
+        }));
+      },
+      message(ws, message) {
+        const event = parseDaemonWebSocketMessage(message);
+        if (event.runtime_id || event.runtimeId) {
+          ws.data.runtimeId = String(event.runtime_id ?? event.runtimeId);
+        }
+        ws.sendText(JSON.stringify({
+          type: event.type === "ping" ? "pong" : "ack",
+          received_type: event.type ?? null,
+          runtime_id: ws.data.runtimeId,
+          ok: true,
+          ts: new Date().toISOString(),
+        }));
+      },
+      close() {
+        realtimeState.connections = Math.max(0, realtimeState.connections - 1);
+      },
+    },
+  });
   const stopServer = server.stop.bind(server);
   server.stop = (closeActiveConnections?: boolean) => {
     scheduler?.stop();
@@ -2048,6 +2113,21 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
   } catch {
     return {} as T;
   }
+}
+
+function parseDaemonWebSocketMessage(message: string | BufferSource): Record<string, any> {
+  const text = typeof message === "string" ? message : decodeWebSocketMessage(message);
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, any> : { type: "message", payload: text };
+  } catch {
+    return { type: text || "message" };
+  }
+}
+
+function decodeWebSocketMessage(message: BufferSource): string {
+  if (message instanceof ArrayBuffer) return new TextDecoder().decode(message);
+  return new TextDecoder().decode(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
 }
 
 function normalizeSubscriptionReason(value: unknown): MulticaSubscriptionReason {
