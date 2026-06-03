@@ -875,6 +875,15 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("function visibleMyIssues()");
     expect(html).toContain("myIssueMemberId");
   });
+
+  it("renders autopilot detail controls and run history", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain("function openAutopilot");
+    expect(html).toContain("function renderAutopilotDrawer");
+    expect(html).toContain("function renderAutopilotRuns");
+    expect(html).toContain("/api/multica/autopilots/");
+    expect(html).toContain("updateSelectedAutopilot");
+  });
 });
 
 describe("Bun Multica API", () => {

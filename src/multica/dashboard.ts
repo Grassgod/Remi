@@ -1428,6 +1428,9 @@ export function renderMulticaDashboardHtml(): string {
       selectedRuntimeUsage: [],
       selectedSkillId: null,
       selectedSkill: null,
+      selectedAutopilotId: null,
+      selectedAutopilot: null,
+      selectedAutopilotRuns: [],
       chatSessions: [],
       selectedChatId: null,
       selectedChatSession: null,
@@ -1591,6 +1594,7 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedAgentId) await loadAgentDetail(state.selectedAgentId, { silent: true });
         if (state.selectedRuntimeId) await loadRuntimeDetail(state.selectedRuntimeId, { silent: true });
         if (state.selectedSkillId) await loadSkillDetail(state.selectedSkillId, { silent: true });
+        if (state.selectedAutopilotId) await loadAutopilotDetail(state.selectedAutopilotId, { silent: true });
         if (state.selectedChatId) await loadChatDetail(state.selectedChatId, { silent: true });
         else if (els.chatAgent.value) {
           const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
@@ -1689,6 +1693,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderTaskDrawer({ loading: true });
       await loadTaskDetail(id);
@@ -1701,6 +1706,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderIssueDrawer({ loading: true });
       await loadIssueDetail(id);
@@ -1714,6 +1720,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderSquadDrawer({ loading: true });
       await loadSquadDetail(id);
@@ -1727,6 +1734,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderProjectDrawer({ loading: true });
       await loadProjectDetail(id);
@@ -1740,6 +1748,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedRuntimeId = null;
       state.selectedSkillId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderAgentDrawer({ loading: true });
       await loadAgentDetail(id);
@@ -1753,6 +1762,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedAgentId = null;
       state.selectedSkillId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderRuntimeDrawer({ loading: true });
       await loadRuntimeDetail(id);
@@ -1766,9 +1776,24 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
+      state.selectedAutopilotId = null;
       els.taskDrawer.classList.add("open");
       renderSkillDrawer({ loading: true });
       await loadSkillDetail(id);
+    }
+
+    async function openAutopilot(id) {
+      state.selectedAutopilotId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      state.selectedSquadId = null;
+      state.selectedProjectId = null;
+      state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
+      state.selectedSkillId = null;
+      els.taskDrawer.classList.add("open");
+      renderAutopilotDrawer({ loading: true });
+      await loadAutopilotDetail(id);
     }
 
     async function loadIssueDetail(id, options = {}) {
@@ -1887,7 +1912,26 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedProject = null;
         state.selectedAgent = null;
         state.selectedRuntime = null;
+        state.selectedAutopilot = null;
         renderSkillDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function loadAutopilotDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/autopilots/" + encodeURIComponent(id));
+        state.selectedAutopilot = result.autopilot;
+        state.selectedAutopilotRuns = result.runs || [];
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        state.selectedSquad = null;
+        state.selectedProject = null;
+        state.selectedAgent = null;
+        state.selectedRuntime = null;
+        state.selectedSkill = null;
+        renderAutopilotDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
       }
@@ -1929,6 +1973,9 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedRuntimeUsage = [];
       state.selectedSkillId = null;
       state.selectedSkill = null;
+      state.selectedAutopilotId = null;
+      state.selectedAutopilot = null;
+      state.selectedAutopilotRuns = [];
       els.taskDrawer.classList.remove("open");
     }
 
@@ -1996,6 +2043,29 @@ export function renderMulticaDashboardHtml(): string {
         })
       });
       await loadSkillDetail(state.selectedSkill.id);
+      await refresh({ silent: true });
+    }
+
+    async function updateSelectedAutopilot(event) {
+      event.preventDefault();
+      if (!state.selectedAutopilot) return;
+      await api("/api/multica/autopilots/" + encodeURIComponent(state.selectedAutopilot.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          title: document.getElementById("autopilotEditTitle").value,
+          description: document.getElementById("autopilotEditDescription").value || null,
+          projectId: document.getElementById("autopilotProject").value || null,
+          assigneeType: document.getElementById("autopilotAssigneeType").value,
+          assigneeId: document.getElementById("autopilotAssigneeId").value,
+          status: document.getElementById("autopilotStatus").value,
+          executionMode: document.getElementById("autopilotExecutionMode").value,
+          issueTitleTemplate: document.getElementById("autopilotPrompt").value || null,
+          triggerKind: document.getElementById("autopilotTriggerKind").value,
+          triggerLabel: document.getElementById("autopilotTriggerLabel").value || null,
+          cronExpression: document.getElementById("autopilotCron").value || null
+        })
+      });
+      await loadAutopilotDetail(state.selectedAutopilot.id);
       await refresh({ silent: true });
     }
 
@@ -2404,6 +2474,10 @@ export function renderMulticaDashboardHtml(): string {
           body: JSON.stringify({ source: "manual" })
         });
         await refresh();
+        if (state.selectedAutopilotId === id) {
+          await loadAutopilotDetail(id);
+          return;
+        }
         if (result.run?.taskId) {
           switchPage("issues");
           openTask(result.run.taskId);
@@ -2503,6 +2577,7 @@ export function renderMulticaDashboardHtml(): string {
           body: JSON.stringify({ status })
         });
         await refresh();
+        if (state.selectedAutopilotId === id) await loadAutopilotDetail(id);
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
       }
@@ -2511,6 +2586,7 @@ export function renderMulticaDashboardHtml(): string {
     async function archiveAutopilot(id) {
       try {
         await api("/api/multica/autopilots/" + encodeURIComponent(id), { method: "DELETE" });
+        if (state.selectedAutopilotId === id) closeDrawer();
         await refresh();
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
@@ -3061,7 +3137,7 @@ export function renderMulticaDashboardHtml(): string {
           ? state.squads.find(s => s.id === autopilot.assigneeId)
           : state.agents.find(a => a.id === autopilot.assigneeId);
         const project = autopilot.projectId ? state.projects.find(p => p.id === autopilot.projectId) : null;
-        return "<article class=\\"entity-card\\">" +
+        return "<article class=\\"entity-card\\" onclick=\\"openAutopilot('" + escAttr(autopilot.id) + "')\\">" +
           "<div class=\\"entity-head\\">" +
             "<span class=\\"agent-avatar\\">" + esc(autopilot.triggerKind.slice(0, 1).toUpperCase()) + "</span>" +
             "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(autopilot.title) + "</div><div class=\\"entity-subtitle\\">" + esc(autopilot.triggerKind) + " / " + esc(autopilot.executionMode) + "</div></div>" +
@@ -3075,11 +3151,11 @@ export function renderMulticaDashboardHtml(): string {
             (autopilot.lastRunAt ? "<span class=\\"status-badge\\">" + esc(timeAgo(autopilot.lastRunAt)) + "</span>" : "") +
           "</div>" +
           "<div class=\\"issue-meta\\">" +
-            "<button class=\\"outline\\" onclick=\\"runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
+            "<button class=\\"outline\\" onclick=\\"event.stopPropagation(); runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
             (autopilot.status === "active" ?
-              "<button class=\\"outline\\" onclick=\\"setAutopilotStatus('" + escAttr(autopilot.id) + "', 'paused')\\">Pause</button>" :
-              "<button class=\\"outline\\" onclick=\\"setAutopilotStatus('" + escAttr(autopilot.id) + "', 'active')\\">Resume</button>") +
-            "<button class=\\"destructive\\" onclick=\\"archiveAutopilot('" + escAttr(autopilot.id) + "')\\">Archive</button>" +
+              "<button class=\\"outline\\" onclick=\\"event.stopPropagation(); setAutopilotStatus('" + escAttr(autopilot.id) + "', 'paused')\\">Pause</button>" :
+              "<button class=\\"outline\\" onclick=\\"event.stopPropagation(); setAutopilotStatus('" + escAttr(autopilot.id) + "', 'active')\\">Resume</button>") +
+            "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveAutopilot('" + escAttr(autopilot.id) + "')\\">Archive</button>" +
           "</div>" +
         "</article>";
       }).join("");
@@ -3537,6 +3613,73 @@ export function renderMulticaDashboardHtml(): string {
         "</div>";
     }
 
+    function renderAutopilotDrawer(options = {}) {
+      if (options.loading || !state.selectedAutopilot) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Autopilot detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const autopilot = state.selectedAutopilot;
+      const project = autopilot.projectId ? state.projects.find(item => item.id === autopilot.projectId) : null;
+      const assignee = autopilot.assigneeType === "squad"
+        ? state.squads.find(item => item.id === autopilot.assigneeId)
+        : state.agents.find(item => item.id === autopilot.assigneeId);
+      const runs = state.selectedAutopilotRuns || [];
+      const webhookUrl = window.location.origin + "/api/multica/autopilots/" + encodeURIComponent(autopilot.id) + "/webhook";
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(autopilot.title || "") + "</strong><span>" + esc(autopilot.triggerKind) + " / " + esc(shortId(autopilot.id)) + "</span></div>" +
+          "<button class=\\"outline\\" onclick=\\"runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveAutopilot('" + escAttr(autopilot.id) + "')\\">Archive</button>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(runs.length, "runs") +
+            renderMetric(runs.filter(run => run.status === "running").length, "running") +
+            renderMetric(runs.filter(run => run.status === "failed" || run.status === "skipped").length, "failed") +
+          "</div>" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + (autopilot.status === "active" ? "completed" : "") + "\\">" + esc(autopilot.status) + "</span><span class=\\"status-badge\\">" + esc(autopilot.executionMode) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + "<span class=\\"status-badge\\">" + esc(autopilot.assigneeType) + ": " + esc(assignee ? (assignee.name || assignee.title) : "missing") + "</span></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateSelectedAutopilot(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Title<input id=\\"autopilotEditTitle\\" value=\\"" + escAttr(autopilot.title || "") + "\\" required></label>" +
+              "<label>Status<select id=\\"autopilotStatus\\">" + autopilotStatusOptions(autopilot.status) + "</select></label>" +
+              "<label>Project<select id=\\"autopilotProject\\">" + projectOptions(true, autopilot.projectId || "") + "</select></label>" +
+              "<label>Execution<select id=\\"autopilotExecutionMode\\">" + autopilotExecutionOptions(autopilot.executionMode) + "</select></label>" +
+              "<label>Assignee type<select id=\\"autopilotAssigneeType\\" onchange=\\"refreshAutopilotAssigneeOptions()\\">" + autopilotAssigneeTypeOptions(autopilot.assigneeType) + "</select></label>" +
+              "<label>Assignee<select id=\\"autopilotAssigneeId\\">" + autopilotAssigneeOptions(autopilot.assigneeType, autopilot.assigneeId) + "</select></label>" +
+              "<label>Trigger<input id=\\"autopilotTriggerKind\\" value=\\"" + escAttr(autopilot.triggerKind || "manual") + "\\"></label>" +
+              "<label>Trigger label<input id=\\"autopilotTriggerLabel\\" value=\\"" + escAttr(autopilot.triggerLabel || "") + "\\" placeholder=\\"Optional\\"></label>" +
+              "<label>Cron<input id=\\"autopilotCron\\" value=\\"" + escAttr(autopilot.cronExpression || "") + "\\" placeholder=\\"*/5 * * * *\\"></label>" +
+            "</div>" +
+            "<label>Description<textarea id=\\"autopilotEditDescription\\" placeholder=\\"Optional\\">" + esc(autopilot.description || "") + "</textarea></label>" +
+            "<label>Prompt<textarea id=\\"autopilotPrompt\\" placeholder=\\"Prompt template\\">" + esc(autopilot.issueTitleTemplate || "") + "</textarea></label>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save autopilot</button>" +
+          "</form>" +
+          "<div class=\\"detail-grid\\">" +
+            renderCell("Webhook URL", webhookUrl) +
+            renderCell("Last run", autopilot.lastRunAt ? timeAgo(autopilot.lastRunAt) : "never") +
+          "</div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Runs</div><div class=\\"message-list\\">" + renderAutopilotRuns() + "</div></div>" +
+        "</div>";
+    }
+
+    function renderAutopilotRuns() {
+      const runs = state.selectedAutopilotRuns || [];
+      if (!runs.length) return "<div class=\\"empty-column\\">No runs</div>";
+      return runs.map(run =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(run.status) + "</span><span>" + esc(run.source) + "</span><span>" + esc(timeAgo(run.triggeredAt || run.createdAt)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(run.failureReason || autopilotRunSummary(run)) + "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            (run.issueId ? "<button class=\\"outline\\" onclick=\\"openIssue('" + escAttr(run.issueId) + "')\\">Open issue</button>" : "") +
+            (run.taskId ? "<button class=\\"outline\\" onclick=\\"openTask('" + escAttr(run.taskId) + "')\\">Open task</button>" : "") +
+          "</div>" +
+        "</div>"
+      ).join("");
+    }
+
     function renderSquadDrawer(options = {}) {
       if (options.loading || !state.selectedSquad) {
         els.taskDrawer.innerHTML =
@@ -3897,7 +4040,7 @@ export function renderMulticaDashboardHtml(): string {
       pages.settings && rows.push({ type: "Page", title: "Settings", subtitle: state.tokens.length + " tokens", action: () => switchPage("settings") });
       state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || issueLabel(i), subtitle: issueLabel(i) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
-      state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
+      state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => { switchPage("autopilots"); openAutopilot(a.id); } }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => { switchPage("agents"); openAgent(a.id); } }));
       state.members.forEach(m => rows.push({ type: "Member", title: m.name, subtitle: m.role + " / " + m.workspaceId, action: () => { state.agentFilter = "members"; switchPage("issues"); } }));
       state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => { switchPage("squads"); openSquad(s.id); } }));
@@ -3983,6 +4126,41 @@ export function renderMulticaDashboardHtml(): string {
     function agentOptions(allowEmpty) {
       const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
       return empty + state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("");
+    }
+
+    function autopilotStatusOptions(current) {
+      return ["active", "paused"].map(status =>
+        "<option value=\\"" + status + "\\" " + (status === current ? "selected" : "") + ">" + status + "</option>"
+      ).join("");
+    }
+
+    function autopilotExecutionOptions(current) {
+      return ["create_issue", "run_only"].map(mode =>
+        "<option value=\\"" + mode + "\\" " + (mode === current ? "selected" : "") + ">" + mode + "</option>"
+      ).join("");
+    }
+
+    function autopilotAssigneeTypeOptions(current) {
+      return ["agent", "squad"].map(type =>
+        "<option value=\\"" + type + "\\" " + (type === current ? "selected" : "") + ">" + type + "</option>"
+      ).join("");
+    }
+
+    function autopilotAssigneeOptions(type, selectedId = "") {
+      if (type === "squad") {
+        return state.squads.map(squad =>
+          "<option value=\\"" + escAttr(squad.id) + "\\" " + (squad.id === selectedId ? "selected" : "") + ">" + esc(squad.name) + "</option>"
+        ).join("") || "<option value=\\"\\">No squads</option>";
+      }
+      return state.agents.map(agent =>
+        "<option value=\\"" + escAttr(agent.id) + "\\" " + (agent.id === selectedId ? "selected" : "") + ">" + esc(agent.name) + " / " + esc(agent.provider) + "</option>"
+      ).join("") || "<option value=\\"\\">No agents</option>";
+    }
+
+    function refreshAutopilotAssigneeOptions() {
+      const type = document.getElementById("autopilotAssigneeType")?.value || "agent";
+      const select = document.getElementById("autopilotAssigneeId");
+      if (select) select.innerHTML = autopilotAssigneeOptions(type);
     }
 
     function assigneeTypeOptions(current) {
@@ -4257,6 +4435,21 @@ export function renderMulticaDashboardHtml(): string {
       return totals.input + " in / " + totals.output + " out";
     }
 
+    function autopilotRunSummary(run) {
+      if (run.result) {
+        try {
+          return JSON.stringify(run.result);
+        } catch {
+          return String(run.result);
+        }
+      }
+      const parts = [];
+      if (run.issueId) parts.push("issue " + shortId(run.issueId));
+      if (run.taskId) parts.push("task " + shortId(run.taskId));
+      if (run.completedAt) parts.push("completed " + timeAgo(run.completedAt));
+      return parts.join(" / ") || "No result";
+    }
+
     function usageTotals(rows) {
       return (rows || []).reduce((acc, row) => {
         const input = Number(row.inputTokens || row.input_tokens || 0);
@@ -4362,6 +4555,7 @@ export function renderMulticaDashboardHtml(): string {
     window.openProject = openProject;
     window.openRuntime = openRuntime;
     window.openSkill = openSkill;
+    window.openAutopilot = openAutopilot;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
@@ -4383,8 +4577,10 @@ export function renderMulticaDashboardHtml(): string {
     window.updateSelectedAgentSkills = updateSelectedAgentSkills;
     window.updateSelectedRuntime = updateSelectedRuntime;
     window.updateSelectedSkill = updateSelectedSkill;
+    window.updateSelectedAutopilot = updateSelectedAutopilot;
     window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
+    window.refreshAutopilotAssigneeOptions = refreshAutopilotAssigneeOptions;
     window.refreshIssueAssigneeOptions = refreshIssueAssigneeOptions;
     window.assignSelectedIssue = assignSelectedIssue;
     window.insertIssueMention = insertIssueMention;
