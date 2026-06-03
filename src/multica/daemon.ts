@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../logger.js";
@@ -111,6 +111,11 @@ export class MulticaDaemon {
 
     const workDir = resolveWorkDir(task);
     mkdirSync(workDir, { recursive: true });
+    try {
+      writeProjectResourceContext(workDir, task);
+    } catch (err) {
+      log.warn(`Failed to write project resources for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     await this.client.pinTaskSession(task.id, task.sessionId, workDir);
 
     const provider = new AcpProvider({
@@ -170,6 +175,30 @@ function resolveWorkDir(task: MulticaTaskWithAgent): string {
   if (task.workDir) return task.workDir;
   if (task.agent?.cwd) return task.agent.cwd;
   return join(homedir(), ".remi", "multica", "workspaces", task.workspaceId, task.id);
+}
+
+export function writeProjectResourceContext(workDir: string, task: MulticaTaskWithAgent): void {
+  if (!task.project && task.projectResources.length === 0) return;
+  const dir = join(workDir, ".multica", "project");
+  mkdirSync(dir, { recursive: true });
+  const payload = {
+    project_id: task.project?.id ?? "",
+    project_title: task.project?.title ?? "",
+    resources: task.projectResources.map((resource) => ({
+      id: resource.id,
+      resource_type: resource.resourceType,
+      resource_ref: serializeProjectResourceRef(resource.resourceType, resource.resourceRef),
+      ...(resource.label ? { label: resource.label } : {}),
+    })),
+  };
+  writeFileSync(join(dir, "resources.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
+}
+
+function serializeProjectResourceRef(resourceType: string, ref: Record<string, unknown>): Record<string, unknown> {
+  if (resourceType !== "github_repo") return ref;
+  const url = String(ref.url ?? "");
+  const defaultBranchHint = String(ref.default_branch_hint ?? ref.defaultBranchHint ?? "");
+  return defaultBranchHint ? { url, default_branch_hint: defaultBranchHint } : { url };
 }
 
 function eventToTaskMessage(event: ProviderEvent, seq: number): TaskMessageInput | null {

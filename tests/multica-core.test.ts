@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { detectMulticaProviders } from "../src/cli/multica.js";
 import { createMulticaApp } from "../src/multica/api.js";
+import { writeProjectResourceContext } from "../src/multica/daemon.js";
 import { buildTaskPrompt } from "../src/multica/prompt.js";
 import { MulticaScheduler } from "../src/multica/scheduler.js";
 import { MulticaStore } from "../src/multica/store.js";
@@ -264,6 +269,38 @@ describe("Bun Multica core store", () => {
     expect(store.getProject(project.id)?.resourceCount).toBe(0);
   });
 
+  it("writes project resources into the daemon workdir", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const project = store.createProject({
+      title: "Runtime resources",
+      resources: [{
+        resourceType: "github_repo",
+        resourceRef: { url: "https://github.com/example/runtime", defaultBranchHint: "main" },
+        label: "runtime repo",
+      }],
+    });
+    const issue = store.createIssue({ title: "Run with context", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use runtime context" });
+    const dir = mkdtempSync(join(tmpdir(), "multica-context-"));
+
+    try {
+      writeProjectResourceContext(dir, store.getTaskWithAgent(task.id)!);
+      const payload = JSON.parse(readFileSync(join(dir, ".multica", "project", "resources.json"), "utf8"));
+
+      expect(payload.project_id).toBe(project.id);
+      expect(payload.project_title).toBe("Runtime resources");
+      expect(payload.resources[0]).toEqual({
+        id: store.listProjectResources(project.id)[0]!.id,
+        resource_type: "github_repo",
+        resource_ref: { url: "https://github.com/example/runtime", default_branch_hint: "main" },
+        label: "runtime repo",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -314,6 +351,22 @@ describe("Bun Multica core store", () => {
     expect(scheduler.scheduledIds()).not.toContain(autopilot.id);
     expect(scheduler.trigger(autopilot.id)).toBeNull();
     scheduler.stop();
+  });
+});
+
+describe("Bun Multica CLI", () => {
+  it("detects supported daemon providers from PATH", () => {
+    const pathEnv = ["/mock/bin", "/other/bin"].join(delimiter);
+
+    expect(detectMulticaProviders({
+      pathEnv,
+      canExecute: (path) => path === join("/mock/bin", "claude") || path === join("/other/bin", "codex"),
+    })).toEqual(["claude", "codex"]);
+
+    expect(detectMulticaProviders({
+      pathEnv,
+      canExecute: (path) => path === "/mock/bin/gemini",
+    })).toEqual([]);
   });
 });
 

@@ -1,4 +1,6 @@
+import { accessSync, constants } from "node:fs";
 import { networkInterfaces } from "node:os";
+import { delimiter, join } from "node:path";
 import { MulticaDaemon, startMulticaServer, MulticaStore } from "../multica/index.js";
 import { setLogLevel } from "../logger.js";
 
@@ -6,6 +8,9 @@ interface ParsedArgs {
   command: string;
   options: Record<string, string | boolean>;
 }
+
+const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex"] as const;
+type SupportedDaemonProvider = typeof SUPPORTED_DAEMON_PROVIDERS[number];
 
 export async function runMultica(args: string[]): Promise<void> {
   const parsed = parseArgs(args);
@@ -44,18 +49,33 @@ async function serve(options: Record<string, string | boolean>): Promise<void> {
 
 async function daemon(options: Record<string, string | boolean>): Promise<void> {
   const serverUrl = stringOpt(options.server, process.env.MULTICA_SERVER_URL) ?? "http://127.0.0.1:6130";
-  const daemon = new MulticaDaemon({
+  const explicitProvider = stringOpt(options.provider, process.env.MULTICA_PROVIDER);
+  if (explicitProvider && !isSupportedDaemonProvider(explicitProvider)) {
+    throw new Error(`Unsupported Multica runtime provider: ${explicitProvider}. Supported providers: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
+  }
+  const providers = explicitProvider ? [explicitProvider] : detectMulticaProviders();
+  if (providers.length === 0) {
+    throw new Error(`No supported Multica runtime provider found on PATH. Install one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
+  }
+
+  const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTICA_RUNTIME_ID);
+  if (providers.length > 1 && runtimeId) {
+    throw new Error("--runtime-id requires --provider when multiple providers are auto-detected");
+  }
+
+  const runtimeName = stringOpt(options.name, process.env.MULTICA_RUNTIME_NAME) ?? undefined;
+  const daemons = providers.map((provider) => new MulticaDaemon({
     serverUrl,
     token: stringOpt(options.token, process.env.MULTICA_TOKEN),
-    runtimeId: stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTICA_RUNTIME_ID),
-    runtimeName: stringOpt(options.name, process.env.MULTICA_RUNTIME_NAME) ?? undefined,
-    provider: stringOpt(options.provider, process.env.MULTICA_PROVIDER) ?? "claude",
+    runtimeId,
+    runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
+    provider,
     workspaceId: stringOpt(options.workspace, process.env.MULTICA_WORKSPACE_ID) ?? "local",
     once: Boolean(options.once),
-  });
-  process.on("SIGINT", () => daemon.stop());
-  process.on("SIGTERM", () => daemon.stop());
-  await daemon.start();
+  }));
+  process.on("SIGINT", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
+  process.on("SIGTERM", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
+  await Promise.all(daemons.map((runtimeDaemon) => runtimeDaemon.start()));
 }
 
 function seed(options: Record<string, string | boolean>): void {
@@ -79,7 +99,7 @@ Options:
   --host <address>       API listen host for serve (default: 0.0.0.0)
   --token <token>        Bearer token for server/daemon auth
   --server <url>         Daemon server URL (default: http://127.0.0.1:6130)
-  --provider <name>      Agent provider/runtime provider: claude or codex
+  --provider <name>      Limit daemon to one provider: claude or codex (default: auto-detect)
   --workspace <id>       Workspace id (default: local)
   --runtime-id <id>      Reuse a fixed runtime id
   --name <name>          Runtime display name
@@ -115,6 +135,47 @@ function numberOpt(value: unknown, fallback: string | undefined, defaultValue: n
   const raw = typeof value === "string" ? value : fallback;
   const parsed = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+export function detectMulticaProviders(options: {
+  pathEnv?: string;
+  pathExt?: string;
+  canExecute?: (path: string) => boolean;
+} = {}): SupportedDaemonProvider[] {
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
+  const canExecute = options.canExecute ?? isExecutable;
+  const paths = pathEnv.split(delimiter).filter(Boolean);
+  const extensions = executableExtensions(options.pathExt);
+  return SUPPORTED_DAEMON_PROVIDERS.filter((provider) => paths.some((dir) => {
+    return extensions.some((extension) => canExecute(join(dir, `${provider}${extension}`)));
+  }));
+}
+
+function isSupportedDaemonProvider(provider: string): provider is SupportedDaemonProvider {
+  return (SUPPORTED_DAEMON_PROVIDERS as readonly string[]).includes(provider);
+}
+
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function executableExtensions(pathExt?: string): string[] {
+  if (process.platform !== "win32") return [""];
+  const extensions = (pathExt ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+    .split(";")
+    .map((extension) => extension.trim())
+    .filter(Boolean)
+    .map((extension) => extension.startsWith(".") ? extension : `.${extension}`);
+  return ["", ...extensions];
+}
+
+function formatRuntimeName(baseName: string | undefined, provider: string): string {
+  return `${baseName ?? `${Bun.env.USER ?? "local"}-bun-runtime`}-${provider}`;
 }
 
 function formatListenUrls(host: string, port: number): string[] {
