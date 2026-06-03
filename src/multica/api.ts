@@ -14,6 +14,7 @@ import type {
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateIssueWithTaskInput,
+  CreateLabelInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateSquadInput,
@@ -29,6 +30,7 @@ import type {
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateLabelInput,
   UpdateProjectInput,
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
@@ -254,6 +256,52 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     }, 201);
   });
 
+  app.get("/api/multica/labels", (c) => {
+    const labels = store.listLabels(c.req.query("workspaceId"));
+    return c.json({ labels, total: labels.length });
+  });
+  app.post("/api/multica/labels", async (c) => {
+    const body = await readJson<CreateLabelInput>(c);
+    return c.json({ label: store.createLabel(body) }, 201);
+  });
+  app.get("/api/multica/labels/:id", (c) => {
+    const label = store.getLabel(c.req.param("id"));
+    if (!label) return c.json({ error: "label not found" }, 404);
+    return c.json({ label });
+  });
+  app.patch("/api/multica/labels/:id", async (c) => {
+    const body = await readJson<UpdateLabelInput>(c);
+    return c.json({ label: store.updateLabel(c.req.param("id"), body) });
+  });
+  app.put("/api/multica/labels/:id", async (c) => {
+    const body = await readJson<UpdateLabelInput>(c);
+    return c.json({ label: store.updateLabel(c.req.param("id"), body) });
+  });
+  app.delete("/api/multica/labels/:id", (c) => {
+    return c.json({ label: store.deleteLabel(c.req.param("id")) });
+  });
+
+  app.get("/api/labels", (c) => {
+    const labels = store.listLabels(c.req.query("workspaceId"));
+    return c.json({ labels, total: labels.length });
+  });
+  app.post("/api/labels", async (c) => {
+    const body = await readJson<CreateLabelInput>(c);
+    return c.json({ label: store.createLabel(body) }, 201);
+  });
+  app.get("/api/labels/:id", (c) => {
+    const label = store.getLabel(c.req.param("id"));
+    if (!label) return c.json({ error: "label not found" }, 404);
+    return c.json({ label });
+  });
+  app.put("/api/labels/:id", async (c) => {
+    const body = await readJson<UpdateLabelInput>(c);
+    return c.json({ label: store.updateLabel(c.req.param("id"), body) });
+  });
+  app.delete("/api/labels/:id", (c) => {
+    return c.json({ label: store.deleteLabel(c.req.param("id")) });
+  });
+
   app.get("/api/multica/issues", (c) => {
     const issues = store.listIssues().map((issue) => {
       const tasks = store.listTasksForIssue(issue.id);
@@ -325,6 +373,32 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateAttachmentInput>(c);
     const attachment = store.createAttachment({ ...body, issueId: c.req.param("id") });
     return c.json({ attachment }, 201);
+  });
+  app.get("/api/multica/issues/:id/labels", (c) => {
+    const labels = store.listLabelsForIssue(c.req.param("id"));
+    return c.json({ labels, total: labels.length });
+  });
+  app.post("/api/multica/issues/:id/labels", async (c) => {
+    const body = await readJson<{ labelId?: string; label_id?: string }>(c);
+    const labels = store.attachLabelToIssue(c.req.param("id"), body.labelId ?? body.label_id ?? "");
+    return c.json({ labels, total: labels.length }, 201);
+  });
+  app.delete("/api/multica/issues/:id/labels/:labelId", (c) => {
+    const labels = store.detachLabelFromIssue(c.req.param("id"), c.req.param("labelId"));
+    return c.json({ labels, total: labels.length });
+  });
+  app.get("/api/issues/:id/labels", (c) => {
+    const labels = store.listLabelsForIssue(c.req.param("id"));
+    return c.json({ labels, total: labels.length });
+  });
+  app.post("/api/issues/:id/labels", async (c) => {
+    const body = await readJson<{ labelId?: string; label_id?: string }>(c);
+    const labels = store.attachLabelToIssue(c.req.param("id"), body.labelId ?? body.label_id ?? "");
+    return c.json({ labels, total: labels.length }, 201);
+  });
+  app.delete("/api/issues/:id/labels/:labelId", (c) => {
+    const labels = store.detachLabelFromIssue(c.req.param("id"), c.req.param("labelId"));
+    return c.json({ labels, total: labels.length });
   });
   app.get("/api/multica/issues/:id/subscribers", (c) => {
     return c.json({ subscribers: store.listIssueSubscribers(c.req.param("id")) });

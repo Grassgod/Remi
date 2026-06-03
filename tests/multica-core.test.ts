@@ -242,6 +242,34 @@ describe("Bun Multica core store", () => {
     expect(store.listIssueComments(issue.id).find((comment) => comment.id === reply.id)?.reactions).toHaveLength(1);
   });
 
+  it("manages issue labels with workspace scoping", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Needs labels", workspaceId: "local" });
+    const label = store.createLabel({ name: "Bug", color: "FF3333", workspaceId: "local" });
+
+    expect(label.color).toBe("#ff3333");
+    expect(store.listLabels("local").map((item) => item.name)).toEqual(["Bug"]);
+    expect(() => store.createLabel({ name: "bug", color: "#00ff00", workspaceId: "local" })).toThrow("Label already exists");
+    expect(() => store.createLabel({ name: "bad-color", color: "red", workspaceId: "local" })).toThrow("6-digit hex");
+
+    expect(store.attachLabelToIssue(issue.id, label.id).map((item) => item.id)).toEqual([label.id]);
+    store.attachLabelToIssue(issue.id, label.id);
+    expect(store.listLabelsForIssue(issue.id)).toHaveLength(1);
+    expect(store.getIssue(issue.id)?.labels[0]?.name).toBe("Bug");
+    expect(store.listIssues()[0]?.labels[0]?.color).toBe("#ff3333");
+
+    const updated = store.updateLabel(label.id, { name: "Regression", color: "#22AA66" });
+    expect(updated.color).toBe("#22aa66");
+    expect(store.getIssueWithTasks(issue.id)?.labels[0]?.name).toBe("Regression");
+
+    const otherWorkspaceLabel = store.createLabel({ name: "Remote", color: "#111111", workspaceId: "remote" });
+    expect(() => store.attachLabelToIssue(issue.id, otherWorkspaceLabel.id)).toThrow("another workspace");
+
+    expect(store.detachLabelFromIssue(issue.id, label.id)).toEqual([]);
+    store.deleteLabel(label.id);
+    expect(store.listLabelsForIssue(issue.id)).toEqual([]);
+  });
+
   it("skips agent self-mentions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
@@ -660,6 +688,47 @@ describe("Bun Multica API", () => {
 
     const deleted = await app.request(`/api/multica/issues/${issue.id}/metadata/pipeline_status`, { method: "DELETE" });
     expect((await deleted.json()).metadata).toEqual({});
+  });
+
+  it("serves issue label endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "Label API", workspaceId: "local" });
+
+    const created = await app.request("/api/multica/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Review", color: "3399FF", workspace_id: "local" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.label.color).toBe("#3399ff");
+
+    const listed = await app.request("/api/multica/labels?workspaceId=local");
+    expect((await listed.json()).total).toBe(1);
+
+    const updated = await app.request(`/api/labels/${createdBody.label.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Reviewed", color: "#22aa66" }),
+    });
+    expect((await updated.json()).label.name).toBe("Reviewed");
+
+    const attached = await app.request(`/api/issues/${issue.id}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label_id: createdBody.label.id }),
+    });
+    expect(attached.status).toBe(201);
+    expect((await attached.json()).labels[0].name).toBe("Reviewed");
+
+    const detail = await app.request(`/api/multica/issues/${issue.id}`);
+    expect((await detail.json()).issue.labels[0].color).toBe("#22aa66");
+
+    const detached = await app.request(`/api/multica/issues/${issue.id}/labels/${createdBody.label.id}`, {
+      method: "DELETE",
+    });
+    expect((await detached.json()).labels).toHaveLength(0);
   });
 
   it("serves issue subscribers and member inbox endpoints", async () => {

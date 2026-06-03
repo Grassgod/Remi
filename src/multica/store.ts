@@ -11,6 +11,7 @@ import type {
   CreateAttachmentInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  CreateLabelInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateSquadInput,
@@ -28,6 +29,7 @@ import type {
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaLabel,
   MulticaIssueReaction,
   MulticaIssueSubscriber,
   MulticaIssueWithTasks,
@@ -53,6 +55,7 @@ import type {
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateLabelInput,
   UpdateProjectInput,
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
@@ -195,6 +198,30 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_inbox_member ON multica_inbox_items(member_id, archived, read, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_labels (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_multica_issue_labels_workspace_name
+        ON multica_issue_labels(workspace_id, lower(name));
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_labels_workspace
+        ON multica_issue_labels(workspace_id, name);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_to_labels (
+        issue_id TEXT NOT NULL,
+        label_id TEXT NOT NULL,
+        PRIMARY KEY(issue_id, label_id),
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY(label_id) REFERENCES multica_issue_labels(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_to_labels_label ON multica_issue_to_labels(label_id);
 
       CREATE TABLE IF NOT EXISTS multica_issue_reactions (
         id TEXT PRIMARY KEY,
@@ -710,7 +737,7 @@ export class MulticaStore {
 
   getIssue(id: string): MulticaIssue | null {
     const row = this.db.query("SELECT * FROM multica_issues WHERE id = ?").get(id) as Row | null;
-    return row ? toIssue(row) : null;
+    return row ? this.hydrateIssue(toIssue(row)) : null;
   }
 
   getIssueWithTasks(id: string): MulticaIssueWithTasks | null {
@@ -726,7 +753,7 @@ export class MulticaStore {
 
   listIssues(): MulticaIssue[] {
     const rows = this.db.query("SELECT * FROM multica_issues ORDER BY updated_at DESC").all() as Row[];
-    return rows.map(toIssue);
+    return rows.map((row) => this.hydrateIssue(toIssue(row)));
   }
 
   listTasksForIssue(issueId: string): MulticaTask[] {
@@ -947,6 +974,124 @@ export class MulticaStore {
 
   removeIssueSubscriber(issueId: string, memberId: string): void {
     this.db.run("DELETE FROM multica_issue_subscribers WHERE issue_id = ? AND member_id = ?", [issueId, memberId]);
+  }
+
+  listLabels(workspaceId?: string | null): MulticaLabel[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_issue_labels WHERE workspace_id = ? ORDER BY lower(name) ASC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_issue_labels ORDER BY workspace_id ASC, lower(name) ASC").all() as Row[];
+    return rows.map(toLabel);
+  }
+
+  getLabel(id: string): MulticaLabel | null {
+    const row = this.db.query("SELECT * FROM multica_issue_labels WHERE id = ?").get(id) as Row | null;
+    return row ? toLabel(row) : null;
+  }
+
+  createLabel(input: CreateLabelInput): MulticaLabel {
+    const name = normalizeLabelName(input.name);
+    const color = normalizeLabelColor(input.color);
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const existing = this.db.query(
+      "SELECT id FROM multica_issue_labels WHERE workspace_id = ? AND lower(name) = lower(?)",
+    ).get(workspaceId, name) as Row | null;
+    if (existing) throw new Error(`Label already exists in workspace: ${name}`);
+    const id = input.id ?? createId("lbl");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_issue_labels (id, workspace_id, name, color, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, name, color, now, now],
+    );
+    return this.getLabel(id)!;
+  }
+
+  updateLabel(id: string, input: UpdateLabelInput): MulticaLabel {
+    const current = this.getLabel(id);
+    if (!current) throw new Error(`Label not found: ${id}`);
+    const name = input.name === undefined ? current.name : normalizeLabelName(input.name);
+    const color = input.color === undefined ? current.color : normalizeLabelColor(input.color);
+    const duplicate = this.db.query(
+      "SELECT id FROM multica_issue_labels WHERE workspace_id = ? AND lower(name) = lower(?) AND id != ?",
+    ).get(current.workspaceId, name, id) as Row | null;
+    if (duplicate) throw new Error(`Label already exists in workspace: ${name}`);
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_issue_labels SET name = ?, color = ?, updated_at = ? WHERE id = ?",
+      [name, color, now, id],
+    );
+    return this.getLabel(id)!;
+  }
+
+  deleteLabel(id: string): MulticaLabel {
+    const label = this.getLabel(id);
+    if (!label) throw new Error(`Label not found: ${id}`);
+    this.db.run("DELETE FROM multica_issue_labels WHERE id = ?", [id]);
+    return label;
+  }
+
+  listLabelsForIssue(issueId: string): MulticaLabel[] {
+    const issue = this.db.query("SELECT id FROM multica_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      `SELECT l.*
+       FROM multica_issue_labels l
+       JOIN multica_issue_to_labels il ON il.label_id = l.id
+       WHERE il.issue_id = ?
+       ORDER BY lower(l.name) ASC`,
+    ).all(issueId) as Row[];
+    return rows.map(toLabel);
+  }
+
+  attachLabelToIssue(issueId: string, labelId: string): MulticaLabel[] {
+    const issueRow = this.db.query("SELECT * FROM multica_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!issueRow) throw new Error(`Issue not found: ${issueId}`);
+    const issue = toIssue(issueRow);
+    const label = this.getLabel(labelId);
+    if (!label) throw new Error(`Label not found: ${labelId}`);
+    if (label.workspaceId !== issue.workspaceId) throw new Error("Label belongs to another workspace");
+    const existing = this.db.query(
+      "SELECT 1 FROM multica_issue_to_labels WHERE issue_id = ? AND label_id = ?",
+    ).get(issueId, labelId) as Row | null;
+    if (existing) return this.listLabelsForIssue(issueId);
+    this.db.run(
+      "INSERT OR IGNORE INTO multica_issue_to_labels (issue_id, label_id) VALUES (?, ?)",
+      [issueId, labelId],
+    );
+    const now = nowIso();
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
+    this.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "label_attached",
+      body: label.name,
+      data: { labelId, color: label.color },
+    });
+    return this.listLabelsForIssue(issueId);
+  }
+
+  detachLabelFromIssue(issueId: string, labelId: string): MulticaLabel[] {
+    const issueRow = this.db.query("SELECT * FROM multica_issues WHERE id = ?").get(issueId) as Row | null;
+    if (!issueRow) throw new Error(`Issue not found: ${issueId}`);
+    const issue = toIssue(issueRow);
+    const label = this.getLabel(labelId);
+    if (!label) throw new Error(`Label not found: ${labelId}`);
+    if (label.workspaceId !== issue.workspaceId) throw new Error("Label belongs to another workspace");
+    const existing = this.db.query(
+      "SELECT 1 FROM multica_issue_to_labels WHERE issue_id = ? AND label_id = ?",
+    ).get(issueId, labelId) as Row | null;
+    if (!existing) return this.listLabelsForIssue(issueId);
+    this.db.run("DELETE FROM multica_issue_to_labels WHERE issue_id = ? AND label_id = ?", [issueId, labelId]);
+    const now = nowIso();
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
+    this.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "label_detached",
+      body: label.name,
+      data: { labelId, color: label.color },
+    });
+    return this.listLabelsForIssue(issueId);
   }
 
   listInboxItems(memberId?: string | null): MulticaInboxItem[] {
@@ -2098,6 +2243,13 @@ export class MulticaStore {
     return row ? toIssueComment(row) : null;
   }
 
+  private hydrateIssue(issue: MulticaIssue): MulticaIssue {
+    return {
+      ...issue,
+      labels: this.listLabelsForIssue(issue.id),
+    };
+  }
+
   private hydrateIssueComment(comment: MulticaIssueComment): MulticaIssueComment {
     return {
       ...comment,
@@ -2415,6 +2567,19 @@ function validateIssueMetadataSize(metadata: Record<string, string | number | bo
   }
 }
 
+function normalizeLabelName(value: string | undefined): string {
+  const name = value?.trim() ?? "";
+  if (!name) throw new Error("Label name is required");
+  if (name.length > 32) throw new Error("Label name cannot exceed 32 characters");
+  return name;
+}
+
+function normalizeLabelColor(value: string | undefined): string {
+  const color = value?.trim() ?? "";
+  if (!/^#?[0-9a-fA-F]{6}$/.test(color)) throw new Error("Label color must be a 6-digit hex color");
+  return (color.startsWith("#") ? color : `#${color}`).toLowerCase();
+}
+
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
   if (!resourceType) throw new Error("resourceType is required");
   if (resourceType !== "github_repo") throw new Error(`Unknown project resource type: ${resourceType}`);
@@ -2571,6 +2736,7 @@ function toIssue(row: Row): MulticaIssue {
     assigneeType: nullableString(row.assignee_type) as MulticaIssue["assigneeType"],
     assigneeId: nullableString(row.assignee_id),
     metadata: parseIssueMetadata(row.metadata),
+    labels: [],
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -2681,6 +2847,17 @@ function toAttachment(row: Row): MulticaAttachment {
     contentType: String(row.content_type ?? "application/octet-stream"),
     sizeBytes: Number(row.size_bytes ?? 0),
     createdAt: String(row.created_at),
+  };
+}
+
+function toLabel(row: Row): MulticaLabel {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    name: String(row.name ?? ""),
+    color: String(row.color ?? "#6b7280"),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

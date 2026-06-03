@@ -117,6 +117,7 @@ export interface MulticaIssue {
   assigneeType: MulticaAssigneeType | null;
   assigneeId: string | null;
   metadata: Record<string, string | number | boolean>;
+  labels: MulticaLabel[];
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -208,6 +209,15 @@ export interface MulticaAttachment {
   contentType: string;
   sizeBytes: number;
   createdAt: string;
+}
+
+export interface MulticaLabel {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface MulticaSquad {
@@ -472,6 +482,19 @@ export interface CreateAttachmentInput {
   content_type?: string | null;
   sizeBytes?: number | null;
   size_bytes?: number | null;
+}
+
+export interface CreateLabelInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name: string;
+  color: string;
+}
+
+export interface UpdateLabelInput {
+  name?: string;
+  color?: string;
 }
 
 export interface CreateProjectInput {

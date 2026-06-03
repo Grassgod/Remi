@@ -1361,6 +1361,7 @@ export function renderMulticaDashboardHtml(): string {
       projects: [],
       squads: [],
       autopilots: [],
+      labels: [],
       inboxItems: [],
       mode: "board",
       activeOnly: false,
@@ -1485,7 +1486,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1495,7 +1496,8 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/squads"),
           api("/api/multica/autopilots"),
           api("/api/multica/chats"),
-          api("/api/multica/inbox")
+          api("/api/multica/inbox"),
+          api("/api/multica/labels")
         ]);
         state.agents = agents.agents || [];
         state.issues = issues.issues || [];
@@ -1507,6 +1509,7 @@ export function renderMulticaDashboardHtml(): string {
         state.autopilots = autopilots.autopilots || [];
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
+        state.labels = labels.labels || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
@@ -1903,6 +1906,51 @@ export function renderMulticaDashboardHtml(): string {
       document.getElementById("issueAttachmentUrl").value = "";
       if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
       else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function attachSelectedIssueLabel(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      const labelId = document.getElementById("issueLabelId")?.value || "";
+      if (!issue || !labelId) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/labels", {
+        method: "POST",
+        body: JSON.stringify({ labelId })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+      await refresh({ silent: true });
+    }
+
+    async function createSelectedIssueLabel(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      const name = document.getElementById("issueLabelName").value.trim();
+      const color = document.getElementById("issueLabelColor").value.trim();
+      if (!name || !color) return;
+      const result = await api("/api/multica/labels", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: issue.workspaceId || "local", name, color })
+      });
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/labels", {
+        method: "POST",
+        body: JSON.stringify({ labelId: result.label.id })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+      await refresh({ silent: true });
+    }
+
+    async function detachSelectedIssueLabel(labelId) {
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue || !labelId) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/labels/" + encodeURIComponent(labelId), {
+        method: "DELETE"
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+      await refresh({ silent: true });
     }
 
     async function setSelectedIssueMetadata(event) {
@@ -2423,6 +2471,7 @@ export function renderMulticaDashboardHtml(): string {
           "<span class=\\"status-badge\\">" + esc(project ? project.title : "no project") + "</span>" +
           (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") +
           (agent ? "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>" : "") +
+          renderLabelChips(t.labels || []) +
           (cancellable ? "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); cancelTask('" + escAttr(latestTask.id) + "')\\">Cancel</button>" : "") +
         "</div>" +
       "</article>";
@@ -2441,6 +2490,7 @@ export function renderMulticaDashboardHtml(): string {
           "<span class=\\"priority-dot\\"></span>" +
           "<span class=\\"list-id\\">" + esc(issueLabel(t)) + "</span>" +
           "<span class=\\"list-title\\">" + esc(t.title || "") + "</span>" +
+          renderLabelChips(t.labels || []) +
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
           "<span class=\\"status-badge\\">" + esc(assigneeLabel(t) || "unassigned") + "</span>" +
           "<span class=\\"list-right\\">" + esc(project ? project.title : "no project") + "</span>" +
@@ -2665,6 +2715,7 @@ export function renderMulticaDashboardHtml(): string {
         "</div>" +
         "<div class=\\"drawer-body\\">" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") + "</div>" +
+          renderIssueLabels(issue.labels || []) +
           renderDetailBlock("Description", issue.description || "") +
           renderIssueControls(issue) +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Reactions</div><div class=\\"message-list\\">" + renderReactions(issue.reactions || []) + "</div></div>" +
@@ -2845,6 +2896,20 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('👀')\\">👀</button>" +
           "<button class=\\"outline\\" onclick=\\"reactToSelectedIssue('✅')\\">✅</button>" +
         "</div>" +
+        "<div class=\\"detail-block\\" style=\\"padding:0;border:0;\\"><div class=\\"detail-label\\">Labels</div>" + renderIssueLabels(issue.labels || [], true) + "</div>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"attachSelectedIssueLabel(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Existing label<select id=\\"issueLabelId\\">" + labelOptions(issue) + "</select></label>" +
+          "</div>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Attach label</button>" +
+        "</form>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"createSelectedIssueLabel(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Name<input id=\\"issueLabelName\\" maxlength=\\"32\\" placeholder=\\"bug\\"></label>" +
+            "<label>Color<input id=\\"issueLabelColor\\" value=\\"#6b7280\\" placeholder=\\"#6b7280\\"></label>" +
+          "</div>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Create and attach label</button>" +
+        "</form>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueAttachment(event)\\" style=\\"padding:0;\\">" +
           "<div class=\\"detail-grid\\">" +
             "<label>Filename<input id=\\"issueAttachmentFilename\\" placeholder=\\"screenshot.png\\"></label>" +
@@ -2911,6 +2976,38 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"message-content\\">" + esc(attachment.url) + "</div>" +
         "</div>"
       ).join("");
+    }
+
+    function renderLabelChips(labels) {
+      if (!labels || !labels.length) return "";
+      return labels.slice(0, 4).map(label =>
+        "<span class=\\"status-badge\\" style=\\"" + labelStyle(label) + "\\"><span class=\\"priority-dot\\" style=\\"background:" + escAttr(label.color || "#6b7280") + ";width:8px;height:8px;border-radius:999px;\\"></span>" + esc(label.name) + "</span>"
+      ).join("") + (labels.length > 4 ? "<span class=\\"status-badge\\">+" + esc(labels.length - 4) + "</span>" : "");
+    }
+
+    function renderIssueLabels(labels, removable = false) {
+      if (!labels || !labels.length) return "<div class=\\"empty-column\\">No labels</div>";
+      return "<div class=\\"issue-meta\\">" + labels.map(label =>
+        "<span class=\\"status-badge\\" style=\\"" + labelStyle(label) + "\\">" +
+          "<span class=\\"priority-dot\\" style=\\"background:" + escAttr(label.color || "#6b7280") + ";width:8px;height:8px;border-radius:999px;\\"></span>" +
+          esc(label.name) +
+          (removable ? "<button class=\\"icon\\" style=\\"width:20px;height:20px;\\" onclick=\\"detachSelectedIssueLabel('" + escAttr(label.id) + "')\\">x</button>" : "") +
+        "</span>"
+      ).join("") + "</div>";
+    }
+
+    function labelOptions(issue) {
+      const attached = new Set((issue.labels || []).map(label => label.id));
+      const labels = state.labels.filter(label => (label.workspaceId || "local") === (issue.workspaceId || "local") && !attached.has(label.id));
+      if (!labels.length) return "<option value=\\"\\">No labels</option>";
+      return labels.map(label =>
+        "<option value=\\"" + escAttr(label.id) + "\\">" + esc(label.name) + " / " + esc(label.color) + "</option>"
+      ).join("");
+    }
+
+    function labelStyle(label) {
+      const color = String(label?.color || "#6b7280");
+      return "background: color-mix(in oklab, " + escAttr(color) + " 14%, transparent); color: color-mix(in oklab, " + escAttr(color) + " 72%, var(--foreground));";
     }
 
     function renderIssueActivity() {
@@ -3288,6 +3385,9 @@ export function renderMulticaDashboardHtml(): string {
     window.reactToSelectedIssue = reactToSelectedIssue;
     window.reactToComment = reactToComment;
     window.addSelectedIssueAttachment = addSelectedIssueAttachment;
+    window.attachSelectedIssueLabel = attachSelectedIssueLabel;
+    window.createSelectedIssueLabel = createSelectedIssueLabel;
+    window.detachSelectedIssueLabel = detachSelectedIssueLabel;
     window.setSelectedIssueMetadata = setSelectedIssueMetadata;
     window.deleteSelectedIssueMetadata = deleteSelectedIssueMetadata;
     window.markInboxRead = markInboxRead;
