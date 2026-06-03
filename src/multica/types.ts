@@ -197,6 +197,30 @@ export interface MulticaRuntimeUpdateRequest {
   runStartedAt: string | null;
 }
 
+export interface MulticaDaemonHeartbeatAck {
+  runtime_id: string;
+  status: "ok" | "runtime_gone";
+  runtime_gone?: boolean;
+  pending_update?: {
+    id: string;
+    target_version: string;
+  };
+  pending_model_list?: {
+    id: string;
+  };
+  pending_local_skills?: {
+    id: string;
+  };
+  pending_local_skill_import?: {
+    id: string;
+    skill_key: string;
+  };
+  pending_local_skill_imports?: Array<{
+    id: string;
+    skill_key: string;
+  }>;
+}
+
 export interface MulticaRuntimeModelThinkingLevel {
   value: string;
   label: string;

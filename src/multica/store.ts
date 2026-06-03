@@ -45,6 +45,7 @@ import type {
   MulticaChatMessage,
   MulticaChatSession,
   MulticaCommentReaction,
+  MulticaDaemonHeartbeatAck,
   MulticaInboxItem,
   MulticaIssueActivity,
   MulticaIssueChildProgress,
@@ -2027,12 +2028,49 @@ export class MulticaStore {
     return [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date));
   }
 
-  heartbeatRuntime(runtimeId: string): void {
+  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean } = {}): MulticaDaemonHeartbeatAck {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) {
+      return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
+    }
     const now = nowIso();
     this.db.run(
       "UPDATE multica_runtimes SET status = 'online', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
       [now, now, runtimeId],
     );
+    const ack: MulticaDaemonHeartbeatAck = { runtime_id: runtimeId, status: "ok" };
+    if (options.claimPending === false) return ack;
+
+    const pendingUpdate = this.claimRuntimeUpdateRequest(runtimeId);
+    if (pendingUpdate) {
+      ack.pending_update = {
+        id: pendingUpdate.id,
+        target_version: pendingUpdate.targetVersion,
+      };
+    }
+    const pendingModelList = this.claimRuntimeModelListRequest(runtimeId);
+    if (pendingModelList) {
+      ack.pending_model_list = { id: pendingModelList.id };
+    }
+    const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
+    if (pendingLocalSkills) {
+      ack.pending_local_skills = { id: pendingLocalSkills.id };
+    }
+    const importLimit = options.supportsBatchImport === false ? 1 : 10;
+    const pendingImports = this.claimRuntimeLocalSkillImportRequests(runtimeId, importLimit);
+    if (pendingImports.length > 0) {
+      ack.pending_local_skill_import = {
+        id: pendingImports[0].id,
+        skill_key: pendingImports[0].skillKey,
+      };
+      if (options.supportsBatchImport !== false) {
+        ack.pending_local_skill_imports = pendingImports.map((request) => ({
+          id: request.id,
+          skill_key: request.skillKey,
+        }));
+      }
+    }
+    return ack;
   }
 
   createIssue(input: CreateIssueInput): MulticaIssue {
@@ -4126,7 +4164,7 @@ export class MulticaStore {
     const tx = this.db.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-      this.heartbeatRuntime(runtimeId);
+      this.heartbeatRuntime(runtimeId, { claimPending: false });
 
       const active = this.db.query(
         "SELECT COUNT(*) AS count FROM multica_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running')",

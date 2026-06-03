@@ -150,6 +150,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/multica/health", (c) => c.json({ ok: true }));
+  app.post("/api/daemon/heartbeat", async (c) => {
+    const body = await readJson<{ runtime_id?: string; runtimeId?: string; supports_batch_import?: boolean; supportsBatchImport?: boolean }>(c);
+    const runtimeId = body.runtime_id ?? body.runtimeId ?? "";
+    if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    const ack = store.heartbeatRuntime(runtimeId, {
+      supportsBatchImport: body.supports_batch_import ?? body.supportsBatchImport ?? false,
+    });
+    if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
+    return c.json(ack);
+  });
 
   app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
   app.post("/api/multica/agents", async (c) => {
@@ -633,8 +643,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(store.listTaskActivityByHour(usageQuery(c, { runtimeId: runtime.id })));
   });
   app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
-    store.heartbeatRuntime(c.req.param("id"));
-    return c.json({ ok: true });
+    const ack = store.heartbeatRuntime(c.req.param("id"), {
+      supportsBatchImport: c.req.query("supports_batch_import") === "true" || c.req.query("supportsBatchImport") === "true",
+    });
+    if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
+    return c.json(ack);
   });
 
   app.get("/api/dashboard/usage/daily", (c) => c.json(store.listUsageDaily(usageQuery(c))));

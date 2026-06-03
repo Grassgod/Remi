@@ -1797,6 +1797,53 @@ describe("Bun Multica API", () => {
     expect(importPollBody.skill.files[0].path).toBe("notes/check.md");
   });
 
+  it("serves original daemon heartbeat pending request protocol", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_heartbeat_flow", name: "Heartbeat runtime", provider: "codex" });
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const issue = store.createIssue({ title: "Do not steal heartbeat requests" });
+    store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Claim task" });
+    const app = createMulticaApp({ store });
+
+    const modelRequest = store.createRuntimeModelListRequest(runtime.id);
+    const updateRequest = store.createRuntimeUpdateRequest(runtime.id, { target_version: "v9.9.9" });
+    const localSkillRequest = store.createRuntimeLocalSkillListRequest(runtime.id);
+    const importOne = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "review-helper" });
+    const importTwo = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "test-helper" });
+
+    const taskClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(taskClaim.status).toBe(200);
+    expect(store.getRuntimeModelListRequest(runtime.id, modelRequest.id)?.status).toBe("pending");
+    expect(store.getRuntimeUpdateRequest(runtime.id, updateRequest.id)?.status).toBe("pending");
+
+    const heartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runtime_id: runtime.id, supports_batch_import: true }),
+    });
+    const heartbeatBody = await heartbeat.json();
+
+    expect(heartbeat.status).toBe(200);
+    expect(heartbeatBody).toMatchObject({
+      runtime_id: runtime.id,
+      status: "ok",
+      pending_update: { id: updateRequest.id, target_version: "v9.9.9" },
+      pending_model_list: { id: modelRequest.id },
+      pending_local_skills: { id: localSkillRequest.id },
+      pending_local_skill_import: { id: importOne.id, skill_key: "review-helper" },
+    });
+    expect(heartbeatBody.pending_local_skill_imports.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
+    expect(store.getRuntimeModelListRequest(runtime.id, modelRequest.id)?.status).toBe("running");
+    expect(store.getRuntimeUpdateRequest(runtime.id, updateRequest.id)?.status).toBe("running");
+    expect(store.getRuntimeLocalSkillListRequest(runtime.id, localSkillRequest.id)?.status).toBe("running");
+    expect(store.getRuntimeLocalSkillImportRequest(runtime.id, importOne.id)?.status).toBe("running");
+
+    const emptyHeartbeat = await app.request(`/api/multica/runtimes/${runtime.id}/heartbeat`, { method: "POST" });
+    const emptyHeartbeatBody = await emptyHeartbeat.json();
+    expect(emptyHeartbeat.status).toBe(200);
+    expect(emptyHeartbeatBody.pending_update).toBeUndefined();
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
