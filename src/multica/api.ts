@@ -393,11 +393,25 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     });
     return c.json(result);
   });
+  app.get("/api/multica/issues/child-progress", (c) => {
+    const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
+    return c.json({ progress, total: progress.length });
+  });
+  app.get("/api/issues/child-progress", (c) => {
+    const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
+    return c.json({ progress, total: progress.length });
+  });
   app.post("/api/multica/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
-    const assigneeType = body.assigneeType ?? (body.agentId ? "agent" : null);
-    const assigneeId = body.assigneeId ?? body.agentId ?? null;
-    const issue = store.createIssue({ ...body, assigneeType: null, assigneeId: null });
+    const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
+    const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
+    const issue = store.createIssue({
+      ...body,
+      assigneeType: null,
+      assignee_type: null,
+      assigneeId: null,
+      assignee_id: null,
+    });
     let task = null;
     if (assigneeType && assigneeId) {
       const assigned = store.assignIssue(issue.id, {
@@ -414,9 +428,19 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     return c.json({
       issue,
+      children: issue.children,
+      childProgress: issue.childProgress,
       comments: store.listIssueComments(issue.id),
       activity: store.listIssueActivity(issue.id),
     });
+  });
+  app.get("/api/multica/issues/:id/children", (c) => {
+    const children = store.listChildIssues(c.req.param("id"));
+    return c.json({ issues: children, total: children.length });
+  });
+  app.get("/api/issues/:id/children", (c) => {
+    const children = store.listChildIssues(c.req.param("id"));
+    return c.json({ issues: children, total: children.length });
   });
   app.patch("/api/multica/issues/:id", async (c) => {
     const body = await readJson<UpdateIssueInput>(c);

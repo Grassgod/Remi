@@ -9,6 +9,7 @@ export type MulticaTaskStatus =
   | "cancelled";
 
 export type MulticaRuntimeStatus = "online" | "offline";
+export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
 export type MulticaProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaAssigneeType = "agent" | "member" | "squad";
@@ -113,10 +114,17 @@ export interface MulticaIssue {
   title: string;
   description: string | null;
   status: string;
+  priority: MulticaIssuePriority;
   workspaceId: string;
   projectId: string | null;
+  parentIssueId: string | null;
   assigneeType: MulticaAssigneeType | null;
   assigneeId: string | null;
+  position: number;
+  startDate: string | null;
+  dueDate: string | null;
+  acceptanceCriteria: unknown[];
+  contextRefs: unknown[];
   metadata: Record<string, string | number | boolean>;
   labels: MulticaLabel[];
   createdBy: string | null;
@@ -128,6 +136,14 @@ export interface MulticaIssueWithTasks extends MulticaIssue {
   tasks: MulticaTask[];
   reactions: MulticaIssueReaction[];
   attachments: MulticaAttachment[];
+  children: MulticaIssue[];
+  childProgress: MulticaIssueChildProgress;
+}
+
+export interface MulticaIssueChildProgress {
+  parentIssueId: string;
+  total: number;
+  done: number;
 }
 
 export interface MulticaIssueComment {
@@ -437,10 +453,27 @@ export interface CreateIssueInput {
   id?: string;
   title: string;
   description?: string | null;
+  status?: string;
+  priority?: MulticaIssuePriority | string;
   workspaceId?: string | null;
+  workspace_id?: string | null;
   projectId?: string | null;
+  project_id?: string | null;
+  parentIssueId?: string | null;
+  parent_issue_id?: string | null;
   assigneeType?: MulticaAssigneeType | null;
+  assignee_type?: MulticaAssigneeType | null;
   assigneeId?: string | null;
+  assignee_id?: string | null;
+  position?: number | null;
+  startDate?: string | null;
+  start_date?: string | null;
+  dueDate?: string | null;
+  due_date?: string | null;
+  acceptanceCriteria?: unknown[];
+  acceptance_criteria?: unknown[];
+  contextRefs?: unknown[];
+  context_refs?: unknown[];
   createdBy?: string | null;
 }
 
@@ -453,10 +486,26 @@ export interface UpdateIssueInput {
   title?: string;
   description?: string | null;
   status?: string;
+  priority?: MulticaIssuePriority | string;
   projectId?: string | null;
+  project_id?: string | null;
   workspaceId?: string | null;
+  workspace_id?: string | null;
+  parentIssueId?: string | null;
+  parent_issue_id?: string | null;
   assigneeType?: MulticaAssigneeType | null;
+  assignee_type?: MulticaAssigneeType | null;
   assigneeId?: string | null;
+  assignee_id?: string | null;
+  position?: number | null;
+  startDate?: string | null;
+  start_date?: string | null;
+  dueDate?: string | null;
+  due_date?: string | null;
+  acceptanceCriteria?: unknown[];
+  acceptance_criteria?: unknown[];
+  contextRefs?: unknown[];
+  context_refs?: unknown[];
 }
 
 export interface AssignIssueInput {

@@ -150,6 +150,49 @@ describe("Bun Multica core store", () => {
     expect(second.key).toBe("MUL-2");
   });
 
+  it("manages issue hierarchy, priority, scheduling, and planning fields", () => {
+    const store = createStore();
+    const project = store.createProject({ title: "Hierarchy project" });
+    const parent = store.createIssue({
+      title: "Parent issue",
+      projectId: project.id,
+      priority: "high",
+      dueDate: "2026-06-10T12:00:00+08:00",
+      acceptanceCriteria: ["parent done"],
+      contextRefs: [{ type: "doc", url: "https://example.com/spec" }],
+    });
+    const child = store.createIssue({
+      title: "Child issue",
+      parent_issue_id: parent.id,
+      position: 2.5,
+      start_date: "2026-06-04T09:00:00+08:00",
+    });
+
+    expect(parent.priority).toBe("high");
+    expect(parent.dueDate).toBe("2026-06-10T04:00:00.000Z");
+    expect(parent.acceptanceCriteria).toEqual(["parent done"]);
+    expect(parent.contextRefs[0]).toEqual({ type: "doc", url: "https://example.com/spec" });
+    expect(child.parentIssueId).toBe(parent.id);
+    expect(child.projectId).toBe(project.id);
+    expect(child.position).toBe(2.5);
+    expect(store.listChildIssues(parent.id).map((item) => item.id)).toEqual([child.id]);
+    expect(store.getIssueWithTasks(parent.id)?.children[0]?.id).toBe(child.id);
+
+    store.updateIssue(child.id, { status: "done" });
+    expect(store.getChildIssueProgress(parent.id)).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
+    expect(store.listChildIssueProgress("local")).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+
+    const sibling = store.createIssue({ title: "Sibling", parentIssueId: parent.id, priority: "urgent", position: 1 });
+    expect(store.listChildIssues(parent.id).map((item) => item.id)).toEqual([sibling.id, child.id]);
+
+    expect(() => store.updateIssue(parent.id, { parentIssueId: child.id })).toThrow("Circular parent");
+    expect(() => store.updateIssue(parent.id, { parentIssueId: parent.id })).toThrow("own parent");
+    expect(() => store.createIssue({ title: "Bad priority", priority: "must" })).toThrow("priority");
+
+    const remoteParent = store.createIssue({ title: "Remote parent", workspaceId: "remote" });
+    expect(() => store.createIssue({ title: "Cross workspace", parentIssueId: remoteParent.id, workspaceId: "local" })).toThrow("another workspace");
+  });
+
   it("queues comment mentions without changing issue assignee", () => {
     const store = createStore();
     const reviewer = store.createAgent({ name: "Review Bot", provider: "codex" });
@@ -661,6 +704,58 @@ describe("Bun Multica API", () => {
     const detailBody = await detail.json();
     expect(detailBody.issue.tasks).toHaveLength(1);
     expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+  });
+
+  it("serves issue hierarchy and planning fields through API endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const project = store.createProject({ title: "API hierarchy" });
+
+    const parentRes = await app.request("/api/multica/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "API parent",
+        project_id: project.id,
+        priority: "high",
+        due_date: "2026-06-10T12:00:00+08:00",
+        acceptance_criteria: ["works"],
+        context_refs: [{ type: "repo", url: "git@example.com:repo.git" }],
+      }),
+    });
+    expect(parentRes.status).toBe(201);
+    const parent = (await parentRes.json()).issue;
+
+    const childRes = await app.request("/api/multica/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "API child", parent_issue_id: parent.id, position: 3 }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = (await childRes.json()).issue;
+    expect(child.parentIssueId).toBe(parent.id);
+    expect(child.projectId).toBe(project.id);
+
+    const updated = await app.request(`/api/multica/issues/${child.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done", priority: "urgent", start_date: "2026-06-04T09:00:00+08:00" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).issue.priority).toBe("urgent");
+
+    const detail = await app.request(`/api/multica/issues/${parent.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.issue.dueDate).toBe("2026-06-10T04:00:00.000Z");
+    expect(detailBody.issue.acceptanceCriteria).toEqual(["works"]);
+    expect(detailBody.children.map((item: any) => item.id)).toEqual([child.id]);
+    expect(detailBody.childProgress).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
+
+    const children = await app.request(`/api/issues/${parent.id}/children`);
+    expect((await children.json()).total).toBe(1);
+
+    const progress = await app.request("/api/issues/child-progress?workspaceId=local");
+    expect((await progress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
   });
 
   it("assigns issues through API endpoints", async () => {

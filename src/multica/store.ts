@@ -28,8 +28,10 @@ import type {
   MulticaCommentReaction,
   MulticaInboxItem,
   MulticaIssueActivity,
+  MulticaIssueChildProgress,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaIssuePriority,
   MulticaIssueSearchResult,
   MulticaLabel,
   MulticaPinnedItem,
@@ -134,14 +136,22 @@ export class MulticaStore {
         title TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL DEFAULT 'open',
+        priority TEXT NOT NULL DEFAULT 'none',
         workspace_id TEXT NOT NULL DEFAULT 'local',
         project_id TEXT,
+        parent_issue_id TEXT,
         assignee_type TEXT,
         assignee_id TEXT,
+        position REAL NOT NULL DEFAULT 0,
+        start_date TEXT,
+        due_date TEXT,
+        acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+        context_refs TEXT NOT NULL DEFAULT '[]',
         metadata TEXT NOT NULL DEFAULT '{}',
         created_by TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(parent_issue_id) REFERENCES multica_issues(id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS multica_issue_comments (
@@ -486,11 +496,20 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
     this.addColumnIfMissing("multica_issues", "issue_number INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("multica_issues", "issue_key TEXT");
+    this.addColumnIfMissing("multica_issues", "priority TEXT NOT NULL DEFAULT 'none'");
+    this.addColumnIfMissing("multica_issues", "parent_issue_id TEXT");
+    this.addColumnIfMissing("multica_issues", "position REAL NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("multica_issues", "start_date TEXT");
+    this.addColumnIfMissing("multica_issues", "due_date TEXT");
+    this.addColumnIfMissing("multica_issues", "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
+    this.addColumnIfMissing("multica_issues", "context_refs TEXT NOT NULL DEFAULT '[]'");
     this.addColumnIfMissing("multica_issue_comments", "parent_id TEXT");
     this.addColumnIfMissing("multica_issue_comments", "resolved_at TEXT");
     this.addColumnIfMissing("multica_issue_comments", "resolved_by_type TEXT");
     this.addColumnIfMissing("multica_issue_comments", "resolved_by_id TEXT");
     this.addColumnIfMissing("multica_tasks", "chat_session_id TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issues_parent ON multica_issues(parent_issue_id, position, created_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issues_scheduled ON multica_issues(workspace_id, start_date, due_date)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_parent ON multica_issue_comments(parent_id, created_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_resolved ON multica_issue_comments(issue_id, resolved_at)");
     this.backfillIssueKeys();
@@ -715,46 +734,73 @@ export class MulticaStore {
   }
 
   createIssue(input: CreateIssueInput): MulticaIssue {
-    if (input.projectId && !this.getProject(input.projectId)) {
-      throw new Error(`Project not found: ${input.projectId}`);
+    const parentIssueId = input.parentIssueId ?? input.parent_issue_id ?? null;
+    const explicitWorkspaceId = input.workspaceId ?? input.workspace_id ?? null;
+    const workspaceId = explicitWorkspaceId ?? "local";
+    const parent = parentIssueId ? this.getIssue(parentIssueId) : null;
+    if (parentIssueId && !parent) throw new Error(`Parent issue not found: ${parentIssueId}`);
+    if (parent && parent.workspaceId !== workspaceId) throw new Error("Parent issue belongs to another workspace");
+
+    const projectId = input.projectId ?? input.project_id ?? (parent ? parent.projectId : null);
+    if (projectId) {
+      const project = this.getProject(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (project.workspaceId !== workspaceId) throw new Error("Project belongs to another workspace");
     }
-    if (input.assigneeType || input.assigneeId) {
-      this.validateIssueAssignee(input.assigneeType ?? null, input.assigneeId ?? null);
+
+    const assigneeType = input.assigneeType ?? input.assignee_type ?? null;
+    const assigneeId = input.assigneeId ?? input.assignee_id ?? null;
+    if (assigneeType || assigneeId) {
+      this.validateIssueAssignee(assigneeType, assigneeId);
     }
     const id = input.id ?? createId("iss");
     const now = nowIso();
-    const workspaceId = input.workspaceId ?? "local";
     const issueNumber = this.nextIssueNumber(workspaceId);
     const issueKey = formatIssueKey(issueNumber);
+    const priority = normalizeIssuePriority(input.priority);
+    const position = normalizeIssuePosition(input.position);
+    const startDate = normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date");
+    const dueDate = normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date");
+    const acceptanceCriteria = normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? []);
+    const contextRefs = normalizeJsonArray(input.contextRefs ?? input.context_refs ?? []);
     this.db.run(
       `INSERT INTO multica_issues (
-        id, issue_number, issue_key, title, description, status, workspace_id, project_id, assignee_type, assignee_id,
-        created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
+        id, issue_number, issue_key, title, description, status, priority, workspace_id, project_id,
+        parent_issue_id, assignee_type, assignee_id, position, start_date, due_date,
+        acceptance_criteria, context_refs, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         issueNumber,
         issueKey,
         input.title,
         input.description ?? null,
+        input.status ?? "open",
+        priority,
         workspaceId,
-        input.projectId ?? null,
-        input.assigneeType ?? null,
-        input.assigneeId ?? null,
+        projectId,
+        parentIssueId,
+        assigneeType,
+        assigneeId,
+        position,
+        startDate,
+        dueDate,
+        toJson(acceptanceCriteria),
+        toJson(contextRefs),
         input.createdBy ?? null,
         now,
         now,
       ],
     );
-    if (input.projectId) {
-      this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
+    if (projectId) {
+      this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
     }
     this.appendIssueActivity(id, {
       actorType: "system",
       actorId: input.createdBy ?? null,
       type: "issue_created",
       body: input.title,
-      data: { projectId: input.projectId ?? null },
+      data: { projectId, parentIssueId, priority, startDate, dueDate },
     });
     if (input.createdBy) {
       const creator = this.getWorkspaceMember(input.createdBy);
@@ -776,6 +822,8 @@ export class MulticaStore {
       tasks: this.listTasksForIssue(id),
       reactions: this.listIssueReactions(id),
       attachments: this.listAttachmentsForIssue(id),
+      children: this.listChildIssues(id),
+      childProgress: this.getChildIssueProgress(id),
     };
   }
 
@@ -814,36 +862,108 @@ export class MulticaStore {
     return rows.map(toTask);
   }
 
+  listChildIssues(parentIssueId: string): MulticaIssue[] {
+    const parent = this.getIssue(parentIssueId);
+    if (!parent) throw new Error(`Issue not found: ${parentIssueId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_issues WHERE parent_issue_id = ? ORDER BY position ASC, created_at DESC",
+    ).all(parentIssueId) as Row[];
+    return rows.map((row) => this.hydrateIssue(toIssue(row)));
+  }
+
+  listChildIssueProgress(workspaceId = "local"): MulticaIssueChildProgress[] {
+    const rows = this.db.query(
+      `SELECT parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN status IN ('done', 'completed', 'closed', 'cancelled') THEN 1 ELSE 0 END) AS done
+       FROM multica_issues
+       WHERE workspace_id = ? AND parent_issue_id IS NOT NULL
+       GROUP BY parent_issue_id
+       ORDER BY parent_issue_id ASC`,
+    ).all(workspaceId) as Row[];
+    return rows.map(toChildIssueProgress);
+  }
+
+  getChildIssueProgress(parentIssueId: string): MulticaIssueChildProgress {
+    const row = this.db.query(
+      `SELECT parent_issue_id, COUNT(*) AS total,
+              SUM(CASE WHEN status IN ('done', 'completed', 'closed', 'cancelled') THEN 1 ELSE 0 END) AS done
+       FROM multica_issues
+       WHERE parent_issue_id = ?
+       GROUP BY parent_issue_id`,
+    ).get(parentIssueId) as Row | null;
+    return row ? toChildIssueProgress(row) : { parentIssueId, total: 0, done: 0 };
+  }
+
   updateIssue(id: string, input: UpdateIssueInput): MulticaIssue {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
-    if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
-    if (input.assigneeType !== undefined || input.assigneeId !== undefined) {
-      this.validateIssueAssignee(
-        input.assigneeType === undefined ? current.assigneeType : input.assigneeType,
-        input.assigneeId === undefined ? current.assigneeId : input.assigneeId,
-      );
+    const nextWorkspaceId = resolveOptionalStringField(input, "workspaceId", "workspace_id", current.workspaceId) ?? "local";
+    const nextProjectId = resolveOptionalStringField(input, "projectId", "project_id", current.projectId);
+    const nextParentIssueId = resolveOptionalStringField(input, "parentIssueId", "parent_issue_id", current.parentIssueId);
+    const nextAssigneeType = resolveOptionalStringField(input, "assigneeType", "assignee_type", current.assigneeType) as MulticaAssigneeType | null;
+    const nextAssigneeId = resolveOptionalStringField(input, "assigneeId", "assignee_id", current.assigneeId);
+    const nextStartDate = hasAnyField(input, "startDate", "start_date")
+      ? normalizeIssueDate(input.startDate ?? input.start_date ?? null, "start_date")
+      : current.startDate;
+    const nextDueDate = hasAnyField(input, "dueDate", "due_date")
+      ? normalizeIssueDate(input.dueDate ?? input.due_date ?? null, "due_date")
+      : current.dueDate;
+    const nextAcceptanceCriteria = hasAnyField(input, "acceptanceCriteria", "acceptance_criteria")
+      ? normalizeJsonArray(input.acceptanceCriteria ?? input.acceptance_criteria ?? [])
+      : current.acceptanceCriteria;
+    const nextContextRefs = hasAnyField(input, "contextRefs", "context_refs")
+      ? normalizeJsonArray(input.contextRefs ?? input.context_refs ?? [])
+      : current.contextRefs;
+
+    if (nextProjectId) {
+      const project = this.getProject(nextProjectId);
+      if (!project) throw new Error(`Project not found: ${nextProjectId}`);
+      if (project.workspaceId !== nextWorkspaceId) throw new Error("Project belongs to another workspace");
     }
+    if (nextParentIssueId) {
+      const parent = this.getIssue(nextParentIssueId);
+      if (!parent) throw new Error(`Parent issue not found: ${nextParentIssueId}`);
+      if (parent.workspaceId !== nextWorkspaceId) throw new Error("Parent issue belongs to another workspace");
+      this.validateIssueParent(id, nextParentIssueId);
+    }
+    if (hasAnyField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id")) {
+      this.validateIssueAssignee(nextAssigneeType, nextAssigneeId);
+    }
+
     const now = nowIso();
     this.db.run(
       `UPDATE multica_issues SET
         title = ?,
         description = ?,
         status = ?,
+        priority = ?,
         workspace_id = ?,
         project_id = ?,
+        parent_issue_id = ?,
         assignee_type = ?,
         assignee_id = ?,
+        position = ?,
+        start_date = ?,
+        due_date = ?,
+        acceptance_criteria = ?,
+        context_refs = ?,
         updated_at = ?
        WHERE id = ?`,
       [
         input.title ?? current.title,
         input.description === undefined ? current.description : input.description,
         input.status ?? current.status,
-        input.workspaceId ?? current.workspaceId,
-        input.projectId === undefined ? current.projectId : input.projectId,
-        input.assigneeType === undefined ? current.assigneeType : input.assigneeType,
-        input.assigneeId === undefined ? current.assigneeId : input.assigneeId,
+        normalizeIssuePriority(input.priority ?? current.priority),
+        nextWorkspaceId,
+        nextProjectId,
+        nextParentIssueId,
+        nextAssigneeType,
+        nextAssigneeId,
+        input.position === undefined || input.position === null ? current.position : normalizeIssuePosition(input.position),
+        nextStartDate,
+        nextDueDate,
+        toJson(nextAcceptanceCriteria),
+        toJson(nextContextRefs),
         now,
         id,
       ],
@@ -856,7 +976,7 @@ export class MulticaStore {
       data: input,
     });
     if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
-    if (input.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
+    if (nextProjectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, nextProjectId]);
     return this.getIssue(id)!;
   }
 
@@ -2407,6 +2527,18 @@ export class MulticaStore {
     }
   }
 
+  private validateIssueParent(issueId: string, parentIssueId: string): void {
+    if (issueId === parentIssueId) throw new Error("An issue cannot be its own parent");
+    let cursor: string | null = parentIssueId;
+    const seen = new Set<string>();
+    for (let depth = 0; cursor && depth < 100; depth++) {
+      if (cursor === issueId) throw new Error("Circular parent issue relationship detected");
+      if (seen.has(cursor)) throw new Error("Circular parent issue relationship detected");
+      seen.add(cursor);
+      cursor = this.getIssue(cursor)?.parentIssueId ?? null;
+    }
+  }
+
   private cancelActiveIssueTasks(issueId: string, reason: string): number {
     const active = this.db.query(
       "SELECT * FROM multica_tasks WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')",
@@ -2827,6 +2959,49 @@ function validateIssueMetadataSize(metadata: Record<string, string | number | bo
   }
 }
 
+function normalizeIssuePriority(value: string | undefined): MulticaIssuePriority {
+  const priority = String(value ?? "none").trim().toLowerCase();
+  if (priority === "urgent" || priority === "high" || priority === "medium" || priority === "low" || priority === "none") {
+    return priority;
+  }
+  throw new Error("priority must be one of urgent, high, medium, low, or none");
+}
+
+function normalizeIssuePosition(value: number | null | undefined): number {
+  const position = Number(value ?? 0);
+  if (!Number.isFinite(position)) throw new Error("position must be a finite number");
+  return position;
+}
+
+function normalizeIssueDate(value: string | null | undefined, field: string): string | null {
+  if (value == null || value === "") return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error(`${field} must be a valid date`);
+  return date.toISOString();
+}
+
+function normalizeJsonArray(value: unknown): unknown[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("value must be an array");
+  return value;
+}
+
+function hasAnyField(target: object, ...keys: string[]): boolean {
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(target, key));
+}
+
+function resolveOptionalStringField(
+  target: object,
+  camelKey: string,
+  snakeKey: string,
+  current: string | null,
+): string | null {
+  const values = target as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(values, camelKey)) return values[camelKey] == null ? null : String(values[camelKey]);
+  if (Object.prototype.hasOwnProperty.call(values, snakeKey)) return values[snakeKey] == null ? null : String(values[snakeKey]);
+  return current;
+}
+
 function normalizeLabelName(value: string | undefined): string {
   const name = value?.trim() ?? "";
   if (!name) throw new Error("Label name is required");
@@ -3028,15 +3203,30 @@ function toIssue(row: Row): MulticaIssue {
     title: String(row.title),
     description: nullableString(row.description),
     status: String(row.status),
+    priority: normalizeIssuePriority(String(row.priority ?? "none")),
     workspaceId: String(row.workspace_id ?? "local"),
     projectId: nullableString(row.project_id),
+    parentIssueId: nullableString(row.parent_issue_id),
     assigneeType: nullableString(row.assignee_type) as MulticaIssue["assigneeType"],
     assigneeId: nullableString(row.assignee_id),
+    position: Number(row.position ?? 0),
+    startDate: nullableString(row.start_date),
+    dueDate: nullableString(row.due_date),
+    acceptanceCriteria: parseJson(row.acceptance_criteria, []),
+    contextRefs: parseJson(row.context_refs, []),
     metadata: parseIssueMetadata(row.metadata),
     labels: [],
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toChildIssueProgress(row: Row): MulticaIssueChildProgress {
+  return {
+    parentIssueId: String(row.parent_issue_id),
+    total: Number(row.total ?? 0),
+    done: Number(row.done ?? 0),
   };
 }
 

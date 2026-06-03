@@ -1374,6 +1374,8 @@ export function renderMulticaDashboardHtml(): string {
       selectedMessages: [],
       selectedIssueId: null,
       selectedIssue: null,
+      selectedIssueChildren: [],
+      selectedIssueChildProgress: null,
       selectedIssueComments: [],
       selectedIssueActivity: [],
       selectedSquadId: null,
@@ -1671,6 +1673,8 @@ export function renderMulticaDashboardHtml(): string {
       try {
         const issueResult = await api("/api/multica/issues/" + encodeURIComponent(id));
         state.selectedIssue = issueResult.issue;
+        state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
+        state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
         state.selectedIssueComments = issueResult.comments || [];
         state.selectedIssueActivity = issueResult.activity || [];
         state.selectedMessages = [];
@@ -1692,9 +1696,13 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedTask?.issueId) {
           const issueResult = await api("/api/multica/issues/" + encodeURIComponent(state.selectedTask.issueId));
           state.selectedTask.issue = issueResult.issue;
+          state.selectedIssueChildren = issueResult.children || issueResult.issue?.children || [];
+          state.selectedIssueChildProgress = issueResult.childProgress || issueResult.issue?.childProgress || null;
           state.selectedIssueComments = issueResult.comments || [];
           state.selectedIssueActivity = issueResult.activity || [];
         } else {
+          state.selectedIssueChildren = [];
+          state.selectedIssueChildProgress = null;
           state.selectedIssueComments = [];
           state.selectedIssueActivity = [];
         }
@@ -1761,6 +1769,8 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedTask = null;
       state.selectedIssueId = null;
       state.selectedIssue = null;
+      state.selectedIssueChildren = [];
+      state.selectedIssueChildProgress = null;
       state.selectedMessages = [];
       state.selectedIssueComments = [];
       state.selectedIssueActivity = [];
@@ -1825,11 +1835,18 @@ export function renderMulticaDashboardHtml(): string {
     async function updateSelectedIssue() {
       const issue = state.selectedIssue || state.selectedTask?.issue;
       if (!issue) return;
+      const startDate = readLocalDateTime("issueStartDate");
+      const dueDate = readLocalDateTime("issueDueDate");
       await api("/api/multica/issues/" + encodeURIComponent(issue.id), {
         method: "PATCH",
         body: JSON.stringify({
           status: document.getElementById("issueStatus").value,
-          projectId: document.getElementById("issueProject").value || null
+          priority: document.getElementById("issuePriority").value,
+          projectId: document.getElementById("issueProject").value || null,
+          parentIssueId: document.getElementById("issueParent").value || null,
+          position: Number(document.getElementById("issuePosition").value || 0),
+          startDate,
+          dueDate
         })
       });
       if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
@@ -2794,6 +2811,7 @@ export function renderMulticaDashboardHtml(): string {
       }
       const issue = state.selectedIssue;
       const project = issue.projectId ? state.projects.find(p => p.id === issue.projectId) : null;
+      const parent = issue.parentIssueId ? state.issues.find(item => item.id === issue.parentIssueId) : null;
       const assignee = assigneeLabel(issue);
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
@@ -2802,12 +2820,14 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
         "<div class=\\"drawer-body\\">" +
-          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") + "</div>" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(issue.status) + "\\">" + esc(statusLabel(issue.status)) + "</span><span class=\\"status-badge\\">" + esc(issue.priority || "none") + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + (parent ? "<span class=\\"status-badge\\">parent " + esc(issueLabel(parent)) + "</span>" : "") + (assignee ? "<span class=\\"status-badge\\">" + esc(assignee) + "</span>" : "") + renderIssueScheduleBadges(issue) + "</div>" +
           renderIssueLabels(issue.labels || []) +
           renderDetailBlock("Description", issue.description || "") +
+          renderIssuePlanning(issue) +
           renderIssueControls(issue) +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Reactions</div><div class=\\"message-list\\">" + renderReactions(issue.reactions || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Attachments</div><div class=\\"message-list\\">" + renderAttachments(issue.attachments || []) + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Child issues</div><div class=\\"message-list\\">" + renderChildIssues() + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Tasks</div><div class=\\"message-list\\">" + renderIssueTasks(issue.tasks || []) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" +
@@ -2954,12 +2974,52 @@ export function renderMulticaDashboardHtml(): string {
       }).join("");
     }
 
+    function renderIssuePlanning(issue) {
+      const acceptance = Array.isArray(issue.acceptanceCriteria) ? issue.acceptanceCriteria : [];
+      const refs = Array.isArray(issue.contextRefs) ? issue.contextRefs : [];
+      if (!acceptance.length && !refs.length && !issue.startDate && !issue.dueDate) return "";
+      const acceptanceText = acceptance.map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\\n");
+      const refsText = refs.map(item => typeof item === "string" ? item : JSON.stringify(item)).join("\\n");
+      return "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Planning</div>" +
+        "<div class=\\"message-list\\">" +
+          (issue.startDate || issue.dueDate ? "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>Schedule</span></div><div class=\\"message-content\\">" + esc([issue.startDate ? "start " + new Date(issue.startDate).toLocaleString() : "", issue.dueDate ? "due " + new Date(issue.dueDate).toLocaleString() : ""].filter(Boolean).join(" / ")) + "</div></div>" : "") +
+          (acceptanceText ? "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>Acceptance</span></div><div class=\\"message-content\\">" + esc(acceptanceText) + "</div></div>" : "") +
+          (refsText ? "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>Context refs</span></div><div class=\\"message-content\\">" + esc(refsText) + "</div></div>" : "") +
+        "</div>" +
+      "</div>";
+    }
+
+    function renderChildIssues() {
+      const progress = state.selectedIssueChildProgress || { total: 0, done: 0 };
+      const children = state.selectedIssueChildren || [];
+      const progressLine = "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(String(progress.done || 0)) + " / " + esc(String(progress.total || 0)) + " done</span></div>";
+      if (!children.length) return progressLine + "<div class=\\"empty-column\\">No child issues</div>";
+      return progressLine + children.map(child =>
+        "<div class=\\"message-row\\" onclick=\\"openIssue('" + escAttr(child.id) + "')\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(issueLabel(child)) + "</span><span>" + esc(child.status) + "</span><span>" + esc(child.priority || "none") + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(child.title || "") + "</div>" +
+        "</div>"
+      ).join("");
+    }
+
+    function renderIssueScheduleBadges(issue) {
+      const parts = [];
+      if (issue.startDate) parts.push("<span class=\\"status-badge\\">start " + esc(new Date(issue.startDate).toLocaleDateString()) + "</span>");
+      if (issue.dueDate) parts.push("<span class=\\"status-badge\\">due " + esc(new Date(issue.dueDate).toLocaleDateString()) + "</span>");
+      return parts.join("");
+    }
+
     function renderIssueControls(issue) {
       return "<div class=\\"detail-block\\">" +
         "<div class=\\"detail-label\\">Issue</div>" +
         "<div class=\\"detail-grid\\">" +
           "<label>Status<select id=\\"issueStatus\\">" + issueStatusOptions(issue.status) + "</select></label>" +
+          "<label>Priority<select id=\\"issuePriority\\">" + issuePriorityOptions(issue.priority || "none") + "</select></label>" +
           "<label>Project<select id=\\"issueProject\\">" + projectOptions(true, issue.projectId) + "</select></label>" +
+          "<label>Parent<select id=\\"issueParent\\">" + issueParentOptions(issue) + "</select></label>" +
+          "<label>Position<input id=\\"issuePosition\\" type=\\"number\\" step=\\"0.1\\" value=\\"" + escAttr(issue.position || 0) + "\\"></label>" +
+          "<label>Start<input id=\\"issueStartDate\\" type=\\"datetime-local\\" value=\\"" + escAttr(toLocalDateTimeValue(issue.startDate)) + "\\"></label>" +
+          "<label>Due<input id=\\"issueDueDate\\" type=\\"datetime-local\\" value=\\"" + escAttr(toLocalDateTimeValue(issue.dueDate)) + "\\"></label>" +
         "</div>" +
         "<button class=\\"outline\\" onclick=\\"updateSelectedIssue()\\">Save issue</button>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"assignSelectedIssue(event)\\" style=\\"padding:0;\\">" +
@@ -3328,6 +3388,13 @@ export function renderMulticaDashboardHtml(): string {
       ).join("");
     }
 
+    function issueParentOptions(issue) {
+      return "<option value=\\"\\">None</option>" + state.issues
+        .filter(item => item.id !== issue.id)
+        .map(item => "<option value=\\"" + escAttr(item.id) + "\\" " + (item.id === issue.parentIssueId ? "selected" : "") + ">" + esc(issueLabel(item)) + " / " + esc(item.title || "") + "</option>")
+        .join("");
+    }
+
     function squadOptions() {
       return state.squads.map(s => "<option value=\\"" + escAttr(s.id) + "\\">" + esc(s.name) + "</option>").join("");
     }
@@ -3357,6 +3424,12 @@ export function renderMulticaDashboardHtml(): string {
       ).join("");
     }
 
+    function issuePriorityOptions(current) {
+      return ["urgent", "high", "medium", "low", "none"].map(priority =>
+        "<option value=\\"" + priority + "\\" " + (priority === current ? "selected" : "") + ">" + priority + "</option>"
+      ).join("");
+    }
+
     function activitySummary(item) {
       if (!item.data) return "";
       try {
@@ -3383,6 +3456,21 @@ export function renderMulticaDashboardHtml(): string {
 
     function splitCsv(value) {
       return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
+    }
+
+    function readLocalDateTime(id) {
+      const raw = document.getElementById(id)?.value || "";
+      if (!raw) return null;
+      const date = new Date(raw);
+      return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+    }
+
+    function toLocalDateTimeValue(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) return "";
+      const pad = n => String(n).padStart(2, "0");
+      return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + "T" + pad(date.getHours()) + ":" + pad(date.getMinutes());
     }
 
     function renderDetailBlock(label, value) {
