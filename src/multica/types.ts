@@ -231,6 +231,16 @@ export interface MulticaPinnedItem {
   createdAt: string;
 }
 
+export interface MulticaIssueSearchResult extends MulticaIssue {
+  matchSource: "key" | "title" | "description";
+  matchedDescriptionSnippet?: string;
+}
+
+export interface MulticaProjectSearchResult extends MulticaProject {
+  matchSource: "title" | "description";
+  matchedSnippet?: string;
+}
+
 export interface MulticaSquad {
   id: string;
   workspaceId: string;

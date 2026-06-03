@@ -295,6 +295,29 @@ describe("Bun Multica core store", () => {
     expect(store.listPinnedItems("local", "local").map((pin) => pin.id)).toEqual([issuePin.id]);
   });
 
+  it("searches issues and projects with ranking and snippets", () => {
+    const store = createStore();
+    store.createIssue({ title: "Alpha title", description: "No special details", workspaceId: "local" });
+    const descIssue = store.createIssue({ title: "Other title", description: "Contains needle phrase inside a longer issue description", workspaceId: "local" });
+    store.updateIssue(descIssue.id, { status: "done" });
+    store.createProject({ title: "Project Alpha", description: "No details", workspaceId: "local" });
+    store.createProject({ title: "Project Other", description: "Contains project needle phrase", workspaceId: "local" });
+
+    const issues = store.searchIssues({ q: "alpha", workspaceId: "local" });
+    expect(issues.total).toBe(1);
+    expect(issues.issues[0]?.matchSource).toBe("title");
+
+    const withoutClosed = store.searchIssues({ q: "needle", workspaceId: "local" });
+    expect(withoutClosed.total).toBe(0);
+    const withClosed = store.searchIssues({ q: "needle", workspaceId: "local", includeClosed: true });
+    expect(withClosed.issues[0]?.matchSource).toBe("description");
+    expect(withClosed.issues[0]?.matchedDescriptionSnippet).toContain("needle");
+
+    const projects = store.searchProjects({ q: "needle", workspaceId: "local" });
+    expect(projects.projects[0]?.matchSource).toBe("description");
+    expect(projects.projects[0]?.matchedSnippet).toContain("needle");
+  });
+
   it("skips agent self-mentions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
@@ -801,6 +824,32 @@ describe("Bun Multica API", () => {
     });
     expect(deleted.status).toBe(200);
     expect(store.listPinnedItems("local", "local")).toHaveLength(1);
+  });
+
+  it("serves issue and project search endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "Searchable API issue", description: "Has api needle context", workspaceId: "local" });
+    const closedIssue = store.createIssue({ title: "Closed API issue", description: "closed needle", workspaceId: "local" });
+    store.updateIssue(closedIssue.id, { status: "done" });
+    store.createProject({ title: "Searchable API project", description: "No needle", workspaceId: "local" });
+    store.createProject({ title: "Other project", description: "Project needle context", workspaceId: "local" });
+
+    const byTitle = await app.request("/api/multica/issues/search?q=searchable%20api&workspaceId=local");
+    expect(byTitle.status).toBe(200);
+    const byTitleBody = await byTitle.json();
+    expect(byTitleBody.issues[0].id).toBe(issue.id);
+    expect(byTitleBody.issues[0].matchSource).toBe("title");
+
+    const compatIssueSearch = await app.request("/api/issues/search?q=needle&workspaceId=local&include_closed=true&limit=1");
+    const compatIssueBody = await compatIssueSearch.json();
+    expect(compatIssueBody.issues).toHaveLength(1);
+    expect(compatIssueBody.total).toBeGreaterThanOrEqual(1);
+
+    const projectSearch = await app.request("/api/projects/search?q=project%20needle&workspaceId=local");
+    const projectBody = await projectSearch.json();
+    expect(projectBody.projects[0].matchSource).toBe("description");
+    expect(projectBody.projects[0].matchedSnippet).toContain("needle");
   });
 
   it("serves issue subscribers and member inbox endpoints", async () => {

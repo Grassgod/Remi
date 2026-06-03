@@ -30,6 +30,7 @@ import type {
   MulticaIssueActivity,
   MulticaIssueComment,
   MulticaIssue,
+  MulticaIssueSearchResult,
   MulticaLabel,
   MulticaPinnedItem,
   MulticaPinnedItemType,
@@ -38,6 +39,7 @@ import type {
   MulticaIssueWithTasks,
   MulticaProject,
   MulticaProjectResource,
+  MulticaProjectSearchResult,
   MulticaRuntime,
   MulticaSquad,
   MulticaSquadMember,
@@ -774,6 +776,29 @@ export class MulticaStore {
     return rows.map((row) => this.hydrateIssue(toIssue(row)));
   }
 
+  searchIssues(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { issues: MulticaIssueSearchResult[]; total: number } {
+    const query = normalizeSearchQuery(input.q);
+    if (!query) throw new Error("q parameter is required");
+    const workspaceId = input.workspaceId ?? "local";
+    const includeClosed = Boolean(input.includeClosed);
+    const limit = clampSearchLimit(input.limit);
+    const offset = Math.max(0, Number(input.offset ?? 0));
+    const rows = this.listIssues().filter((issue) => {
+      if (issue.workspaceId !== workspaceId) return false;
+      if (!includeClosed && ["done", "failed", "cancelled"].includes(issue.status)) return false;
+      return searchMatch(issue.key, query) || searchMatch(issue.title, query) || searchMatch(issue.description ?? "", query);
+    }).map((issue) => {
+      const matchSource = searchMatch(issue.key, query) ? "key" : searchMatch(issue.title, query) ? "title" : "description";
+      const result: MulticaIssueSearchResult = {
+        ...issue,
+        matchSource,
+      };
+      if (matchSource === "description" && issue.description) result.matchedDescriptionSnippet = extractSearchSnippet(issue.description, query);
+      return result;
+    }).sort((left, right) => searchRank(left.matchSource) - searchRank(right.matchSource) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    return { issues: rows.slice(offset, offset + limit), total: rows.length };
+  }
+
   listTasksForIssue(issueId: string): MulticaTask[] {
     const rows = this.db.query(
       "SELECT * FROM multica_tasks WHERE issue_id = ? ORDER BY created_at DESC",
@@ -1400,6 +1425,28 @@ export class MulticaStore {
       ? this.db.query(projectSelect("WHERE p.workspace_id = ? ORDER BY p.updated_at DESC")).all(workspaceId) as Row[]
       : this.db.query(projectSelect("ORDER BY p.updated_at DESC")).all() as Row[];
     return rows.map(toProject);
+  }
+
+  searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MulticaProjectSearchResult[]; total: number } {
+    const query = normalizeSearchQuery(input.q);
+    if (!query) throw new Error("q parameter is required");
+    const workspaceId = input.workspaceId ?? "local";
+    const includeClosed = Boolean(input.includeClosed);
+    const limit = clampSearchLimit(input.limit);
+    const offset = Math.max(0, Number(input.offset ?? 0));
+    const rows = this.listProjects(workspaceId).filter((project) => {
+      if (!includeClosed && ["completed", "cancelled"].includes(project.status)) return false;
+      return searchMatch(project.title, query) || searchMatch(project.description ?? "", query);
+    }).map((project) => {
+      const matchSource = searchMatch(project.title, query) ? "title" : "description";
+      const result: MulticaProjectSearchResult = {
+        ...project,
+        matchSource,
+      };
+      if (matchSource === "description" && project.description) result.matchedSnippet = extractSearchSnippet(project.description, query);
+      return result;
+    }).sort((left, right) => searchRank(left.matchSource) - searchRank(right.matchSource) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    return { projects: rows.slice(offset, offset + limit), total: rows.length };
   }
 
   updateProject(id: string, input: UpdateProjectInput): MulticaProject {
@@ -2677,6 +2724,38 @@ function normalizeLabelColor(value: string | undefined): string {
 function normalizePinnedItemType(value: string | undefined): MulticaPinnedItemType {
   if (value === "issue" || value === "project") return value;
   throw new Error("item_type must be 'issue' or 'project'");
+}
+
+function normalizeSearchQuery(value: string | undefined): string {
+  return String(value ?? "").trim();
+}
+
+function clampSearchLimit(value: number | undefined): number {
+  const limit = Number(value ?? 20);
+  if (!Number.isFinite(limit) || limit <= 0) return 20;
+  return Math.min(50, Math.floor(limit));
+}
+
+function searchMatch(value: string, query: string): boolean {
+  const haystack = value.toLowerCase();
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
+function searchRank(matchSource: string): number {
+  if (matchSource === "key") return 0;
+  if (matchSource === "title") return 1;
+  return 2;
+}
+
+function extractSearchSnippet(value: string, query: string): string {
+  const text = String(value);
+  const term = query.toLowerCase().split(/\s+/).filter(Boolean).find((item) => text.toLowerCase().includes(item)) ?? "";
+  if (!term) return text.slice(0, 160);
+  const index = text.toLowerCase().indexOf(term);
+  const start = Math.max(0, index - 50);
+  const end = Math.min(text.length, index + term.length + 80);
+  return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
 }
 
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {

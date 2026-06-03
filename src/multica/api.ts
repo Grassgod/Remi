@@ -131,6 +131,26 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const projects = store.listProjects(c.req.query("workspaceId"));
     return c.json({ projects, total: projects.length });
   });
+  app.get("/api/multica/projects/search", (c) => {
+    const result = store.searchProjects({
+      q: c.req.query("q") ?? "",
+      workspaceId: c.req.query("workspaceId"),
+      includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
+      limit: parseOptionalInt(c.req.query("limit")),
+      offset: parseOptionalInt(c.req.query("offset")),
+    });
+    return c.json(result);
+  });
+  app.get("/api/projects/search", (c) => {
+    const result = store.searchProjects({
+      q: c.req.query("q") ?? "",
+      workspaceId: c.req.query("workspaceId"),
+      includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
+      limit: parseOptionalInt(c.req.query("limit")),
+      offset: parseOptionalInt(c.req.query("offset")),
+    });
+    return c.json(result);
+  });
   app.post("/api/multica/projects", async (c) => {
     const body = await readJson<CreateProjectInput>(c);
     return c.json({ project: store.createProject(body) }, 201);
@@ -351,6 +371,26 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       };
     });
     return c.json({ issues });
+  });
+  app.get("/api/multica/issues/search", (c) => {
+    const result = store.searchIssues({
+      q: c.req.query("q") ?? "",
+      workspaceId: c.req.query("workspaceId"),
+      includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
+      limit: parseOptionalInt(c.req.query("limit")),
+      offset: parseOptionalInt(c.req.query("offset")),
+    });
+    return c.json(result);
+  });
+  app.get("/api/issues/search", (c) => {
+    const result = store.searchIssues({
+      q: c.req.query("q") ?? "",
+      workspaceId: c.req.query("workspaceId"),
+      includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
+      limit: parseOptionalInt(c.req.query("limit")),
+      offset: parseOptionalInt(c.req.query("offset")),
+    });
+    return c.json(result);
   });
   app.post("/api/multica/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
@@ -632,6 +672,12 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
 function normalizeSubscriptionReason(value: unknown): MulticaSubscriptionReason {
   const reason = String(value ?? "manual") as MulticaSubscriptionReason;
   return SUBSCRIPTION_REASONS.includes(reason) ? reason : "manual";
+}
+
+function parseOptionalInt(value: string | undefined): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
 }
 
 function normalizeReactionInput(input: CreateMulticaReactionInput): { actorType?: string; actorId?: string | null; emoji: string } {
