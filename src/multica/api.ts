@@ -223,6 +223,18 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(workspace);
   });
   app.get("/api/workspaces/:id/members", (c) => c.json(store.listWorkspaceMembers(c.req.param("id"))));
+  app.patch("/api/workspaces/:id/members/:memberId", async (c) => {
+    const member = store.getWorkspaceMember(c.req.param("memberId"));
+    if (!member || member.workspaceId !== c.req.param("id")) return c.json({ error: "member not found" }, 404);
+    const body = await readJson<UpdateWorkspaceMemberInput>(c);
+    return c.json(store.updateWorkspaceMember(c.req.param("memberId"), body));
+  });
+  app.delete("/api/workspaces/:id/members/:memberId", (c) => {
+    const member = store.getWorkspaceMember(c.req.param("memberId"));
+    if (!member || member.workspaceId !== c.req.param("id")) return c.json({ error: "member not found" }, 404);
+    store.archiveWorkspaceMember(c.req.param("memberId"));
+    return c.body(null, 204);
+  });
   app.post("/api/workspaces/:id/members", async (c) => {
     const body = await readJson<any>(c);
     const result = safeCreateInvitation(store, c.req.param("id"), body);
@@ -230,6 +242,13 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(result, 201);
   });
   app.get("/api/workspaces/:id/invitations", (c) => c.json(store.listWorkspaceInvitations(c.req.param("id"))));
+  app.get("/api/workspaces/:id/github/connect", (c) => c.json({ configured: false }));
+  app.get("/api/workspaces/:id/github/installations", (c) => c.json({
+    installations: [],
+    configured: false,
+    can_manage: true,
+  }));
+  app.delete("/api/workspaces/:id/github/installations/:installationId", (c) => c.body(null, 204));
   app.delete("/api/workspaces/:id/invitations/:invitationId", (c) => {
     const revoked = store.revokeWorkspaceInvitation(c.req.param("id"), c.req.param("invitationId"));
     if (!revoked) return c.json({ error: "invitation not found" }, 404);

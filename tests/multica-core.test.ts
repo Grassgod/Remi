@@ -2011,6 +2011,27 @@ describe("Bun Multica API", () => {
       email: "local@multica.local",
     });
 
+    const updatedMember = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/members/${encodeURIComponent(membersBody[0].id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "admin" }),
+    });
+    expect((await updatedMember.json()).role).toBe("admin");
+
+    const githubConnect = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/github/connect`);
+    expect(await githubConnect.json()).toEqual({ configured: false });
+    const githubInstallations = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/github/installations`);
+    expect(await githubInstallations.json()).toEqual({
+      installations: [],
+      configured: false,
+      can_manage: true,
+    });
+
+    const deletedMember = await app.request(`/api/workspaces/${encodeURIComponent(createdBody.id)}/members/${encodeURIComponent(membersBody[0].id)}`, {
+      method: "DELETE",
+    });
+    expect(deletedMember.status).toBe(204);
+
     const invitations = await app.request("/api/invitations");
     expect(await invitations.json()).toEqual([]);
   });
