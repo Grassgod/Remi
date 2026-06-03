@@ -7,12 +7,14 @@ import type {
   AddSquadMemberInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateIssueCommentInput,
   CreateIssueInput,
   CreateProjectInput,
   CreateSquadInput,
   CreateTaskInput,
   RegisterRuntimeInput,
   RunAutopilotInput,
+  UpdateIssueInput,
   UpdateProjectInput,
 } from "./types.js";
 
@@ -152,7 +154,22 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/issues/:id", (c) => {
     const issue = store.getIssue(c.req.param("id"));
     if (!issue) return c.json({ error: "issue not found" }, 404);
-    return c.json({ issue });
+    return c.json({
+      issue,
+      comments: store.listIssueComments(issue.id),
+      activity: store.listIssueActivity(issue.id),
+    });
+  });
+  app.patch("/api/multica/issues/:id", async (c) => {
+    const body = await readJson<UpdateIssueInput>(c);
+    return c.json({ issue: store.updateIssue(c.req.param("id"), body) });
+  });
+  app.get("/api/multica/issues/:id/comments", (c) => {
+    return c.json({ comments: store.listIssueComments(c.req.param("id")) });
+  });
+  app.post("/api/multica/issues/:id/comments", async (c) => {
+    const body = await readJson<CreateIssueCommentInput>(c);
+    return c.json({ comment: store.createIssueComment(c.req.param("id"), body) }, 201);
   });
 
   app.get("/api/multica/tasks", (c) => {

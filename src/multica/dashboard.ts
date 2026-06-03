@@ -1362,6 +1362,8 @@ export function renderMulticaDashboardHtml(): string {
       selectedTaskId: null,
       selectedTask: null,
       selectedMessages: [],
+      selectedIssueComments: [],
+      selectedIssueActivity: [],
       chatEntries: []
     };
 
@@ -1546,6 +1548,15 @@ export function renderMulticaDashboardHtml(): string {
         ]);
         state.selectedTask = taskResult.task;
         state.selectedMessages = messageResult.messages || [];
+        if (state.selectedTask?.issueId) {
+          const issueResult = await api("/api/multica/issues/" + encodeURIComponent(state.selectedTask.issueId));
+          state.selectedTask.issue = issueResult.issue;
+          state.selectedIssueComments = issueResult.comments || [];
+          state.selectedIssueActivity = issueResult.activity || [];
+        } else {
+          state.selectedIssueComments = [];
+          state.selectedIssueActivity = [];
+        }
         renderTaskDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
@@ -1556,7 +1567,35 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedTaskId = null;
       state.selectedTask = null;
       state.selectedMessages = [];
+      state.selectedIssueComments = [];
+      state.selectedIssueActivity = [];
       els.taskDrawer.classList.remove("open");
+    }
+
+    async function updateSelectedIssue() {
+      const issue = state.selectedTask?.issue;
+      if (!issue) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          status: document.getElementById("issueStatus").value,
+          projectId: document.getElementById("issueProject").value || null
+        })
+      });
+      await refresh();
+    }
+
+    async function addSelectedIssueComment(event) {
+      event.preventDefault();
+      const issue = state.selectedTask?.issue;
+      const body = document.getElementById("issueCommentBody").value.trim();
+      if (!issue || !body) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/comments", {
+        method: "POST",
+        body: JSON.stringify({ authorType: "member", body })
+      });
+      document.getElementById("issueCommentBody").value = "";
+      await loadTaskDetail(state.selectedTaskId);
     }
 
     function openSheet() {
@@ -2046,6 +2085,7 @@ export function renderMulticaDashboardHtml(): string {
       }
       const t = state.selectedTask;
       const agent = t.agent || state.agents.find(a => a.id === t.agentId);
+      const issue = t.issue;
       const cancellable = isActiveTask(t);
       const usage = usageSummary(t.usage || []);
       els.taskDrawer.innerHTML =
@@ -2057,6 +2097,7 @@ export function renderMulticaDashboardHtml(): string {
         "<div class=\\"drawer-body\\">" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span><span class=\\"status-badge\\">" + esc(agent ? agent.name : "agent") + "</span></div>" +
           renderDetailBlock("Prompt", t.prompt || "") +
+          (issue ? renderIssueControls(issue) : "") +
           (t.result ? renderDetailBlock("Result", t.result) : "") +
           (t.error ? renderDetailBlock("Error", t.error) : "") +
           (t.progressSummary ? renderDetailBlock("Progress", progressText(t)) : "") +
@@ -2068,8 +2109,39 @@ export function renderMulticaDashboardHtml(): string {
             renderCell("Branch", t.branchName || "none") +
             renderCell("Usage", usage) +
           "</div>" +
+          (issue ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" : "") +
+          (issue ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" : "") +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Messages</div><div class=\\"message-list\\">" + renderMessages() + "</div></div>" +
         "</div>";
+    }
+
+    function renderIssueControls(issue) {
+      return "<div class=\\"detail-block\\">" +
+        "<div class=\\"detail-label\\">Issue</div>" +
+        "<div class=\\"detail-grid\\">" +
+          "<label>Status<select id=\\"issueStatus\\">" + issueStatusOptions(issue.status) + "</select></label>" +
+          "<label>Project<select id=\\"issueProject\\">" + projectOptions(true, issue.projectId) + "</select></label>" +
+        "</div>" +
+        "<button class=\\"outline\\" onclick=\\"updateSelectedIssue()\\">Save issue</button>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueComment(event)\\" style=\\"padding:0;\\">" +
+          "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
+        "</form>" +
+      "</div>";
+    }
+
+    function renderIssueComments() {
+      if (!state.selectedIssueComments.length) return "<div class=\\"empty-column\\">No comments</div>";
+      return state.selectedIssueComments.map(comment =>
+        "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>" + esc(comment.authorType) + "</span><span>" + esc(timeAgo(comment.createdAt)) + "</span></div><div class=\\"message-content\\">" + esc(comment.body) + "</div></div>"
+      ).join("");
+    }
+
+    function renderIssueActivity() {
+      if (!state.selectedIssueActivity.length) return "<div class=\\"empty-column\\">No activity</div>";
+      return state.selectedIssueActivity.map(item =>
+        "<div class=\\"message-row\\"><div class=\\"message-head\\"><span>" + esc(item.type) + "</span><span>" + esc(timeAgo(item.createdAt)) + "</span></div><div class=\\"message-content\\">" + esc(item.body || activitySummary(item)) + "</div></div>"
+      ).join("");
     }
 
     function renderMessages() {
@@ -2177,9 +2249,11 @@ export function renderMulticaDashboardHtml(): string {
       return empty + state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("");
     }
 
-    function projectOptions(allowEmpty) {
+    function projectOptions(allowEmpty, selectedId = "") {
       const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
-      return empty + state.projects.map(p => "<option value=\\"" + escAttr(p.id) + "\\">" + esc(p.title) + "</option>").join("");
+      return empty + state.projects.map(p =>
+        "<option value=\\"" + escAttr(p.id) + "\\" " + (p.id === selectedId ? "selected" : "") + ">" + esc(p.title) + "</option>"
+      ).join("");
     }
 
     function squadOptions() {
@@ -2189,6 +2263,21 @@ export function renderMulticaDashboardHtml(): string {
     function refreshAssigneeOptions() {
       const type = document.getElementById("entityAssigneeType").value;
       document.getElementById("entityAssignee").innerHTML = type === "squad" ? squadOptions() : agentOptions(false);
+    }
+
+    function issueStatusOptions(current) {
+      return ["open", "in_progress", "blocked", "done", "failed", "cancelled"].map(status =>
+        "<option value=\\"" + status + "\\" " + (status === current ? "selected" : "") + ">" + status + "</option>"
+      ).join("");
+    }
+
+    function activitySummary(item) {
+      if (!item.data) return "";
+      try {
+        return JSON.stringify(item.data);
+      } catch {
+        return "";
+      }
     }
 
     function renderDetailBlock(label, value) {
@@ -2280,6 +2369,8 @@ export function renderMulticaDashboardHtml(): string {
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
+    window.updateSelectedIssue = updateSelectedIssue;
+    window.addSelectedIssueComment = addSelectedIssueComment;
   </script>
 </body>
 </html>`;

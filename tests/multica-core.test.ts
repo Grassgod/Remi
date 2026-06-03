@@ -96,6 +96,32 @@ describe("Bun Multica core store", () => {
     expect(store.listSquadMembers(squad.id)).toHaveLength(1);
     expect(store.listAutopilotRuns(autopilot.id)[0]?.id).toBe(run.id);
   });
+
+  it("syncs issue and autopilot run state when tasks finish", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const project = store.createProject({ title: "Core" });
+    const autopilot = store.createAutopilot({
+      title: "Regression sweep",
+      projectId: project.id,
+      assigneeId: agent.id,
+      issueTitleTemplate: "Sweep regressions",
+    });
+    const run = store.runAutopilot(autopilot.id);
+
+    const comment = store.createIssueComment(run.issueId!, { body: "Looks important" });
+    expect(comment.body).toBe("Looks important");
+    expect(store.listIssueActivity(run.issueId!)).toHaveLength(2);
+
+    store.updateIssue(run.issueId!, { status: "in_progress" });
+    store.startTask(run.taskId!);
+    store.completeTask(run.taskId!, { output: "fixed" });
+
+    expect(store.getIssue(run.issueId!)?.status).toBe("done");
+    expect(store.getProject(project.id)?.doneCount).toBe(1);
+    expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
+    expect(store.listIssueActivity(run.issueId!).at(-1)?.type).toBe("task_completed");
+  });
 });
 
 describe("Bun Multica API", () => {

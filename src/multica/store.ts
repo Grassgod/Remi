@@ -5,6 +5,7 @@ import type {
   AddSquadMemberInput,
   CreateAgentInput,
   CreateAutopilotInput,
+  CreateIssueCommentInput,
   CreateIssueInput,
   CreateProjectInput,
   CreateSquadInput,
@@ -12,6 +13,8 @@ import type {
   MulticaAutopilot,
   MulticaAutopilotRun,
   MulticaAgent,
+  MulticaIssueActivity,
+  MulticaIssueComment,
   MulticaIssue,
   MulticaProject,
   MulticaRuntime,
@@ -25,6 +28,7 @@ import type {
   RunAutopilotInput,
   TaskMessageInput,
   TaskUsageEntry,
+  UpdateIssueInput,
   UpdateProjectInput,
 } from "./types.js";
 
@@ -81,6 +85,33 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_issue_comments (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        author_type TEXT NOT NULL DEFAULT 'member',
+        author_id TEXT,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_issue ON multica_issue_comments(issue_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_issue_activity (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        actor_type TEXT NOT NULL DEFAULT 'system',
+        actor_id TEXT,
+        type TEXT NOT NULL,
+        body TEXT,
+        data TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_issue_activity_issue ON multica_issue_activity(issue_id, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_projects (
         id TEXT PRIMARY KEY,
@@ -345,6 +376,13 @@ export class MulticaStore {
     if (input.projectId) {
       this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
     }
+    this.appendIssueActivity(id, {
+      actorType: "system",
+      actorId: input.createdBy ?? null,
+      type: "issue_created",
+      body: input.title,
+      data: { projectId: input.projectId ?? null },
+    });
     return this.getIssue(id)!;
   }
 
@@ -356,6 +394,105 @@ export class MulticaStore {
   listIssues(): MulticaIssue[] {
     const rows = this.db.query("SELECT * FROM multica_issues ORDER BY updated_at DESC").all() as Row[];
     return rows.map(toIssue);
+  }
+
+  updateIssue(id: string, input: UpdateIssueInput): MulticaIssue {
+    const current = this.getIssue(id);
+    if (!current) throw new Error(`Issue not found: ${id}`);
+    if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_issues SET
+        title = ?,
+        description = ?,
+        status = ?,
+        workspace_id = ?,
+        project_id = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.title ?? current.title,
+        input.description === undefined ? current.description : input.description,
+        input.status ?? current.status,
+        input.workspaceId ?? current.workspaceId,
+        input.projectId === undefined ? current.projectId : input.projectId,
+        now,
+        id,
+      ],
+    );
+    this.appendIssueActivity(id, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_updated",
+      body: null,
+      data: input,
+    });
+    if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
+    if (input.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
+    return this.getIssue(id)!;
+  }
+
+  createIssueComment(issueId: string, input: CreateIssueCommentInput): MulticaIssueComment {
+    if (!input.body?.trim()) throw new Error("Comment body is required");
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const id = createId("cmt");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_issue_comments (id, issue_id, author_type, author_id, body, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, issueId, input.authorType ?? "member", input.authorId ?? null, input.body.trim(), now, now],
+    );
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
+    this.appendIssueActivity(issueId, {
+      actorType: input.authorType ?? "member",
+      actorId: input.authorId ?? null,
+      type: "comment_created",
+      body: input.body.trim(),
+      data: { commentId: id },
+    });
+    return this.getIssueComment(id)!;
+  }
+
+  getIssueComment(id: string): MulticaIssueComment | null {
+    const row = this.db.query("SELECT * FROM multica_issue_comments WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueComment(row) : null;
+  }
+
+  listIssueComments(issueId: string): MulticaIssueComment[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_issue_comments WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toIssueComment);
+  }
+
+  listIssueActivity(issueId: string): MulticaIssueActivity[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toIssueActivity);
+  }
+
+  private appendIssueActivity(issueId: string, input: {
+    actorType: string;
+    actorId?: string | null;
+    type: string;
+    body?: string | null;
+    data?: unknown | null;
+  }): void {
+    this.db.run(
+      `INSERT INTO multica_issue_activity (id, issue_id, actor_type, actor_id, type, body, data, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        createId("act"),
+        issueId,
+        input.actorType,
+        input.actorId ?? null,
+        input.type,
+        input.body ?? null,
+        input.data == null ? null : toJson(input.data),
+        nowIso(),
+      ],
+    );
   }
 
   createProject(input: CreateProjectInput): MulticaProject {
@@ -816,7 +953,9 @@ export class MulticaStore {
       [input.output, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    return this.getTask(taskId)!;
+    const task = this.getTask(taskId)!;
+    this.afterTaskTerminal(task, "completed", input.output);
+    return task;
   }
 
   failTask(taskId: string, input: {
@@ -837,7 +976,9 @@ export class MulticaStore {
       [input.error, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    return this.getTask(taskId)!;
+    const task = this.getTask(taskId)!;
+    this.afterTaskTerminal(task, "failed", input.error);
+    return task;
   }
 
   cancelTask(taskId: string): MulticaTask {
@@ -849,7 +990,9 @@ export class MulticaStore {
       [now, now, taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    return this.getTask(taskId)!;
+    const task = this.getTask(taskId)!;
+    this.afterTaskTerminal(task, "cancelled", null);
+    return task;
   }
 
   getTaskStatus(taskId: string): MulticaTaskStatus {
@@ -888,6 +1031,45 @@ export class MulticaStore {
     if (squad.leaderId) return this.getAgent(squad.leaderId);
     const member = this.listSquadMembers(squad.id).find((m) => m.memberType === "agent");
     return member ? this.getAgent(member.memberId) : null;
+  }
+
+  private afterTaskTerminal(task: MulticaTask, status: "completed" | "failed" | "cancelled", body: string | null): void {
+    const now = nowIso();
+    if (task.issueId) {
+      const issueStatus = status === "completed" ? "done" : status;
+      this.db.run(
+        "UPDATE multica_issues SET status = ?, updated_at = ? WHERE id = ?",
+        [issueStatus, now, task.issueId],
+      );
+      this.appendIssueActivity(task.issueId, {
+        actorType: "agent",
+        actorId: task.agentId,
+        type: `task_${status}`,
+        body,
+        data: { taskId: task.id, runtimeId: task.runtimeId },
+      });
+      const issue = this.getIssue(task.issueId);
+      if (issue?.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
+    }
+
+    const runRow = this.db.query(
+      "SELECT id FROM multica_autopilot_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+    ).get(task.id) as { id: string } | null;
+    if (runRow) {
+      const runStatus = status === "completed" ? "completed" : "failed";
+      this.db.run(
+        `UPDATE multica_autopilot_runs
+         SET status = ?, completed_at = ?, failure_reason = ?, result = ?
+         WHERE id = ?`,
+        [
+          runStatus,
+          now,
+          status === "failed" ? task.error : status === "cancelled" ? "Task cancelled" : null,
+          toJson({ taskId: task.id, status, output: task.result, error: task.error }),
+          runRow.id,
+        ],
+      );
+    }
   }
 }
 
@@ -993,6 +1175,31 @@ function toIssue(row: Row): MulticaIssue {
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toIssueComment(row: Row): MulticaIssueComment {
+  return {
+    id: String(row.id),
+    issueId: String(row.issue_id),
+    authorType: String(row.author_type ?? "member"),
+    authorId: nullableString(row.author_id),
+    body: String(row.body ?? ""),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toIssueActivity(row: Row): MulticaIssueActivity {
+  return {
+    id: String(row.id),
+    issueId: String(row.issue_id),
+    actorType: String(row.actor_type ?? "system"),
+    actorId: nullableString(row.actor_id),
+    type: String(row.type),
+    body: nullableString(row.body),
+    data: row.data == null ? null : parseJson(row.data, null),
+    createdAt: String(row.created_at),
   };
 }
 

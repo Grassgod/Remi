@@ -88,6 +88,27 @@ export interface MulticaIssue {
   updatedAt: string;
 }
 
+export interface MulticaIssueComment {
+  id: string;
+  issueId: string;
+  authorType: string;
+  authorId: string | null;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MulticaIssueActivity {
+  id: string;
+  issueId: string;
+  actorType: string;
+  actorId: string | null;
+  type: string;
+  body: string | null;
+  data: unknown | null;
+  createdAt: string;
+}
+
 export interface MulticaSquad {
   id: string;
   workspaceId: string;
@@ -229,6 +250,20 @@ export interface CreateIssueInput {
   workspaceId?: string | null;
   projectId?: string | null;
   createdBy?: string | null;
+}
+
+export interface UpdateIssueInput {
+  title?: string;
+  description?: string | null;
+  status?: string;
+  projectId?: string | null;
+  workspaceId?: string | null;
+}
+
+export interface CreateIssueCommentInput {
+  authorType?: string;
+  authorId?: string | null;
+  body: string;
 }
 
 export interface CreateProjectInput {
