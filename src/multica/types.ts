@@ -85,9 +85,33 @@ export interface MulticaRuntime {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  models: MulticaRuntimeModel[];
   lastHeartbeatAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaRuntimeModelThinkingLevel {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface MulticaRuntimeModelThinking {
+  supportedLevels: MulticaRuntimeModelThinkingLevel[];
+  supported_levels?: MulticaRuntimeModelThinkingLevel[];
+  defaultLevel?: string;
+  default_level?: string;
+}
+
+export interface MulticaRuntimeModel {
+  id: string;
+  label: string;
+  provider: string;
+  default: boolean;
+  thinking?: MulticaRuntimeModelThinking;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MulticaRuntimeUsage {
@@ -599,6 +623,7 @@ export interface RegisterRuntimeInput {
   visibility?: MulticaRuntimeVisibility | string;
   maxConcurrency?: number;
   max_concurrency?: number;
+  models?: MulticaRuntimeModel[];
 }
 
 export interface UpdateRuntimeInput {
@@ -608,6 +633,7 @@ export interface UpdateRuntimeInput {
   visibility?: MulticaRuntimeVisibility | string;
   maxConcurrency?: number;
   max_concurrency?: number;
+  models?: MulticaRuntimeModel[];
 }
 
 export interface CreateIssueInput {

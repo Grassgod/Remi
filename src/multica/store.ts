@@ -52,6 +52,7 @@ import type {
   MulticaProjectSearchResult,
   MulticaRuntime,
   MulticaRuntimeDaily,
+  MulticaRuntimeModel,
   MulticaRuntimeVisibility,
   MulticaRuntimeUsage,
   MulticaSkill,
@@ -176,6 +177,21 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_runtime_models (
+        runtime_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        thinking TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(runtime_id, model_id),
+        FOREIGN KEY(runtime_id) REFERENCES multica_runtimes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_runtime_models_runtime ON multica_runtime_models(runtime_id, is_default);
 
       CREATE TABLE IF NOT EXISTS multica_workspace_members (
         id TEXT PRIMARY KEY,
@@ -1031,6 +1047,7 @@ export class MulticaStore {
         now,
       ],
     );
+    if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, input.provider, now);
     return this.getRuntime(id)!;
   }
 
@@ -1072,7 +1089,22 @@ export class MulticaStore {
         id,
       ],
     );
+    if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, current.provider, now);
     return this.getRuntime(id)!;
+  }
+
+  listRuntimeModels(runtimeId: string): MulticaRuntimeModel[] {
+    if (!this.db.query("SELECT id FROM multica_runtimes WHERE id = ?").get(runtimeId)) {
+      throw new Error(`Runtime not found: ${runtimeId}`);
+    }
+    return this.listRuntimeModelsForExistingRuntime(runtimeId);
+  }
+
+  updateRuntimeModels(runtimeId: string, models: MulticaRuntimeModel[]): MulticaRuntimeModel[] {
+    const row = this.db.query("SELECT * FROM multica_runtimes WHERE id = ?").get(runtimeId) as Row | null;
+    if (!row) throw new Error(`Runtime not found: ${runtimeId}`);
+    this.replaceRuntimeModels(runtimeId, models, String(row.provider), nowIso());
+    return this.listRuntimeModels(runtimeId);
   }
 
   listRuntimeUsage(runtimeId?: string | null): MulticaRuntimeUsage[] {
@@ -3218,7 +3250,37 @@ export class MulticaStore {
     return {
       ...runtime,
       ...stats,
+      models: this.listRuntimeModelsForExistingRuntime(runtime.id),
     };
+  }
+
+  private listRuntimeModelsForExistingRuntime(runtimeId: string): MulticaRuntimeModel[] {
+    const rows = this.db.query("SELECT * FROM multica_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC").all(runtimeId) as Row[];
+    return rows.map(toRuntimeModel);
+  }
+
+  private replaceRuntimeModels(runtimeId: string, models: MulticaRuntimeModel[], provider: string, now = nowIso()): void {
+    const normalized = normalizeRuntimeModels(models, provider);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM multica_runtime_models WHERE runtime_id = ?", [runtimeId]);
+      for (const model of normalized) {
+        this.db.run(
+          `INSERT INTO multica_runtime_models (
+            runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            runtimeId,
+            model.id,
+            model.label,
+            model.provider,
+            model.default ? 1 : 0,
+            model.thinking ? toJson(model.thinking) : null,
+            now,
+            now,
+          ],
+        );
+      }
+    })();
   }
 
   private hydrateIssueComment(comment: MulticaIssueComment): MulticaIssueComment {
@@ -3797,6 +3859,37 @@ function normalizeRuntimeConcurrency(value: number | null | undefined): number {
   return Math.floor(concurrency);
 }
 
+function normalizeRuntimeModels(models: MulticaRuntimeModel[], provider: string): MulticaRuntimeModel[] {
+  const seen = new Set<string>();
+  return (models ?? []).map((model) => {
+    const id = String(model.id ?? "").trim();
+    if (!id) throw new Error("model id is required");
+    if (seen.has(id)) throw new Error(`Duplicate runtime model: ${id}`);
+    seen.add(id);
+    return {
+      id,
+      label: String(model.label ?? id).trim() || id,
+      provider: String(model.provider ?? provider ?? "").trim() || provider,
+      default: Boolean(model.default),
+      thinking: normalizeRuntimeModelThinking(model.thinking),
+    };
+  });
+}
+
+function normalizeRuntimeModelThinking(value: MulticaRuntimeModel["thinking"]): MulticaRuntimeModel["thinking"] | undefined {
+  if (!value) return undefined;
+  const supportedLevels = (value.supportedLevels ?? value.supported_levels ?? []).map((level) => ({
+    value: String(level.value ?? "").trim(),
+    label: String(level.label ?? level.value ?? "").trim(),
+    ...(level.description ? { description: String(level.description) } : {}),
+  })).filter((level) => level.value);
+  if (!supportedLevels.length) return undefined;
+  return {
+    supportedLevels,
+    ...(value.defaultLevel || value.default_level ? { defaultLevel: String(value.defaultLevel ?? value.default_level) } : {}),
+  };
+}
+
 function normalizeAccessTokenType(value: string | undefined): MulticaAccessTokenType {
   const type = String(value ?? "pat").trim().toLowerCase();
   if (type === "pat" || type === "daemon") return type;
@@ -3998,6 +4091,7 @@ function toRuntime(row: Row): MulticaRuntime {
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    models: [],
     lastHeartbeatAt: nullableString(row.last_heartbeat_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -4010,6 +4104,18 @@ function withRuntimeLiveness(runtime: MulticaRuntime): MulticaRuntime {
   const heartbeat = Date.parse(runtime.lastHeartbeatAt);
   if (!Number.isFinite(heartbeat)) return { ...runtime, status: "offline" };
   return Date.now() - heartbeat > RUNTIME_HEARTBEAT_STALE_MS ? { ...runtime, status: "offline" } : runtime;
+}
+
+function toRuntimeModel(row: Row): MulticaRuntimeModel {
+  return {
+    id: String(row.model_id),
+    label: String(row.label ?? row.model_id),
+    provider: String(row.provider ?? ""),
+    default: Boolean(Number(row.is_default ?? 0)),
+    thinking: row.thinking == null ? undefined : parseJson(row.thinking, undefined),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
 }
 
 function toWorkspaceMember(row: Row): MulticaWorkspaceMember {

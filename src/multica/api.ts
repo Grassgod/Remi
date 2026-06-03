@@ -223,6 +223,24 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<UpdateRuntimeInput>(c);
     return c.json({ runtime: store.updateRuntime(c.req.param("id"), body) });
   });
+  app.get("/api/multica/runtimes/:id/models", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ runtimeId: runtime.id, supported: true, models: store.listRuntimeModels(runtime.id) });
+  });
+  app.put("/api/multica/runtimes/:id/models", async (c) => {
+    const body = await readJson<{ models?: any[]; supported?: boolean }>(c);
+    return c.json({ runtimeId: c.req.param("id"), supported: body.supported !== false, models: store.updateRuntimeModels(c.req.param("id"), body.models ?? []) });
+  });
+  app.get("/api/runtimes/:id/models", (c) => {
+    const runtime = store.getRuntime(c.req.param("id"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ runtime_id: runtime.id, supported: true, models: store.listRuntimeModels(runtime.id) });
+  });
+  app.put("/api/runtimes/:id/models", async (c) => {
+    const body = await readJson<{ models?: any[]; supported?: boolean }>(c);
+    return c.json({ runtime_id: c.req.param("id"), supported: body.supported !== false, models: store.updateRuntimeModels(c.req.param("id"), body.models ?? []) });
+  });
   app.get("/api/multica/runtimes/:id/usage", (c) => {
     const runtime = store.getRuntime(c.req.param("id"));
     if (!runtime) return c.json({ error: "runtime not found" }, 404);

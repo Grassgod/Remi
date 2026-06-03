@@ -6,7 +6,7 @@ import { AcpProvider } from "../providers/acp/index.js";
 import type { ProviderEvent } from "../providers/base.js";
 import { MulticaDaemonClient } from "./client.js";
 import { buildTaskPrompt } from "./prompt.js";
-import type { MulticaTaskWithAgent, TaskMessageInput, TaskUsageEntry } from "./types.js";
+import type { MulticaRuntimeModel, MulticaTaskWithAgent, TaskMessageInput, TaskUsageEntry } from "./types.js";
 
 const log = createLogger("multica-daemon");
 
@@ -58,6 +58,7 @@ export class MulticaDaemon {
       provider: this.options.provider,
       workspaceId: this.options.workspaceId,
       maxConcurrency: 1,
+      models: defaultRuntimeModels(this.options.provider),
     });
     this.options.runtimeId = runtime.runtime.id;
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
@@ -315,6 +316,70 @@ function responseToUsage(provider: string, response: any): TaskUsageEntry[] {
     cacheReadTokens,
     cacheWriteTokens,
   }];
+}
+
+function defaultRuntimeModels(provider: string): MulticaRuntimeModel[] {
+  const normalized = provider.toLowerCase();
+  if (normalized === "codex") {
+    return [
+      {
+        id: "gpt-5.5",
+        label: "GPT-5.5",
+        provider: "openai",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra high" },
+          ],
+          defaultLevel: "medium",
+        },
+      },
+      { id: "gpt-5.5-mini", label: "GPT-5.5 mini", provider: "openai", default: false },
+      { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", default: false },
+      { id: "gpt-5.4-mini", label: "GPT-5.4 mini", provider: "openai", default: false },
+      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", provider: "openai", default: false },
+      { id: "gpt-5", label: "GPT-5", provider: "openai", default: false },
+    ];
+  }
+  if (normalized === "claude") {
+    return [
+      {
+        id: "claude-sonnet-4-6",
+        label: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "max", label: "Max" },
+          ],
+        },
+      },
+      {
+        id: "claude-opus-4-7",
+        label: "Claude Opus 4.7",
+        provider: "anthropic",
+        default: false,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra high" },
+            { value: "max", label: "Max" },
+          ],
+        },
+      },
+      { id: "claude-opus-4-6", label: "Claude Opus 4.6", provider: "anthropic", default: false },
+      { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "anthropic", default: false },
+    ];
+  }
+  return [];
 }
 
 function sleep(ms: number): Promise<void> {

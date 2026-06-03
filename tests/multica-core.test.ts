@@ -103,6 +103,7 @@ describe("Bun Multica core store", () => {
       owner_id: member.id,
       visibility: "public",
       max_concurrency: 2,
+      models: [{ id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true }],
     });
     const first = store.createTask({ agentId: agent.id, prompt: "First" });
     const second = store.createTask({ agentId: agent.id, prompt: "Second" });
@@ -110,6 +111,7 @@ describe("Bun Multica core store", () => {
     expect(runtime.ownerId).toBe(member.id);
     expect(runtime.visibility).toBe("public");
     expect(runtime.maxConcurrency).toBe(2);
+    expect(runtime.models[0].id).toBe("gpt-5.5");
     expect(store.claimTask(runtime.id)?.id).toBe(first.id);
     expect(store.claimTask(runtime.id)?.id).toBe(second.id);
     store.startTask(first.id);
@@ -153,6 +155,15 @@ describe("Bun Multica core store", () => {
     expect(updated.ownerId).toBeNull();
     expect(updated.visibility).toBe("private");
     expect(updated.maxConcurrency).toBe(3);
+
+    const models = store.updateRuntimeModels(runtime.id, [{
+      id: "gpt-5.4",
+      label: "GPT-5.4",
+      provider: "openai",
+      default: false,
+      thinking: { supportedLevels: [{ value: "high", label: "High" }], defaultLevel: "high" },
+    }]);
+    expect(models[0].thinking?.supportedLevels[0].value).toBe("high");
   });
 
   it("updates and archives agents from scheduling surfaces", () => {
@@ -834,6 +845,7 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain('id="usagePage"');
     expect(html).toContain('id="usageSummaryGrid"');
     expect(html).toContain("function renderUsage()");
+    expect(html).toContain("function renderRuntimeModels(runtime)");
     expect(html).toContain("/api/dashboard/usage/daily");
   });
 
@@ -985,6 +997,7 @@ describe("Bun Multica API", () => {
         owner_id: member.id,
         visibility: "public",
         max_concurrency: 2,
+        models: [{ id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true }],
       }),
     });
     expect(created.status).toBe(201);
@@ -992,6 +1005,17 @@ describe("Bun Multica API", () => {
     expect(createdBody.runtime.ownerId).toBe(member.id);
     expect(createdBody.runtime.visibility).toBe("public");
     expect(createdBody.runtime.maxConcurrency).toBe(2);
+    expect(createdBody.runtime.models[0].default).toBeTrue();
+
+    const models = await app.request("/api/runtimes/rt_api/models");
+    expect((await models.json()).models[0].id).toBe("gpt-5.5");
+
+    const updatedModels = await app.request("/api/multica/runtimes/rt_api/models", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models: [{ id: "gpt-5.4", label: "GPT-5.4", provider: "openai", default: true }] }),
+    });
+    expect((await updatedModels.json()).models[0].id).toBe("gpt-5.4");
 
     const claim = await app.request("/api/daemon/runtimes/rt_api/tasks/claim", { method: "POST" });
     expect((await claim.json()).task.id).toBe(task.id);

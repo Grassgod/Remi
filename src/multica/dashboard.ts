@@ -2988,6 +2988,7 @@ export function renderMulticaDashboardHtml(): string {
             renderMetric(runtime.activeTaskCount || 0, "active") +
             renderMetric(runtime.taskCount || 0, "tasks") +
             renderMetric(formatCompact(tokens), "tokens") +
+            renderMetric((runtime.models || []).length, "models") +
           "</div>" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(ownerLabel(runtime.ownerId)) + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
         "</article>";
@@ -3242,7 +3243,7 @@ export function renderMulticaDashboardHtml(): string {
             "<div class=\\"detail-grid\\">" +
               "<label>Name<input id=\\"agentEditName\\" value=\\"" + escAttr(agent.name || "") + "\\" required></label>" +
               "<label>Provider<select id=\\"agentEditProvider\\"><option value=\\"claude\\" " + (agent.provider === "claude" ? "selected" : "") + ">Claude</option><option value=\\"codex\\" " + (agent.provider === "codex" ? "selected" : "") + ">Codex</option></select></label>" +
-              "<label>Model<input id=\\"agentEditModel\\" value=\\"" + escAttr(agent.model || "") + "\\" placeholder=\\"Optional\\"></label>" +
+              "<label>Model<input id=\\"agentEditModel\\" value=\\"" + escAttr(agent.model || "") + "\\" list=\\"agentModelOptions\\" placeholder=\\"Optional\\"><datalist id=\\"agentModelOptions\\">" + runtimeModelOptions(agent.provider) + "</datalist></label>" +
               "<label>Working directory<input id=\\"agentEditCwd\\" value=\\"" + escAttr(agent.cwd || "") + "\\" placeholder=\\"Optional\\"></label>" +
             "</div>" +
             "<label>Allowed tools<input id=\\"agentAllowedTools\\" value=\\"" + escAttr(tools) + "\\" placeholder=\\"Read, Bash, Edit\\"></label>" +
@@ -3306,7 +3307,19 @@ export function renderMulticaDashboardHtml(): string {
             renderCell("Output tokens", formatCompact(runtime.outputTokens || 0)) +
           "</div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Usage by model</div><div class=\\"message-list\\">" + renderRuntimeUsageRows() + "</div></div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Available models</div><div class=\\"message-list\\">" + renderRuntimeModels(runtime) + "</div></div>" +
         "</div>";
+    }
+
+    function renderRuntimeModels(runtime) {
+      const models = runtime.models || [];
+      if (!models.length) return "<div class=\\"empty-column\\">No models reported</div>";
+      return models.map(model =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(model.label || model.id) + "</span><span>" + esc(model.provider || runtime.provider) + "</span>" + (model.default ? "<span>default</span>" : "") + "</div>" +
+          "<div class=\\"message-content\\">" + esc(model.id) + (model.thinking?.supportedLevels?.length ? " / " + esc(model.thinking.supportedLevels.map(level => level.label || level.value).join(", ")) : "") + "</div>" +
+        "</div>"
+      ).join("");
     }
 
     function renderSkillDrawer(options = {}) {
@@ -3907,6 +3920,20 @@ export function renderMulticaDashboardHtml(): string {
       return ["private", "public"].map(value =>
         "<option value=\\"" + value + "\\" " + (value === current ? "selected" : "") + ">" + value + "</option>"
       ).join("");
+    }
+
+    function runtimeModelOptions(provider) {
+      const seen = new Set();
+      return state.runtimes
+        .filter(runtime => !provider || runtime.provider === provider || runtime.provider === "any")
+        .flatMap(runtime => runtime.models || [])
+        .filter(model => {
+          if (!model.id || seen.has(model.id)) return false;
+          seen.add(model.id);
+          return true;
+        })
+        .map(model => "<option value=\\"" + escAttr(model.id) + "\\">" + esc(model.label || model.id) + "</option>")
+        .join("");
     }
 
     function refreshSquadMemberOptions() {
