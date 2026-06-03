@@ -10,6 +10,7 @@ import type {
   CreateAutopilotInput,
   CreateChatSessionInput,
   CreateAttachmentInput,
+  CreateFeedbackInput,
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
@@ -51,6 +52,7 @@ import type {
   MulticaIssuePriority,
   MulticaIssueSearchResult,
   MulticaGitHubChecksConclusion,
+  MulticaFeedback,
   MulticaGitHubPullRequest,
   MulticaGitHubPullRequestState,
   MulticaGitHubSettings,
@@ -120,6 +122,8 @@ const TERMINAL_STATUSES: MulticaTaskStatus[] = ["completed", "failed", "cancelle
 const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const MAX_ISSUE_METADATA_KEYS = 50;
 const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
+const FEEDBACK_MAX_MESSAGE_LENGTH = 10_000;
+const FEEDBACK_HOURLY_RATE_LIMIT = 10;
 
 export class MulticaStore {
   private db: Database;
@@ -289,6 +293,19 @@ export class MulticaStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY(workspace_id, member_id)
       );
+
+      CREATE TABLE IF NOT EXISTS multica_feedback (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        user_id TEXT NOT NULL DEFAULT 'local',
+        member_id TEXT,
+        message TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_feedback_user_created ON multica_feedback(user_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_multica_feedback_workspace_created ON multica_feedback(workspace_id, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_github_settings (
         workspace_id TEXT PRIMARY KEY,
@@ -1126,6 +1143,51 @@ export class MulticaStore {
       [workspaceId, memberId ?? "", toJson(preferences), now],
     );
     return this.getNotificationPreferences({ workspaceId, memberId });
+  }
+
+  createFeedback(input: CreateFeedbackInput): MulticaFeedback {
+    const message = String(input.message ?? "").trim();
+    if (!message) throw new Error("message is required");
+    if (message.length > FEEDBACK_MAX_MESSAGE_LENGTH) throw new Error("message too long");
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const memberId = cleanOptionalString(input.memberId ?? input.member_id);
+    const userId = cleanOptionalString(input.userId ?? input.user_id) ?? memberId ?? "local";
+    const recentCount = this.countRecentFeedbackByUser(userId);
+    if (recentCount >= FEEDBACK_HOURLY_RATE_LIMIT) {
+      throw new Error("too many feedback submissions, please try again later");
+    }
+    const metadata = normalizeFeedbackMetadata({
+      ...(input.metadata ?? {}),
+      ...(input.url != null ? { url: input.url } : {}),
+    });
+    const id = input.id ?? createId("fdb");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_feedback (
+        id, workspace_id, user_id, member_id, message, metadata, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, userId, memberId, message, toJson(metadata), now],
+    );
+    return this.getFeedback(id)!;
+  }
+
+  getFeedback(id: string): MulticaFeedback | null {
+    const row = this.db.query("SELECT * FROM multica_feedback WHERE id = ?").get(id) as Row | null;
+    return row ? toFeedback(row) : null;
+  }
+
+  listFeedback(workspaceId?: string | null): MulticaFeedback[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_feedback WHERE workspace_id = ? ORDER BY created_at DESC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_feedback ORDER BY created_at DESC").all() as Row[];
+    return rows.map(toFeedback);
+  }
+
+  countRecentFeedbackByUser(userId: string, since = new Date(Date.now() - 60 * 60 * 1000).toISOString()): number {
+    const row = this.db.query(
+      "SELECT COUNT(*) AS count FROM multica_feedback WHERE user_id = ? AND created_at >= ?",
+    ).get(userId, since) as Row | null;
+    return Number(row?.count ?? 0);
   }
 
   getGitHubSettings(workspaceId = "local"): MulticaGitHubSettings {
@@ -5212,6 +5274,31 @@ function cleanOptionalLocalSkillString(value: string | null | undefined): string
   return trimmed || null;
 }
 
+function cleanOptionalString(value: unknown): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed || null;
+}
+
+function normalizeFeedbackMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    const cleanKey = key.trim();
+    if (!cleanKey) continue;
+    if (
+      typeof rawValue === "string"
+      || typeof rawValue === "number"
+      || typeof rawValue === "boolean"
+      || rawValue === null
+    ) {
+      metadata[cleanKey] = rawValue;
+    }
+  }
+  if (Buffer.byteLength(toJson(metadata), "utf8") > 8 * 1024) {
+    throw new Error("metadata exceeds the 8KB size limit");
+  }
+  return metadata;
+}
+
 function withRuntimeLiveness(runtime: MulticaRuntime): MulticaRuntime {
   if (runtime.status === "offline") return runtime;
   if (!runtime.lastHeartbeatAt) return { ...runtime, status: "offline" };
@@ -5298,6 +5385,18 @@ function toAccessToken(row: Row): MulticaAccessToken {
     lastUsedAt: nullableString(row.last_used_at),
     expiresAt: nullableString(row.expires_at),
     revokedAt: nullableString(row.revoked_at),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toFeedback(row: Row): MulticaFeedback {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    userId: String(row.user_id ?? "local"),
+    memberId: nullableString(row.member_id),
+    message: String(row.message ?? ""),
+    metadata: parseJson(row.metadata, {}),
     createdAt: String(row.created_at),
   };
 }

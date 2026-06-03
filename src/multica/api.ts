@@ -20,6 +20,7 @@ import type {
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateChatSessionInput,
+  CreateFeedbackInput,
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
@@ -95,6 +96,12 @@ type NormalizedGitHubPullRequestBody = {
   changedFiles: number;
 };
 
+class MulticaApiError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 409 | 413 | 429) {
+    super(message);
+  }
+}
+
 export interface MulticaApiOptions {
   store?: MulticaStore;
   scheduler?: MulticaScheduler | null;
@@ -121,10 +128,13 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   }
 
   app.onError((err, c) => {
-    log.error(err.message);
     if (err instanceof SkillImportError) {
       return c.json({ error: err.message }, err.status as 400 | 502);
     }
+    if (err instanceof MulticaApiError) {
+      return c.json({ error: err.message }, err.status);
+    }
+    log.error(err.message);
     return c.json({ error: err.message }, 500);
   });
 
@@ -290,6 +300,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? body,
     }));
+  });
+  app.post("/api/multica/feedback", async (c) => {
+    const body = await readJson<CreateFeedbackInput>(c);
+    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
+    return c.json({ feedback }, 201);
+  });
+  app.get("/api/multica/feedback", (c) => {
+    const feedback = store.listFeedback(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    return c.json({ feedback, total: feedback.length });
+  });
+  app.post("/api/feedback", async (c) => {
+    const body = await readJson<CreateFeedbackInput>(c);
+    const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
+    return c.json({ id: feedback.id, created_at: feedback.createdAt }, 201);
   });
   app.get("/api/multica/github/settings", (c) => {
     return c.json({ settings: store.getGitHubSettings(c.req.query("workspaceId") ?? "local") });
@@ -1327,6 +1351,35 @@ function issueListQuery(c: { req: { query: (name: string) => string | undefined 
 
 function splitQueryList(value: string | undefined): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function withFeedbackRequestMetadata(
+  input: CreateFeedbackInput,
+  c: { req: { header: (name: string) => string | undefined } },
+): CreateFeedbackInput {
+  const metadata: Record<string, unknown> = {
+    ...(input.metadata ?? {}),
+    platform: c.req.header("x-multica-platform") ?? c.req.header("x-remi-platform") ?? null,
+    version: c.req.header("x-multica-version") ?? c.req.header("x-remi-version") ?? null,
+    os: c.req.header("x-multica-os") ?? c.req.header("x-remi-os") ?? null,
+    user_agent: c.req.header("user-agent") ?? null,
+  };
+  return { ...input, metadata };
+}
+
+function createFeedbackOrApiError(store: MulticaStore, input: CreateFeedbackInput): ReturnType<MulticaStore["createFeedback"]> {
+  try {
+    return store.createFeedback(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "message is required" || message === "message too long" || message === "metadata exceeds the 8KB size limit") {
+      throw new MulticaApiError(message, 400);
+    }
+    if (message === "too many feedback submissions, please try again later") {
+      throw new MulticaApiError(message, 429);
+    }
+    throw error;
+  }
 }
 
 function safeQuickCreateIssue(store: MulticaStore, input: QuickCreateIssueInput): ReturnType<MulticaStore["quickCreateIssue"]> | { error: string } {

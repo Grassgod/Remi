@@ -2240,6 +2240,68 @@ describe("Bun Multica API", () => {
     expect((await listed.json()).preferences.assignments).toBe("muted");
   });
 
+  it("serves feedback endpoints with validation and rate limiting", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/feedback", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "remi-test",
+        "x-multica-platform": "desktop",
+        "x-multica-version": "1.2.3",
+      },
+      body: JSON.stringify({
+        message: "  Love the product, dark mode flashes on startup  ",
+        url: "http://localhost:6130/issues",
+        workspace_id: "local",
+        member_id: "mem_feedback",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.id).toStartWith("fdb_");
+    expect(createdBody.created_at).toBeString();
+
+    const feedback = store.listFeedback("local")[0];
+    expect(feedback.message).toBe("Love the product, dark mode flashes on startup");
+    expect(feedback.memberId).toBe("mem_feedback");
+    expect(feedback.userId).toBe("mem_feedback");
+    expect(feedback.metadata.url).toBe("http://localhost:6130/issues");
+    expect(feedback.metadata.platform).toBe("desktop");
+    expect(feedback.metadata.version).toBe("1.2.3");
+    expect(feedback.metadata.user_agent).toBe("remi-test");
+
+    const multicaFeedback = await app.request("/api/multica/feedback");
+    const multicaFeedbackBody = await multicaFeedback.json();
+    expect(multicaFeedbackBody.total).toBe(1);
+    expect(multicaFeedbackBody.feedback[0].id).toBe(createdBody.id);
+
+    const empty = await app.request("/api/multica/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    expect(empty.status).toBe(400);
+
+    for (let i = 0; i < 9; i++) {
+      const response = await app.request("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: `feedback #${i}`, member_id: "mem_feedback" }),
+      });
+      expect(response.status).toBe(201);
+    }
+
+    const overLimit = await app.request("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "one too many", member_id: "mem_feedback" }),
+    });
+    expect(overLimit.status).toBe(429);
+  });
+
   it("serves GitHub settings, pull request, and webhook endpoints", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

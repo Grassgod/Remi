@@ -260,6 +260,16 @@ export interface MulticaNotificationPreferenceResponse {
   updatedAt: string | null;
 }
 
+export interface MulticaFeedback {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  memberId: string | null;
+  message: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface MulticaGitHubSettings {
   workspaceId: string;
   enabled: boolean;
@@ -306,6 +316,19 @@ export interface CreateAccessTokenInput {
   type?: MulticaAccessTokenType | string;
   expiresInDays?: number | null;
   expires_in_days?: number | null;
+}
+
+export interface CreateFeedbackInput {
+  id?: string;
+  message: string;
+  url?: string | null;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  userId?: string | null;
+  user_id?: string | null;
+  memberId?: string | null;
+  member_id?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface MulticaProject {
