@@ -3,7 +3,18 @@ import { cors } from "hono/cors";
 import { createLogger } from "../logger.js";
 import { renderMulticaDashboardHtml } from "./dashboard.js";
 import { MulticaStore } from "./store.js";
-import type { CreateAgentInput, CreateIssueInput, CreateTaskInput, RegisterRuntimeInput } from "./types.js";
+import type {
+  AddSquadMemberInput,
+  CreateAgentInput,
+  CreateAutopilotInput,
+  CreateIssueInput,
+  CreateProjectInput,
+  CreateSquadInput,
+  CreateTaskInput,
+  RegisterRuntimeInput,
+  RunAutopilotInput,
+  UpdateProjectInput,
+} from "./types.js";
 
 const log = createLogger("multica-api");
 
@@ -61,6 +72,66 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/multica/runtimes/:id/heartbeat", (c) => {
     store.heartbeatRuntime(c.req.param("id"));
     return c.json({ ok: true });
+  });
+
+  app.get("/api/multica/projects", (c) => {
+    const projects = store.listProjects(c.req.query("workspaceId"));
+    return c.json({ projects, total: projects.length });
+  });
+  app.post("/api/multica/projects", async (c) => {
+    const body = await readJson<CreateProjectInput>(c);
+    return c.json({ project: store.createProject(body) }, 201);
+  });
+  app.get("/api/multica/projects/:id", (c) => {
+    const project = store.getProject(c.req.param("id"));
+    if (!project) return c.json({ error: "project not found" }, 404);
+    return c.json({ project });
+  });
+  app.patch("/api/multica/projects/:id", async (c) => {
+    const body = await readJson<UpdateProjectInput>(c);
+    return c.json({ project: store.updateProject(c.req.param("id"), body) });
+  });
+
+  app.get("/api/multica/squads", (c) => {
+    const squads = store.listSquads(c.req.query("workspaceId"));
+    return c.json({ squads, total: squads.length });
+  });
+  app.post("/api/multica/squads", async (c) => {
+    const body = await readJson<CreateSquadInput>(c);
+    return c.json({ squad: store.createSquad(body) }, 201);
+  });
+  app.get("/api/multica/squads/:id", (c) => {
+    const squad = store.getSquad(c.req.param("id"));
+    if (!squad) return c.json({ error: "squad not found" }, 404);
+    return c.json({ squad, members: store.listSquadMembers(squad.id) });
+  });
+  app.get("/api/multica/squads/:id/members", (c) => {
+    return c.json({ members: store.listSquadMembers(c.req.param("id")) });
+  });
+  app.post("/api/multica/squads/:id/members", async (c) => {
+    const body = await readJson<AddSquadMemberInput>(c);
+    return c.json({ member: store.addSquadMember(c.req.param("id"), body) }, 201);
+  });
+
+  app.get("/api/multica/autopilots", (c) => {
+    const autopilots = store.listAutopilots(c.req.query("workspaceId"));
+    return c.json({ autopilots, total: autopilots.length });
+  });
+  app.post("/api/multica/autopilots", async (c) => {
+    const body = await readJson<CreateAutopilotInput>(c);
+    return c.json({ autopilot: store.createAutopilot(body) }, 201);
+  });
+  app.get("/api/multica/autopilots/:id", (c) => {
+    const autopilot = store.getAutopilot(c.req.param("id"));
+    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    return c.json({ autopilot, runs: store.listAutopilotRuns(autopilot.id) });
+  });
+  app.get("/api/multica/autopilots/:id/runs", (c) => {
+    return c.json({ runs: store.listAutopilotRuns(c.req.param("id")) });
+  });
+  app.post("/api/multica/autopilots/:id/run", async (c) => {
+    const body = await readJson<RunAutopilotInput>(c);
+    return c.json({ run: store.runAutopilot(c.req.param("id"), body) }, 201);
   });
 
   app.get("/api/multica/issues", (c) => c.json({ issues: store.listIssues() }));
@@ -180,4 +251,3 @@ async function readJson<T>(c: { req: { json: () => Promise<unknown> } }): Promis
     return {} as T;
   }
 }
-

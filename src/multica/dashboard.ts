@@ -1235,6 +1235,21 @@ export function renderMulticaDashboardHtml(): string {
           <div class="entity-grid" id="agentsGrid"></div>
         </div>
       </section>
+      <section class="page" id="projectsPage">
+        <div class="collection">
+          <div class="entity-grid" id="projectsGrid"></div>
+        </div>
+      </section>
+      <section class="page" id="autopilotsPage">
+        <div class="collection">
+          <div class="entity-grid" id="autopilotsGrid"></div>
+        </div>
+      </section>
+      <section class="page" id="squadsPage">
+        <div class="collection">
+          <div class="entity-grid" id="squadsGrid"></div>
+        </div>
+      </section>
       <section class="page" id="runtimesPage">
         <div class="collection">
           <div class="entity-grid" id="runtimesGrid"></div>
@@ -1279,11 +1294,19 @@ export function renderMulticaDashboardHtml(): string {
         </form>
       </div>
 
+      <div class="floating-panel agent-sheet" id="entitySheet">
+        <div class="sheet-head">
+          <span id="entitySheetTitle">New</span>
+          <button class="outline" id="closeEntitySheet">Close</button>
+        </div>
+        <form class="sheet-form" id="entityForm"></form>
+      </div>
+
       <aside class="drawer" id="taskDrawer"></aside>
 
       <div class="command-overlay" id="searchOverlay">
         <div class="command-panel">
-          <input class="command-input" id="searchInput" placeholder="Search issues, agents, runtimes">
+          <input class="command-input" id="searchInput" placeholder="Search issues, projects, agents, runtimes">
           <div class="command-results" id="searchResults"></div>
         </div>
       </div>
@@ -1315,10 +1338,10 @@ export function renderMulticaDashboardHtml(): string {
       inbox: { title: "Inbox", group: "Personal", placeholder: "Inbox", text: "No inbox items." },
       "my-issues": { title: "My Issues", group: "Personal", placeholder: "My Issues", text: "No assigned issues." },
       issues: { title: "Issues", group: "Workspace" },
-      projects: { title: "Projects", group: "Workspace", placeholder: "Projects", text: "No projects." },
-      autopilots: { title: "Autopilots", group: "Workspace", placeholder: "Autopilots", text: "No autopilots." },
+      projects: { title: "Projects", group: "Workspace" },
+      autopilots: { title: "Autopilots", group: "Workspace" },
       agents: { title: "Agents", group: "Workspace" },
-      squads: { title: "Squads", group: "Workspace", placeholder: "Squads", text: "No squads." },
+      squads: { title: "Squads", group: "Workspace" },
       usage: { title: "Usage", group: "Workspace", placeholder: "Usage", text: "No usage data." },
       runtimes: { title: "Runtimes", group: "Configure" },
       skills: { title: "Skills", group: "Configure", placeholder: "Skills", text: "No skills." },
@@ -1329,6 +1352,9 @@ export function renderMulticaDashboardHtml(): string {
       agents: [],
       tasks: [],
       runtimes: [],
+      projects: [],
+      squads: [],
+      autopilots: [],
       mode: "board",
       activeOnly: false,
       agentFilter: "all",
@@ -1344,6 +1370,9 @@ export function renderMulticaDashboardHtml(): string {
       pageTitle: document.getElementById("pageTitle"),
       issuesPage: document.getElementById("issuesPage"),
       agentsPage: document.getElementById("agentsPage"),
+      projectsPage: document.getElementById("projectsPage"),
+      autopilotsPage: document.getElementById("autopilotsPage"),
+      squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
       placeholderPage: document.getElementById("placeholderPage"),
       placeholderTitle: document.getElementById("placeholderTitle"),
@@ -1351,6 +1380,9 @@ export function renderMulticaDashboardHtml(): string {
       board: document.getElementById("board"),
       list: document.getElementById("list"),
       agentsGrid: document.getElementById("agentsGrid"),
+      projectsGrid: document.getElementById("projectsGrid"),
+      autopilotsGrid: document.getElementById("autopilotsGrid"),
+      squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
       agentSelect: document.getElementById("agentSelect"),
       chatAgent: document.getElementById("chatAgent"),
@@ -1360,6 +1392,9 @@ export function renderMulticaDashboardHtml(): string {
       prompt: document.getElementById("prompt"),
       sheet: document.getElementById("createSheet"),
       agentSheet: document.getElementById("agentSheet"),
+      entitySheet: document.getElementById("entitySheet"),
+      entitySheetTitle: document.getElementById("entitySheetTitle"),
+      entityForm: document.getElementById("entityForm"),
       taskDrawer: document.getElementById("taskDrawer"),
       searchOverlay: document.getElementById("searchOverlay"),
       searchInput: document.getElementById("searchInput"),
@@ -1382,6 +1417,8 @@ export function renderMulticaDashboardHtml(): string {
     document.getElementById("taskForm").addEventListener("submit", createTask);
     document.getElementById("closeAgentSheet").addEventListener("click", closeAgentSheet);
     document.getElementById("agentForm").addEventListener("submit", createAgent);
+    document.getElementById("closeEntitySheet").addEventListener("click", closeEntitySheet);
+    document.getElementById("entityForm").addEventListener("submit", submitEntityForm);
     document.getElementById("searchTrigger").addEventListener("click", openSearch);
     document.getElementById("searchOverlay").addEventListener("click", event => {
       if (event.target === els.searchOverlay) closeSearch();
@@ -1414,14 +1451,20 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, tasks, runtimes] = await Promise.all([
+        const [agents, tasks, runtimes, projects, squads, autopilots] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/tasks"),
-          api("/api/multica/runtimes")
+          api("/api/multica/runtimes"),
+          api("/api/multica/projects"),
+          api("/api/multica/squads"),
+          api("/api/multica/autopilots")
         ]);
         state.agents = agents.agents || [];
         state.tasks = tasks.tasks || [];
         state.runtimes = runtimes.runtimes || [];
+        state.projects = projects.projects || [];
+        state.squads = squads.squads || [];
+        state.autopilots = autopilots.autopilots || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
       } catch (err) {
@@ -1518,6 +1561,7 @@ export function renderMulticaDashboardHtml(): string {
 
     function openSheet() {
       closeAgentSheet();
+      closeEntitySheet();
       els.sheet.classList.add("open");
       setTimeout(() => els.prompt.focus(), 50);
     }
@@ -1528,12 +1572,93 @@ export function renderMulticaDashboardHtml(): string {
 
     function openAgentSheet() {
       closeSheet();
+      closeEntitySheet();
       els.agentSheet.classList.add("open");
       setTimeout(() => document.getElementById("agentName").focus(), 50);
     }
 
     function closeAgentSheet() {
       els.agentSheet.classList.remove("open");
+    }
+
+    function openEntitySheet(kind) {
+      closeSheet();
+      closeAgentSheet();
+      els.entitySheet.dataset.kind = kind;
+      els.entitySheetTitle.textContent = kind === "project" ? "New project" : kind === "squad" ? "New squad" : "New autopilot";
+      els.entityForm.innerHTML = entityFormHtml(kind);
+      els.entitySheet.classList.add("open");
+      setTimeout(() => els.entityForm.querySelector("input, textarea, select")?.focus(), 50);
+    }
+
+    function closeEntitySheet() {
+      els.entitySheet.classList.remove("open");
+      els.entityForm.innerHTML = "";
+    }
+
+    async function submitEntityForm(event) {
+      event.preventDefault();
+      const kind = els.entitySheet.dataset.kind;
+      try {
+        if (kind === "project") {
+          await api("/api/multica/projects", {
+            method: "POST",
+            body: JSON.stringify({
+              title: document.getElementById("entityTitle").value,
+              description: document.getElementById("entityDescription").value || null,
+              priority: document.getElementById("entityPriority").value,
+              status: document.getElementById("entityStatus").value
+            })
+          });
+        } else if (kind === "squad") {
+          const leaderId = document.getElementById("entityLeader").value || null;
+          await api("/api/multica/squads", {
+            method: "POST",
+            body: JSON.stringify({
+              name: document.getElementById("entityTitle").value,
+              description: document.getElementById("entityDescription").value || "",
+              instructions: document.getElementById("entityInstructions").value || "",
+              leaderId,
+              memberIds: leaderId ? [leaderId] : []
+            })
+          });
+        } else if (kind === "autopilot") {
+          await api("/api/multica/autopilots", {
+            method: "POST",
+            body: JSON.stringify({
+              title: document.getElementById("entityTitle").value,
+              description: document.getElementById("entityDescription").value || null,
+              projectId: document.getElementById("entityProject").value || null,
+              assigneeType: document.getElementById("entityAssigneeType").value,
+              assigneeId: document.getElementById("entityAssignee").value,
+              executionMode: document.getElementById("entityMode").value,
+              issueTitleTemplate: document.getElementById("entityPrompt").value || null,
+              triggerKind: document.getElementById("entityTrigger").value
+            })
+          });
+        }
+        closeEntitySheet();
+        await refresh();
+      } catch (err) {
+        els.entityForm.querySelector(".notice").textContent = String(err.message || err);
+        els.entityForm.querySelector(".notice").classList.add("show");
+      }
+    }
+
+    async function runAutopilot(id) {
+      try {
+        const result = await api("/api/multica/autopilots/" + encodeURIComponent(id) + "/run", {
+          method: "POST",
+          body: JSON.stringify({ source: "manual" })
+        });
+        await refresh();
+        if (result.run?.taskId) {
+          switchPage("issues");
+          openTask(result.run.taskId);
+        }
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
     }
 
     function openSearch() {
@@ -1579,6 +1704,7 @@ export function renderMulticaDashboardHtml(): string {
       state.page = page || "issues";
       closeSheet();
       closeAgentSheet();
+      closeEntitySheet();
       render();
     }
 
@@ -1598,6 +1724,9 @@ export function renderMulticaDashboardHtml(): string {
       renderAgentSelects();
       renderBoard();
       renderList();
+      renderProjects();
+      renderSquads();
+      renderAutopilots();
       renderAgents();
       renderRuntimes();
       renderRuntimeStrip();
@@ -1614,8 +1743,11 @@ export function renderMulticaDashboardHtml(): string {
       });
       els.issuesPage.classList.toggle("active", state.page === "issues");
       els.agentsPage.classList.toggle("active", state.page === "agents");
+      els.projectsPage.classList.toggle("active", state.page === "projects");
+      els.autopilotsPage.classList.toggle("active", state.page === "autopilots");
+      els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
-      const isPlaceholder = !["issues", "agents", "runtimes"].includes(state.page);
+      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -1667,6 +1799,25 @@ export function renderMulticaDashboardHtml(): string {
         document.getElementById("seedCodex").addEventListener("click", () => seed("codex"));
         document.getElementById("refresh").addEventListener("click", () => refresh({ agent: true }));
         document.getElementById("newAgent").addEventListener("click", openAgentSheet);
+      } else if (state.page === "projects") {
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\"><span class=\\"status-badge\\">" + state.projects.length + " projects</span><span class=\\"status-badge\\">" + state.tasks.length + " issues</span></div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newProject\\">New project</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newProject").addEventListener("click", () => openEntitySheet("project"));
+      } else if (state.page === "squads") {
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\"><span class=\\"status-badge\\">" + state.squads.length + " squads</span><span class=\\"status-badge\\">" + state.agents.length + " agents</span></div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newSquad\\">New squad</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newSquad").addEventListener("click", () => openEntitySheet("squad"));
+      } else if (state.page === "autopilots") {
+        const active = state.autopilots.filter(a => a.status === "active").length;
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\"><span class=\\"status-badge\\">" + state.autopilots.length + " autopilots</span><span class=\\"status-badge completed\\">" + active + " active</span></div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newAutopilot\\">New autopilot</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newAutopilot").addEventListener("click", () => openEntitySheet("autopilot"));
       } else if (state.page === "runtimes") {
         els.toolbar.innerHTML =
           "<div class=\\"toolbar-left\\">" +
@@ -1753,6 +1904,83 @@ export function renderMulticaDashboardHtml(): string {
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
           "<span class=\\"list-right\\">" + esc(agent ? agent.name : "agent") + "</span>" +
         "</div>";
+      }).join("");
+    }
+
+    function renderProjects() {
+      if (!state.projects.length) {
+        els.projectsGrid.innerHTML = "<div class=\\"empty-column\\">No projects</div>";
+        return;
+      }
+      els.projectsGrid.innerHTML = state.projects.map(project => {
+        const progress = project.issueCount > 0 ? Math.round((project.doneCount / project.issueCount) * 100) : 0;
+        const lead = project.leadId ? state.agents.find(a => a.id === project.leadId) : null;
+        return "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\">" +
+            "<span class=\\"agent-avatar\\">" + esc((project.icon || project.title || "P").slice(0, 1).toUpperCase()) + "</span>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(project.title) + "</div><div class=\\"entity-subtitle\\">" + esc(project.status) + " / " + esc(project.priority) + "</div></div>" +
+          "</div>" +
+          "<div class=\\"entity-body\\">" + esc(project.description || "No description") + "</div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(project.issueCount || 0, "issues") +
+            renderMetric(project.doneCount || 0, "done") +
+            renderMetric(progress + "%", "progress") +
+          "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            (lead ? "<span class=\\"status-badge\\">" + esc(lead.name) + "</span>" : "") +
+            "<span class=\\"status-badge\\">" + esc(timeAgo(project.updatedAt)) + "</span>" +
+          "</div>" +
+        "</article>";
+      }).join("");
+    }
+
+    function renderSquads() {
+      if (!state.squads.length) {
+        els.squadsGrid.innerHTML = "<div class=\\"empty-column\\">No squads</div>";
+        return;
+      }
+      els.squadsGrid.innerHTML = state.squads.map(squad => {
+        const leader = squad.leaderId ? state.agents.find(a => a.id === squad.leaderId) : null;
+        const active = state.tasks.filter(t => leader && t.agentId === leader.id && isActiveTask(t)).length;
+        return "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\">" +
+            "<span class=\\"agent-avatar\\">" + esc(initials(squad.name)) + "</span>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(squad.name) + "</div><div class=\\"entity-subtitle\\">" + esc(leader ? leader.name : "No leader") + "</div></div>" +
+          "</div>" +
+          "<div class=\\"entity-body\\">" + esc(squad.description || squad.instructions || "No description") + "</div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(squad.memberCount || 0, "members") +
+            renderMetric(active, "active") +
+            renderMetric(timeAgo(squad.updatedAt), "updated") +
+          "</div>" +
+        "</article>";
+      }).join("");
+    }
+
+    function renderAutopilots() {
+      if (!state.autopilots.length) {
+        els.autopilotsGrid.innerHTML = "<div class=\\"empty-column\\">No autopilots</div>";
+        return;
+      }
+      els.autopilotsGrid.innerHTML = state.autopilots.map(autopilot => {
+        const assignee = autopilot.assigneeType === "squad"
+          ? state.squads.find(s => s.id === autopilot.assigneeId)
+          : state.agents.find(a => a.id === autopilot.assigneeId);
+        const project = autopilot.projectId ? state.projects.find(p => p.id === autopilot.projectId) : null;
+        return "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\">" +
+            "<span class=\\"agent-avatar\\">" + esc(autopilot.triggerKind.slice(0, 1).toUpperCase()) + "</span>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(autopilot.title) + "</div><div class=\\"entity-subtitle\\">" + esc(autopilot.triggerKind) + " / " + esc(autopilot.executionMode) + "</div></div>" +
+            "<span class=\\"status-badge " + (autopilot.status === "active" ? "completed" : "") + "\\">" + esc(autopilot.status) + "</span>" +
+          "</div>" +
+          "<div class=\\"entity-body\\">" + esc(autopilot.issueTitleTemplate || autopilot.description || "No prompt") + "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            "<span class=\\"status-badge\\">" + esc(autopilot.assigneeType) + ": " + esc(assignee ? (assignee.name || assignee.title) : "missing") + "</span>" +
+            (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") +
+            (autopilot.lastRunAt ? "<span class=\\"status-badge\\">" + esc(timeAgo(autopilot.lastRunAt)) + "</span>" : "") +
+          "</div>" +
+          "<button class=\\"outline\\" onclick=\\"runAutopilot('" + escAttr(autopilot.id) + "')\\">Run</button>" +
+        "</article>";
       }).join("");
     }
 
@@ -1877,10 +2105,16 @@ export function renderMulticaDashboardHtml(): string {
       const q = els.searchInput.value.trim().toLowerCase();
       const rows = [];
       pages.issues && rows.push({ type: "Page", title: "Issues", subtitle: state.tasks.length + " issues", action: () => switchPage("issues") });
+      pages.projects && rows.push({ type: "Page", title: "Projects", subtitle: state.projects.length + " projects", action: () => switchPage("projects") });
+      pages.autopilots && rows.push({ type: "Page", title: "Autopilots", subtitle: state.autopilots.length + " autopilots", action: () => switchPage("autopilots") });
       pages.agents && rows.push({ type: "Page", title: "Agents", subtitle: state.agents.length + " agents", action: () => switchPage("agents") });
+      pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
       state.tasks.forEach(t => rows.push({ type: "Issue", title: t.prompt || shortId(t.id), subtitle: shortId(t.id) + " / " + statusLabel(t.status), action: () => { switchPage("issues"); openTask(t.id); } }));
+      state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
+      state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => switchPage("agents") }));
+      state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => switchPage("squads") }));
       state.runtimes.forEach(r => rows.push({ type: "Runtime", title: r.name, subtitle: r.provider + " / " + r.status, action: () => switchPage("runtimes") }));
       const filtered = rows.filter(row => !q || (row.title + " " + row.subtitle + " " + row.type).toLowerCase().includes(q)).slice(0, 18);
       els.searchResults.innerHTML = filtered.length ? filtered.map((row, index) =>
@@ -1910,6 +2144,51 @@ export function renderMulticaDashboardHtml(): string {
 
     function renderMetric(value, label) {
       return "<div class=\\"metric\\"><div class=\\"metric-value\\">" + esc(value) + "</div><div class=\\"metric-label\\">" + esc(label) + "</div></div>";
+    }
+
+    function entityFormHtml(kind) {
+      if (kind === "project") {
+        return "<label>Title<input id=\\"entityTitle\\" required placeholder=\\"Project title\\"></label>" +
+          "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
+          "<label>Status<select id=\\"entityStatus\\"><option value=\\"planned\\">planned</option><option value=\\"in_progress\\">in_progress</option><option value=\\"paused\\">paused</option><option value=\\"completed\\">completed</option></select></label>" +
+          "<label>Priority<select id=\\"entityPriority\\"><option value=\\"none\\">none</option><option value=\\"low\\">low</option><option value=\\"medium\\">medium</option><option value=\\"high\\">high</option><option value=\\"urgent\\">urgent</option></select></label>" +
+          "<button class=\\"primary\\" type=\\"submit\\">Create project</button><div class=\\"notice\\"></div>";
+      }
+      if (kind === "squad") {
+        return "<label>Name<input id=\\"entityTitle\\" required placeholder=\\"Squad name\\"></label>" +
+          "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
+          "<label>Leader<select id=\\"entityLeader\\">" + agentOptions(true) + "</select></label>" +
+          "<label>Instructions<textarea id=\\"entityInstructions\\" placeholder=\\"Optional\\"></textarea></label>" +
+          "<button class=\\"primary\\" type=\\"submit\\">Create squad</button><div class=\\"notice\\"></div>";
+      }
+      return "<label>Title<input id=\\"entityTitle\\" required placeholder=\\"Autopilot title\\"></label>" +
+        "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
+        "<label>Project<select id=\\"entityProject\\">" + projectOptions(true) + "</select></label>" +
+        "<label>Assignee type<select id=\\"entityAssigneeType\\" onchange=\\"refreshAssigneeOptions()\\"><option value=\\"agent\\">agent</option><option value=\\"squad\\">squad</option></select></label>" +
+        "<label>Assignee<select id=\\"entityAssignee\\">" + agentOptions(false) + "</select></label>" +
+        "<label>Mode<select id=\\"entityMode\\"><option value=\\"create_issue\\">create_issue</option><option value=\\"run_only\\">run_only</option></select></label>" +
+        "<label>Trigger<select id=\\"entityTrigger\\"><option value=\\"manual\\">manual</option><option value=\\"schedule\\">schedule</option><option value=\\"webhook\\">webhook</option><option value=\\"api\\">api</option></select></label>" +
+        "<label>Prompt<textarea id=\\"entityPrompt\\" placeholder=\\"Optional\\"></textarea></label>" +
+        "<button class=\\"primary\\" type=\\"submit\\">Create autopilot</button><div class=\\"notice\\"></div>";
+    }
+
+    function agentOptions(allowEmpty) {
+      const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
+      return empty + state.agents.map(a => "<option value=\\"" + escAttr(a.id) + "\\">" + esc(a.name) + " / " + esc(a.provider) + "</option>").join("");
+    }
+
+    function projectOptions(allowEmpty) {
+      const empty = allowEmpty ? "<option value=\\"\\">None</option>" : "";
+      return empty + state.projects.map(p => "<option value=\\"" + escAttr(p.id) + "\\">" + esc(p.title) + "</option>").join("");
+    }
+
+    function squadOptions() {
+      return state.squads.map(s => "<option value=\\"" + escAttr(s.id) + "\\">" + esc(s.name) + "</option>").join("");
+    }
+
+    function refreshAssigneeOptions() {
+      const type = document.getElementById("entityAssigneeType").value;
+      document.getElementById("entityAssignee").innerHTML = type === "squad" ? squadOptions() : agentOptions(false);
     }
 
     function renderDetailBlock(label, value) {
@@ -1972,6 +2251,9 @@ export function renderMulticaDashboardHtml(): string {
     function agentInitial(agent) {
       return (agent?.name || agent?.provider || "A").slice(0, 1).toUpperCase();
     }
+    function initials(value) {
+      return String(value || "M").split(/\\s+/).filter(Boolean).map(part => part.slice(0, 1)).join("").slice(0, 2).toUpperCase() || "M";
+    }
     function timeAgo(value) {
       const ms = Date.now() - Date.parse(value);
       if (!Number.isFinite(ms)) return value;
@@ -1996,6 +2278,8 @@ export function renderMulticaDashboardHtml(): string {
     window.cancelTask = cancelTask;
     window.openTask = openTask;
     window.closeDrawer = closeDrawer;
+    window.runAutopilot = runAutopilot;
+    window.refreshAssigneeOptions = refreshAssigneeOptions;
   </script>
 </body>
 </html>`;

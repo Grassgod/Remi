@@ -9,6 +9,14 @@ export type MulticaTaskStatus =
   | "cancelled";
 
 export type MulticaRuntimeStatus = "online" | "offline";
+export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
+export type MulticaProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
+export type MulticaSquadMemberType = "agent" | "member";
+export type MulticaAutopilotStatus = "active" | "paused" | "archived";
+export type MulticaAutopilotExecutionMode = "create_issue" | "run_only";
+export type MulticaAutopilotAssigneeType = "agent" | "squad";
+export type MulticaAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
+export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
 
 export interface MulticaSkillFile {
   path: string;
@@ -52,6 +60,22 @@ export interface MulticaRuntime {
   updatedAt: string;
 }
 
+export interface MulticaProject {
+  id: string;
+  workspaceId: string;
+  title: string;
+  description: string | null;
+  icon: string | null;
+  status: MulticaProjectStatus;
+  priority: MulticaProjectPriority;
+  leadType: "member" | "agent" | null;
+  leadId: string | null;
+  issueCount: number;
+  doneCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MulticaIssue {
   id: string;
   title: string;
@@ -62,6 +86,63 @@ export interface MulticaIssue {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaSquad {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string;
+  instructions: string;
+  leaderId: string | null;
+  creatorId: string | null;
+  archivedAt: string | null;
+  memberCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MulticaSquadMember {
+  id: string;
+  squadId: string;
+  memberType: MulticaSquadMemberType;
+  memberId: string;
+  role: string;
+  createdAt: string;
+}
+
+export interface MulticaAutopilot {
+  id: string;
+  workspaceId: string;
+  title: string;
+  description: string | null;
+  projectId: string | null;
+  assigneeType: MulticaAutopilotAssigneeType;
+  assigneeId: string;
+  status: MulticaAutopilotStatus;
+  executionMode: MulticaAutopilotExecutionMode;
+  issueTitleTemplate: string | null;
+  triggerKind: string;
+  triggerLabel: string | null;
+  cronExpression: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MulticaAutopilotRun {
+  id: string;
+  autopilotId: string;
+  source: MulticaAutopilotRunSource;
+  status: MulticaAutopilotRunStatus;
+  issueId: string | null;
+  taskId: string | null;
+  triggeredAt: string;
+  completedAt: string | null;
+  failureReason: string | null;
+  payload: unknown | null;
+  result: unknown | null;
+  createdAt: string;
 }
 
 export interface MulticaTask {
@@ -148,6 +229,67 @@ export interface CreateIssueInput {
   workspaceId?: string | null;
   projectId?: string | null;
   createdBy?: string | null;
+}
+
+export interface CreateProjectInput {
+  id?: string;
+  title: string;
+  description?: string | null;
+  icon?: string | null;
+  workspaceId?: string | null;
+  status?: MulticaProjectStatus;
+  priority?: MulticaProjectPriority;
+  leadType?: "member" | "agent" | null;
+  leadId?: string | null;
+}
+
+export interface UpdateProjectInput {
+  title?: string;
+  description?: string | null;
+  icon?: string | null;
+  status?: MulticaProjectStatus;
+  priority?: MulticaProjectPriority;
+  leadType?: "member" | "agent" | null;
+  leadId?: string | null;
+}
+
+export interface CreateSquadInput {
+  id?: string;
+  name: string;
+  description?: string | null;
+  instructions?: string | null;
+  workspaceId?: string | null;
+  leaderId?: string | null;
+  creatorId?: string | null;
+  memberIds?: string[];
+}
+
+export interface AddSquadMemberInput {
+  memberType: MulticaSquadMemberType;
+  memberId: string;
+  role?: string;
+}
+
+export interface CreateAutopilotInput {
+  id?: string;
+  title: string;
+  description?: string | null;
+  projectId?: string | null;
+  workspaceId?: string | null;
+  assigneeType?: MulticaAutopilotAssigneeType;
+  assigneeId: string;
+  status?: MulticaAutopilotStatus;
+  executionMode?: MulticaAutopilotExecutionMode;
+  issueTitleTemplate?: string | null;
+  triggerKind?: string;
+  triggerLabel?: string | null;
+  cronExpression?: string | null;
+}
+
+export interface RunAutopilotInput {
+  source?: MulticaAutopilotRunSource;
+  prompt?: string | null;
+  payload?: unknown | null;
 }
 
 export interface CreateTaskInput {

@@ -64,6 +64,38 @@ describe("Bun Multica core store", () => {
     expect(recovered?.status).toBe("queued");
     expect(recovered?.runtimeId).toBeNull();
   });
+
+  it("creates projects, squads, and autopilot runs", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const project = store.createProject({ title: "Launch", priority: "high" });
+    const squad = store.createSquad({
+      name: "Core squad",
+      leaderId: agent.id,
+      memberIds: [agent.id],
+    });
+    const autopilot = store.createAutopilot({
+      title: "Triage regressions",
+      projectId: project.id,
+      assigneeType: "squad",
+      assigneeId: squad.id,
+      issueTitleTemplate: "Investigate nightly regression",
+    });
+
+    const run = store.runAutopilot(autopilot.id);
+    expect(run.status).toBe("running");
+    expect(run.issueId).toBeString();
+    expect(run.taskId).toBeString();
+
+    const task = store.getTask(run.taskId!);
+    expect(task?.agentId).toBe(agent.id);
+    expect(task?.prompt).toBe("Investigate nightly regression");
+
+    const updatedProject = store.getProject(project.id);
+    expect(updatedProject?.issueCount).toBe(1);
+    expect(store.listSquadMembers(squad.id)).toHaveLength(1);
+    expect(store.listAutopilotRuns(autopilot.id)[0]?.id).toBe(run.id);
+  });
 });
 
 describe("Bun Multica API", () => {

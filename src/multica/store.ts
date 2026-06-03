@@ -2,19 +2,30 @@ import type { Database } from "bun:sqlite";
 import { getDb } from "../db/index.js";
 import { createId, nowIso } from "./ids.js";
 import type {
+  AddSquadMemberInput,
   CreateAgentInput,
+  CreateAutopilotInput,
   CreateIssueInput,
+  CreateProjectInput,
+  CreateSquadInput,
   CreateTaskInput,
+  MulticaAutopilot,
+  MulticaAutopilotRun,
   MulticaAgent,
   MulticaIssue,
+  MulticaProject,
   MulticaRuntime,
+  MulticaSquad,
+  MulticaSquadMember,
   MulticaTask,
   MulticaTaskMessage,
   MulticaTaskStatus,
   MulticaTaskWithAgent,
   RegisterRuntimeInput,
+  RunAutopilotInput,
   TaskMessageInput,
   TaskUsageEntry,
+  UpdateProjectInput,
 } from "./types.js";
 
 const TERMINAL_STATUSES: MulticaTaskStatus[] = ["completed", "failed", "cancelled"];
@@ -70,6 +81,93 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_projects (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        icon TEXT,
+        status TEXT NOT NULL DEFAULT 'planned',
+        priority TEXT NOT NULL DEFAULT 'none',
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        lead_type TEXT,
+        lead_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_projects_workspace ON multica_projects(workspace_id);
+
+      CREATE TABLE IF NOT EXISTS multica_squads (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        instructions TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        leader_id TEXT,
+        creator_id TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_squads_workspace ON multica_squads(workspace_id);
+
+      CREATE TABLE IF NOT EXISTS multica_squad_members (
+        id TEXT PRIMARY KEY,
+        squad_id TEXT NOT NULL,
+        member_type TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'member',
+        created_at TEXT NOT NULL,
+        UNIQUE(squad_id, member_type, member_id),
+        FOREIGN KEY(squad_id) REFERENCES multica_squads(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_squad_members_squad ON multica_squad_members(squad_id);
+
+      CREATE TABLE IF NOT EXISTS multica_autopilots (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        project_id TEXT,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        assignee_type TEXT NOT NULL DEFAULT 'agent',
+        assignee_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        execution_mode TEXT NOT NULL DEFAULT 'create_issue',
+        issue_title_template TEXT,
+        trigger_kind TEXT NOT NULL DEFAULT 'manual',
+        trigger_label TEXT,
+        cron_expression TEXT,
+        last_run_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES multica_projects(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_autopilots_workspace ON multica_autopilots(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_autopilots_assignee ON multica_autopilots(assignee_type, assignee_id);
+
+      CREATE TABLE IF NOT EXISTS multica_autopilot_runs (
+        id TEXT PRIMARY KEY,
+        autopilot_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        issue_id TEXT,
+        task_id TEXT,
+        triggered_at TEXT NOT NULL,
+        completed_at TEXT,
+        failure_reason TEXT,
+        payload TEXT,
+        result TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(autopilot_id) REFERENCES multica_autopilots(id) ON DELETE CASCADE,
+        FOREIGN KEY(issue_id) REFERENCES multica_issues(id),
+        FOREIGN KEY(task_id) REFERENCES multica_tasks(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_autopilot_runs_autopilot ON multica_autopilot_runs(autopilot_id, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_tasks (
         id TEXT PRIMARY KEY,
@@ -224,6 +322,9 @@ export class MulticaStore {
   }
 
   createIssue(input: CreateIssueInput): MulticaIssue {
+    if (input.projectId && !this.getProject(input.projectId)) {
+      throw new Error(`Project not found: ${input.projectId}`);
+    }
     const id = input.id ?? createId("iss");
     const now = nowIso();
     this.db.run(
@@ -241,6 +342,9 @@ export class MulticaStore {
         now,
       ],
     );
+    if (input.projectId) {
+      this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, input.projectId]);
+    }
     return this.getIssue(id)!;
   }
 
@@ -252,6 +356,279 @@ export class MulticaStore {
   listIssues(): MulticaIssue[] {
     const rows = this.db.query("SELECT * FROM multica_issues ORDER BY updated_at DESC").all() as Row[];
     return rows.map(toIssue);
+  }
+
+  createProject(input: CreateProjectInput): MulticaProject {
+    if (!input.title?.trim()) throw new Error("Project title is required");
+    const id = input.id ?? createId("prj");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_projects (
+        id, title, description, icon, status, priority, workspace_id,
+        lead_type, lead_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        input.title.trim(),
+        input.description ?? null,
+        input.icon ?? null,
+        input.status ?? "planned",
+        input.priority ?? "none",
+        input.workspaceId ?? "local",
+        input.leadType ?? null,
+        input.leadId ?? null,
+        now,
+        now,
+      ],
+    );
+    return this.getProject(id)!;
+  }
+
+  getProject(id: string): MulticaProject | null {
+    const row = this.db.query(projectSelect("WHERE p.id = ?")).get(id) as Row | null;
+    return row ? toProject(row) : null;
+  }
+
+  listProjects(workspaceId?: string | null): MulticaProject[] {
+    const rows = workspaceId
+      ? this.db.query(projectSelect("WHERE p.workspace_id = ? ORDER BY p.updated_at DESC")).all(workspaceId) as Row[]
+      : this.db.query(projectSelect("ORDER BY p.updated_at DESC")).all() as Row[];
+    return rows.map(toProject);
+  }
+
+  updateProject(id: string, input: UpdateProjectInput): MulticaProject {
+    const current = this.getProject(id);
+    if (!current) throw new Error(`Project not found: ${id}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_projects SET
+        title = ?,
+        description = ?,
+        icon = ?,
+        status = ?,
+        priority = ?,
+        lead_type = ?,
+        lead_id = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.title ?? current.title,
+        input.description === undefined ? current.description : input.description,
+        input.icon === undefined ? current.icon : input.icon,
+        input.status ?? current.status,
+        input.priority ?? current.priority,
+        input.leadType === undefined ? current.leadType : input.leadType,
+        input.leadId === undefined ? current.leadId : input.leadId,
+        now,
+        id,
+      ],
+    );
+    return this.getProject(id)!;
+  }
+
+  createSquad(input: CreateSquadInput): MulticaSquad {
+    if (!input.name?.trim()) throw new Error("Squad name is required");
+    if (input.leaderId && !this.getAgent(input.leaderId)) throw new Error(`Agent not found: ${input.leaderId}`);
+    const id = input.id ?? createId("sqd");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_squads (
+        id, name, description, instructions, workspace_id, leader_id,
+        creator_id, archived_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      [
+        id,
+        input.name.trim(),
+        input.description ?? "",
+        input.instructions ?? "",
+        input.workspaceId ?? "local",
+        input.leaderId ?? null,
+        input.creatorId ?? null,
+        now,
+        now,
+      ],
+    );
+    if (input.leaderId) this.addSquadMember(id, { memberType: "agent", memberId: input.leaderId, role: "leader" });
+    for (const memberId of input.memberIds ?? []) {
+      if (memberId !== input.leaderId) this.addSquadMember(id, { memberType: "agent", memberId, role: "member" });
+    }
+    return this.getSquad(id)!;
+  }
+
+  getSquad(id: string): MulticaSquad | null {
+    const row = this.db.query(squadSelect("WHERE s.id = ?")).get(id) as Row | null;
+    return row ? toSquad(row) : null;
+  }
+
+  listSquads(workspaceId?: string | null): MulticaSquad[] {
+    const rows = workspaceId
+      ? this.db.query(squadSelect("WHERE s.workspace_id = ? AND s.archived_at IS NULL ORDER BY s.updated_at DESC")).all(workspaceId) as Row[]
+      : this.db.query(squadSelect("WHERE s.archived_at IS NULL ORDER BY s.updated_at DESC")).all() as Row[];
+    return rows.map(toSquad);
+  }
+
+  addSquadMember(squadId: string, input: AddSquadMemberInput): MulticaSquadMember {
+    const squad = this.getSquad(squadId);
+    if (!squad) throw new Error(`Squad not found: ${squadId}`);
+    if (input.memberType === "agent" && !this.getAgent(input.memberId)) {
+      throw new Error(`Agent not found: ${input.memberId}`);
+    }
+    const now = nowIso();
+    const existing = this.db.query(
+      "SELECT * FROM multica_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
+    ).get(squadId, input.memberType, input.memberId) as Row | null;
+    if (existing) {
+      this.db.run(
+        "UPDATE multica_squad_members SET role = ? WHERE id = ?",
+        [input.role ?? "member", String(existing.id)],
+      );
+      return this.getSquadMember(String(existing.id))!;
+    }
+    const id = createId("sqm");
+    this.db.run(
+      `INSERT INTO multica_squad_members (id, squad_id, member_type, member_id, role, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, squadId, input.memberType, input.memberId, input.role ?? "member", now],
+    );
+    this.db.run("UPDATE multica_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
+    return this.getSquadMember(id)!;
+  }
+
+  getSquadMember(id: string): MulticaSquadMember | null {
+    const row = this.db.query("SELECT * FROM multica_squad_members WHERE id = ?").get(id) as Row | null;
+    return row ? toSquadMember(row) : null;
+  }
+
+  listSquadMembers(squadId: string): MulticaSquadMember[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_squad_members WHERE squad_id = ? ORDER BY role = 'leader' DESC, created_at ASC",
+    ).all(squadId) as Row[];
+    return rows.map(toSquadMember);
+  }
+
+  createAutopilot(input: CreateAutopilotInput): MulticaAutopilot {
+    if (!input.title?.trim()) throw new Error("Autopilot title is required");
+    const assigneeType = input.assigneeType ?? "agent";
+    if (assigneeType === "agent" && !this.getAgent(input.assigneeId)) throw new Error(`Agent not found: ${input.assigneeId}`);
+    if (assigneeType === "squad" && !this.getSquad(input.assigneeId)) throw new Error(`Squad not found: ${input.assigneeId}`);
+    if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    const id = input.id ?? createId("aut");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_autopilots (
+        id, title, description, project_id, workspace_id, assignee_type,
+        assignee_id, status, execution_mode, issue_title_template,
+        trigger_kind, trigger_label, cron_expression, last_run_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      [
+        id,
+        input.title.trim(),
+        input.description ?? null,
+        input.projectId ?? null,
+        input.workspaceId ?? "local",
+        assigneeType,
+        input.assigneeId,
+        input.status ?? "active",
+        input.executionMode ?? "create_issue",
+        input.issueTitleTemplate ?? null,
+        input.triggerKind ?? "manual",
+        input.triggerLabel ?? null,
+        input.cronExpression ?? null,
+        now,
+        now,
+      ],
+    );
+    return this.getAutopilot(id)!;
+  }
+
+  getAutopilot(id: string): MulticaAutopilot | null {
+    const row = this.db.query("SELECT * FROM multica_autopilots WHERE id = ?").get(id) as Row | null;
+    return row ? toAutopilot(row) : null;
+  }
+
+  listAutopilots(workspaceId?: string | null): MulticaAutopilot[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_autopilots WHERE workspace_id = ? AND status != 'archived' ORDER BY updated_at DESC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_autopilots WHERE status != 'archived' ORDER BY updated_at DESC").all() as Row[];
+    return rows.map(toAutopilot);
+  }
+
+  listAutopilotRuns(autopilotId: string): MulticaAutopilotRun[] {
+    const rows = this.db.query(
+      "SELECT * FROM multica_autopilot_runs WHERE autopilot_id = ? ORDER BY created_at DESC LIMIT 20",
+    ).all(autopilotId) as Row[];
+    return rows.map(toAutopilotRun);
+  }
+
+  runAutopilot(autopilotId: string, input: RunAutopilotInput = {}): MulticaAutopilotRun {
+    const autopilot = this.getAutopilot(autopilotId);
+    if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+    const now = nowIso();
+    const runId = createId("run");
+    const source = input.source ?? "manual";
+    const prompt = (input.prompt || autopilot.issueTitleTemplate || autopilot.title).trim();
+    const agent = this.resolveAutopilotAgent(autopilot);
+    if (!agent || autopilot.status !== "active") {
+      this.db.run(
+        `INSERT INTO multica_autopilot_runs (
+          id, autopilot_id, source, status, issue_id, task_id, triggered_at,
+          completed_at, failure_reason, payload, result, created_at
+        ) VALUES (?, ?, ?, 'skipped', NULL, NULL, ?, ?, ?, ?, NULL, ?)`,
+        [
+          runId,
+          autopilotId,
+          source,
+          now,
+          now,
+          agent ? "Autopilot is not active" : "No runnable agent",
+          input.payload == null ? null : toJson(input.payload),
+          now,
+        ],
+      );
+      this.db.run("UPDATE multica_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?", [now, now, autopilotId]);
+      return this.getAutopilotRun(runId)!;
+    }
+
+    let issue: MulticaIssue | null = null;
+    if (autopilot.executionMode === "create_issue") {
+      issue = this.createIssue({
+        title: prompt,
+        description: autopilot.description,
+        workspaceId: autopilot.workspaceId,
+        projectId: autopilot.projectId,
+        createdBy: autopilot.id,
+      });
+    }
+    const task = this.createTask({
+      agentId: agent.id,
+      issueId: issue?.id ?? null,
+      workspaceId: autopilot.workspaceId,
+      prompt,
+    });
+    this.db.run(
+      `INSERT INTO multica_autopilot_runs (
+        id, autopilot_id, source, status, issue_id, task_id, triggered_at,
+        completed_at, failure_reason, payload, result, created_at
+      ) VALUES (?, ?, ?, 'running', ?, ?, ?, NULL, NULL, ?, ?, ?)`,
+      [
+        runId,
+        autopilotId,
+        source,
+        issue?.id ?? null,
+        task.id,
+        now,
+        input.payload == null ? null : toJson(input.payload),
+        toJson({ taskId: task.id, issueId: issue?.id ?? null }),
+        now,
+      ],
+    );
+    this.db.run("UPDATE multica_autopilots SET last_run_at = ?, updated_at = ? WHERE id = ?", [now, now, autopilotId]);
+    return this.getAutopilotRun(runId)!;
+  }
+
+  getAutopilotRun(id: string): MulticaAutopilotRun | null {
+    const row = this.db.query("SELECT * FROM multica_autopilot_runs WHERE id = ?").get(id) as Row | null;
+    return row ? toAutopilotRun(row) : null;
   }
 
   createTask(input: CreateTaskInput): MulticaTask {
@@ -503,6 +880,15 @@ export class MulticaStore {
     );
     return result.changes;
   }
+
+  private resolveAutopilotAgent(autopilot: MulticaAutopilot): MulticaAgent | null {
+    if (autopilot.assigneeType === "agent") return this.getAgent(autopilot.assigneeId);
+    const squad = this.getSquad(autopilot.assigneeId);
+    if (!squad) return null;
+    if (squad.leaderId) return this.getAgent(squad.leaderId);
+    const member = this.listSquadMembers(squad.id).find((m) => m.memberType === "agent");
+    return member ? this.getAgent(member.memberId) : null;
+  }
 }
 
 type Row = Record<string, unknown>;
@@ -522,6 +908,26 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function projectSelect(suffix: string): string {
+  return `
+    SELECT p.*,
+      COUNT(i.id) AS issue_count,
+      COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count
+    FROM multica_projects p
+    LEFT JOIN multica_issues i ON i.project_id = p.id
+    ${suffix.includes("ORDER BY") ? suffix.replace("ORDER BY", "GROUP BY p.id ORDER BY") : `${suffix} GROUP BY p.id`}
+  `;
+}
+
+function squadSelect(suffix: string): string {
+  return `
+    SELECT s.*, COUNT(m.id) AS member_count
+    FROM multica_squads s
+    LEFT JOIN multica_squad_members m ON m.squad_id = s.id
+    ${suffix.includes("ORDER BY") ? suffix.replace("ORDER BY", "GROUP BY s.id ORDER BY") : `${suffix} GROUP BY s.id`}
+  `;
 }
 
 function toAgent(row: Row): MulticaAgent {
@@ -558,6 +964,24 @@ function toRuntime(row: Row): MulticaRuntime {
   };
 }
 
+function toProject(row: Row): MulticaProject {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    title: String(row.title),
+    description: nullableString(row.description),
+    icon: nullableString(row.icon),
+    status: String(row.status ?? "planned") as MulticaProject["status"],
+    priority: String(row.priority ?? "none") as MulticaProject["priority"],
+    leadType: nullableString(row.lead_type) as MulticaProject["leadType"],
+    leadId: nullableString(row.lead_id),
+    issueCount: Number(row.issue_count ?? 0),
+    doneCount: Number(row.done_count ?? 0),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
 function toIssue(row: Row): MulticaIssue {
   return {
     id: String(row.id),
@@ -569,6 +993,71 @@ function toIssue(row: Row): MulticaIssue {
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toSquad(row: Row): MulticaSquad {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    name: String(row.name),
+    description: String(row.description ?? ""),
+    instructions: String(row.instructions ?? ""),
+    leaderId: nullableString(row.leader_id),
+    creatorId: nullableString(row.creator_id),
+    archivedAt: nullableString(row.archived_at),
+    memberCount: Number(row.member_count ?? 0),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toSquadMember(row: Row): MulticaSquadMember {
+  return {
+    id: String(row.id),
+    squadId: String(row.squad_id),
+    memberType: String(row.member_type) as MulticaSquadMember["memberType"],
+    memberId: String(row.member_id),
+    role: String(row.role ?? "member"),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toAutopilot(row: Row): MulticaAutopilot {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    title: String(row.title),
+    description: nullableString(row.description),
+    projectId: nullableString(row.project_id),
+    assigneeType: String(row.assignee_type ?? "agent") as MulticaAutopilot["assigneeType"],
+    assigneeId: String(row.assignee_id),
+    status: String(row.status ?? "active") as MulticaAutopilot["status"],
+    executionMode: String(row.execution_mode ?? "create_issue") as MulticaAutopilot["executionMode"],
+    issueTitleTemplate: nullableString(row.issue_title_template),
+    triggerKind: String(row.trigger_kind ?? "manual"),
+    triggerLabel: nullableString(row.trigger_label),
+    cronExpression: nullableString(row.cron_expression),
+    lastRunAt: nullableString(row.last_run_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toAutopilotRun(row: Row): MulticaAutopilotRun {
+  return {
+    id: String(row.id),
+    autopilotId: String(row.autopilot_id),
+    source: String(row.source ?? "manual") as MulticaAutopilotRun["source"],
+    status: String(row.status ?? "running") as MulticaAutopilotRun["status"],
+    issueId: nullableString(row.issue_id),
+    taskId: nullableString(row.task_id),
+    triggeredAt: String(row.triggered_at),
+    completedAt: nullableString(row.completed_at),
+    failureReason: nullableString(row.failure_reason),
+    payload: row.payload == null ? null : parseJson(row.payload, null),
+    result: row.result == null ? null : parseJson(row.result, null),
+    createdAt: String(row.created_at),
   };
 }
 
