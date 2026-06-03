@@ -32,6 +32,7 @@ import type {
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueCommentInput,
   UpdateLabelInput,
   UpdateProjectInput,
   UpdateSquadInput,
@@ -511,6 +512,51 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/inbox/:id/archive", (c) => {
     return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
+  });
+
+  app.put("/api/multica/comments/:id", async (c) => {
+    const body = await readJson<UpdateIssueCommentInput>(c);
+    return c.json({ comment: store.updateIssueComment(c.req.param("id"), body) });
+  });
+  app.patch("/api/multica/comments/:id", async (c) => {
+    const body = await readJson<UpdateIssueCommentInput>(c);
+    return c.json({ comment: store.updateIssueComment(c.req.param("id"), body) });
+  });
+  app.delete("/api/multica/comments/:id", (c) => {
+    store.deleteIssueComment(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  app.post("/api/multica/comments/:id/resolve", async (c) => {
+    const body = await readJson<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
+    return c.json({
+      comment: store.resolveIssueComment(c.req.param("id"), {
+        actorType: body.actorType ?? body.actor_type,
+        actorId: body.actorId ?? body.actor_id,
+      }),
+    });
+  });
+  app.delete("/api/multica/comments/:id/resolve", (c) => {
+    return c.json({ comment: store.unresolveIssueComment(c.req.param("id")) });
+  });
+  app.put("/api/comments/:id", async (c) => {
+    const body = await readJson<UpdateIssueCommentInput>(c);
+    return c.json({ comment: store.updateIssueComment(c.req.param("id"), body) });
+  });
+  app.delete("/api/comments/:id", (c) => {
+    store.deleteIssueComment(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  app.post("/api/comments/:id/resolve", async (c) => {
+    const body = await readJson<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
+    return c.json({
+      comment: store.resolveIssueComment(c.req.param("id"), {
+        actorType: body.actorType ?? body.actor_type,
+        actorId: body.actorId ?? body.actor_id,
+      }),
+    });
+  });
+  app.delete("/api/comments/:id/resolve", (c) => {
+    return c.json({ comment: store.unresolveIssueComment(c.req.param("id")) });
   });
 
   app.get("/api/multica/comments/:id/reactions", (c) => {

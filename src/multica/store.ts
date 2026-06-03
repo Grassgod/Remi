@@ -61,6 +61,7 @@ import type {
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
+  UpdateIssueCommentInput,
   UpdateLabelInput,
   UpdateProjectInput,
   UpdateSquadInput,
@@ -150,6 +151,9 @@ export class MulticaStore {
         author_id TEXT,
         parent_id TEXT,
         body TEXT NOT NULL,
+        resolved_at TEXT,
+        resolved_by_type TEXT,
+        resolved_by_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(issue_id) REFERENCES multica_issues(id) ON DELETE CASCADE,
@@ -483,8 +487,12 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_issues", "issue_number INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("multica_issues", "issue_key TEXT");
     this.addColumnIfMissing("multica_issue_comments", "parent_id TEXT");
+    this.addColumnIfMissing("multica_issue_comments", "resolved_at TEXT");
+    this.addColumnIfMissing("multica_issue_comments", "resolved_by_type TEXT");
+    this.addColumnIfMissing("multica_issue_comments", "resolved_by_id TEXT");
     this.addColumnIfMissing("multica_tasks", "chat_session_id TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_parent ON multica_issue_comments(parent_id, created_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multica_issue_comments_resolved ON multica_issue_comments(issue_id, resolved_at)");
     this.backfillIssueKeys();
   }
 
@@ -950,6 +958,7 @@ export class MulticaStore {
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
     this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
+    if (parentId) this.unresolveThreadRoot(parentId);
     const authorType = input.authorType ?? "member";
     if (authorType === "member" && input.authorId) {
       this.addIssueSubscriber(issueId, input.authorId, "commented");
@@ -966,6 +975,95 @@ export class MulticaStore {
     this.notifySubscribedMembers(issue, "comment_created", "New comment", body, authorType, input.authorId ?? null, mentionedMemberIds);
     this.triggerCommentMentions(issue, comment);
     return comment;
+  }
+
+  updateIssueComment(id: string, input: UpdateIssueCommentInput): MulticaIssueComment {
+    const current = this.getRawIssueComment(id);
+    if (!current) throw new Error(`Comment not found: ${id}`);
+    const body = (input.body ?? input.content ?? "").trim();
+    if (!body) throw new Error("Comment body is required");
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_issue_comments SET body = ?, updated_at = ? WHERE id = ?",
+      [body, now, id],
+    );
+    const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
+    if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    this.appendIssueActivity(current.issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "comment_updated",
+      body,
+      data: { commentId: id },
+    });
+    return this.getIssueComment(id)!;
+  }
+
+  deleteIssueComment(id: string): void {
+    const current = this.getRawIssueComment(id);
+    if (!current) throw new Error(`Comment not found: ${id}`);
+    const ids = this.collectCommentTreeIds(id);
+    const now = nowIso();
+    for (const commentId of ids) {
+      this.db.run("DELETE FROM multica_comment_reactions WHERE comment_id = ?", [commentId]);
+      this.db.run("DELETE FROM multica_attachments WHERE comment_id = ?", [commentId]);
+    }
+    for (const commentId of ids.slice().reverse()) {
+      this.db.run("DELETE FROM multica_issue_comments WHERE id = ?", [commentId]);
+    }
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    this.appendIssueActivity(current.issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "comment_deleted",
+      body: current.body,
+      data: { commentId: id, deletedCommentIds: ids },
+    });
+  }
+
+  resolveIssueComment(id: string, input: { actorType?: string; actorId?: string | null } = {}): MulticaIssueComment {
+    const current = this.getRawIssueComment(id);
+    if (!current) throw new Error(`Comment not found: ${id}`);
+    if (current.parentId) throw new Error("Only root comments can be resolved");
+    if (current.resolvedAt) return this.getIssueComment(id)!;
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_issue_comments
+       SET resolved_at = ?, resolved_by_type = ?, resolved_by_id = ?, updated_at = ?
+       WHERE id = ?`,
+      [now, input.actorType ?? "member", input.actorId ?? "local", now, id],
+    );
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    this.appendIssueActivity(current.issueId, {
+      actorType: input.actorType ?? "member",
+      actorId: input.actorId ?? "local",
+      type: "comment_resolved",
+      body: current.body,
+      data: { commentId: id },
+    });
+    return this.getIssueComment(id)!;
+  }
+
+  unresolveIssueComment(id: string): MulticaIssueComment {
+    const current = this.getRawIssueComment(id);
+    if (!current) throw new Error(`Comment not found: ${id}`);
+    if (current.parentId) throw new Error("Only root comments can be resolved");
+    if (!current.resolvedAt) return this.getIssueComment(id)!;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
+      [now, id],
+    );
+    this.db.run("UPDATE multica_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    this.appendIssueActivity(current.issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "comment_unresolved",
+      body: current.body,
+      data: { commentId: id },
+    });
+    return this.getIssueComment(id)!;
   }
 
   getIssueComment(id: string): MulticaIssueComment | null {
@@ -2389,6 +2487,27 @@ export class MulticaStore {
     };
   }
 
+  private collectCommentTreeIds(commentId: string): string[] {
+    const ids: string[] = [];
+    const visit = (id: string) => {
+      ids.push(id);
+      const rows = this.db.query("SELECT id FROM multica_issue_comments WHERE parent_id = ? ORDER BY created_at ASC").all(id) as Row[];
+      for (const row of rows) visit(String(row.id));
+    };
+    visit(commentId);
+    return ids;
+  }
+
+  private unresolveThreadRoot(commentId: string): void {
+    let current = this.getRawIssueComment(commentId);
+    while (current?.parentId) current = this.getRawIssueComment(current.parentId);
+    if (!current?.resolvedAt) return;
+    this.db.run(
+      "UPDATE multica_issue_comments SET resolved_at = NULL, resolved_by_type = NULL, resolved_by_id = NULL, updated_at = ? WHERE id = ?",
+      [nowIso(), current.id],
+    );
+  }
+
   private validatePinnedItemTarget(workspaceId: string, itemType: MulticaPinnedItemType, itemId: string): void {
     if (itemType === "issue") {
       const row = this.db.query("SELECT id FROM multica_issues WHERE id = ? AND workspace_id = ?").get(itemId, workspaceId) as Row | null;
@@ -2940,6 +3059,9 @@ function toIssueComment(row: Row): MulticaIssueComment {
     authorId: nullableString(row.author_id),
     parentId: nullableString(row.parent_id),
     body: String(row.body ?? ""),
+    resolvedAt: nullableString(row.resolved_at),
+    resolvedByType: nullableString(row.resolved_by_type),
+    resolvedById: nullableString(row.resolved_by_id),
     reactions: [],
     attachments: [],
     createdAt: String(row.created_at),

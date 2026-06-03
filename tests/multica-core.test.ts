@@ -242,6 +242,36 @@ describe("Bun Multica core store", () => {
     expect(store.listIssueComments(issue.id).find((comment) => comment.id === reply.id)?.reactions).toHaveLength(1);
   });
 
+  it("updates, deletes, resolves, and reopens comment threads", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Comment lifecycle" });
+    const root = store.createIssueComment(issue.id, { body: "Root thread" });
+    const reply = store.createIssueComment(issue.id, { body: "Reply", parentId: root.id });
+
+    const updated = store.updateIssueComment(reply.id, { content: "Edited reply" });
+    expect(updated.body).toBe("Edited reply");
+    expect(store.listIssueActivity(issue.id).some((item) => item.type === "comment_updated")).toBe(true);
+
+    const resolved = store.resolveIssueComment(root.id, { actorType: "member", actorId: "local" });
+    expect(resolved.resolvedAt).toBeString();
+    expect(resolved.resolvedByType).toBe("member");
+    expect(() => store.resolveIssueComment(reply.id)).toThrow("Only root comments");
+
+    const reopenedReply = store.createIssueComment(issue.id, { body: "Reopen thread", parentId: root.id });
+    expect(reopenedReply.parentId).toBe(root.id);
+    expect(store.getIssueComment(root.id)?.resolvedAt).toBeNull();
+
+    const resolvedAgain = store.resolveIssueComment(root.id);
+    expect(resolvedAgain.resolvedAt).toBeString();
+    expect(store.unresolveIssueComment(root.id).resolvedAt).toBeNull();
+
+    store.deleteIssueComment(root.id);
+    expect(store.getIssueComment(root.id)).toBeNull();
+    expect(store.getIssueComment(reply.id)).toBeNull();
+    expect(store.getIssueComment(reopenedReply.id)).toBeNull();
+    expect(store.listIssueActivity(issue.id).some((item) => item.type === "comment_deleted")).toBe(true);
+  });
+
   it("manages issue labels with workspace scoping", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Needs labels", workspaceId: "local" });
@@ -937,6 +967,23 @@ describe("Bun Multica API", () => {
     expect(replyBody.comment.parentId).toBe(rootBody.comment.id);
     expect(replyBody.comment.attachments[0].id).toBe(pendingAttachment.id);
 
+    const edited = await app.request(`/api/comments/${replyBody.comment.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Edited API reply" }),
+    });
+    expect((await edited.json()).comment.body).toBe("Edited API reply");
+
+    const resolved = await app.request(`/api/multica/comments/${rootBody.comment.id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actorType: "member", actorId: "local" }),
+    });
+    expect((await resolved.json()).comment.resolvedAt).toBeString();
+
+    const unresolved = await app.request(`/api/comments/${rootBody.comment.id}/resolve`, { method: "DELETE" });
+    expect((await unresolved.json()).comment.resolvedAt).toBeNull();
+
     const issueReaction = await app.request(`/api/multica/issues/${issue.id}/reactions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -956,6 +1003,10 @@ describe("Bun Multica API", () => {
     expect(detailBody.issue.reactions).toHaveLength(1);
     expect(detailBody.issue.attachments).toHaveLength(1);
     expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(1);
+
+    const deleted = await app.request(`/api/multica/comments/${replyBody.comment.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(store.getIssueComment(replyBody.comment.id)).toBeNull();
   });
 
   it("serves chat session and message endpoints", async () => {

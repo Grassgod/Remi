@@ -1889,6 +1889,35 @@ export function renderMulticaDashboardHtml(): string {
       else await loadTaskDetail(state.selectedTaskId);
     }
 
+    async function editComment(commentId) {
+      const comment = state.selectedIssueComments.find(item => item.id === commentId);
+      if (!comment) return;
+      const body = prompt("Edit comment", comment.body || "");
+      if (body == null || !body.trim()) return;
+      await api("/api/multica/comments/" + encodeURIComponent(commentId), {
+        method: "PUT",
+        body: JSON.stringify({ body })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function deleteComment(commentId) {
+      if (!confirm("Delete this comment?")) return;
+      await api("/api/multica/comments/" + encodeURIComponent(commentId), { method: "DELETE" });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function setCommentResolved(commentId, resolved) {
+      await api("/api/multica/comments/" + encodeURIComponent(commentId) + "/resolve", {
+        method: resolved ? "POST" : "DELETE",
+        body: resolved ? JSON.stringify({ actorType: "member", actorId: "local" }) : undefined
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
     async function addSelectedIssueAttachment(event) {
       event.preventDefault();
       const issue = state.selectedIssue || state.selectedTask?.issue;
@@ -3008,11 +3037,19 @@ export function renderMulticaDashboardHtml(): string {
       return state.selectedIssueComments.map(comment => {
         const parent = comment.parentId ? state.selectedIssueComments.find(item => item.id === comment.parentId) : null;
         return "<div class=\\"message-row\\" style=\\"" + (comment.parentId ? "margin-left:18px;" : "") + "\\">" +
-          "<div class=\\"message-head\\"><span>" + esc(comment.authorType) + "</span><span>" + esc(timeAgo(comment.createdAt)) + "</span>" + (parent ? "<span>reply " + esc(shortId(parent.id)) + "</span>" : "") + "</div>" +
+          "<div class=\\"message-head\\"><span>" + esc(comment.authorType) + "</span><span>" + esc(timeAgo(comment.createdAt)) + "</span>" + (parent ? "<span>reply " + esc(shortId(parent.id)) + "</span>" : "") + (comment.resolvedAt ? "<span>resolved " + esc(timeAgo(comment.resolvedAt)) + "</span>" : "") + "</div>" +
           "<div class=\\"message-content\\">" + esc(comment.body) + "</div>" +
           (comment.reactions?.length ? "<div class=\\"issue-meta\\">" + renderReactions(comment.reactions) + "</div>" : "") +
           (comment.attachments?.length ? "<div class=\\"message-list\\">" + renderAttachments(comment.attachments) + "</div>" : "") +
-          "<div class=\\"issue-meta\\"><button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👍')\\">👍</button><button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👀')\\">👀</button></div>" +
+          "<div class=\\"issue-meta\\">" +
+            "<button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👍')\\">👍</button>" +
+            "<button class=\\"outline\\" onclick=\\"reactToComment('" + escAttr(comment.id) + "', '👀')\\">👀</button>" +
+            "<button class=\\"outline\\" onclick=\\"editComment('" + escAttr(comment.id) + "')\\">Edit</button>" +
+            "<button class=\\"destructive\\" onclick=\\"deleteComment('" + escAttr(comment.id) + "')\\">Delete</button>" +
+            (!comment.parentId ? (comment.resolvedAt
+              ? "<button class=\\"outline\\" onclick=\\"setCommentResolved('" + escAttr(comment.id) + "', false)\\">Unresolve</button>"
+              : "<button class=\\"outline\\" onclick=\\"setCommentResolved('" + escAttr(comment.id) + "', true)\\">Resolve</button>") : "") +
+          "</div>" +
         "</div>";
       }).join("");
     }
@@ -3464,6 +3501,9 @@ export function renderMulticaDashboardHtml(): string {
     window.addSelectedIssueComment = addSelectedIssueComment;
     window.reactToSelectedIssue = reactToSelectedIssue;
     window.reactToComment = reactToComment;
+    window.editComment = editComment;
+    window.deleteComment = deleteComment;
+    window.setCommentResolved = setCommentResolved;
     window.addSelectedIssueAttachment = addSelectedIssueAttachment;
     window.attachSelectedIssueLabel = attachSelectedIssueLabel;
     window.createSelectedIssueLabel = createSelectedIssueLabel;

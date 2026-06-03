@@ -137,6 +137,9 @@ export interface MulticaIssueComment {
   authorId: string | null;
   parentId: string | null;
   body: string;
+  resolvedAt: string | null;
+  resolvedByType: string | null;
+  resolvedById: string | null;
   reactions: MulticaCommentReaction[];
   attachments: MulticaAttachment[];
   createdAt: string;
@@ -475,6 +478,13 @@ export interface CreateIssueCommentInput {
   attachmentIds?: string[];
   attachment_ids?: string[];
   body: string;
+}
+
+export interface UpdateIssueCommentInput {
+  body?: string;
+  content?: string;
+  attachmentIds?: string[];
+  attachment_ids?: string[];
 }
 
 export interface CreateMulticaReactionInput {
