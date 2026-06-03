@@ -140,6 +140,16 @@ describe("Bun Multica core store", () => {
     expect(store.getTask(squadAssigned.task!.id)?.status).toBe("cancelled");
   });
 
+  it("assigns human-readable issue keys per workspace", () => {
+    const store = createStore();
+    const first = store.createIssue({ title: "First issue" });
+    const second = store.createIssue({ title: "Second issue" });
+
+    expect(first.key).toBe("MUL-1");
+    expect(first.number).toBe(1);
+    expect(second.key).toBe("MUL-2");
+  });
+
   it("queues comment mentions without changing issue assignee", () => {
     const store = createStore();
     const reviewer = store.createAgent({ name: "Review Bot", provider: "codex" });
@@ -318,6 +328,7 @@ describe("Bun Multica core store", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use pinned facts" });
     const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)!);
     expect(prompt).toContain("## Issue Metadata");
+    expect(prompt).toContain(`Key: ${issue.key}`);
     expect(prompt).toContain("pr_url: https://github.com/example/repo/pull/1");
 
     expect(store.deleteIssueMetadataKey(issue.id, "ready")).toEqual({

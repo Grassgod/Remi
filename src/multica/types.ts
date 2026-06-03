@@ -106,6 +106,8 @@ export interface MulticaProjectResource {
 
 export interface MulticaIssue {
   id: string;
+  key: string;
+  number: number;
   title: string;
   description: string | null;
   status: string;

@@ -112,6 +112,8 @@ export class MulticaStore {
 
       CREATE TABLE IF NOT EXISTS multica_issues (
         id TEXT PRIMARY KEY,
+        issue_number INTEGER NOT NULL DEFAULT 0,
+        issue_key TEXT,
         title TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL DEFAULT 'open',
@@ -341,7 +343,10 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_issues", "assignee_type TEXT");
     this.addColumnIfMissing("multica_issues", "assignee_id TEXT");
     this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
+    this.addColumnIfMissing("multica_issues", "issue_number INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("multica_issues", "issue_key TEXT");
     this.addColumnIfMissing("multica_tasks", "chat_session_id TEXT");
+    this.backfillIssueKeys();
   }
 
   createAgent(input: CreateAgentInput): MulticaAgent {
@@ -571,16 +576,21 @@ export class MulticaStore {
     }
     const id = input.id ?? createId("iss");
     const now = nowIso();
+    const workspaceId = input.workspaceId ?? "local";
+    const issueNumber = this.nextIssueNumber(workspaceId);
+    const issueKey = formatIssueKey(issueNumber);
     this.db.run(
       `INSERT INTO multica_issues (
-        id, title, description, status, workspace_id, project_id, assignee_type, assignee_id,
+        id, issue_number, issue_key, title, description, status, workspace_id, project_id, assignee_type, assignee_id,
         created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        issueNumber,
+        issueKey,
         input.title,
         input.description ?? null,
-        input.workspaceId ?? "local",
+        workspaceId,
         input.projectId ?? null,
         input.assigneeType ?? null,
         input.assigneeId ?? null,
@@ -1850,6 +1860,27 @@ export class MulticaStore {
       .get(projectId) as { count: number } | null;
     return Number(row?.count ?? 0);
   }
+
+  private nextIssueNumber(workspaceId: string): number {
+    const row = this.db.query(
+      "SELECT COALESCE(MAX(issue_number), 0) + 1 AS next FROM multica_issues WHERE workspace_id = ?",
+    ).get(workspaceId) as { next: number } | null;
+    return Number(row?.next ?? 1);
+  }
+
+  private backfillIssueKeys(): void {
+    const rows = this.db.query(
+      "SELECT id, workspace_id FROM multica_issues WHERE issue_number = 0 OR issue_key IS NULL OR issue_key = '' ORDER BY created_at ASC",
+    ).all() as Array<{ id: string; workspace_id?: string }>;
+    for (const row of rows) {
+      const workspaceId = String(row.workspace_id ?? "local");
+      const number = this.nextIssueNumber(workspaceId);
+      this.db.run(
+        "UPDATE multica_issues SET issue_number = ?, issue_key = ? WHERE id = ?",
+        [number, formatIssueKey(number), row.id],
+      );
+    }
+  }
 }
 
 type Row = Record<string, unknown>;
@@ -1869,6 +1900,10 @@ function parseJson<T>(value: unknown, fallback: T): T {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function formatIssueKey(number: number): string {
+  return `MUL-${number}`;
 }
 
 function commentMentionPrompt(comment: MulticaIssueComment): string {
@@ -2057,8 +2092,11 @@ function toProjectResource(row: Row): MulticaProjectResource {
 }
 
 function toIssue(row: Row): MulticaIssue {
+  const number = Number(row.issue_number ?? 0);
   return {
     id: String(row.id),
+    key: String(row.issue_key || (number > 0 ? formatIssueKey(number) : row.id)),
+    number,
     title: String(row.title),
     description: nullableString(row.description),
     status: String(row.status),

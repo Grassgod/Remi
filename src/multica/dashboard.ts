@@ -2335,7 +2335,7 @@ export function renderMulticaDashboardHtml(): string {
       const assignee = assigneeLabel(t);
       const cancellable = latestTask && isActiveTask(latestTask);
       return "<article class=\\"issue-card\\" onclick=\\"openIssue('" + escAttr(t.id) + "')\\">" +
-        "<div class=\\"issue-id\\">" + esc(shortId(t.id)) + "</div>" +
+        "<div class=\\"issue-id\\">" + esc(issueLabel(t)) + "</div>" +
         "<div class=\\"issue-title\\">" + esc(t.title || "") + "</div>" +
         "<div class=\\"issue-desc\\">" + esc(t.description || project?.title || "") + "</div>" +
         "<div class=\\"issue-meta\\">" +
@@ -2360,7 +2360,7 @@ export function renderMulticaDashboardHtml(): string {
         const project = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
         return "<div class=\\"list-row\\" onclick=\\"openIssue('" + escAttr(t.id) + "')\\">" +
           "<span class=\\"priority-dot\\"></span>" +
-          "<span class=\\"list-id\\">" + esc(shortId(t.id)) + "</span>" +
+          "<span class=\\"list-id\\">" + esc(issueLabel(t)) + "</span>" +
           "<span class=\\"list-title\\">" + esc(t.title || "") + "</span>" +
           "<span class=\\"status-badge " + esc(t.status) + "\\">" + esc(statusLabel(t.status)) + "</span>" +
           "<span class=\\"status-badge\\">" + esc(assigneeLabel(t) || "unassigned") + "</span>" +
@@ -2524,7 +2524,7 @@ export function renderMulticaDashboardHtml(): string {
       const usage = usageSummary(t.usage || []);
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
-          "<div class=\\"drawer-title\\"><strong>" + esc(t.prompt || "") + "</strong><span>" + esc(shortId(t.id)) + "</span></div>" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(t.prompt || "") + "</strong><span>" + esc(issue ? issueLabel(issue) : shortId(t.id)) + "</span></div>" +
           (cancellable ? "<button class=\\"destructive\\" onclick=\\"cancelTask('" + escAttr(t.id) + "')\\">Cancel</button>" : "") +
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
@@ -2561,7 +2561,7 @@ export function renderMulticaDashboardHtml(): string {
       const assignee = assigneeLabel(issue);
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
-          "<div class=\\"drawer-title\\"><strong>" + esc(issue.title || "") + "</strong><span>" + esc(shortId(issue.id)) + "</span></div>" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(issue.title || "") + "</strong><span>" + esc(issueLabel(issue)) + "</span></div>" +
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
         "<div class=\\"drawer-body\\">" +
@@ -2813,7 +2813,7 @@ export function renderMulticaDashboardHtml(): string {
       pages.agents && rows.push({ type: "Page", title: "Agents", subtitle: state.agents.length + " agents", action: () => switchPage("agents") });
       pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
-      state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || shortId(i.id), subtitle: shortId(i.id) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
+      state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || issueLabel(i), subtitle: issueLabel(i) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => { switchPage("agents"); openAgent(a.id); } }));
@@ -3067,6 +3067,9 @@ export function renderMulticaDashboardHtml(): string {
     function shortId(id) {
       const raw = String(id || "");
       return raw.includes("_") ? raw.split("_")[1].slice(0, 8).toUpperCase() : raw.slice(0, 8).toUpperCase();
+    }
+    function issueLabel(issue) {
+      return issue?.key || shortId(issue?.id);
     }
     function statusLabel(status) {
       if (status === "dispatched") return "starting";
