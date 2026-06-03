@@ -1302,6 +1302,107 @@ describe("Bun Multica API", () => {
     expect((await afterDelete.json()).skills).toHaveLength(0);
   });
 
+  it("serves agent templates and creates agents from templates", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const existingSkill = store.createSkill({
+      workspaceId: "local",
+      name: "root-cause-tracing",
+      description: "Trace bugs",
+      content: "# Root cause",
+    });
+
+    const templates = await app.request("/api/agent-templates");
+    const templateBody = await templates.json();
+    expect(templateBody.length).toBeGreaterThan(10);
+    expect(templateBody.find((template: any) => template.slug === "bug-fixer")?.instructions).toBeUndefined();
+    expect(templateBody.find((template: any) => template.slug === "bug-fixer")?.skills[0].cached_name).toBe("root-cause-tracing");
+
+    const detail = await app.request("/api/agent-templates/bug-fixer");
+    const detailBody = await detail.json();
+    expect(detailBody.instructions).toContain("You debug systematically");
+
+    const multicaTemplates = await app.request("/api/multica/agent-templates");
+    const multicaTemplatesBody = await multicaTemplates.json();
+    expect(multicaTemplatesBody.total).toBe(templateBody.length);
+
+    const created = await app.request("/api/agents/from-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        template_slug: "bug-fixer",
+        name: "Bug Fixer Agent",
+        provider: "codex",
+        extra_skill_ids: [existingSkill.id],
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.agent.name).toBe("Bug Fixer Agent");
+    expect(createdBody.agent.provider).toBe("codex");
+    expect(createdBody.agent.instructions).toContain("root cause");
+    expect(createdBody.imported_skill_ids).toEqual([]);
+    expect(createdBody.reused_skill_ids).toEqual([existingSkill.id]);
+    expect(store.listAgentSkills(createdBody.agent.id).map((skill) => skill.id)).toEqual([existingSkill.id]);
+
+    const multicaCreated = await app.request("/api/multica/agents/from-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        templateSlug: "summarizer",
+        name: "Summarizer Agent",
+        provider: "claude",
+      }),
+    });
+    expect(multicaCreated.status).toBe(201);
+    const multicaCreatedBody = await multicaCreated.json();
+    expect(multicaCreatedBody.agent.name).toBe("Summarizer Agent");
+    expect(multicaCreatedBody.importedSkillIds).toEqual([]);
+    expect(multicaCreatedBody.reusedSkillIds).toEqual([]);
+
+    const missing = await app.request("/api/agent-templates/not-real");
+    expect(missing.status).toBe(404);
+  });
+
+  it("reuses imported template skills by resolved skill name", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const existing = store.createSkill({
+      workspaceId: "local",
+      name: "vercel-react-best-practices",
+      description: "Existing real frontmatter name",
+      content: "# Existing",
+    });
+    mockFetch((url) => {
+      if (url === "https://api.github.com/repos/vercel-labs/agent-skills") {
+        return jsonResponse({ default_branch: "main" });
+      }
+      if (url === "https://raw.githubusercontent.com/vercel-labs/agent-skills/main/skills/react-best-practices/SKILL.md") {
+        return new Response("---\nname: vercel-react-best-practices\ndescription: React best practices\n---\n# Body");
+      }
+      if (url === "https://api.github.com/repos/vercel-labs/agent-skills/git/trees/main?recursive=1") {
+        return jsonResponse({ tree: [{ path: "skills/react-best-practices/SKILL.md", type: "blob" }] });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const response = await app.request("/api/agents/from-template", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        template_slug: "code-reviewer",
+        name: "Reviewer from Template",
+        provider: "codex",
+      }),
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.imported_skill_ids).toEqual([]);
+    expect(body.reused_skill_ids).toEqual([existing.id]);
+    expect(store.listSkills("local")).toHaveLength(1);
+    expect(store.listAgentSkills(body.agent.id).map((skill) => skill.id)).toEqual([existing.id]);
+  });
+
   it("imports skills from GitHub and skills.sh URLs", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

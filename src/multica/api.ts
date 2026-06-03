@@ -6,6 +6,7 @@ import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { createLogger } from "../logger.js";
+import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
 import { renderMulticaDashboardHtml } from "./dashboard.js";
 import { MulticaScheduler } from "./scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "./skill-import.js";
@@ -19,6 +20,7 @@ import type {
   CreateAutopilotInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
+  CreateAgentFromTemplateInput,
   CreateChatSessionInput,
   CreateFeedbackInput,
   CreateIssueDependencyInput,
@@ -131,6 +133,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (err instanceof SkillImportError) {
       return c.json({ error: err.message }, err.status as 400 | 502);
     }
+    if (err instanceof AgentTemplateError) {
+      return c.json({ error: err.message, failed_urls: err.failedUrls }, err.status);
+    }
     if (err instanceof MulticaApiError) {
       return c.json({ error: err.message }, err.status);
     }
@@ -181,6 +186,20 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<SetAgentSkillsInput>(c);
     return c.json(store.setAgentSkills(c.req.param("id"), body).map(skillSummary));
   });
+  app.post("/api/multica/agents/from-template", async (c) => {
+    const body = await readJson<CreateAgentFromTemplateInput>(c);
+    const result = await createAgentFromTemplate(store, body);
+    return c.json(result, 201);
+  });
+  app.post("/api/agents/from-template", async (c) => {
+    const body = await readJson<CreateAgentFromTemplateInput>(c);
+    const result = await createAgentFromTemplate(store, body);
+    return c.json({
+      agent: result.agent,
+      imported_skill_ids: result.imported_skill_ids,
+      reused_skill_ids: result.reused_skill_ids,
+    }, 201);
+  });
   app.get("/api/multica/agent-task-snapshot", (c) => {
     const tasks = store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
     return c.json({ tasks, total: tasks.length });
@@ -201,6 +220,21 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.get("/api/agent-activity-30d", (c) => {
     return c.json(store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+  });
+  app.get("/api/multica/agent-templates", (c) => {
+    const templates = listAgentTemplates();
+    return c.json({ templates, total: templates.length });
+  });
+  app.get("/api/multica/agent-templates/:slug", (c) => {
+    const template = getAgentTemplate(c.req.param("slug"));
+    if (!template) return c.json({ error: "template not found" }, 404);
+    return c.json({ template });
+  });
+  app.get("/api/agent-templates", (c) => c.json(listAgentTemplates()));
+  app.get("/api/agent-templates/:slug", (c) => {
+    const template = getAgentTemplate(c.req.param("slug"));
+    if (!template) return c.json({ error: "template not found" }, 404);
+    return c.json(template);
   });
 
   app.get("/api/multica/skills", (c) => {

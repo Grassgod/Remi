@@ -66,6 +66,29 @@ export interface MulticaSkill {
   updatedAt?: string;
 }
 
+export interface MulticaAgentTemplateSkill {
+  sourceUrl: string;
+  source_url?: string;
+  cachedName: string;
+  cached_name?: string;
+  cachedDescription: string;
+  cached_description?: string;
+}
+
+export interface MulticaAgentTemplateSummary {
+  slug: string;
+  name: string;
+  description: string;
+  category?: string;
+  icon?: string;
+  accent?: string;
+  skills: MulticaAgentTemplateSkill[];
+}
+
+export interface MulticaAgentTemplate extends MulticaAgentTemplateSummary {
+  instructions: string;
+}
+
 export interface MulticaAgent {
   id: string;
   name: string;
@@ -732,6 +755,37 @@ export interface CreateAgentInput {
   customArgs?: string[];
   mcpConfig?: unknown | null;
   thinkingLevel?: string | null;
+}
+
+export interface CreateAgentFromTemplateInput {
+  templateSlug?: string;
+  template_slug?: string;
+  name: string;
+  runtimeId?: string | null;
+  runtime_id?: string | null;
+  provider?: MulticaAgentProvider | null;
+  model?: string | null;
+  visibility?: string;
+  maxConcurrentTasks?: number;
+  max_concurrent_tasks?: number;
+  description?: string | null;
+  instructions?: string | null;
+  avatarUrl?: string | null;
+  avatar_url?: string | null;
+  extraSkillIds?: string[];
+  extra_skill_ids?: string[];
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  ownerId?: string | null;
+  owner_id?: string | null;
+}
+
+export interface CreateAgentFromTemplateResult {
+  agent: MulticaAgent;
+  importedSkillIds: string[];
+  imported_skill_ids: string[];
+  reusedSkillIds: string[];
+  reused_skill_ids: string[];
 }
 
 export interface CreateSkillInput {
