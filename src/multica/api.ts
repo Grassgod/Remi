@@ -205,7 +205,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/auth/verify-code", (c) => c.json({ error: "email auth is not configured in local Bun Multica" }, 501));
   app.post("/auth/google", (c) => c.json({ error: "google auth is not configured in local Bun Multica" }, 501));
   app.get("/health/realtime", (c) => c.json({ connections: 0, enabled: false }));
-  app.get("/api/github/setup", (c) => c.json({ configured: false }));
+  app.get("/api/github/setup", (c) => c.json(githubSetupResponse(c.req.query("installation_id"), c.req.query("state"))));
   app.post("/api/webhooks/github", (c) => c.json({ configured: false }, 202));
   app.post("/api/webhooks/autopilots/:token", async (c) => {
     const rawBody = await c.req.raw.text();
@@ -350,10 +350,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(result, 201);
   });
   app.get("/api/workspaces/:id/invitations", (c) => c.json(store.listWorkspaceInvitations(c.req.param("id"))));
-  app.get("/api/workspaces/:id/github/connect", (c) => c.json({ configured: false }));
+  app.get("/api/workspaces/:id/github/connect", (c) => c.json(githubConnectResponse(c.req.param("id"))));
   app.get("/api/workspaces/:id/github/installations", (c) => c.json({
     installations: [],
-    configured: false,
+    configured: isGitHubAppConfigured(),
     can_manage: true,
   }));
   app.delete("/api/workspaces/:id/github/installations/:installationId", (c) => c.body(null, 204));
@@ -2436,6 +2436,45 @@ function workspaceReposResponse(workspaceId: string): {
 
 function cloudRuntimeUnavailableResponse(): { error: string; configured: false } {
   return { error: "cloud runtime service is not configured", configured: false };
+}
+
+function githubAppSlug(): string {
+  return (process.env.GITHUB_APP_SLUG ?? "").trim();
+}
+
+function githubWebhookSecret(): string {
+  return (process.env.GITHUB_WEBHOOK_SECRET ?? process.env.MULTICA_WEBHOOK_SECRET ?? "").trim();
+}
+
+function isGitHubAppConfigured(): boolean {
+  return Boolean(githubAppSlug() && githubWebhookSecret());
+}
+
+function signGitHubState(workspaceId: string): string {
+  const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+  const payload = `${workspaceId}.${nonce}`;
+  const sig = createHmac("sha256", githubWebhookSecret()).update(payload).digest("hex");
+  return `${payload}.${sig}`;
+}
+
+function githubConnectResponse(workspaceId: string): { configured: boolean; url?: string } {
+  if (!isGitHubAppConfigured()) return { configured: false };
+  const state = signGitHubState(workspaceId);
+  return {
+    configured: true,
+    url: `https://github.com/apps/${encodeURIComponent(githubAppSlug())}/installations/new?state=${encodeURIComponent(state)}`,
+  };
+}
+
+function githubSetupResponse(installationId?: string, state?: string): {
+  configured: boolean;
+  installation_id?: string;
+  state?: string;
+  error?: string;
+} {
+  if (!isGitHubAppConfigured()) return { configured: false, error: "github app is not configured" };
+  if (!installationId || !state) return { configured: true, error: "missing_params" };
+  return { configured: true, installation_id: installationId, state };
 }
 
 function taskCompatibilityResponse(task: MulticaTask): MulticaTask & {

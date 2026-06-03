@@ -3377,6 +3377,9 @@ describe("Bun Multica API", () => {
     const app = createMulticaApp({ store });
     const issue = store.createIssue({ title: "GitHub API issue" });
 
+    const unavailableConnect = await app.request("/api/workspaces/local/github/connect");
+    expect(await unavailableConnect.json()).toEqual({ configured: false });
+
     const settings = await app.request("/api/multica/github/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -3469,6 +3472,41 @@ describe("Bun Multica API", () => {
     });
     expect(webhook.status).toBe(202);
     expect((await webhook.json()).pullRequest.issueId).toBe(webhookIssue.id);
+  });
+
+  it("serves configured GitHub setup and connect compatibility responses", async () => {
+    const previousSlug = process.env.GITHUB_APP_SLUG;
+    const previousSecret = process.env.GITHUB_WEBHOOK_SECRET;
+    try {
+      process.env.GITHUB_APP_SLUG = "multica-local";
+      process.env.GITHUB_WEBHOOK_SECRET = "local-secret";
+      const app = createMulticaApp({ store: createStore() });
+
+      const connect = await app.request("/api/workspaces/local/github/connect");
+      const connectBody = await connect.json();
+      expect(connect.status).toBe(200);
+      expect(connectBody.configured).toBe(true);
+      expect(connectBody.url).toStartWith("https://github.com/apps/multica-local/installations/new?state=");
+
+      const installations = await app.request("/api/workspaces/local/github/installations");
+      expect(await installations.json()).toMatchObject({
+        configured: true,
+        installations: [],
+        can_manage: true,
+      });
+
+      const setup = await app.request("/api/github/setup?installation_id=123&state=local.state.sig");
+      expect(await setup.json()).toMatchObject({
+        configured: true,
+        installation_id: "123",
+        state: "local.state.sig",
+      });
+    } finally {
+      if (previousSlug === undefined) delete process.env.GITHUB_APP_SLUG;
+      else process.env.GITHUB_APP_SLUG = previousSlug;
+      if (previousSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+      else process.env.GITHUB_WEBHOOK_SECRET = previousSecret;
+    }
   });
 
   it("serves assignee frequency through original Multica route", async () => {
