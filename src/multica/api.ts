@@ -28,6 +28,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -36,6 +37,8 @@ import type {
   ListIssuesInput,
   QuickCreateIssueInput,
   RegisterRuntimeInput,
+  ReportRuntimeLocalSkillImportInput,
+  ReportRuntimeLocalSkillListInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -386,6 +389,57 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.put("/api/runtimes/:id/models", async (c) => {
     const body = await readJson<{ models?: any[]; supported?: boolean }>(c);
     return c.json({ runtime_id: c.req.param("id"), supported: body.supported !== false, models: store.updateRuntimeModels(c.req.param("id"), body.models ?? []) });
+  });
+  app.post("/api/multica/runtimes/:id/local-skills", (c) => {
+    return c.json(store.createRuntimeLocalSkillListRequest(c.req.param("id")));
+  });
+  app.post("/api/runtimes/:id/local-skills", (c) => {
+    return c.json(store.createRuntimeLocalSkillListRequest(c.req.param("id")));
+  });
+  app.get("/api/multica/runtimes/:id/local-skills/:requestId", (c) => {
+    const request = store.getRuntimeLocalSkillListRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.get("/api/runtimes/:id/local-skills/:requestId", (c) => {
+    const request = store.getRuntimeLocalSkillListRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.post("/api/multica/runtimes/:id/local-skills/import", async (c) => {
+    const body = await readJson<CreateRuntimeLocalSkillImportInput>(c);
+    return c.json(store.createRuntimeLocalSkillImportRequest(c.req.param("id"), body));
+  });
+  app.post("/api/runtimes/:id/local-skills/import", async (c) => {
+    const body = await readJson<CreateRuntimeLocalSkillImportInput>(c);
+    return c.json(store.createRuntimeLocalSkillImportRequest(c.req.param("id"), body));
+  });
+  app.get("/api/multica/runtimes/:id/local-skills/import/:requestId", (c) => {
+    const request = store.getRuntimeLocalSkillImportRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.get("/api/runtimes/:id/local-skills/import/:requestId", (c) => {
+    const request = store.getRuntimeLocalSkillImportRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/local-skills/claim", (c) => {
+    return c.json({ request: store.claimRuntimeLocalSkillListRequest(c.req.param("runtimeId")) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/local-skills/:requestId/result", async (c) => {
+    const body = await readJson<ReportRuntimeLocalSkillListInput>(c);
+    store.reportRuntimeLocalSkillListResult(c.req.param("runtimeId"), c.req.param("requestId"), body);
+    return c.json({ status: "ok" });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/local-skills/import/claim", (c) => {
+    const limit = parseOptionalInt(c.req.query("limit")) ?? 10;
+    return c.json({ requests: store.claimRuntimeLocalSkillImportRequests(c.req.param("runtimeId"), limit) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result", async (c) => {
+    const body = await readJson<ReportRuntimeLocalSkillImportInput>(c);
+    store.reportRuntimeLocalSkillImportResult(c.req.param("runtimeId"), c.req.param("requestId"), body);
+    return c.json({ status: "ok" });
   });
   app.get("/api/multica/runtimes/:id/usage", (c) => {
     const runtime = store.getRuntime(c.req.param("id"));

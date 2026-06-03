@@ -10,6 +10,7 @@ export type MulticaTaskStatus =
 
 export type MulticaRuntimeStatus = "online" | "offline";
 export type MulticaRuntimeVisibility = "private" | "public";
+export type MulticaRuntimeLocalSkillRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaIssueDependencyType = "blocks" | "blocked_by" | "related";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
@@ -105,6 +106,45 @@ export interface MulticaRuntime {
   lastHeartbeatAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaRuntimeLocalSkillSummary {
+  key: string;
+  name: string;
+  description?: string;
+  sourcePath: string;
+  source_path?: string;
+  provider: string;
+  fileCount: number;
+  file_count?: number;
+}
+
+export interface MulticaRuntimeLocalSkillListRequest {
+  id: string;
+  runtimeId: string;
+  status: MulticaRuntimeLocalSkillRequestStatus;
+  skills: MulticaRuntimeLocalSkillSummary[];
+  supported: boolean;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt: string | null;
+}
+
+export interface MulticaRuntimeLocalSkillImportRequest {
+  id: string;
+  runtimeId: string;
+  skillKey: string;
+  name: string | null;
+  description: string | null;
+  status: MulticaRuntimeLocalSkillRequestStatus;
+  skill: MulticaSkill | null;
+  skillId: string | null;
+  error: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt: string | null;
 }
 
 export interface MulticaRuntimeModelThinkingLevel {
@@ -747,6 +787,36 @@ export interface UpdateRuntimeInput {
   maxConcurrency?: number;
   max_concurrency?: number;
   models?: MulticaRuntimeModel[];
+}
+
+export interface CreateRuntimeLocalSkillImportInput {
+  skillKey?: string;
+  skill_key?: string;
+  name?: string | null;
+  description?: string | null;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface ReportRuntimeLocalSkillListInput {
+  status?: string;
+  skills?: MulticaRuntimeLocalSkillSummary[];
+  supported?: boolean;
+  error?: string;
+}
+
+export interface ReportRuntimeLocalSkillImportInput {
+  status?: string;
+  skill?: {
+    name?: string;
+    description?: string;
+    content?: string;
+    sourcePath?: string;
+    source_path?: string;
+    provider?: string;
+    files?: MulticaSkillFile[];
+  } | null;
+  error?: string;
 }
 
 export interface CreateIssueInput {

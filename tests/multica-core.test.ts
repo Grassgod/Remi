@@ -1389,6 +1389,82 @@ describe("Bun Multica API", () => {
     expect(updatedBody.runtime.maxConcurrency).toBe(4);
   });
 
+  it("serves runtime local skill list and import request flows", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ name: "skill-runtime", provider: "claude", workspaceId: "local" });
+    const app = createMulticaApp({ store });
+
+    const listInit = await app.request(`/api/runtimes/${runtime.id}/local-skills`, { method: "POST" });
+    expect(listInit.status).toBe(200);
+    const listRequest = await listInit.json();
+    expect(listRequest.status).toBe("pending");
+
+    const listClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/local-skills/claim`, { method: "POST" });
+    const listClaimBody = await listClaim.json();
+    expect(listClaimBody.request.id).toBe(listRequest.id);
+    expect(listClaimBody.request.status).toBe("running");
+
+    const listReport = await app.request(`/api/daemon/runtimes/${runtime.id}/local-skills/${listRequest.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        skills: [{
+          key: "review-helper",
+          name: "Review Helper",
+          description: "Review local files",
+          source_path: "/home/me/.claude/skills/review-helper",
+          provider: "claude",
+          file_count: 2,
+        }],
+      }),
+    });
+    expect(listReport.status).toBe(200);
+
+    const listPoll = await app.request(`/api/runtimes/${runtime.id}/local-skills/${listRequest.id}`);
+    const listPollBody = await listPoll.json();
+    expect(listPollBody.status).toBe("completed");
+    expect(listPollBody.skills[0].sourcePath).toBe("/home/me/.claude/skills/review-helper");
+
+    const importInit = await app.request(`/api/runtimes/${runtime.id}/local-skills/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skill_key: "review-helper", name: "Imported Local Review" }),
+    });
+    expect(importInit.status).toBe(200);
+    const importRequest = await importInit.json();
+    expect(importRequest.status).toBe("pending");
+
+    const importClaim = await app.request(`/api/daemon/runtimes/${runtime.id}/local-skills/import/claim?limit=5`, { method: "POST" });
+    const importClaimBody = await importClaim.json();
+    expect(importClaimBody.requests[0].id).toBe(importRequest.id);
+    expect(importClaimBody.requests[0].skillKey).toBe("review-helper");
+
+    const importReport = await app.request(`/api/daemon/runtimes/${runtime.id}/local-skills/import/${importRequest.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        skill: {
+          name: "Review Helper",
+          description: "Daemon description",
+          content: "# Review Helper",
+          provider: "claude",
+          source_path: "/home/me/.claude/skills/review-helper",
+          files: [{ path: "notes/check.md", content: "Check" }],
+        },
+      }),
+    });
+    expect(importReport.status).toBe(200);
+
+    const importPoll = await app.request(`/api/runtimes/${runtime.id}/local-skills/import/${importRequest.id}`);
+    const importPollBody = await importPoll.json();
+    expect(importPollBody.status).toBe("completed");
+    expect(importPollBody.skill.name).toBe("Imported Local Review");
+    expect(importPollBody.skill.config.origin.type).toBe("runtime_local");
+    expect(importPollBody.skill.files[0].path).toBe("notes/check.md");
+  });
+
   it("serves issues as first-class records with linked tasks", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

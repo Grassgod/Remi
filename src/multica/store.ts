@@ -19,6 +19,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -66,8 +67,14 @@ import type {
   MulticaProject,
   MulticaProjectResource,
   MulticaProjectSearchResult,
+  MulticaRuntimeLocalSkillImportRequest,
+  MulticaRuntimeLocalSkillListRequest,
+  MulticaRuntimeLocalSkillRequestStatus,
+  MulticaRuntimeLocalSkillSummary,
   QuickCreateIssueInput,
   QuickCreateIssueResult,
+  ReportRuntimeLocalSkillImportInput,
+  ReportRuntimeLocalSkillListInput,
   MulticaRuntime,
   MulticaRuntimeDaily,
   MulticaRuntimeModel,
@@ -210,6 +217,41 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_runtime_models_runtime ON multica_runtime_models(runtime_id, is_default);
+
+      CREATE TABLE IF NOT EXISTS multica_runtime_local_skill_list_requests (
+        id TEXT PRIMARY KEY,
+        runtime_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        skills TEXT NOT NULL DEFAULT '[]',
+        supported INTEGER NOT NULL DEFAULT 1,
+        error TEXT,
+        run_started_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(runtime_id) REFERENCES multica_runtimes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_runtime_local_skill_list_runtime ON multica_runtime_local_skill_list_requests(runtime_id, status, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_runtime_local_skill_import_requests (
+        id TEXT PRIMARY KEY,
+        runtime_id TEXT NOT NULL,
+        skill_key TEXT NOT NULL,
+        name TEXT,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        skill_id TEXT,
+        skill TEXT,
+        error TEXT,
+        created_by TEXT,
+        run_started_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(runtime_id) REFERENCES multica_runtimes(id) ON DELETE CASCADE,
+        FOREIGN KEY(skill_id) REFERENCES multica_skills(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_runtime_local_skill_import_runtime ON multica_runtime_local_skill_import_requests(runtime_id, status, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_workspace_members (
         id TEXT PRIMARY KEY,
@@ -1401,6 +1443,160 @@ export class MulticaStore {
     if (!row) throw new Error(`Runtime not found: ${runtimeId}`);
     this.replaceRuntimeModels(runtimeId, models, String(row.provider), nowIso());
     return this.listRuntimeModels(runtimeId);
+  }
+
+  createRuntimeLocalSkillListRequest(runtimeId: string): MulticaRuntimeLocalSkillListRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const id = createId("rls");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_runtime_local_skill_list_requests (
+        id, runtime_id, status, skills, supported, created_at, updated_at
+      ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
+      [id, runtimeId, now, now],
+    );
+    return this.getRuntimeLocalSkillListRequest(runtimeId, id)!;
+  }
+
+  getRuntimeLocalSkillListRequest(runtimeId: string, requestId: string): MulticaRuntimeLocalSkillListRequest | null {
+    const row = this.db.query(
+      "SELECT * FROM multica_runtime_local_skill_list_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? toRuntimeLocalSkillListRequest(row) : null;
+  }
+
+  claimRuntimeLocalSkillListRequest(runtimeId: string): MulticaRuntimeLocalSkillListRequest | null {
+    const row = this.db.query(
+      `SELECT * FROM multica_runtime_local_skill_list_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (!row) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_runtime_local_skill_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, String(row.id)],
+    );
+    return this.getRuntimeLocalSkillListRequest(runtimeId, String(row.id));
+  }
+
+  reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillListInput): MulticaRuntimeLocalSkillListRequest {
+    const current = this.getRuntimeLocalSkillListRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    const status = normalizeRuntimeLocalSkillStatus(input.status);
+    const now = nowIso();
+    if (status === "completed") {
+      this.db.run(
+        `UPDATE multica_runtime_local_skill_list_requests
+         SET status = 'completed', skills = ?, supported = ?, error = NULL, updated_at = ?
+         WHERE id = ?`,
+        [toJson(normalizeRuntimeLocalSkillSummaries(input.skills ?? [])), input.supported === false ? 0 : 1, now, requestId],
+      );
+    } else {
+      this.db.run(
+        `UPDATE multica_runtime_local_skill_list_requests
+         SET status = 'failed', error = ?, updated_at = ?
+         WHERE id = ?`,
+        [input.error ?? "runtime local skill list failed", now, requestId],
+      );
+    }
+    return this.getRuntimeLocalSkillListRequest(runtimeId, requestId)!;
+  }
+
+  createRuntimeLocalSkillImportRequest(runtimeId: string, input: CreateRuntimeLocalSkillImportInput): MulticaRuntimeLocalSkillImportRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const skillKey = String(input.skillKey ?? input.skill_key ?? "").trim();
+    if (!skillKey) throw new Error("skill_key is required");
+    const id = createId("rli");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_runtime_local_skill_import_requests (
+        id, runtime_id, skill_key, name, description, status, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [
+        id,
+        runtimeId,
+        skillKey,
+        cleanOptionalLocalSkillString(input.name),
+        cleanOptionalLocalSkillString(input.description),
+        input.createdBy ?? input.created_by ?? null,
+        now,
+        now,
+      ],
+    );
+    return this.getRuntimeLocalSkillImportRequest(runtimeId, id)!;
+  }
+
+  getRuntimeLocalSkillImportRequest(runtimeId: string, requestId: string): MulticaRuntimeLocalSkillImportRequest | null {
+    const row = this.db.query(
+      "SELECT * FROM multica_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? this.hydrateRuntimeLocalSkillImportRequest(toRuntimeLocalSkillImportRequest(row)) : null;
+  }
+
+  claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10): MulticaRuntimeLocalSkillImportRequest[] {
+    const rows = this.db.query(
+      `SELECT * FROM multica_runtime_local_skill_import_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT ?`,
+    ).all(runtimeId, Math.max(1, Math.floor(limit))) as Row[];
+    if (!rows.length) return [];
+    const now = nowIso();
+    for (const row of rows) {
+      this.db.run(
+        "UPDATE multica_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, String(row.id)],
+      );
+    }
+    return rows.map((row) => this.getRuntimeLocalSkillImportRequest(runtimeId, String(row.id))!).filter(Boolean);
+  }
+
+  reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillImportInput): MulticaRuntimeLocalSkillImportRequest {
+    const current = this.getRuntimeLocalSkillImportRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    const status = normalizeRuntimeLocalSkillStatus(input.status);
+    const now = nowIso();
+    if (status !== "completed") {
+      this.db.run(
+        "UPDATE multica_runtime_local_skill_import_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+        [input.error ?? "runtime local skill import failed", now, requestId],
+      );
+      return this.getRuntimeLocalSkillImportRequest(runtimeId, requestId)!;
+    }
+    if (!input.skill) throw new Error("daemon returned an empty skill bundle");
+    const skillName = cleanOptionalLocalSkillString(current.name) ?? String(input.skill.name ?? current.skillKey).trim();
+    const description = cleanOptionalLocalSkillString(current.description) ?? String(input.skill.description ?? "");
+    const runtime = this.getRuntime(runtimeId);
+    const skill = this.createSkill({
+      workspaceId: runtime?.workspaceId ?? "local",
+      name: skillName,
+      description,
+      content: input.skill.content ?? "",
+      createdBy: current.createdBy,
+      files: input.skill.files ?? [],
+      config: {
+        origin: {
+          type: "runtime_local",
+          runtime_id: runtimeId,
+          provider: input.skill.provider ?? runtime?.provider ?? "unknown",
+          source_path: input.skill.sourcePath ?? input.skill.source_path ?? "",
+        },
+      },
+    });
+    const skillId = skill.id ?? "";
+    this.db.run(
+      `UPDATE multica_runtime_local_skill_import_requests
+       SET status = 'completed', skill_id = ?, skill = ?, error = NULL, updated_at = ?
+       WHERE id = ?`,
+      [skillId, toJson(skill), now, requestId],
+    );
+    return this.getRuntimeLocalSkillImportRequest(runtimeId, requestId)!;
   }
 
   listRuntimeUsage(runtimeId?: string | null): MulticaRuntimeUsage[] {
@@ -3882,6 +4078,13 @@ export class MulticaStore {
     };
   }
 
+  private hydrateRuntimeLocalSkillImportRequest(request: MulticaRuntimeLocalSkillImportRequest): MulticaRuntimeLocalSkillImportRequest {
+    return {
+      ...request,
+      skill: request.skill ?? (request.skillId ? this.getSkill(request.skillId) : null),
+    };
+  }
+
   private listRuntimeModelsForExistingRuntime(runtimeId: string): MulticaRuntimeModel[] {
     const rows = this.db.query("SELECT * FROM multica_runtime_models WHERE runtime_id = ? ORDER BY is_default DESC, label ASC").all(runtimeId) as Row[];
     return rows.map(toRuntimeModel);
@@ -4945,6 +5148,68 @@ function toRuntime(row: Row): MulticaRuntime {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function toRuntimeLocalSkillListRequest(row: Row): MulticaRuntimeLocalSkillListRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    status: normalizeRuntimeLocalSkillStatus(row.status),
+    skills: normalizeRuntimeLocalSkillSummaries(parseJson(row.skills, [])),
+    supported: Number(row.supported ?? 1) !== 0,
+    error: nullableString(row.error),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    runStartedAt: nullableString(row.run_started_at),
+  };
+}
+
+function toRuntimeLocalSkillImportRequest(row: Row): MulticaRuntimeLocalSkillImportRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    skillKey: String(row.skill_key),
+    name: nullableString(row.name),
+    description: nullableString(row.description),
+    status: normalizeRuntimeLocalSkillStatus(row.status),
+    skill: row.skill == null ? null : parseJson(row.skill, null),
+    skillId: nullableString(row.skill_id),
+    error: nullableString(row.error),
+    createdBy: nullableString(row.created_by),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    runStartedAt: nullableString(row.run_started_at),
+  };
+}
+
+function normalizeRuntimeLocalSkillStatus(value: unknown): MulticaRuntimeLocalSkillRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
+}
+
+function normalizeRuntimeLocalSkillSummaries(value: unknown): MulticaRuntimeLocalSkillSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    const record = isRecord(item) ? item : {};
+    const sourcePath = String(record.sourcePath ?? record.source_path ?? "");
+    const fileCount = Number(record.fileCount ?? record.file_count ?? 0);
+    return {
+      key: String(record.key ?? record.name ?? "").trim(),
+      name: String(record.name ?? record.key ?? "").trim(),
+      description: String(record.description ?? ""),
+      sourcePath,
+      source_path: sourcePath,
+      provider: String(record.provider ?? "unknown"),
+      fileCount,
+      file_count: fileCount,
+    };
+  }).filter((skill) => skill.key && skill.name);
+}
+
+function cleanOptionalLocalSkillString(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? "").trim();
+  return trimmed || null;
 }
 
 function withRuntimeLiveness(runtime: MulticaRuntime): MulticaRuntime {
