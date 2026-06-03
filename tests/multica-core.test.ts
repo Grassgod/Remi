@@ -11,6 +11,8 @@ import { MulticaScheduler } from "../src/multica/scheduler.js";
 import { MulticaStore } from "../src/multica/store.js";
 
 let db: Database | null = null;
+let previousUploadDir: string | undefined;
+let uploadDir: string | null = null;
 
 function createStore(): MulticaStore {
   db = new Database(":memory:");
@@ -20,7 +22,21 @@ function createStore(): MulticaStore {
 afterEach(() => {
   db?.close();
   db = null;
+  if (uploadDir) {
+    rmSync(uploadDir, { recursive: true, force: true });
+    uploadDir = null;
+  }
+  if (previousUploadDir === undefined) delete process.env.MULTICA_UPLOAD_DIR;
+  else process.env.MULTICA_UPLOAD_DIR = previousUploadDir;
+  previousUploadDir = undefined;
 });
+
+function useUploadDir(): string {
+  previousUploadDir = process.env.MULTICA_UPLOAD_DIR;
+  uploadDir = mkdtempSync(join(tmpdir(), "multica-upload-"));
+  process.env.MULTICA_UPLOAD_DIR = uploadDir;
+  return uploadDir;
+}
 
 describe("Bun Multica core store", () => {
   it("claims queued tasks by runtime provider and completes them", () => {
@@ -1164,6 +1180,42 @@ describe("Bun Multica API", () => {
     const deleted = await app.request(`/api/multica/comments/${replyBody.comment.id}`, { method: "DELETE" });
     expect(deleted.status).toBe(200);
     expect(store.getIssueComment(replyBody.comment.id)).toBeNull();
+  });
+
+  it("uploads, downloads, and deletes local attachment files", async () => {
+    useUploadDir();
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "Upload API" });
+    const form = new FormData();
+    form.append("file", new File(["hello upload"], "note.txt", { type: "text/plain" }));
+    form.append("issue_id", issue.id);
+    form.append("workspace_id", "local");
+
+    const uploaded = await app.request("/api/upload-file", {
+      method: "POST",
+      body: form,
+    });
+    expect(uploaded.status).toBe(200);
+    const uploadedBody = await uploaded.json();
+    expect(uploadedBody.attachment.issueId).toBe(issue.id);
+    expect(uploadedBody.attachment.url).toStartWith("/api/attachments/");
+    expect(store.listAttachmentsForIssue(issue.id)[0]?.filename).toBe("note.txt");
+
+    const meta = await app.request(`/api/attachments/${uploadedBody.attachment.id}`);
+    expect((await meta.json()).attachment.filename).toBe("note.txt");
+
+    const content = await app.request(`/api/attachments/${uploadedBody.attachment.id}/content`);
+    expect(content.status).toBe(200);
+    expect(content.headers.get("content-type")).toContain("text/plain");
+    expect(await content.text()).toBe("hello upload");
+
+    const deleted = await app.request(`/api/attachments/${uploadedBody.attachment.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(store.getAttachment(uploadedBody.attachment.id)).toBeNull();
+
+    const missing = await app.request(`/api/attachments/${uploadedBody.attachment.id}/content`);
+    expect(missing.status).toBe(404);
   });
 
   it("serves chat session and message endpoints", async () => {

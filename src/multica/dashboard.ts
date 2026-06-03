@@ -1481,9 +1481,12 @@ export function renderMulticaDashboardHtml(): string {
     });
 
     async function api(path, options = {}) {
+      const headers = options.body instanceof FormData
+        ? { ...(options.headers || {}) }
+        : { "Content-Type": "application/json", ...(options.headers || {}) };
       const res = await fetch(path, {
         ...options,
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+        headers
       });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
@@ -1970,6 +1973,24 @@ export function renderMulticaDashboardHtml(): string {
       event.preventDefault();
       const issue = state.selectedIssue || state.selectedTask?.issue;
       if (!issue) return;
+      const fileInput = document.getElementById("issueAttachmentFile");
+      const file = fileInput?.files?.[0] || null;
+      if (file) {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("workspaceId", issue.workspaceId || "local");
+        form.append("issueId", issue.id);
+        form.append("uploaderType", "member");
+        form.append("uploaderId", "local");
+        await api("/api/upload-file", {
+          method: "POST",
+          body: form
+        });
+        fileInput.value = "";
+        if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+        else await loadTaskDetail(state.selectedTaskId);
+        return;
+      }
       const filename = document.getElementById("issueAttachmentFilename").value.trim();
       const url = document.getElementById("issueAttachmentUrl").value.trim();
       if (!filename || !url) return;
@@ -3123,6 +3144,7 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"outline\\" type=\\"submit\\">Create and attach label</button>" +
         "</form>" +
         "<form class=\\"sheet-form\\" onsubmit=\\"addSelectedIssueAttachment(event)\\" style=\\"padding:0;\\">" +
+          "<label>Upload file<input id=\\"issueAttachmentFile\\" type=\\"file\\"></label>" +
           "<div class=\\"detail-grid\\">" +
             "<label>Filename<input id=\\"issueAttachmentFilename\\" placeholder=\\"screenshot.png\\"></label>" +
             "<label>URL<input id=\\"issueAttachmentUrl\\" placeholder=\\"https://...\\"></label>" +
@@ -3190,12 +3212,16 @@ export function renderMulticaDashboardHtml(): string {
 
     function renderAttachments(attachments) {
       if (!attachments.length) return "<div class=\\"empty-column\\">No attachments</div>";
-      return attachments.map(attachment =>
+      return attachments.map(attachment => {
+        const href = attachment.url || ("/api/attachments/" + encodeURIComponent(attachment.id) + "/content");
+        return (
         "<div class=\\"message-row\\">" +
           "<div class=\\"message-head\\"><span>" + esc(attachment.filename) + "</span><span>" + esc(attachment.contentType || "file") + "</span><span>" + esc(shortId(attachment.id)) + "</span></div>" +
-          "<div class=\\"message-content\\">" + esc(attachment.url) + "</div>" +
+          "<div class=\\"message-content\\">" + esc(href) + "</div>" +
+          "<div class=\\"issue-meta\\"><a class=\\"outline\\" href=\\"" + escAttr(href) + "\\" target=\\"_blank\\" rel=\\"noreferrer\\">Download</a></div>" +
         "</div>"
-      ).join("");
+        );
+      }).join("");
     }
 
     function renderLabelChips(labels) {

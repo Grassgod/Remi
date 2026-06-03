@@ -1,5 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, extname, join } from "node:path";
 import { createLogger } from "../logger.js";
 import { renderMulticaDashboardHtml } from "./dashboard.js";
 import { MulticaScheduler } from "./scheduler.js";
@@ -42,6 +46,7 @@ import type {
 
 const log = createLogger("multica-api");
 const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
+const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
 
 export interface MulticaApiOptions {
   store?: MulticaStore;
@@ -634,6 +639,72 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ attachment: store.createAttachment(body) }, 201);
   });
 
+  app.post("/api/upload-file", async (c) => {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "missing file field" }, 400);
+    if (file.size > MAX_UPLOAD_SIZE) return c.json({ error: "file too large" }, 413);
+    const workspaceId = stringFormValue(form.get("workspaceId") ?? form.get("workspace_id")) ?? c.req.header("X-Workspace-ID") ?? "local";
+    const issueId = stringFormValue(form.get("issueId") ?? form.get("issue_id"));
+    const commentId = stringFormValue(form.get("commentId") ?? form.get("comment_id"));
+    const uploaderType = stringFormValue(form.get("uploaderType") ?? form.get("uploader_type")) ?? "member";
+    const uploaderId = stringFormValue(form.get("uploaderId") ?? form.get("uploader_id")) ?? "local";
+    const attachmentId = createUploadAttachmentId();
+    const safeName = safeFilename(file.name || "upload.bin");
+    const relativePath = uploadRelativePath(workspaceId, attachmentId, safeName);
+    const absolutePath = uploadAbsolutePath(relativePath);
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, new Uint8Array(await file.arrayBuffer()));
+    const attachment = store.createAttachment({
+      id: attachmentId,
+      workspaceId,
+      issueId,
+      commentId,
+      uploaderType,
+      uploaderId,
+      filename: safeName,
+      url: `/api/attachments/${attachmentId}/content`,
+      contentType: file.type || detectContentTypeFromFilename(safeName),
+      sizeBytes: file.size,
+    });
+    return c.json({ attachment, ...attachment, downloadUrl: `/api/attachments/${attachment.id}/content` });
+  });
+
+  app.get("/api/attachments/:id", (c) => {
+    const attachment = store.getAttachment(c.req.param("id"));
+    if (!attachment) return c.json({ error: "attachment not found" }, 404);
+    return c.json({ attachment, downloadUrl: `/api/attachments/${attachment.id}/content` });
+  });
+
+  app.get("/api/attachments/:id/content", async (c) => {
+    const attachment = store.getAttachment(c.req.param("id"));
+    if (!attachment) return c.json({ error: "attachment not found" }, 404);
+    if (!attachment.url.startsWith("/api/attachments/")) {
+      return c.redirect(attachment.url);
+    }
+    const filePath = uploadedAttachmentPath(attachment);
+    if (!filePath || !existsSync(filePath)) return c.json({ error: "attachment file not found" }, 404);
+    const info = await stat(filePath);
+    const bytes = await readFile(filePath);
+    return new Response(bytes, {
+      headers: {
+        "Content-Type": attachment.contentType || detectContentTypeFromFilename(attachment.filename),
+        "Content-Length": String(info.size),
+        "Content-Disposition": `attachment; filename="${attachment.filename.replace(/"/g, "")}"`,
+      },
+    });
+  });
+
+  app.delete("/api/attachments/:id", async (c) => {
+    const attachment = store.deleteAttachment(c.req.param("id"));
+    if (!attachment) return c.json({ ok: true });
+    if (attachment.url.startsWith("/api/attachments/")) {
+      const filePath = uploadedAttachmentPath(attachment);
+      if (filePath) await unlink(filePath).catch(() => undefined);
+    }
+    return c.json({ ok: true, attachment });
+  });
+
   app.get("/api/multica/chats", (c) => {
     const sessions = store.listChatSessions(c.req.query("workspaceId"));
     return c.json({ sessions, total: sessions.length });
@@ -782,4 +853,50 @@ function normalizeReactionInput(input: CreateMulticaReactionInput): { actorType?
     actorId: input.actorId ?? input.actor_id ?? "local",
     emoji: input.emoji,
   };
+}
+
+function uploadRoot(): string {
+  return process.env.MULTICA_UPLOAD_DIR ?? join(homedir(), ".remi", "multica", "uploads");
+}
+
+function createUploadAttachmentId(): string {
+  return `att_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+}
+
+function stringFormValue(value: FormDataEntryValue | null): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function safeFilename(value: string): string {
+  const filename = basename(value).replace(/[^A-Za-z0-9._ -]/g, "_").trim();
+  return filename || "upload.bin";
+}
+
+function uploadRelativePath(workspaceId: string, attachmentId: string, filename: string): string {
+  return join(safePathSegment(workspaceId || "local"), `${attachmentId}${extname(filename) || ".bin"}`);
+}
+
+function uploadAbsolutePath(relativePath: string): string {
+  return join(uploadRoot(), relativePath);
+}
+
+function uploadedAttachmentPath(attachment: { workspaceId: string; id: string; filename: string }): string {
+  return uploadAbsolutePath(uploadRelativePath(attachment.workspaceId, attachment.id, attachment.filename));
+}
+
+function safePathSegment(value: string): string {
+  return String(value || "local").replace(/[^A-Za-z0-9_-]/g, "_") || "local";
+}
+
+function detectContentTypeFromFilename(filename: string): string {
+  const ext = extname(filename).toLowerCase();
+  if (ext === ".svg") return "image/svg+xml";
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".json") return "application/json";
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".md" || ext === ".txt" || ext === ".log") return "text/plain";
+  return "application/octet-stream";
 }

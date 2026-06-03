@@ -1579,6 +1579,13 @@ export class MulticaStore {
     return row ? toAttachment(row) : null;
   }
 
+  deleteAttachment(id: string): MulticaAttachment | null {
+    const attachment = this.getAttachment(id);
+    if (!attachment) return null;
+    this.db.run("DELETE FROM multica_attachments WHERE id = ?", [id]);
+    return attachment;
+  }
+
   listAttachmentsForIssue(issueId: string): MulticaAttachment[] {
     if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
     const rows = this.db.query(
