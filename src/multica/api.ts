@@ -195,6 +195,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(ack);
   });
+  app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
+    return c.json(workspaceReposResponse(c.req.param("workspaceId")));
+  });
 
   app.get("/api/multica/agents", (c) => c.json({ agents: store.listAgents() }));
   app.post("/api/multica/agents", async (c) => {
@@ -1697,8 +1700,23 @@ function registerDaemonRuntimes(store: MulticaStore, body: DaemonRegisterRequest
       deviceName,
     });
   });
+  const repos = workspaceReposResponse(workspaceId);
   return {
     runtimes: registered,
+    repos: repos.repos,
+    repos_version: repos.repos_version,
+    settings: repos.settings,
+  };
+}
+
+function workspaceReposResponse(workspaceId: string): {
+  workspace_id: string;
+  repos: unknown[];
+  repos_version: string;
+  settings: Record<string, unknown>;
+} {
+  return {
+    workspace_id: workspaceId,
     repos: [],
     repos_version: emptyReposVersion(),
     settings: {},

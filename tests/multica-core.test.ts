@@ -1914,6 +1914,16 @@ describe("Bun Multica API", () => {
     expect(deregistered.status).toBe(200);
     expect((await deregistered.json()).status).toBe("ok");
     expect(store.getRuntime(registeredBody.runtimes[0].id)?.status).toBe("offline");
+
+    const repos = await app.request("/api/daemon/workspaces/local/repos");
+    const reposBody = await repos.json();
+    expect(repos.status).toBe(200);
+    expect(reposBody).toEqual({
+      workspace_id: "local",
+      repos: [],
+      repos_version: registeredBody.repos_version,
+      settings: {},
+    });
   });
 
   it("serves issues as first-class records with linked tasks", async () => {
