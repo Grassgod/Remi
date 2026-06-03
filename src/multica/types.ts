@@ -111,6 +111,7 @@ export interface MulticaIssue {
   projectId: string | null;
   assigneeType: MulticaAssigneeType | null;
   assigneeId: string | null;
+  metadata: Record<string, string | number | boolean>;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;

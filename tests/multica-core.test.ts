@@ -301,6 +301,31 @@ describe("Bun Multica core store", () => {
     }
   });
 
+  it("stores issue metadata as a bounded primitive map and includes it in prompts", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const issue = store.createIssue({ title: "Remember PR state" });
+
+    expect(issue.metadata).toEqual({});
+    expect(store.setIssueMetadataKey(issue.id, "pr_url", "https://github.com/example/repo/pull/1")).toEqual({
+      pr_url: "https://github.com/example/repo/pull/1",
+    });
+    store.setIssueMetadataKey(issue.id, "ready", true);
+    store.setIssueMetadataKey(issue.id, "attempts", 2);
+    expect(() => store.setIssueMetadataKey(issue.id, "bad key", "x")).toThrow("key must match");
+    expect(() => store.setIssueMetadataKey(issue.id, "nested", { value: "x" })).toThrow("value must be a primitive");
+
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use pinned facts" });
+    const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)!);
+    expect(prompt).toContain("## Issue Metadata");
+    expect(prompt).toContain("pr_url: https://github.com/example/repo/pull/1");
+
+    expect(store.deleteIssueMetadataKey(issue.id, "ready")).toEqual({
+      attempts: 2,
+      pr_url: "https://github.com/example/repo/pull/1",
+    });
+  });
+
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -504,6 +529,26 @@ describe("Bun Multica API", () => {
     });
     expect(deleted.status).toBe(200);
     expect(store.listProjectResources(project.id)).toHaveLength(0);
+  });
+
+  it("serves issue metadata endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "Metadata API" });
+
+    const set = await app.request(`/api/multica/issues/${issue.id}/metadata/pipeline_status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: "waiting_review" }),
+    });
+    expect(set.status).toBe(200);
+    expect((await set.json()).metadata.pipeline_status).toBe("waiting_review");
+
+    const listed = await app.request(`/api/multica/issues/${issue.id}/metadata`);
+    expect((await listed.json()).metadata).toEqual({ pipeline_status: "waiting_review" });
+
+    const deleted = await app.request(`/api/multica/issues/${issue.id}/metadata/pipeline_status`, { method: "DELETE" });
+    expect((await deleted.json()).metadata).toEqual({});
   });
 
   it("triggers autopilots through API and webhook endpoints", async () => {

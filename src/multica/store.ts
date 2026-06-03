@@ -47,6 +47,8 @@ import type {
 
 const TERMINAL_STATUSES: MulticaTaskStatus[] = ["completed", "failed", "cancelled"];
 const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+const MAX_ISSUE_METADATA_KEYS = 50;
+const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 
 export class MulticaStore {
   private db: Database;
@@ -111,6 +113,7 @@ export class MulticaStore {
         project_id TEXT,
         assignee_type TEXT,
         assignee_id TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
         created_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -299,6 +302,7 @@ export class MulticaStore {
     this.addColumnIfMissing("multica_agents", "archived_at TEXT");
     this.addColumnIfMissing("multica_issues", "assignee_type TEXT");
     this.addColumnIfMissing("multica_issues", "assignee_id TEXT");
+    this.addColumnIfMissing("multica_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
   }
 
   createAgent(input: CreateAgentInput): MulticaAgent {
@@ -736,6 +740,59 @@ export class MulticaStore {
       "SELECT * FROM multica_issue_activity WHERE issue_id = ? ORDER BY created_at ASC",
     ).all(issueId) as Row[];
     return rows.map(toIssueActivity);
+  }
+
+  listIssueMetadata(issueId: string): Record<string, string | number | boolean> {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    return issue.metadata;
+  }
+
+  setIssueMetadataKey(issueId: string, key: string, value: unknown): Record<string, string | number | boolean> {
+    validateIssueMetadataKey(key);
+    const normalized = validateIssueMetadataValue(value);
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const metadata = { ...issue.metadata };
+    if (!(key in metadata) && Object.keys(metadata).length >= MAX_ISSUE_METADATA_KEYS) {
+      throw new Error(`metadata cannot exceed ${MAX_ISSUE_METADATA_KEYS} keys`);
+    }
+    metadata[key] = normalized;
+    validateIssueMetadataSize(metadata);
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_issues SET metadata = ?, updated_at = ? WHERE id = ?",
+      [toJson(metadata), now, issueId],
+    );
+    this.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_metadata_set",
+      body: `${key}=${String(normalized)}`,
+      data: { key, value: normalized },
+    });
+    return this.listIssueMetadata(issueId);
+  }
+
+  deleteIssueMetadataKey(issueId: string, key: string): Record<string, string | number | boolean> {
+    validateIssueMetadataKey(key);
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const metadata = { ...issue.metadata };
+    delete metadata[key];
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_issues SET metadata = ?, updated_at = ? WHERE id = ?",
+      [toJson(metadata), now, issueId],
+    );
+    this.appendIssueActivity(issueId, {
+      actorType: "system",
+      actorId: null,
+      type: "issue_metadata_deleted",
+      body: key,
+      data: { key },
+    });
+    return this.listIssueMetadata(issueId);
   }
 
   private appendIssueActivity(issueId: string, input: {
@@ -1680,6 +1737,34 @@ function hasPlainMention(body: string, name: string): boolean {
   return new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[.,:;!?])`, "i").test(body);
 }
 
+function validateIssueMetadataKey(key: string): void {
+  if (!key) throw new Error("key is required");
+  if (!ISSUE_METADATA_KEY_RE.test(key)) {
+    throw new Error("key must match ^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$");
+  }
+}
+
+function validateIssueMetadataValue(value: unknown): string | number | boolean {
+  if (!isIssueMetadataPrimitive(value)) {
+    if (value === null) throw new Error("value cannot be null");
+    throw new Error("value must be a primitive: string, number, or bool");
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new Error("value must be a finite number");
+  }
+  return value;
+}
+
+function isIssueMetadataPrimitive(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "boolean" || typeof value === "number";
+}
+
+function validateIssueMetadataSize(metadata: Record<string, string | number | boolean>): void {
+  if (Buffer.byteLength(toJson(metadata), "utf8") > 8 * 1024) {
+    throw new Error("metadata exceeds the 8KB size limit");
+  }
+}
+
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
   if (!resourceType) throw new Error("resourceType is required");
   if (resourceType !== "github_repo") throw new Error(`Unknown project resource type: ${resourceType}`);
@@ -1832,10 +1917,22 @@ function toIssue(row: Row): MulticaIssue {
     projectId: nullableString(row.project_id),
     assigneeType: nullableString(row.assignee_type) as MulticaIssue["assigneeType"],
     assigneeId: nullableString(row.assignee_id),
+    metadata: parseIssueMetadata(row.metadata),
     createdBy: nullableString(row.created_by),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function parseIssueMetadata(value: unknown): Record<string, string | number | boolean> {
+  const raw = parseJson<Record<string, unknown>>(value, {});
+  const metadata: Record<string, string | number | boolean> = {};
+  for (const [key, item] of Object.entries(raw)) {
+    if (ISSUE_METADATA_KEY_RE.test(key) && isIssueMetadataPrimitive(item)) {
+      metadata[key] = item;
+    }
+  }
+  return metadata;
 }
 
 function toIssueComment(row: Row): MulticaIssueComment {

@@ -1819,6 +1819,39 @@ export function renderMulticaDashboardHtml(): string {
       else await loadTaskDetail(state.selectedTaskId);
     }
 
+    async function setSelectedIssueMetadata(event) {
+      event.preventDefault();
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      const key = document.getElementById("issueMetadataKey").value.trim();
+      const type = document.getElementById("issueMetadataType").value;
+      const rawValue = document.getElementById("issueMetadataValue").value.trim();
+      if (!key || rawValue === "") return;
+      let value;
+      try {
+        value = parseMetadataValue(rawValue, type);
+      } catch (err) {
+        alert(String(err.message || err));
+        return;
+      }
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/metadata/" + encodeURIComponent(key), {
+        method: "PUT",
+        body: JSON.stringify({ value })
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
+    async function deleteSelectedIssueMetadata(key) {
+      const issue = state.selectedIssue || state.selectedTask?.issue;
+      if (!issue) return;
+      await api("/api/multica/issues/" + encodeURIComponent(issue.id) + "/metadata/" + encodeURIComponent(key), {
+        method: "DELETE"
+      });
+      if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      else await loadTaskDetail(state.selectedTaskId);
+    }
+
     function insertIssueMention() {
       const select = document.getElementById("issueMentionTarget");
       const textarea = document.getElementById("issueCommentBody");
@@ -2645,7 +2678,28 @@ export function renderMulticaDashboardHtml(): string {
           "<label>Comment<textarea id=\\"issueCommentBody\\" placeholder=\\"Comment\\"></textarea></label>" +
           "<button class=\\"outline\\" type=\\"submit\\">Add comment</button>" +
         "</form>" +
+        "<div class=\\"detail-block\\" style=\\"padding:0;border:0;\\"><div class=\\"detail-label\\">Metadata</div><div class=\\"message-list\\">" + renderIssueMetadata(issue) + "</div></div>" +
+        "<form class=\\"sheet-form\\" onsubmit=\\"setSelectedIssueMetadata(event)\\" style=\\"padding:0;\\">" +
+          "<div class=\\"detail-grid\\">" +
+            "<label>Key<input id=\\"issueMetadataKey\\" placeholder=\\"pr_url\\"></label>" +
+            "<label>Type<select id=\\"issueMetadataType\\"><option value=\\"string\\">string</option><option value=\\"number\\">number</option><option value=\\"bool\\">bool</option></select></label>" +
+          "</div>" +
+          "<label>Value<input id=\\"issueMetadataValue\\" placeholder=\\"Pinned value\\"></label>" +
+          "<button class=\\"outline\\" type=\\"submit\\">Set metadata</button>" +
+        "</form>" +
       "</div>";
+    }
+
+    function renderIssueMetadata(issue) {
+      const entries = Object.entries(issue.metadata || {}).sort(([left], [right]) => left.localeCompare(right));
+      if (!entries.length) return "<div class=\\"empty-column\\">No metadata</div>";
+      return entries.map(([key, value]) =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(key) + "</span><span>" + esc(typeof value) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(String(value)) + "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"deleteSelectedIssueMetadata('" + escAttr(key) + "')\\">Delete</button>" +
+        "</div>"
+      ).join("");
     }
 
     function renderIssueComments() {
@@ -2878,6 +2932,21 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    function parseMetadataValue(raw, type) {
+      if (type === "number") {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error("Metadata value must be a number");
+        return value;
+      }
+      if (type === "bool") {
+        const normalized = raw.trim().toLowerCase();
+        if (["true", "1", "yes"].includes(normalized)) return true;
+        if (["false", "0", "no"].includes(normalized)) return false;
+        throw new Error("Metadata value must be true or false");
+      }
+      return raw;
+    }
+
     function renderDetailBlock(label, value) {
       return "<div class=\\"detail-block\\"><div class=\\"detail-label\\">" + esc(label) + "</div><div class=\\"detail-text\\">" + esc(value) + "</div></div>";
     }
@@ -2986,6 +3055,8 @@ export function renderMulticaDashboardHtml(): string {
     window.insertIssueMention = insertIssueMention;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
+    window.setSelectedIssueMetadata = setSelectedIssueMetadata;
+    window.deleteSelectedIssueMetadata = deleteSelectedIssueMetadata;
   </script>
 </body>
 </html>`;

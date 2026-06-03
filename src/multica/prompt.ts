@@ -11,6 +11,15 @@ export function buildTaskPrompt(task: MulticaTaskWithAgent): string {
     sections.push("## Issue");
     sections.push(`Title: ${task.issue.title}`);
     if (task.issue.description) sections.push(task.issue.description);
+    const metadata = Object.entries(task.issue.metadata).sort(([left], [right]) => left.localeCompare(right));
+    if (metadata.length) {
+      sections.push("");
+      sections.push("## Issue Metadata");
+      sections.push("Pinned facts for this issue:");
+      for (const [key, value] of metadata) {
+        sections.push(`- ${key}: ${String(value)}`);
+      }
+    }
   }
 
   if (task.project) {

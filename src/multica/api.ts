@@ -299,6 +299,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(c.req.param("id"), body) }, 201);
   });
+  app.get("/api/multica/issues/:id/metadata", (c) => {
+    return c.json({ metadata: store.listIssueMetadata(c.req.param("id")) });
+  });
+  app.put("/api/multica/issues/:id/metadata/:key", async (c) => {
+    const body = await readJson<{ value?: unknown }>(c);
+    return c.json({ metadata: store.setIssueMetadataKey(c.req.param("id"), c.req.param("key"), body.value) });
+  });
+  app.delete("/api/multica/issues/:id/metadata/:key", (c) => {
+    return c.json({ metadata: store.deleteIssueMetadataKey(c.req.param("id"), c.req.param("key")) });
+  });
 
   app.get("/api/multica/tasks", (c) => {
     const status = c.req.query("status") as any;
