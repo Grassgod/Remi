@@ -883,6 +883,61 @@ describe("Bun Multica core store", () => {
     expect(scheduler.trigger(autopilot.id)).toBeNull();
     scheduler.stop();
   });
+
+  it("records, deduplicates, ignores, rejects, and replays webhook deliveries", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Webhook delivery",
+      assigneeId: agent.id,
+      triggerKind: "webhook",
+    });
+
+    const first = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Delivery prompt", event: "opened" },
+      prompt: "Delivery prompt",
+      rawBody: JSON.stringify({ prompt: "Delivery prompt", event: "opened" }),
+      headers: { "Idempotency-Key": "delivery-1", "Content-Type": "application/json" },
+    });
+
+    expect(first.status).toBe("accepted");
+    expect(first.delivery.status).toBe("dispatched");
+    expect(first.delivery.dedupeKey).toBe("delivery-1");
+    expect(first.run?.source).toBe("webhook");
+    expect(store.getIssue(first.run!.issueId!)?.title).toBe("Delivery prompt");
+
+    const duplicate = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Duplicate prompt" },
+      headers: { "Idempotency-Key": "delivery-1" },
+    });
+    expect(duplicate.status).toBe("duplicate");
+    expect(duplicate.delivery.id).toBe(first.delivery.id);
+    expect(duplicate.delivery.attemptCount).toBe(2);
+    expect(store.listWebhookDeliveries(autopilot.id)).toHaveLength(1);
+
+    const replay = store.replayWebhookDelivery(autopilot.id, first.delivery.id);
+    expect(replay.status).toBe("accepted");
+    expect(replay.delivery.replayedFromDeliveryId).toBe(first.delivery.id);
+    expect(store.listWebhookDeliveries(autopilot.id)).toHaveLength(2);
+
+    const rejected = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Bad signature" },
+      signatureStatus: "invalid",
+      headers: { "Idempotency-Key": "bad-signature" },
+    });
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.delivery.status).toBe("rejected");
+    expect(() => store.replayWebhookDelivery(autopilot.id, rejected.delivery.id)).toThrow("Cannot replay");
+
+    store.updateAutopilot(autopilot.id, { status: "paused" });
+    const ignored = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Paused" },
+      headers: { "Idempotency-Key": "paused-delivery" },
+    });
+    expect(ignored.status).toBe("ignored");
+    expect(ignored.delivery.status).toBe("ignored");
+    expect(ignored.run).toBeNull();
+  });
 });
 
 describe("Bun Multica CLI", () => {
@@ -956,6 +1011,8 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("function openAutopilot");
     expect(html).toContain("function renderAutopilotDrawer");
     expect(html).toContain("function renderAutopilotRuns");
+    expect(html).toContain("function renderWebhookDeliveries");
+    expect(html).toContain("replayWebhookDelivery");
     expect(html).toContain("/api/multica/autopilots/");
     expect(html).toContain("updateSelectedAutopilot");
   });
@@ -1716,14 +1773,39 @@ describe("Bun Multica API", () => {
 
     const webhookTrigger = await app.request(`/api/multica/autopilots/${autopilot.id}/webhook`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "api-delivery-1" },
       body: JSON.stringify({ prompt: "Webhook prompt", event: "opened" }),
     });
     expect(webhookTrigger.status).toBe(201);
     const webhookBody = await webhookTrigger.json();
+    expect(webhookBody.status).toBe("accepted");
+    expect(webhookBody.delivery.status).toBe("dispatched");
+    expect(webhookBody.delivery.dedupeKey).toBe("api-delivery-1");
     expect(webhookBody.run.source).toBe("webhook");
     expect(webhookBody.run.payload.event).toBe("opened");
     expect(store.getIssue(webhookBody.run.issueId)?.title).toBe("Webhook prompt");
+
+    const duplicate = await app.request(`/api/multica/autopilots/${autopilot.id}/webhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "api-delivery-1" },
+      body: JSON.stringify({ prompt: "Webhook duplicate" }),
+    });
+    expect(duplicate.status).toBe(200);
+    const duplicateBody = await duplicate.json();
+    expect(duplicateBody.status).toBe("duplicate");
+    expect(duplicateBody.deliveryId).toBe(webhookBody.deliveryId);
+
+    const deliveries = await app.request(`/api/multica/autopilots/${autopilot.id}/deliveries`);
+    const deliveriesBody = await deliveries.json();
+    expect(deliveriesBody.total).toBe(1);
+    expect(deliveriesBody.deliveries[0].attemptCount).toBe(2);
+
+    const detail = await app.request(`/api/multica/autopilots/${autopilot.id}`);
+    expect((await detail.json()).deliveries[0].id).toBe(webhookBody.deliveryId);
+
+    const replay = await app.request(`/api/multica/autopilots/${autopilot.id}/deliveries/${webhookBody.deliveryId}/replay`, { method: "POST" });
+    expect(replay.status).toBe(201);
+    expect((await replay.json()).delivery.replayedFromDeliveryId).toBe(webhookBody.deliveryId);
   });
 
   it("syncs scheduler state through autopilot API updates", async () => {

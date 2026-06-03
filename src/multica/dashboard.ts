@@ -1457,6 +1457,7 @@ export function renderMulticaDashboardHtml(): string {
       selectedAutopilotId: null,
       selectedAutopilot: null,
       selectedAutopilotRuns: [],
+      selectedAutopilotDeliveries: [],
       selectedMemberId: null,
       selectedMember: null,
       chatSessions: [],
@@ -1981,6 +1982,7 @@ export function renderMulticaDashboardHtml(): string {
         const result = await api("/api/multica/autopilots/" + encodeURIComponent(id));
         state.selectedAutopilot = result.autopilot;
         state.selectedAutopilotRuns = result.runs || [];
+        state.selectedAutopilotDeliveries = result.deliveries || [];
         state.selectedTask = null;
         state.selectedIssue = null;
         state.selectedSquad = null;
@@ -2052,6 +2054,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedAutopilotId = null;
       state.selectedAutopilot = null;
       state.selectedAutopilotRuns = [];
+      state.selectedAutopilotDeliveries = [];
       state.selectedMemberId = null;
       state.selectedMember = null;
       els.taskDrawer.classList.remove("open");
@@ -2586,6 +2589,18 @@ export function renderMulticaDashboardHtml(): string {
           switchPage("issues");
           openTask(result.run.taskId);
         }
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function replayWebhookDelivery(autopilotId, deliveryId) {
+      try {
+        await api("/api/multica/autopilots/" + encodeURIComponent(autopilotId) + "/deliveries/" + encodeURIComponent(deliveryId) + "/replay", {
+          method: "POST"
+        });
+        await loadAutopilotDetail(autopilotId);
+        await refresh({ silent: true });
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
       }
@@ -3847,6 +3862,7 @@ export function renderMulticaDashboardHtml(): string {
         ? state.squads.find(item => item.id === autopilot.assigneeId)
         : state.agents.find(item => item.id === autopilot.assigneeId);
       const runs = state.selectedAutopilotRuns || [];
+      const deliveries = state.selectedAutopilotDeliveries || [];
       const webhookUrl = window.location.origin + "/api/multica/autopilots/" + encodeURIComponent(autopilot.id) + "/webhook";
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
@@ -3859,6 +3875,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"metric-row\\">" +
             renderMetric(runs.length, "runs") +
             renderMetric(runs.filter(run => run.status === "running").length, "running") +
+            renderMetric(deliveries.length, "deliveries") +
             renderMetric(runs.filter(run => run.status === "failed" || run.status === "skipped").length, "failed") +
           "</div>" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge " + (autopilot.status === "active" ? "completed" : "") + "\\">" + esc(autopilot.status) + "</span><span class=\\"status-badge\\">" + esc(autopilot.executionMode) + "</span>" + (project ? "<span class=\\"status-badge\\">" + esc(project.title) + "</span>" : "") + "<span class=\\"status-badge\\">" + esc(autopilot.assigneeType) + ": " + esc(assignee ? (assignee.name || assignee.title) : "missing") + "</span></div>" +
@@ -3882,8 +3899,30 @@ export function renderMulticaDashboardHtml(): string {
             renderCell("Webhook URL", webhookUrl) +
             renderCell("Last run", autopilot.lastRunAt ? timeAgo(autopilot.lastRunAt) : "never") +
           "</div>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Deliveries</div><div class=\\"message-list\\">" + renderWebhookDeliveries(autopilot) + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Runs</div><div class=\\"message-list\\">" + renderAutopilotRuns() + "</div></div>" +
         "</div>";
+    }
+
+    function renderWebhookDeliveries(autopilot) {
+      const deliveries = state.selectedAutopilotDeliveries || [];
+      if (!deliveries.length) return "<div class=\\"empty-column\\">No webhook deliveries</div>";
+      return deliveries.map(delivery =>
+        "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(delivery.status) + "</span><span>" + esc(delivery.event || "webhook.received") + "</span><span>" + esc(timeAgo(delivery.receivedAt || delivery.createdAt)) + "</span><span>" + esc(String(delivery.attemptCount || 1)) + " attempts</span></div>" +
+          "<div class=\\"message-content\\">" + esc(delivery.error || delivery.responseBody || delivery.dedupeKey || "Accepted") + "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            "<span class=\\"status-badge\\">" + esc(delivery.provider || "generic") + "</span>" +
+            "<span class=\\"status-badge\\">" + esc(delivery.signatureStatus || "not_required") + "</span>" +
+            (delivery.responseStatus ? "<span class=\\"status-badge\\">HTTP " + esc(delivery.responseStatus) + "</span>" : "") +
+            (delivery.replayedFromDeliveryId ? "<span class=\\"status-badge\\">replay</span>" : "") +
+          "</div>" +
+          "<div class=\\"issue-meta\\">" +
+            (delivery.autopilotRunId ? "<button class=\\"outline\\" onclick=\\"openAutopilot('" + escAttr(autopilot.id) + "')\\">Run linked</button>" : "") +
+            (delivery.status === "rejected" ? "" : "<button class=\\"outline\\" onclick=\\"replayWebhookDelivery('" + escAttr(autopilot.id) + "', '" + escAttr(delivery.id) + "')\\">Replay</button>") +
+          "</div>" +
+        "</div>"
+      ).join("");
     }
 
     function renderAutopilotRuns() {
@@ -4909,6 +4948,7 @@ export function renderMulticaDashboardHtml(): string {
     window.openMember = openMember;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
+    window.replayWebhookDelivery = replayWebhookDelivery;
     window.archiveProject = archiveProject;
     window.addProjectResource = addProjectResource;
     window.removeProjectResource = removeProjectResource;

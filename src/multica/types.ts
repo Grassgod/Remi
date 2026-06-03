@@ -21,6 +21,10 @@ export type MulticaAutopilotExecutionMode = "create_issue" | "run_only";
 export type MulticaAutopilotAssigneeType = "agent" | "squad";
 export type MulticaAutopilotRunStatus = "issue_created" | "running" | "completed" | "failed" | "skipped";
 export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api";
+export type MulticaWebhookProvider = "generic" | "github";
+export type MulticaWebhookSignatureStatus = "not_required" | "valid" | "invalid" | "missing";
+export type MulticaWebhookDeliveryStatus = "queued" | "dispatched" | "rejected" | "ignored" | "failed";
+export type MulticaWebhookDeliveryResultStatus = "accepted" | "duplicate" | "rejected" | "ignored" | "failed" | "skipped";
 export type MulticaChatSessionStatus = "active" | "archived";
 export type MulticaChatMessageRole = "user" | "assistant" | "system";
 export type MulticaSubscriptionReason = "created" | "assigned" | "commented" | "mentioned" | "manual";
@@ -512,6 +516,38 @@ export interface MulticaAutopilotRun {
   payload: unknown | null;
   result: unknown | null;
   createdAt: string;
+}
+
+export interface MulticaWebhookDelivery {
+  id: string;
+  workspaceId: string;
+  autopilotId: string;
+  triggerId: string;
+  provider: MulticaWebhookProvider;
+  event: string;
+  dedupeKey: string | null;
+  dedupeSource: string | null;
+  signatureStatus: MulticaWebhookSignatureStatus;
+  status: MulticaWebhookDeliveryStatus;
+  attemptCount: number;
+  selectedHeaders: Record<string, unknown>;
+  contentType: string | null;
+  rawBody: string | null;
+  responseStatus: number | null;
+  responseBody: string | null;
+  autopilotRunId: string | null;
+  replayedFromDeliveryId: string | null;
+  error: string | null;
+  receivedAt: string;
+  lastAttemptAt: string;
+  createdAt: string;
+}
+
+export interface MulticaWebhookDeliveryResult {
+  status: MulticaWebhookDeliveryResultStatus;
+  duplicate: boolean;
+  delivery: MulticaWebhookDelivery;
+  run: MulticaAutopilotRun | null;
 }
 
 export interface MulticaChatSession {

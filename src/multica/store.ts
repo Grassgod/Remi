@@ -23,6 +23,11 @@ import type {
   CreateWorkspaceMemberInput,
   MulticaAutopilot,
   MulticaAutopilotRun,
+  MulticaWebhookDelivery,
+  MulticaWebhookDeliveryResult,
+  MulticaWebhookDeliveryStatus,
+  MulticaWebhookProvider,
+  MulticaWebhookSignatureStatus,
   MulticaAccessToken,
   MulticaCreatedAccessToken,
   MulticaAccessTokenType,
@@ -573,6 +578,42 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_autopilot_runs_autopilot ON multica_autopilot_runs(autopilot_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS multica_webhook_deliveries (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        autopilot_id TEXT NOT NULL,
+        trigger_id TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'generic',
+        event TEXT NOT NULL DEFAULT 'webhook.received',
+        dedupe_key TEXT,
+        dedupe_source TEXT,
+        signature_status TEXT NOT NULL DEFAULT 'not_required',
+        status TEXT NOT NULL DEFAULT 'queued',
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        selected_headers TEXT NOT NULL DEFAULT '{}',
+        content_type TEXT,
+        raw_body TEXT,
+        response_status INTEGER,
+        response_body TEXT,
+        autopilot_run_id TEXT,
+        replayed_from_delivery_id TEXT,
+        error TEXT,
+        received_at TEXT NOT NULL,
+        last_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(autopilot_id) REFERENCES multica_autopilots(id) ON DELETE CASCADE,
+        FOREIGN KEY(autopilot_run_id) REFERENCES multica_autopilot_runs(id) ON DELETE SET NULL,
+        FOREIGN KEY(replayed_from_delivery_id) REFERENCES multica_webhook_deliveries(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_webhook_deliveries_autopilot
+        ON multica_webhook_deliveries(autopilot_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_multica_webhook_deliveries_run
+        ON multica_webhook_deliveries(autopilot_run_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_multica_webhook_deliveries_dedupe
+        ON multica_webhook_deliveries(trigger_id, dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status NOT IN ('rejected', 'failed');
 
       CREATE TABLE IF NOT EXISTS multica_chat_sessions (
         id TEXT PRIMARY KEY,
@@ -3008,6 +3049,188 @@ export class MulticaStore {
     return row ? toAutopilotRun(row) : null;
   }
 
+  listWebhookDeliveries(autopilotId: string, options: { includeRawBody?: boolean; limit?: number } = {}): MulticaWebhookDelivery[] {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
+    const rawBodyColumn = options.includeRawBody ? "raw_body" : "NULL AS raw_body";
+    const rows = this.db.query(
+      `SELECT id, workspace_id, autopilot_id, trigger_id, provider, event, dedupe_key, dedupe_source,
+        signature_status, status, attempt_count, selected_headers, content_type, ${rawBodyColumn},
+        response_status, response_body, autopilot_run_id, replayed_from_delivery_id, error,
+        received_at, last_attempt_at, created_at
+       FROM multica_webhook_deliveries
+       WHERE autopilot_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    ).all(autopilotId, limit) as Row[];
+    return rows.map(toWebhookDelivery);
+  }
+
+  getWebhookDelivery(id: string): MulticaWebhookDelivery | null {
+    const row = this.db.query("SELECT * FROM multica_webhook_deliveries WHERE id = ?").get(id) as Row | null;
+    return row ? toWebhookDelivery(row) : null;
+  }
+
+  handleAutopilotWebhook(autopilotId: string, input: {
+    payload?: unknown | null;
+    rawBody?: string | null;
+    headers?: Record<string, string | null | undefined>;
+    prompt?: string | null;
+    provider?: MulticaWebhookProvider | string | null;
+    signatureStatus?: MulticaWebhookSignatureStatus | string | null;
+    replayedFromDeliveryId?: string | null;
+  } = {}): MulticaWebhookDeliveryResult {
+    const autopilot = this.getAutopilot(autopilotId);
+    if (!autopilot) throw new Error(`Autopilot not found: ${autopilotId}`);
+    const provider = normalizeWebhookProvider(input.provider);
+    const headers = normalizeWebhookHeaders(input.headers ?? {});
+    const event = inferWebhookEvent(provider, headers, input.payload);
+    const [dedupeKey, dedupeSource] = webhookDedupeKey(provider, headers);
+    const signatureStatus = normalizeWebhookSignatureStatus(input.signatureStatus);
+    const triggerId = autopilot.id;
+    const now = nowIso();
+    if (dedupeKey) {
+      const duplicate = this.db.query(
+        `SELECT * FROM multica_webhook_deliveries
+         WHERE trigger_id = ? AND dedupe_key = ? AND status NOT IN ('rejected', 'failed')
+         ORDER BY created_at ASC LIMIT 1`,
+      ).get(triggerId, dedupeKey) as Row | null;
+      if (duplicate) {
+        this.db.run(
+          "UPDATE multica_webhook_deliveries SET attempt_count = attempt_count + 1, last_attempt_at = ? WHERE id = ?",
+          [now, String(duplicate.id)],
+        );
+        const delivery = this.getWebhookDelivery(String(duplicate.id))!;
+        const run = delivery.autopilotRunId ? this.getAutopilotRun(delivery.autopilotRunId) : null;
+        return { status: "duplicate", duplicate: true, delivery, run };
+      }
+    }
+
+    const deliveryId = createId("whd");
+    this.db.run(
+      `INSERT INTO multica_webhook_deliveries (
+        id, workspace_id, autopilot_id, trigger_id, provider, event, dedupe_key, dedupe_source,
+        signature_status, status, attempt_count, selected_headers, content_type, raw_body,
+        response_status, response_body, autopilot_run_id, replayed_from_delivery_id, error,
+        received_at, last_attempt_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?, ?, NULL, NULL, NULL, ?, NULL, ?, ?, ?)`,
+      [
+        deliveryId,
+        autopilot.workspaceId,
+        autopilot.id,
+        triggerId,
+        provider,
+        event,
+        dedupeKey || null,
+        dedupeSource || null,
+        signatureStatus,
+        toJson(selectedWebhookHeaders(headers)),
+        headers["content-type"] ?? null,
+        input.rawBody ?? (input.payload == null ? null : toJson(input.payload)),
+        input.replayedFromDeliveryId ?? null,
+        now,
+        now,
+        now,
+      ],
+    );
+
+    if (signatureStatus === "invalid" || signatureStatus === "missing") {
+      const reason = signatureStatus === "missing" ? "signature missing" : "signature invalid";
+      const responseBody = { status: "rejected", deliveryId, reason };
+      const delivery = this.finalizeWebhookDelivery(deliveryId, {
+        status: "rejected",
+        responseStatus: 401,
+        responseBody,
+        error: reason,
+      });
+      return { status: "rejected", duplicate: false, delivery, run: null };
+    }
+
+    if (autopilot.status !== "active" || autopilot.triggerKind !== "webhook") {
+      const reason = autopilot.status !== "active" ? `autopilot_${autopilot.status}` : "trigger_not_webhook";
+      const responseBody = { status: "ignored", deliveryId, reason };
+      const delivery = this.finalizeWebhookDelivery(deliveryId, {
+        status: "ignored",
+        responseStatus: 200,
+        responseBody,
+        error: reason,
+      });
+      return { status: "ignored", duplicate: false, delivery, run: null };
+    }
+
+    try {
+      const run = this.runAutopilot(autopilot.id, {
+        prompt: input.prompt ?? null,
+        payload: input.payload ?? null,
+        source: "webhook",
+      });
+      const responseStatus = run.status === "skipped" ? 200 : 201;
+      const responseBody = { status: run.status === "skipped" ? "skipped" : "accepted", deliveryId, runId: run.id };
+      const delivery = this.finalizeWebhookDelivery(deliveryId, {
+        status: "dispatched",
+        responseStatus,
+        responseBody,
+        autopilotRunId: run.id,
+      });
+      return { status: run.status === "skipped" ? "skipped" : "accepted", duplicate: false, delivery, run };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const responseBody = { status: "failed", deliveryId, error: message };
+      const delivery = this.finalizeWebhookDelivery(deliveryId, {
+        status: "failed",
+        responseStatus: 500,
+        responseBody,
+        error: message,
+      });
+      return { status: "failed", duplicate: false, delivery, run: null };
+    }
+  }
+
+  replayWebhookDelivery(autopilotId: string, deliveryId: string): MulticaWebhookDeliveryResult {
+    const delivery = this.getWebhookDelivery(deliveryId);
+    if (!delivery || delivery.autopilotId !== autopilotId) throw new Error(`Webhook delivery not found: ${deliveryId}`);
+    if (delivery.status === "rejected" || delivery.signatureStatus === "invalid" || delivery.signatureStatus === "missing") {
+      throw new Error("Cannot replay a rejected delivery");
+    }
+    const payload = delivery.rawBody ? parseJson(delivery.rawBody, null) : null;
+    return this.handleAutopilotWebhook(autopilotId, {
+      payload,
+      rawBody: delivery.rawBody,
+      headers: replayHeadersFromDelivery(delivery),
+      provider: delivery.provider,
+      signatureStatus: delivery.signatureStatus,
+      replayedFromDeliveryId: delivery.id,
+    });
+  }
+
+  private finalizeWebhookDelivery(id: string, input: {
+    status: MulticaWebhookDeliveryStatus;
+    responseStatus: number;
+    responseBody: unknown;
+    autopilotRunId?: string | null;
+    error?: string | null;
+  }): MulticaWebhookDelivery {
+    this.db.run(
+      `UPDATE multica_webhook_deliveries SET
+        status = ?,
+        response_status = ?,
+        response_body = ?,
+        autopilot_run_id = ?,
+        error = ?,
+        last_attempt_at = ?
+       WHERE id = ?`,
+      [
+        input.status,
+        input.responseStatus,
+        typeof input.responseBody === "string" ? input.responseBody : toJson(input.responseBody),
+        input.autopilotRunId ?? null,
+        input.error ?? null,
+        nowIso(),
+        id,
+      ],
+    );
+    return this.getWebhookDelivery(id)!;
+  }
+
   createChatSession(input: CreateChatSessionInput): MulticaChatSession {
     const agent = this.getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
@@ -3980,6 +4203,69 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function normalizeWebhookProvider(value: unknown): MulticaWebhookProvider {
+  return value === "github" ? "github" : "generic";
+}
+
+function normalizeWebhookSignatureStatus(value: unknown): MulticaWebhookSignatureStatus {
+  if (value === "valid" || value === "invalid" || value === "missing") return value;
+  return "not_required";
+}
+
+function normalizeWebhookDeliveryStatus(value: unknown): MulticaWebhookDeliveryStatus {
+  if (value === "dispatched" || value === "rejected" || value === "ignored" || value === "failed") return value;
+  return "queued";
+}
+
+function normalizeWebhookHeaders(headers: Record<string, string | null | undefined>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value == null) continue;
+    normalized[key.toLowerCase()] = String(value);
+  }
+  return normalized;
+}
+
+function webhookDedupeKey(provider: MulticaWebhookProvider, headers: Record<string, string>): [string, string] {
+  if (provider === "github" && headers["x-github-delivery"]?.trim()) {
+    return [headers["x-github-delivery"].trim(), "x-github-delivery"];
+  }
+  if (headers["idempotency-key"]?.trim()) return [headers["idempotency-key"].trim(), "idempotency-key"];
+  if (headers["x-github-delivery"]?.trim()) return [headers["x-github-delivery"].trim(), "x-github-delivery"];
+  return ["", ""];
+}
+
+function inferWebhookEvent(provider: MulticaWebhookProvider, headers: Record<string, string>, payload: unknown): string {
+  if (provider === "github" && headers["x-github-event"]) {
+    const action = isRecord(payload) && typeof payload.action === "string" ? "." + payload.action : "";
+    return "github." + headers["x-github-event"] + action;
+  }
+  if (headers["x-github-event"]) return "github." + headers["x-github-event"];
+  if (headers["x-gitlab-event"]) return "gitlab." + headers["x-gitlab-event"].toLowerCase().replace(/\s+/g, "_");
+  if (isRecord(payload) && typeof payload.event === "string") return payload.event;
+  if (isRecord(payload) && typeof payload.action === "string") return "webhook." + payload.action;
+  return "webhook.received";
+}
+
+function selectedWebhookHeaders(headers: Record<string, string>): Record<string, unknown> {
+  const selected: Record<string, unknown> = {};
+  for (const key of ["user-agent", "content-type", "x-github-event", "x-github-delivery", "idempotency-key", "x-gitlab-event"]) {
+    if (headers[key]) selected[key] = headers[key];
+  }
+  selected["x-hub-signature-256"] = Boolean(headers["x-hub-signature-256"]);
+  return selected;
+}
+
+function replayHeadersFromDelivery(delivery: MulticaWebhookDelivery): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (delivery.contentType) headers["content-type"] = delivery.contentType;
+  return headers;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeSkillFiles(files: MulticaSkillFile[]): MulticaSkillFile[] {
   const seen = new Set<string>();
   return files.map((file) => {
@@ -4803,6 +5089,33 @@ function toAutopilotRun(row: Row): MulticaAutopilotRun {
     failureReason: nullableString(row.failure_reason),
     payload: row.payload == null ? null : parseJson(row.payload, null),
     result: row.result == null ? null : parseJson(row.result, null),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toWebhookDelivery(row: Row): MulticaWebhookDelivery {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    autopilotId: String(row.autopilot_id),
+    triggerId: String(row.trigger_id),
+    provider: normalizeWebhookProvider(row.provider),
+    event: String(row.event ?? "webhook.received"),
+    dedupeKey: nullableString(row.dedupe_key),
+    dedupeSource: nullableString(row.dedupe_source),
+    signatureStatus: normalizeWebhookSignatureStatus(row.signature_status),
+    status: normalizeWebhookDeliveryStatus(row.status),
+    attemptCount: Number(row.attempt_count ?? 1),
+    selectedHeaders: parseJson<Record<string, unknown>>(row.selected_headers, {}),
+    contentType: nullableString(row.content_type),
+    rawBody: nullableString(row.raw_body),
+    responseStatus: row.response_status == null ? null : Number(row.response_status),
+    responseBody: nullableString(row.response_body),
+    autopilotRunId: nullableString(row.autopilot_run_id),
+    replayedFromDeliveryId: nullableString(row.replayed_from_delivery_id),
+    error: nullableString(row.error),
+    receivedAt: String(row.received_at),
+    lastAttemptAt: String(row.last_attempt_at),
     createdAt: String(row.created_at),
   };
 }

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -38,6 +39,9 @@ import type {
   MulticaSkill,
   MulticaSubscriptionReason,
   MulticaGitHubPullRequestState,
+  MulticaWebhookDeliveryResult,
+  MulticaWebhookProvider,
+  MulticaWebhookSignatureStatus,
   SetAgentSkillsInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
@@ -514,7 +518,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/autopilots/:id", (c) => {
     const autopilot = store.getAutopilot(c.req.param("id"));
     if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
-    return c.json({ autopilot, runs: store.listAutopilotRuns(autopilot.id) });
+    return c.json({
+      autopilot,
+      runs: store.listAutopilotRuns(autopilot.id),
+      deliveries: store.listWebhookDeliveries(autopilot.id),
+    });
   });
   app.patch("/api/multica/autopilots/:id", async (c) => {
     const body = await readJson<UpdateAutopilotInput>(c);
@@ -529,6 +537,19 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.get("/api/multica/autopilots/:id/runs", (c) => {
     return c.json({ runs: store.listAutopilotRuns(c.req.param("id")) });
+  });
+  app.get("/api/multica/autopilots/:id/deliveries", (c) => {
+    const deliveries = store.listWebhookDeliveries(c.req.param("id"));
+    return c.json({ deliveries, total: deliveries.length });
+  });
+  app.get("/api/multica/autopilots/:id/deliveries/:deliveryId", (c) => {
+    const delivery = store.getWebhookDelivery(c.req.param("deliveryId"));
+    if (!delivery || delivery.autopilotId !== c.req.param("id")) return c.json({ error: "delivery not found" }, 404);
+    return c.json({ delivery });
+  });
+  app.post("/api/multica/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
+    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
+    return c.json({ ...webhookDeliveryResponse(result) }, 201);
   });
   app.post("/api/multica/autopilots/:id/run", async (c) => {
     const body = await readJson<RunAutopilotInput>(c);
@@ -552,14 +573,26 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     }, 201);
   });
   app.post("/api/multica/autopilots/:id/webhook", async (c) => {
-    const body = await readJson<RunAutopilotInput & { payload?: unknown }>(c);
-    return c.json({
-      run: store.runAutopilot(c.req.param("id"), {
-        prompt: body.prompt ?? null,
-        payload: body.payload ?? body,
-        source: "webhook",
-      }),
-    }, 201);
+    const rawBody = await c.req.raw.text();
+    let body: RunAutopilotInput & { payload?: unknown };
+    try {
+      body = parseJsonBody<RunAutopilotInput & { payload?: unknown }>(rawBody);
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const headers = headersToRecord(c.req.raw.headers);
+    const provider = headers["x-github-event"] ? "github" : "generic";
+    const signatureStatus = webhookSignatureStatus(provider, headers, rawBody);
+    const result = store.handleAutopilotWebhook(c.req.param("id"), {
+      prompt: body.prompt ?? null,
+      payload: body.payload ?? body,
+      rawBody,
+      headers,
+      provider,
+      signatureStatus,
+    });
+    const statusCode = result.status === "rejected" ? 401 : result.status === "accepted" ? 201 : result.status === "failed" ? 500 : 200;
+    return c.json(webhookDeliveryResponse(result), statusCode);
   });
 
   app.get("/api/multica/labels", (c) => {
@@ -1176,6 +1209,54 @@ function normalizeGitHubPullRequestBody(body: any): NormalizedGitHubPullRequestB
 
 function stringOrDefault(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
+}
+
+function parseJsonBody<T>(rawBody: string): T {
+  if (!rawBody.trim()) return {} as T;
+  try {
+    return JSON.parse(rawBody) as T;
+  } catch {
+    throw new Error("Invalid JSON body");
+  }
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key.toLowerCase()] = value;
+  });
+  return out;
+}
+
+function webhookSignatureStatus(provider: MulticaWebhookProvider, headers: Record<string, string>, rawBody: string): MulticaWebhookSignatureStatus {
+  const secret = process.env.MULTICA_WEBHOOK_SECRET ?? process.env.GITHUB_WEBHOOK_SECRET ?? "";
+  if (!secret) return "not_required";
+  const signature = headers["x-hub-signature-256"] ?? "";
+  if (!signature) return "missing";
+  return verifyWebhookSignature(secret, signature, rawBody) ? "valid" : "invalid";
+}
+
+function verifyWebhookSignature(secret: string, signature: string, rawBody: string): boolean {
+  const prefix = "sha256=";
+  if (!signature.startsWith(prefix)) return false;
+  const actualHex = signature.slice(prefix.length);
+  if (!/^[0-9a-fA-F]+$/.test(actualHex)) return false;
+  const expected = createHmac("sha256", secret).update(rawBody).digest();
+  const actual = Buffer.from(actualHex, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function webhookDeliveryResponse(result: MulticaWebhookDeliveryResult) {
+  return {
+    status: result.status,
+    duplicate: result.duplicate,
+    delivery: result.delivery,
+    deliveryId: result.delivery.id,
+    delivery_id: result.delivery.id,
+    run: result.run,
+    runId: result.run?.id ?? null,
+    run_id: result.run?.id ?? null,
+  };
 }
 
 function uploadRoot(): string {
