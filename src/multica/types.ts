@@ -44,6 +44,7 @@ export interface MulticaAgent {
   customArgs: string[];
   mcpConfig: unknown | null;
   thinkingLevel: string | null;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -227,6 +228,21 @@ export interface CreateAgentInput {
   id?: string;
   name: string;
   provider: MulticaAgentProvider;
+  instructions?: string;
+  skills?: MulticaSkill[];
+  cwd?: string | null;
+  executable?: string | null;
+  model?: string | null;
+  allowedTools?: string[];
+  customEnv?: Record<string, string>;
+  customArgs?: string[];
+  mcpConfig?: unknown | null;
+  thinkingLevel?: string | null;
+}
+
+export interface UpdateAgentInput {
+  name?: string;
+  provider?: MulticaAgentProvider;
   instructions?: string;
   skills?: MulticaSkill[];
   cwd?: string | null;

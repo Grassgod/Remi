@@ -30,6 +30,7 @@ import type {
   RunAutopilotInput,
   TaskMessageInput,
   TaskUsageEntry,
+  UpdateAgentInput,
   UpdateAutopilotInput,
   UpdateIssueInput,
   UpdateProjectInput,
@@ -63,6 +64,7 @@ export class MulticaStore {
         custom_args TEXT NOT NULL DEFAULT '[]',
         mcp_config TEXT,
         thinking_level TEXT,
+        archived_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -255,6 +257,7 @@ export class MulticaStore {
 
       CREATE INDEX IF NOT EXISTS idx_multica_messages_task ON multica_task_messages(task_id, seq);
     `);
+    this.addColumnIfMissing("multica_agents", "archived_at TEXT");
   }
 
   createAgent(input: CreateAgentInput): MulticaAgent {
@@ -287,10 +290,64 @@ export class MulticaStore {
     return this.getAgent(id)!;
   }
 
+  updateAgent(id: string, input: UpdateAgentInput): MulticaAgent {
+    const current = this.getAgent(id);
+    if (!current) throw new Error(`Agent not found: ${id}`);
+    const now = nowIso();
+    this.db.run(
+      `UPDATE multica_agents SET
+        name = ?,
+        provider = ?,
+        instructions = ?,
+        skills = ?,
+        cwd = ?,
+        executable = ?,
+        model = ?,
+        allowed_tools = ?,
+        custom_env = ?,
+        custom_args = ?,
+        mcp_config = ?,
+        thinking_level = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.name ?? current.name,
+        input.provider ?? current.provider,
+        input.instructions ?? current.instructions,
+        input.skills === undefined ? toJson(current.skills) : toJson(input.skills),
+        input.cwd === undefined ? current.cwd : input.cwd,
+        input.executable === undefined ? current.executable : input.executable,
+        input.model === undefined ? current.model : input.model,
+        input.allowedTools === undefined ? toJson(current.allowedTools) : toJson(input.allowedTools),
+        input.customEnv === undefined ? toJson(current.customEnv) : toJson(input.customEnv),
+        input.customArgs === undefined ? toJson(current.customArgs) : toJson(input.customArgs),
+        input.mcpConfig === undefined ? current.mcpConfig == null ? null : toJson(current.mcpConfig) : input.mcpConfig == null ? null : toJson(input.mcpConfig),
+        input.thinkingLevel === undefined ? current.thinkingLevel : input.thinkingLevel,
+        now,
+        id,
+      ],
+    );
+    return this.getAgent(id)!;
+  }
+
+  archiveAgent(id: string): MulticaAgent {
+    if (!this.getAgent(id)) throw new Error(`Agent not found: ${id}`);
+    const now = nowIso();
+    this.db.run("UPDATE multica_agents SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    return this.getAgent(id)!;
+  }
+
   ensureDefaultAgent(provider = "claude"): MulticaAgent {
     const id = `agt_default_${provider}`;
     const existing = this.getAgent(id);
-    if (existing) return existing;
+    if (existing) {
+      if (existing.archivedAt) {
+        const now = nowIso();
+        this.db.run("UPDATE multica_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+        return this.getAgent(id)!;
+      }
+      return existing;
+    }
     return this.createAgent({
       id,
       name: provider === "codex" ? "Codex" : "Claude",
@@ -305,7 +362,7 @@ export class MulticaStore {
   }
 
   listAgents(): MulticaAgent[] {
-    const rows = this.db.query("SELECT * FROM multica_agents ORDER BY created_at ASC").all() as Row[];
+    const rows = this.db.query("SELECT * FROM multica_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
     return rows.map(toAgent);
   }
 
@@ -662,8 +719,10 @@ export class MulticaStore {
   addSquadMember(squadId: string, input: AddSquadMemberInput): MulticaSquadMember {
     const squad = this.getSquad(squadId);
     if (!squad) throw new Error(`Squad not found: ${squadId}`);
-    if (input.memberType === "agent" && !this.getAgent(input.memberId)) {
-      throw new Error(`Agent not found: ${input.memberId}`);
+    if (input.memberType === "agent") {
+      const agent = this.getAgent(input.memberId);
+      if (!agent) throw new Error(`Agent not found: ${input.memberId}`);
+      if (agent.archivedAt) throw new Error(`Agent is archived: ${input.memberId}`);
     }
     const now = nowIso();
     const existing = this.db.query(
@@ -887,6 +946,7 @@ export class MulticaStore {
   createTask(input: CreateTaskInput): MulticaTask {
     const agent = this.getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
+    if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
     const issue = input.issueId ? this.getIssue(input.issueId) : null;
     if (input.issueId && !issue) throw new Error(`Issue not found: ${input.issueId}`);
 
@@ -955,6 +1015,7 @@ export class MulticaStore {
          FROM multica_tasks t
          JOIN multica_agents a ON a.id = t.agent_id
          WHERE t.status = 'queued'
+           AND a.archived_at IS NULL
            ${workspaceFilter}
            AND (? = 'any' OR a.provider = ?)
          ORDER BY t.priority DESC, t.created_at ASC
@@ -1146,12 +1207,21 @@ export class MulticaStore {
   }
 
   private resolveAutopilotAgent(autopilot: MulticaAutopilot): MulticaAgent | null {
-    if (autopilot.assigneeType === "agent") return this.getAgent(autopilot.assigneeId);
+    if (autopilot.assigneeType === "agent") {
+      const agent = this.getAgent(autopilot.assigneeId);
+      return agent?.archivedAt ? null : agent;
+    }
     const squad = this.getSquad(autopilot.assigneeId);
     if (!squad) return null;
-    if (squad.leaderId) return this.getAgent(squad.leaderId);
-    const member = this.listSquadMembers(squad.id).find((m) => m.memberType === "agent");
-    return member ? this.getAgent(member.memberId) : null;
+    if (squad.leaderId) {
+      const leader = this.getAgent(squad.leaderId);
+      if (leader && !leader.archivedAt) return leader;
+    }
+    for (const member of this.listSquadMembers(squad.id).filter((m) => m.memberType === "agent")) {
+      const agent = this.getAgent(member.memberId);
+      if (agent && !agent.archivedAt) return agent;
+    }
+    return null;
   }
 
   private afterTaskTerminal(task: MulticaTask, status: "completed" | "failed" | "cancelled", body: string | null): void {
@@ -1190,6 +1260,14 @@ export class MulticaStore {
           runRow.id,
         ],
       );
+    }
+  }
+
+  private addColumnIfMissing(table: string, definition: string): void {
+    try {
+      this.db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    } catch (err) {
+      if (!String((err as Error).message ?? err).toLowerCase().includes("duplicate column")) throw err;
     }
   }
 }
@@ -1248,6 +1326,7 @@ function toAgent(row: Row): MulticaAgent {
     customArgs: parseJson(row.custom_args, []),
     mcpConfig: row.mcp_config == null ? null : parseJson(row.mcp_config, null),
     thinkingLevel: nullableString(row.thinking_level),
+    archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

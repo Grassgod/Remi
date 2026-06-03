@@ -16,6 +16,7 @@ import type {
   RegisterRuntimeInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
+  UpdateAgentInput,
   UpdateAutopilotInput,
   UpdateIssueInput,
   UpdateProjectInput,
@@ -68,6 +69,13 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const agent = store.getAgent(c.req.param("id"));
     if (!agent) return c.json({ error: "agent not found" }, 404);
     return c.json({ agent });
+  });
+  app.patch("/api/multica/agents/:id", async (c) => {
+    const body = await readJson<UpdateAgentInput>(c);
+    return c.json({ agent: store.updateAgent(c.req.param("id"), body) });
+  });
+  app.delete("/api/multica/agents/:id", (c) => {
+    return c.json({ agent: store.archiveAgent(c.req.param("id")) });
   });
 
   app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));

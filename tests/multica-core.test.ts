@@ -68,6 +68,52 @@ describe("Bun Multica core store", () => {
     expect(store.listRuntimes()[0]?.status).toBe("offline");
   });
 
+  it("updates and archives agents from scheduling surfaces", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex", allowedTools: ["Read"] });
+    const updated = store.updateAgent(agent.id, { name: "Codex Pro", allowedTools: ["Read", "Bash"] });
+    expect(updated.name).toBe("Codex Pro");
+    expect(updated.allowedTools).toHaveLength(2);
+
+    const task = store.createTask({ agentId: agent.id, prompt: "Before archive" });
+    expect(task.id).toStartWith("tsk_");
+    expect(store.archiveAgent(agent.id).archivedAt).toBeString();
+    expect(store.listAgents()).toHaveLength(0);
+    expect(() => store.createTask({ agentId: agent.id, prompt: "After archive" })).toThrow("Agent is archived");
+
+    const runtime = store.registerRuntime({ name: "codex-runtime", provider: "codex" });
+    expect(store.claimTask(runtime.id)).toBeNull();
+
+    const defaultAgent = store.ensureDefaultAgent("codex");
+    store.archiveAgent(defaultAgent.id);
+    expect(store.listAgents()).toHaveLength(0);
+    expect(store.ensureDefaultAgent("codex").archivedAt).toBeNull();
+  });
+
+  it("skips archived agents when resolving squad autopilots", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Leader", provider: "codex" });
+    const backup = store.createAgent({ name: "Backup", provider: "codex" });
+    const squad = store.createSquad({ name: "Core", leaderId: leader.id, memberIds: [leader.id, backup.id] });
+    const autopilot = store.createAutopilot({
+      title: "Resolve squad",
+      assigneeType: "squad",
+      assigneeId: squad.id,
+      issueTitleTemplate: "Use active member",
+    });
+
+    store.archiveAgent(leader.id);
+    const run = store.runAutopilot(autopilot.id);
+    expect(run.status).toBe("running");
+    expect(store.getTask(run.taskId!)?.agentId).toBe(backup.id);
+
+    store.archiveAgent(backup.id);
+    const skipped = store.runAutopilot(autopilot.id);
+    expect(skipped.status).toBe("skipped");
+    expect(skipped.failureReason).toBe("No runnable agent");
+    expect(() => store.addSquadMember(squad.id, { memberType: "agent", memberId: backup.id })).toThrow("Agent is archived");
+  });
+
   it("recovers dispatched and running tasks for a runtime", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });

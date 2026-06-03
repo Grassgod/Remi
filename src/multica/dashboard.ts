@@ -1367,6 +1367,9 @@ export function renderMulticaDashboardHtml(): string {
       selectedIssue: null,
       selectedIssueComments: [],
       selectedIssueActivity: [],
+      selectedSquadId: null,
+      selectedSquad: null,
+      selectedSquadMembers: [],
       chatEntries: []
     };
 
@@ -1475,6 +1478,7 @@ export function renderMulticaDashboardHtml(): string {
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
+        if (state.selectedSquadId) await loadSquadDetail(state.selectedSquadId, { silent: true });
       } catch (err) {
         showNotice(String(err.message || err), options.agent ? els.agentNotice : els.notice);
       } finally {
@@ -1555,9 +1559,19 @@ export function renderMulticaDashboardHtml(): string {
     async function openIssue(id) {
       state.selectedIssueId = id;
       state.selectedTaskId = null;
+      state.selectedSquadId = null;
       els.taskDrawer.classList.add("open");
       renderIssueDrawer({ loading: true });
       await loadIssueDetail(id);
+    }
+
+    async function openSquad(id) {
+      state.selectedSquadId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      els.taskDrawer.classList.add("open");
+      renderSquadDrawer({ loading: true });
+      await loadSquadDetail(id);
     }
 
     async function loadIssueDetail(id, options = {}) {
@@ -1597,6 +1611,19 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function loadSquadDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/squads/" + encodeURIComponent(id));
+        state.selectedSquad = result.squad;
+        state.selectedSquadMembers = result.members || [];
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        renderSquadDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
     function closeDrawer() {
       state.selectedTaskId = null;
       state.selectedTask = null;
@@ -1605,7 +1632,34 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedMessages = [];
       state.selectedIssueComments = [];
       state.selectedIssueActivity = [];
+      state.selectedSquadId = null;
+      state.selectedSquad = null;
+      state.selectedSquadMembers = [];
       els.taskDrawer.classList.remove("open");
+    }
+
+    async function addSquadMember(event) {
+      event.preventDefault();
+      if (!state.selectedSquad) return;
+      const memberId = document.getElementById("squadMemberAgent").value;
+      const role = document.getElementById("squadMemberRole").value || "member";
+      if (!memberId) return;
+      await api("/api/multica/squads/" + encodeURIComponent(state.selectedSquad.id) + "/members", {
+        method: "POST",
+        body: JSON.stringify({ memberType: "agent", memberId, role })
+      });
+      await loadSquadDetail(state.selectedSquad.id);
+      await refresh({ silent: true });
+    }
+
+    async function removeSquadMember(memberType, memberId) {
+      if (!state.selectedSquad) return;
+      await api("/api/multica/squads/" + encodeURIComponent(state.selectedSquad.id) + "/members", {
+        method: "DELETE",
+        body: JSON.stringify({ memberType, memberId })
+      });
+      await loadSquadDetail(state.selectedSquad.id);
+      await refresh({ silent: true });
     }
 
     async function updateSelectedIssue() {
@@ -1774,6 +1828,15 @@ export function renderMulticaDashboardHtml(): string {
         await refresh();
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function archiveAgent(id) {
+      try {
+        await api("/api/multica/agents/" + encodeURIComponent(id), { method: "DELETE" });
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.agentNotice);
       }
     }
 
@@ -2063,7 +2126,7 @@ export function renderMulticaDashboardHtml(): string {
       els.squadsGrid.innerHTML = state.squads.map(squad => {
         const leader = squad.leaderId ? state.agents.find(a => a.id === squad.leaderId) : null;
         const active = state.tasks.filter(t => leader && t.agentId === leader.id && isActiveTask(t)).length;
-        return "<article class=\\"entity-card\\">" +
+        return "<article class=\\"entity-card\\" onclick=\\"openSquad('" + escAttr(squad.id) + "')\\">" +
           "<div class=\\"entity-head\\">" +
             "<span class=\\"agent-avatar\\">" + esc(initials(squad.name)) + "</span>" +
             "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(squad.name) + "</div><div class=\\"entity-subtitle\\">" + esc(leader ? leader.name : "No leader") + "</div></div>" +
@@ -2074,7 +2137,7 @@ export function renderMulticaDashboardHtml(): string {
             renderMetric(active, "active") +
             renderMetric(timeAgo(squad.updatedAt), "updated") +
           "</div>" +
-          "<button class=\\"destructive\\" onclick=\\"archiveSquad('" + escAttr(squad.id) + "')\\">Archive</button>" +
+          "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveSquad('" + escAttr(squad.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -2136,6 +2199,7 @@ export function renderMulticaDashboardHtml(): string {
             (agent.cwd ? "<span class=\\"status-badge\\">" + esc(agent.cwd) + "</span>" : "") +
             (agent.allowedTools && agent.allowedTools.length ? "<span class=\\"status-badge\\">" + agent.allowedTools.length + " tools</span>" : "") +
           "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveAgent('" + escAttr(agent.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -2228,6 +2292,47 @@ export function renderMulticaDashboardHtml(): string {
         "</div>";
     }
 
+    function renderSquadDrawer(options = {}) {
+      if (options.loading || !state.selectedSquad) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Squad detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const squad = state.selectedSquad;
+      const leader = squad.leaderId ? state.agents.find(a => a.id === squad.leaderId) : null;
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(squad.name || "") + "</strong><span>" + esc(shortId(squad.id)) + "</span></div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveSquad('" + escAttr(squad.id) + "')\\">Archive</button>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(leader ? leader.name : "No leader") + "</span><span class=\\"status-badge\\">" + esc(String(squad.memberCount || 0)) + " members</span></div>" +
+          renderDetailBlock("Description", squad.description || squad.instructions || "") +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Members</div><div class=\\"message-list\\">" + renderSquadMembers() + "</div></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"addSquadMember(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Agent<select id=\\"squadMemberAgent\\">" + agentOptions(false) + "</select></label>" +
+              "<label>Role<select id=\\"squadMemberRole\\"><option value=\\"member\\">member</option><option value=\\"leader\\">leader</option><option value=\\"reviewer\\">reviewer</option></select></label>" +
+            "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Add member</button>" +
+          "</form>" +
+        "</div>";
+    }
+
+    function renderSquadMembers() {
+      if (!state.selectedSquadMembers.length) return "<div class=\\"empty-column\\">No members</div>";
+      return state.selectedSquadMembers.map(member => {
+        const agent = member.memberType === "agent" ? state.agents.find(a => a.id === member.memberId) : null;
+        return "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(member.role || "member") + "</span><span>" + esc(member.memberType) + "</span><span>" + esc(shortId(member.memberId)) + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(agent ? agent.name + " / " + agent.provider : member.memberId) + "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"removeSquadMember('" + escAttr(member.memberType) + "', '" + escAttr(member.memberId) + "')\\">Remove</button>" +
+        "</div>";
+      }).join("");
+    }
+
     function renderIssueTasks(tasks) {
       if (!tasks.length) return "<div class=\\"empty-column\\">No tasks</div>";
       return tasks.map(task => {
@@ -2310,7 +2415,7 @@ export function renderMulticaDashboardHtml(): string {
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
       state.agents.forEach(a => rows.push({ type: "Agent", title: a.name, subtitle: a.provider, action: () => switchPage("agents") }));
-      state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => switchPage("squads") }));
+      state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => { switchPage("squads"); openSquad(s.id); } }));
       state.runtimes.forEach(r => rows.push({ type: "Runtime", title: r.name, subtitle: r.provider + " / " + r.status, action: () => switchPage("runtimes") }));
       const filtered = rows.filter(row => !q || (row.title + " " + row.subtitle + " " + row.type).toLowerCase().includes(q)).slice(0, 18);
       els.searchResults.innerHTML = filtered.length ? filtered.map((row, index) =>
@@ -2490,12 +2595,16 @@ export function renderMulticaDashboardHtml(): string {
     }, 4000);
     window.cancelTask = cancelTask;
     window.openTask = openTask;
+    window.openSquad = openSquad;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
     window.archiveSquad = archiveSquad;
+    window.addSquadMember = addSquadMember;
+    window.removeSquadMember = removeSquadMember;
     window.setAutopilotStatus = setAutopilotStatus;
     window.archiveAutopilot = archiveAutopilot;
+    window.archiveAgent = archiveAgent;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.updateSelectedIssue = updateSelectedIssue;
     window.addSelectedIssueComment = addSelectedIssueComment;
