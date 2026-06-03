@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMulticaProviders } from "../src/cli/multica.js";
 import { createMulticaApp } from "../src/multica/api.js";
 import { renderMulticaDashboardHtml } from "../src/multica/dashboard.js";
-import { writeProjectResourceContext } from "../src/multica/daemon.js";
+import { writeAgentSkillContext, writeProjectResourceContext } from "../src/multica/daemon.js";
 import { buildTaskPrompt } from "../src/multica/prompt.js";
 import { MulticaScheduler } from "../src/multica/scheduler.js";
 import { MulticaStore } from "../src/multica/store.js";
@@ -175,6 +175,41 @@ describe("Bun Multica core store", () => {
     store.archiveAgent(defaultAgent.id);
     expect(store.listAgents()).toHaveLength(0);
     expect(store.ensureDefaultAgent("codex").archivedAt).toBeNull();
+  });
+
+  it("manages workspace skills, attaches them to agents, and includes files in claims", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Reviewer", provider: "claude" });
+    const skill = store.createSkill({
+      id: "skl_review",
+      workspaceId: "local",
+      name: "Review Helper",
+      description: "Review pull requests",
+      content: "# Review Helper",
+      config: { origin: { type: "local" } },
+      files: [{ path: "templates/check.md", content: "Check list" }],
+    });
+
+    expect(store.listSkills("local")[0].content).toBe("# Review Helper");
+    expect(store.listSkills("local", { includeFiles: true })[0].files?.[0].path).toBe("templates/check.md");
+
+    const attached = store.setAgentSkills(agent.id, { skill_ids: [skill.id!] });
+    expect(attached[0].name).toBe("Review Helper");
+    expect(store.getAgent(agent.id)?.skills[0].files?.[0].content).toBe("Check list");
+
+    const task = store.createTask({ agentId: agent.id, prompt: "Review this" });
+    const runtime = store.registerRuntime({ name: "local", provider: "claude" });
+    const claimed = store.claimTask(runtime.id);
+    expect(claimed?.id).toBe(task.id);
+    expect(claimed?.agent?.skills[0].name).toBe("Review Helper");
+    expect(claimed?.agent?.skills[0].files?.[0].path).toBe("templates/check.md");
+
+    const updated = store.updateSkill(skill.id!, { name: "Review Helper", files: [{ path: "rules.md", content: "Rules" }] });
+    expect(updated.files?.[0].path).toBe("rules.md");
+    expect(() => store.updateSkill(skill.id!, { files: [{ path: "../escape.md", content: "" }] })).toThrow();
+
+    store.archiveSkill(skill.id!);
+    expect(store.listAgentSkills(agent.id)).toHaveLength(0);
   });
 
   it("manages workspace members and squad membership", () => {
@@ -647,6 +682,31 @@ describe("Bun Multica core store", () => {
     }
   });
 
+  it("writes agent skills into the daemon workdir", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const skill = store.createSkill({
+      name: "Review Helper",
+      description: "Review pull requests",
+      content: "# Body",
+      files: [{ path: "templates/check.md", content: "Check list" }],
+    });
+    store.setAgentSkills(agent.id, { skillIds: [skill.id!] });
+    const task = store.getTaskWithAgent(store.createTask({ agentId: agent.id, prompt: "Review" }).id)!;
+    const dir = mkdtempSync(join(tmpdir(), "multica-skill-"));
+
+    try {
+      writeAgentSkillContext(dir, task);
+      const skillDir = join(dir, ".claude", "skills", "review-helper");
+
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toContain("name: \"Review Helper\"");
+      expect(readFileSync(join(skillDir, "templates", "check.md"), "utf8")).toBe("Check list");
+      expect(existsSync(join(dir, ".claude", "skills", "..", "escape.md"))).toBeFalse();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("stores issue metadata as a bounded primitive map and includes it in prompts", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
@@ -776,6 +836,15 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("function renderUsage()");
     expect(html).toContain("/api/dashboard/usage/daily");
   });
+
+  it("renders a real skills page with agent skill controls", () => {
+    const html = renderMulticaDashboardHtml();
+    expect(html).toContain('id="skillsPage"');
+    expect(html).toContain('id="skillsGrid"');
+    expect(html).toContain("function renderSkills()");
+    expect(html).toContain("/api/multica/skills");
+    expect(html).toContain("updateSelectedAgentSkills");
+  });
 });
 
 describe("Bun Multica API", () => {
@@ -843,6 +912,59 @@ describe("Bun Multica API", () => {
       headers: { Authorization: `Bearer ${createdBody.token.token}` },
     });
     expect(afterRevoke.status).toBe(401);
+  });
+
+  it("serves workspace skills and agent skill assignment endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/multica/skills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "skl_api",
+        workspace_id: "local",
+        name: "API Skill",
+        description: "API managed skill",
+        content: "# API Skill",
+        files: [{ path: "notes/guide.md", content: "Guide" }],
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect((await created.json()).skill.files[0].path).toBe("notes/guide.md");
+
+    const list = await app.request("/api/skills?workspace_id=local");
+    const listBody = await list.json();
+    expect(listBody[0].id).toBe("skl_api");
+    expect(listBody[0].content).toBeUndefined();
+
+    const multicaList = await app.request("/api/multica/skills?workspace_id=local");
+    expect((await multicaList.json()).skills[0].content).toBeUndefined();
+
+    const detail = await app.request("/api/skills/skl_api");
+    const detailBody = await detail.json();
+    expect(detailBody.content).toBe("# API Skill");
+    expect(detailBody.files[0].content).toBe("Guide");
+
+    const assign = await app.request(`/api/agents/${agent.id}/skills`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skill_ids: ["skl_api"] }),
+    });
+    expect(assign.status).toBe(200);
+    const assignBody = await assign.json();
+    expect(assignBody[0].name).toBe("API Skill");
+    expect(assignBody[0].content).toBeUndefined();
+
+    const agentDetail = await app.request(`/api/multica/agents/${agent.id}`);
+    const agentBody = await agentDetail.json();
+    expect(agentBody.agent.skills[0].files[0].path).toBe("notes/guide.md");
+
+    const deleted = await app.request("/api/skills/skl_api", { method: "DELETE" });
+    expect(deleted.status).toBe(204);
+    const afterDelete = await app.request(`/api/multica/agents/${agent.id}/skills`);
+    expect((await afterDelete.json()).skills).toHaveLength(0);
   });
 
   it("serves runtime metadata updates and usage endpoints", async () => {

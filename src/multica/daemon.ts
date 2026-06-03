@@ -113,8 +113,9 @@ export class MulticaDaemon {
     mkdirSync(workDir, { recursive: true });
     try {
       writeProjectResourceContext(workDir, task);
+      writeAgentSkillContext(workDir, task);
     } catch (err) {
-      log.warn(`Failed to write project resources for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      log.warn(`Failed to write task context for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
     }
     await this.client.pinTaskSession(task.id, task.sessionId, workDir);
 
@@ -192,6 +193,53 @@ export function writeProjectResourceContext(workDir: string, task: MulticaTaskWi
     })),
   };
   writeFileSync(join(dir, "resources.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
+}
+
+export function writeAgentSkillContext(workDir: string, task: MulticaTaskWithAgent): void {
+  const skills = task.agent?.skills ?? [];
+  if (!skills.length) return;
+  const root = join(workDir, ".claude", "skills");
+  mkdirSync(root, { recursive: true });
+  for (const skill of skills) {
+    const dir = join(root, safeSkillDirName(skill.name));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), renderSkillMarkdown(skill), { mode: 0o644 });
+    for (const file of skill.files ?? []) {
+      const path = normalizeSkillFilePath(file.path);
+      const target = join(dir, path);
+      mkdirSync(join(target, ".."), { recursive: true });
+      writeFileSync(target, file.content ?? "", { mode: 0o644 });
+    }
+  }
+}
+
+function renderSkillMarkdown(skill: NonNullable<MulticaTaskWithAgent["agent"]>["skills"][number]): string {
+  const content = skill.content ?? "";
+  if (content.trimStart().startsWith("---")) return content;
+  const frontmatter = [
+    "---",
+    `name: ${yamlQuote(skill.name)}`,
+    skill.description ? `description: ${yamlQuote(skill.description)}` : "",
+    "---",
+    "",
+  ].filter((line) => line !== "").join("\n");
+  return `${frontmatter}${content}`;
+}
+
+function yamlQuote(value: string): string {
+  return JSON.stringify(String(value ?? ""));
+}
+
+function safeSkillDirName(value: string): string {
+  return String(value || "skill").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+}
+
+function normalizeSkillFilePath(value: string): string {
+  const normalized = String(value ?? "").replace(/\\/g, "/").split("/").filter(Boolean).join("/");
+  if (!normalized || normalized.startsWith("/") || normalized === "." || normalized.includes("..") || normalized === "SKILL.md") {
+    throw new Error(`Invalid skill file path: ${value}`);
+  }
+  return normalized;
 }
 
 function serializeProjectResourceRef(resourceType: string, ref: Record<string, unknown>): Record<string, unknown> {

@@ -17,6 +17,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
@@ -53,6 +54,8 @@ import type {
   MulticaRuntimeDaily,
   MulticaRuntimeVisibility,
   MulticaRuntimeUsage,
+  MulticaSkill,
+  MulticaSkillFile,
   MulticaSquad,
   MulticaSquadMember,
   MulticaTask,
@@ -71,6 +74,7 @@ import type {
   RunAutopilotInput,
   SendChatMessageInput,
   SendChatMessageResult,
+  SetAgentSkillsInput,
   TaskMessageInput,
   TaskUsageEntry,
   UpdateAgentInput,
@@ -81,6 +85,7 @@ import type {
   UpdateLabelInput,
   UpdateProjectInput,
   UpdateRuntimeInput,
+  UpdateSkillInput,
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
 } from "./types.js";
@@ -118,6 +123,45 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_skills (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL DEFAULT '',
+        config TEXT NOT NULL DEFAULT '{}',
+        created_by TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, name)
+      );
+
+      CREATE TABLE IF NOT EXISTS multica_skill_files (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(skill_id, path),
+        FOREIGN KEY(skill_id) REFERENCES multica_skills(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS multica_agent_skills (
+        agent_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(agent_id, skill_id),
+        FOREIGN KEY(agent_id) REFERENCES multica_agents(id) ON DELETE CASCADE,
+        FOREIGN KEY(skill_id) REFERENCES multica_skills(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_skills_workspace ON multica_skills(workspace_id, archived_at);
+      CREATE INDEX IF NOT EXISTS idx_multica_skill_files_skill ON multica_skill_files(skill_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_agent_skills_agent ON multica_agent_skills(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_multica_agent_skills_skill ON multica_agent_skills(skill_id);
 
       CREATE TABLE IF NOT EXISTS multica_runtimes (
         id TEXT PRIMARY KEY,
@@ -643,6 +687,129 @@ export class MulticaStore {
     return this.getAgent(id)!;
   }
 
+  createSkill(input: CreateSkillInput): MulticaSkill {
+    const name = input.name?.trim();
+    if (!name) throw new Error("Skill name is required");
+    const id = input.id ?? createId("skl");
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const now = nowIso();
+    const files = normalizeSkillFiles(input.files ?? []);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO multica_skills (
+          id, workspace_id, name, description, content, config, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          workspaceId,
+          name,
+          input.description ?? "",
+          input.content ?? "",
+          toJson(input.config ?? {}),
+          input.createdBy ?? input.created_by ?? null,
+          now,
+          now,
+        ],
+      );
+      this.replaceSkillFiles(id, files, now);
+    })();
+    return this.getSkill(id)!;
+  }
+
+  updateSkill(id: string, input: UpdateSkillInput): MulticaSkill {
+    const current = this.getSkill(id);
+    if (!current) throw new Error(`Skill not found: ${id}`);
+    const now = nowIso();
+    const nextName = input.name === undefined ? current.name : input.name.trim();
+    if (!nextName) throw new Error("Skill name is required");
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE multica_skills SET
+          workspace_id = ?,
+          name = ?,
+          description = ?,
+          content = ?,
+          config = ?,
+          created_by = ?,
+          updated_at = ?
+         WHERE id = ?`,
+        [
+          input.workspaceId ?? input.workspace_id ?? current.workspaceId ?? "local",
+          nextName,
+          input.description ?? current.description ?? "",
+          input.content ?? current.content ?? "",
+          input.config === undefined ? toJson(current.config ?? {}) : toJson(input.config ?? {}),
+          input.createdBy ?? input.created_by ?? current.createdBy ?? null,
+          now,
+          id,
+        ],
+      );
+      if (input.files !== undefined) this.replaceSkillFiles(id, normalizeSkillFiles(input.files), now);
+    })();
+    return this.getSkill(id)!;
+  }
+
+  archiveSkill(id: string): MulticaSkill {
+    const current = this.getSkill(id);
+    if (!current) throw new Error(`Skill not found: ${id}`);
+    const now = nowIso();
+    this.db.run("UPDATE multica_skills SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    return this.getSkill(id)!;
+  }
+
+  listSkills(workspaceId?: string | null, options: { includeArchived?: boolean; includeFiles?: boolean } = {}): MulticaSkill[] {
+    const archivedFilter = options.includeArchived ? "" : " AND archived_at IS NULL";
+    const rows = workspaceId
+      ? this.db.query(`SELECT * FROM multica_skills WHERE workspace_id = ?${archivedFilter} ORDER BY created_at DESC`).all(workspaceId) as Row[]
+      : this.db.query(`SELECT * FROM multica_skills WHERE 1 = 1${archivedFilter} ORDER BY created_at DESC`).all() as Row[];
+    return rows.map((row) => toSkill(row, options.includeFiles ? this.listSkillFiles(String(row.id)) : []));
+  }
+
+  getSkill(id: string, options: { includeArchived?: boolean; includeFiles?: boolean } = { includeFiles: true }): MulticaSkill | null {
+    const row = this.db.query(
+      `SELECT * FROM multica_skills WHERE id = ?${options.includeArchived ? "" : " AND archived_at IS NULL"}`,
+    ).get(id) as Row | null;
+    return row ? toSkill(row, options.includeFiles === false ? [] : this.listSkillFiles(id)) : null;
+  }
+
+  listSkillFiles(skillId: string): MulticaSkillFile[] {
+    const rows = this.db.query("SELECT * FROM multica_skill_files WHERE skill_id = ? ORDER BY path ASC").all(skillId) as Row[];
+    return rows.map(toSkillFile);
+  }
+
+  listAgentSkills(agentId: string, options: { includeFiles?: boolean } = { includeFiles: true }): MulticaSkill[] {
+    const row = this.db.query("SELECT * FROM multica_agents WHERE id = ?").get(agentId) as Row | null;
+    if (!row) throw new Error(`Agent not found: ${agentId}`);
+    const agent = toAgent(row);
+    const rows = this.db.query(
+      `SELECT s.*
+       FROM multica_skills s
+       JOIN multica_agent_skills aks ON aks.skill_id = s.id
+       WHERE aks.agent_id = ? AND s.archived_at IS NULL
+       ORDER BY aks.created_at ASC, s.name ASC`,
+    ).all(agentId) as Row[];
+    const structured = rows.map((row) => toSkill(row, options.includeFiles === false ? [] : this.listSkillFiles(String(row.id))));
+    return mergeAgentSkills(agent.skills, structured);
+  }
+
+  setAgentSkills(agentId: string, input: SetAgentSkillsInput | string[]): MulticaSkill[] {
+    if (!this.db.query("SELECT id FROM multica_agents WHERE id = ?").get(agentId)) throw new Error(`Agent not found: ${agentId}`);
+    const skillIds = Array.isArray(input) ? input : input.skillIds ?? input.skill_ids ?? [];
+    const now = nowIso();
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM multica_agent_skills WHERE agent_id = ?", [agentId]);
+      for (const skillId of skillIds) {
+        const skill = this.getSkill(skillId);
+        if (!skill) throw new Error(`Skill not found: ${skillId}`);
+        this.db.run(
+          "INSERT OR IGNORE INTO multica_agent_skills (agent_id, skill_id, created_at) VALUES (?, ?, ?)",
+          [agentId, skillId, now],
+        );
+      }
+    })();
+    return this.listAgentSkills(agentId);
+  }
+
   ensureDefaultAgent(provider = "claude"): MulticaAgent {
     const id = `agt_default_${provider}`;
     const existing = this.getAgent(id);
@@ -664,12 +831,43 @@ export class MulticaStore {
 
   getAgent(id: string): MulticaAgent | null {
     const row = this.db.query("SELECT * FROM multica_agents WHERE id = ?").get(id) as Row | null;
-    return row ? toAgent(row) : null;
+    return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
   listAgents(): MulticaAgent[] {
     const rows = this.db.query("SELECT * FROM multica_agents WHERE archived_at IS NULL ORDER BY created_at ASC").all() as Row[];
-    return rows.map(toAgent);
+    return rows.map((row) => this.hydrateAgent(toAgent(row)));
+  }
+
+  private hydrateAgent(agent: MulticaAgent): MulticaAgent {
+    return {
+      ...agent,
+      skills: this.listAgentSkillsForExistingAgent(agent),
+    };
+  }
+
+  private listAgentSkillsForExistingAgent(agent: MulticaAgent): MulticaSkill[] {
+    const rows = this.db.query(
+      `SELECT s.*
+       FROM multica_skills s
+       JOIN multica_agent_skills aks ON aks.skill_id = s.id
+       WHERE aks.agent_id = ? AND s.archived_at IS NULL
+       ORDER BY aks.created_at ASC, s.name ASC`,
+    ).all(agent.id) as Row[];
+    const structured = rows.map((row) => toSkill(row, this.listSkillFiles(String(row.id))));
+    return mergeAgentSkills(agent.skills, structured);
+  }
+
+  private replaceSkillFiles(skillId: string, files: MulticaSkillFile[], now = nowIso()): void {
+    this.db.run("DELETE FROM multica_skill_files WHERE skill_id = ?", [skillId]);
+    for (const file of files) {
+      this.db.run(
+        `INSERT INTO multica_skill_files (
+          id, skill_id, path, content, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [file.id ?? createId("skf"), skillId, file.path, file.content, now, now],
+      );
+    }
   }
 
   createWorkspaceMember(input: CreateWorkspaceMemberInput): MulticaWorkspaceMember {
@@ -3409,6 +3607,37 @@ function parseJson<T>(value: unknown, fallback: T): T {
   }
 }
 
+function normalizeSkillFiles(files: MulticaSkillFile[]): MulticaSkillFile[] {
+  const seen = new Set<string>();
+  return files.map((file) => {
+    const path = normalizeSkillFilePath(file.path);
+    if (seen.has(path)) throw new Error(`Duplicate skill file path: ${path}`);
+    seen.add(path);
+    return { path, content: String(file.content ?? "") };
+  });
+}
+
+function normalizeSkillFilePath(path: string): string {
+  const normalized = String(path ?? "").replace(/\\/g, "/").split("/").filter(Boolean).join("/");
+  if (!normalized || normalized.startsWith("/") || normalized === "." || normalized.includes("..")) {
+    throw new Error(`Invalid skill file path: ${path}`);
+  }
+  if (normalized === "SKILL.md") throw new Error("Skill files should not include SKILL.md");
+  return normalized;
+}
+
+function mergeAgentSkills(inlineSkills: MulticaSkill[], structuredSkills: MulticaSkill[]): MulticaSkill[] {
+  const seen = new Set<string>();
+  const merged: MulticaSkill[] = [];
+  for (const skill of [...structuredSkills, ...inlineSkills]) {
+    const key = skill.id ?? skill.name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(skill);
+  }
+  return merged;
+}
+
 function nullableString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
@@ -3807,6 +4036,34 @@ function toAccessToken(row: Row): MulticaAccessToken {
     expiresAt: nullableString(row.expires_at),
     revokedAt: nullableString(row.revoked_at),
     createdAt: String(row.created_at),
+  };
+}
+
+function toSkill(row: Row, files: MulticaSkillFile[] = []): MulticaSkill {
+  const config = parseJson<Record<string, unknown>>(row.config, {});
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    name: String(row.name ?? ""),
+    description: String(row.description ?? ""),
+    content: String(row.content ?? ""),
+    config,
+    files,
+    createdBy: nullableString(row.created_by),
+    archivedAt: nullableString(row.archived_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toSkillFile(row: Row): MulticaSkillFile {
+  return {
+    id: String(row.id),
+    skillId: String(row.skill_id),
+    path: String(row.path ?? ""),
+    content: String(row.content ?? ""),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
   };
 }
 

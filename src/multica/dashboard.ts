@@ -1256,6 +1256,11 @@ export function renderMulticaDashboardHtml(): string {
           <div class="entity-grid" id="runtimesGrid"></div>
         </div>
       </section>
+      <section class="page" id="skillsPage">
+        <div class="collection">
+          <div class="entity-grid" id="skillsGrid"></div>
+        </div>
+      </section>
       <section class="page" id="inboxPage">
         <div class="list active" id="inboxList"></div>
       </section>
@@ -1355,7 +1360,7 @@ export function renderMulticaDashboardHtml(): string {
       squads: { title: "Squads", group: "Workspace" },
       usage: { title: "Usage", group: "Workspace", placeholder: "Usage", text: "No usage data." },
       runtimes: { title: "Runtimes", group: "Configure" },
-      skills: { title: "Skills", group: "Configure", placeholder: "Skills", text: "No skills." },
+      skills: { title: "Skills", group: "Configure" },
       settings: { title: "Settings", group: "Configure", placeholder: "Settings", text: "No local settings." }
     };
 
@@ -1368,6 +1373,7 @@ export function renderMulticaDashboardHtml(): string {
       projects: [],
       squads: [],
       autopilots: [],
+      skills: [],
       labels: [],
       pins: [],
       inboxItems: [],
@@ -1399,6 +1405,8 @@ export function renderMulticaDashboardHtml(): string {
       selectedRuntimeId: null,
       selectedRuntime: null,
       selectedRuntimeUsage: [],
+      selectedSkillId: null,
+      selectedSkill: null,
       chatSessions: [],
       selectedChatId: null,
       selectedChatSession: null,
@@ -1415,6 +1423,7 @@ export function renderMulticaDashboardHtml(): string {
       autopilotsPage: document.getElementById("autopilotsPage"),
       squadsPage: document.getElementById("squadsPage"),
       runtimesPage: document.getElementById("runtimesPage"),
+      skillsPage: document.getElementById("skillsPage"),
       inboxPage: document.getElementById("inboxPage"),
       usagePage: document.getElementById("usagePage"),
       placeholderPage: document.getElementById("placeholderPage"),
@@ -1427,6 +1436,7 @@ export function renderMulticaDashboardHtml(): string {
       autopilotsGrid: document.getElementById("autopilotsGrid"),
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
+      skillsGrid: document.getElementById("skillsGrid"),
       inboxList: document.getElementById("inboxList"),
       usageSummaryGrid: document.getElementById("usageSummaryGrid"),
       usageList: document.getElementById("usageList"),
@@ -1510,7 +1520,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1519,6 +1529,7 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/projects"),
           api("/api/multica/squads"),
           api("/api/multica/autopilots"),
+          api("/api/multica/skills"),
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
           api("/api/multica/labels"),
@@ -1535,6 +1546,7 @@ export function renderMulticaDashboardHtml(): string {
         state.projects = projects.projects || [];
         state.squads = squads.squads || [];
         state.autopilots = autopilots.autopilots || [];
+        state.skills = skills.skills || [];
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
@@ -1549,6 +1561,7 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedProjectId) await loadProjectDetail(state.selectedProjectId, { silent: true });
         if (state.selectedAgentId) await loadAgentDetail(state.selectedAgentId, { silent: true });
         if (state.selectedRuntimeId) await loadRuntimeDetail(state.selectedRuntimeId, { silent: true });
+        if (state.selectedSkillId) await loadSkillDetail(state.selectedSkillId, { silent: true });
         if (state.selectedChatId) await loadChatDetail(state.selectedChatId, { silent: true });
         else if (els.chatAgent.value) {
           const existing = state.chatSessions.find(session => session.agentId === els.chatAgent.value);
@@ -1671,6 +1684,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedProjectId = null;
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
+      state.selectedSkillId = null;
       els.taskDrawer.classList.add("open");
       renderSquadDrawer({ loading: true });
       await loadSquadDetail(id);
@@ -1683,6 +1697,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedAgentId = null;
       state.selectedRuntimeId = null;
+      state.selectedSkillId = null;
       els.taskDrawer.classList.add("open");
       renderProjectDrawer({ loading: true });
       await loadProjectDetail(id);
@@ -1695,6 +1710,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedProjectId = null;
       state.selectedRuntimeId = null;
+      state.selectedSkillId = null;
       els.taskDrawer.classList.add("open");
       renderAgentDrawer({ loading: true });
       await loadAgentDetail(id);
@@ -1707,9 +1723,23 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedProjectId = null;
       state.selectedAgentId = null;
+      state.selectedSkillId = null;
       els.taskDrawer.classList.add("open");
       renderRuntimeDrawer({ loading: true });
       await loadRuntimeDetail(id);
+    }
+
+    async function openSkill(id) {
+      state.selectedSkillId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      state.selectedSquadId = null;
+      state.selectedProjectId = null;
+      state.selectedAgentId = null;
+      state.selectedRuntimeId = null;
+      els.taskDrawer.classList.add("open");
+      renderSkillDrawer({ loading: true });
+      await loadSkillDetail(id);
     }
 
     async function loadIssueDetail(id, options = {}) {
@@ -1794,6 +1824,7 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedIssue = null;
         state.selectedSquad = null;
         state.selectedRuntime = null;
+        state.selectedSkill = null;
         renderAgentDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
@@ -1810,7 +1841,24 @@ export function renderMulticaDashboardHtml(): string {
         state.selectedSquad = null;
         state.selectedProject = null;
         state.selectedAgent = null;
+        state.selectedSkill = null;
         renderRuntimeDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function loadSkillDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/skills/" + encodeURIComponent(id));
+        state.selectedSkill = result.skill;
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        state.selectedSquad = null;
+        state.selectedProject = null;
+        state.selectedAgent = null;
+        state.selectedRuntime = null;
+        renderSkillDrawer();
       } catch (err) {
         if (!options.silent) showNotice(String(err.message || err), els.notice);
       }
@@ -1850,6 +1898,8 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedRuntimeId = null;
       state.selectedRuntime = null;
       state.selectedRuntimeUsage = [];
+      state.selectedSkillId = null;
+      state.selectedSkill = null;
       els.taskDrawer.classList.remove("open");
     }
 
@@ -1875,6 +1925,18 @@ export function renderMulticaDashboardHtml(): string {
       await refresh({ silent: true });
     }
 
+    async function updateSelectedAgentSkills(event) {
+      event.preventDefault();
+      if (!state.selectedAgent) return;
+      const skillIds = Array.from(document.querySelectorAll("input[name='agentSkill']:checked")).map(input => input.value);
+      await api("/api/multica/agents/" + encodeURIComponent(state.selectedAgent.id) + "/skills", {
+        method: "PUT",
+        body: JSON.stringify({ skillIds })
+      });
+      await loadAgentDetail(state.selectedAgent.id);
+      await refresh({ silent: true });
+    }
+
     async function updateSelectedRuntime(event) {
       event.preventDefault();
       if (!state.selectedRuntime) return;
@@ -1888,6 +1950,23 @@ export function renderMulticaDashboardHtml(): string {
         })
       });
       await loadRuntimeDetail(state.selectedRuntime.id);
+      await refresh({ silent: true });
+    }
+
+    async function updateSelectedSkill(event) {
+      event.preventDefault();
+      if (!state.selectedSkill) return;
+      await api("/api/multica/skills/" + encodeURIComponent(state.selectedSkill.id), {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: document.getElementById("skillEditName").value,
+          workspaceId: document.getElementById("skillEditWorkspace").value || "local",
+          description: document.getElementById("skillEditDescription").value || "",
+          content: document.getElementById("skillEditContent").value || "",
+          files: parseSkillFiles(document.getElementById("skillEditFiles").value)
+        })
+      });
+      await loadSkillDetail(state.selectedSkill.id);
       await refresh({ silent: true });
     }
 
@@ -2209,7 +2288,7 @@ export function renderMulticaDashboardHtml(): string {
       closeSheet();
       closeAgentSheet();
       els.entitySheet.dataset.kind = kind;
-      els.entitySheetTitle.textContent = kind === "project" ? "New project" : kind === "squad" ? "New squad" : "New autopilot";
+      els.entitySheetTitle.textContent = kind === "project" ? "New project" : kind === "squad" ? "New squad" : kind === "skill" ? "New skill" : "New autopilot";
       els.entityForm.innerHTML = entityFormHtml(kind);
       els.entitySheet.classList.add("open");
       setTimeout(() => els.entityForm.querySelector("input, textarea, select")?.focus(), 50);
@@ -2253,6 +2332,16 @@ export function renderMulticaDashboardHtml(): string {
               instructions: document.getElementById("entityInstructions").value || "",
               leaderId,
               memberIds: leaderId ? [leaderId] : []
+            })
+          });
+        } else if (kind === "skill") {
+          await api("/api/multica/skills", {
+            method: "POST",
+            body: JSON.stringify({
+              name: document.getElementById("entityTitle").value,
+              description: document.getElementById("entityDescription").value || "",
+              content: document.getElementById("entityContent").value || "",
+              files: parseSkillFiles(document.getElementById("entityFiles").value)
             })
           });
         } else if (kind === "autopilot") {
@@ -2409,6 +2498,16 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function archiveSkill(id) {
+      try {
+        await api("/api/multica/skills/" + encodeURIComponent(id), { method: "DELETE" });
+        if (state.selectedSkillId === id) closeDrawer();
+        await refresh();
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
     async function markInboxRead(id) {
       await api("/api/multica/inbox/" + encodeURIComponent(id) + "/read", { method: "POST" });
       await refresh({ silent: true });
@@ -2521,6 +2620,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAutopilots();
       renderAgents();
       renderRuntimes();
+      renderSkills();
       renderInbox();
       renderUsage();
       renderPinnedNav();
@@ -2542,9 +2642,10 @@ export function renderMulticaDashboardHtml(): string {
       els.autopilotsPage.classList.toggle("active", state.page === "autopilots");
       els.squadsPage.classList.toggle("active", state.page === "squads");
       els.runtimesPage.classList.toggle("active", state.page === "runtimes");
+      els.skillsPage.classList.toggle("active", state.page === "skills");
       els.inboxPage.classList.toggle("active", state.page === "inbox");
       els.usagePage.classList.toggle("active", state.page === "usage");
-      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "inbox", "usage"].includes(state.page);
+      const isPlaceholder = !["issues", "agents", "projects", "autopilots", "squads", "runtimes", "skills", "inbox", "usage"].includes(state.page);
       els.placeholderPage.classList.toggle("active", isPlaceholder);
       if (isPlaceholder) {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
@@ -2642,6 +2743,16 @@ export function renderMulticaDashboardHtml(): string {
           "</div>" +
           "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button></div>";
         document.getElementById("refresh").addEventListener("click", () => refresh());
+      } else if (state.page === "skills") {
+        const attached = state.agents.reduce((count, agent) => count + (agent.skills || []).length, 0);
+        els.toolbar.innerHTML =
+          "<div class=\\"toolbar-left\\">" +
+            "<span class=\\"status-badge\\">" + state.skills.length + " skills</span>" +
+            "<span class=\\"status-badge\\">" + attached + " agent links</span>" +
+          "</div>" +
+          "<div class=\\"toolbar-right\\"><button class=\\"chip-button\\" id=\\"refresh\\">Refresh</button><button class=\\"primary\\" id=\\"newSkill\\">New skill</button></div>";
+        document.getElementById("refresh").addEventListener("click", () => refresh());
+        document.getElementById("newSkill").addEventListener("click", () => openEntitySheet("skill"));
       } else if (state.page === "usage") {
         const totals = usageTotals(state.usageDaily);
         els.toolbar.innerHTML =
@@ -2851,6 +2962,7 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"issue-meta\\">" +
             (agent.cwd ? "<span class=\\"status-badge\\">" + esc(agent.cwd) + "</span>" : "") +
             (agent.allowedTools && agent.allowedTools.length ? "<span class=\\"status-badge\\">" + agent.allowedTools.length + " tools</span>" : "") +
+            (agent.skills && agent.skills.length ? "<span class=\\"status-badge\\">" + agent.skills.length + " skills</span>" : "") +
           "</div>" +
           "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveAgent('" + escAttr(agent.id) + "')\\">Archive</button>" +
         "</article>";
@@ -2878,6 +2990,30 @@ export function renderMulticaDashboardHtml(): string {
             renderMetric(formatCompact(tokens), "tokens") +
           "</div>" +
           "<div class=\\"issue-meta\\"><span class=\\"status-badge\\">" + esc(runtime.status) + "</span><span class=\\"status-badge\\">" + esc(ownerLabel(runtime.ownerId)) + "</span><span class=\\"status-badge\\">" + esc(last) + "</span></div>" +
+        "</article>";
+      }).join("");
+    }
+
+    function renderSkills() {
+      if (!state.skills.length) {
+        els.skillsGrid.innerHTML = "<div class=\\"empty-column\\">No skills</div>";
+        return;
+      }
+      els.skillsGrid.innerHTML = state.skills.map(skill => {
+        const agents = state.agents.filter(agent => (agent.skills || []).some(item => item.id === skill.id));
+        const origin = skill.config?.origin?.type || skill.config?.origin?.source || "local";
+        return "<article class=\\"entity-card\\" onclick=\\"openSkill('" + escAttr(skill.id) + "')\\">" +
+          "<div class=\\"entity-head\\">" +
+            "<span class=\\"agent-avatar\\">" + esc((skill.name || "S").slice(0, 1).toUpperCase()) + "</span>" +
+            "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(skill.name || "") + "</div><div class=\\"entity-subtitle\\">" + esc(skill.workspaceId || "local") + " / " + esc(origin) + "</div></div>" +
+          "</div>" +
+          "<div class=\\"entity-body\\">" + esc(skill.description || "No description") + "</div>" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(agents.length, "agents") +
+            renderMetric(skill.files ? skill.files.length : 0, "files") +
+            renderMetric(shortDate(skill.updatedAt || skill.createdAt), "updated") +
+          "</div>" +
+          "<div class=\\"issue-meta\\">" + agents.slice(0, 3).map(agent => "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>").join("") + "</div>" +
         "</article>";
       }).join("");
     }
@@ -3113,7 +3249,22 @@ export function renderMulticaDashboardHtml(): string {
             "<label>Instructions<textarea id=\\"agentEditInstructions\\" placeholder=\\"Optional\\">" + esc(agent.instructions || "") + "</textarea></label>" +
             "<button class=\\"outline\\" type=\\"submit\\">Save agent</button>" +
           "</form>" +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Skills</div><div class=\\"message-list\\">" + renderAgentSkillPicker(agent) + "</div></div>" +
         "</div>";
+    }
+
+    function renderAgentSkillPicker(agent) {
+      if (!state.skills.length) return "<div class=\\"empty-column\\">No workspace skills</div>";
+      const selected = new Set((agent.skills || []).map(skill => skill.id));
+      return "<form class=\\"sheet-form\\" onsubmit=\\"updateSelectedAgentSkills(event)\\" style=\\"padding:0;\\">" +
+        state.skills.map(skill =>
+          "<label class=\\"message-row\\" style=\\"display:flex; gap:10px; align-items:flex-start;\\">" +
+            "<input type=\\"checkbox\\" name=\\"agentSkill\\" value=\\"" + escAttr(skill.id) + "\\" " + (selected.has(skill.id) ? "checked" : "") + ">" +
+            "<span><strong>" + esc(skill.name) + "</strong><span class=\\"message-content\\">" + esc(skill.description || "") + "</span></span>" +
+          "</label>"
+        ).join("") +
+        "<button class=\\"outline\\" type=\\"submit\\">Save skills</button>" +
+      "</form>";
     }
 
     function renderRuntimeDrawer(options = {}) {
@@ -3155,6 +3306,42 @@ export function renderMulticaDashboardHtml(): string {
             renderCell("Output tokens", formatCompact(runtime.outputTokens || 0)) +
           "</div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Usage by model</div><div class=\\"message-list\\">" + renderRuntimeUsageRows() + "</div></div>" +
+        "</div>";
+    }
+
+    function renderSkillDrawer(options = {}) {
+      if (options.loading || !state.selectedSkill) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Skill detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const skill = state.selectedSkill;
+      const agents = state.agents.filter(agent => (agent.skills || []).some(item => item.id === skill.id));
+      const filesText = formatSkillFiles(skill.files || []);
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(skill.name || "") + "</strong><span>" + esc(skill.workspaceId || "local") + " / " + esc(shortId(skill.id)) + "</span></div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveSkill('" + escAttr(skill.id) + "')\\">Archive</button>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(agents.length, "agents") +
+            renderMetric((skill.files || []).length, "files") +
+            renderMetric(shortDate(skill.updatedAt || skill.createdAt), "updated") +
+          "</div>" +
+          "<div class=\\"issue-meta\\">" + (agents.length ? agents.map(agent => "<span class=\\"status-badge\\">" + esc(agent.name) + "</span>").join("") : "<span class=\\"status-badge\\">unused</span>") + "</div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateSelectedSkill(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Name<input id=\\"skillEditName\\" value=\\"" + escAttr(skill.name || "") + "\\" required></label>" +
+              "<label>Workspace<input id=\\"skillEditWorkspace\\" value=\\"" + escAttr(skill.workspaceId || "local") + "\\"></label>" +
+            "</div>" +
+            "<label>Description<textarea id=\\"skillEditDescription\\" placeholder=\\"Optional\\">" + esc(skill.description || "") + "</textarea></label>" +
+            "<label>SKILL.md<textarea id=\\"skillEditContent\\" placeholder=\\"Skill instructions\\">" + esc(skill.content || "") + "</textarea></label>" +
+            "<label>Supporting files<textarea id=\\"skillEditFiles\\" placeholder=\\"path/to/file.md\\n---\\ncontent\\">" + esc(filesText) + "</textarea></label>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save skill</button>" +
+          "</form>" +
         "</div>";
     }
 
@@ -3513,6 +3700,7 @@ export function renderMulticaDashboardHtml(): string {
       pages.agents && rows.push({ type: "Page", title: "Agents", subtitle: state.agents.length + " agents", action: () => switchPage("agents") });
       pages.squads && rows.push({ type: "Page", title: "Squads", subtitle: state.squads.length + " squads", action: () => switchPage("squads") });
       pages.runtimes && rows.push({ type: "Page", title: "Runtimes", subtitle: state.runtimes.length + " runtimes", action: () => switchPage("runtimes") });
+      pages.skills && rows.push({ type: "Page", title: "Skills", subtitle: state.skills.length + " skills", action: () => switchPage("skills") });
       state.issues.forEach(i => rows.push({ type: "Issue", title: i.title || issueLabel(i), subtitle: issueLabel(i) + " / " + statusLabel(i.status), action: () => { switchPage("issues"); openIssue(i.id); } }));
       state.projects.forEach(p => rows.push({ type: "Project", title: p.title, subtitle: p.status + " / " + p.issueCount + " issues", action: () => switchPage("projects") }));
       state.autopilots.forEach(a => rows.push({ type: "Autopilot", title: a.title, subtitle: a.status + " / " + a.triggerKind, action: () => switchPage("autopilots") }));
@@ -3520,6 +3708,7 @@ export function renderMulticaDashboardHtml(): string {
       state.members.forEach(m => rows.push({ type: "Member", title: m.name, subtitle: m.role + " / " + m.workspaceId, action: () => { state.agentFilter = "members"; switchPage("issues"); } }));
       state.squads.forEach(s => rows.push({ type: "Squad", title: s.name, subtitle: s.memberCount + " members", action: () => { switchPage("squads"); openSquad(s.id); } }));
       state.runtimes.forEach(r => rows.push({ type: "Runtime", title: r.name, subtitle: r.provider + " / " + r.status, action: () => switchPage("runtimes") }));
+      state.skills.forEach(s => rows.push({ type: "Skill", title: s.name, subtitle: (s.description || "No description"), action: () => { switchPage("skills"); openSkill(s.id); } }));
       const filtered = rows.filter(row => !q || (row.title + " " + row.subtitle + " " + row.type).toLowerCase().includes(q)).slice(0, 18);
       els.searchResults.innerHTML = filtered.length ? filtered.map((row, index) =>
         "<div class=\\"command-row\\" data-result-index=\\"" + index + "\\">" +
@@ -3577,6 +3766,13 @@ export function renderMulticaDashboardHtml(): string {
           "<label>Leader<select id=\\"entityLeader\\">" + agentOptions(true) + "</select></label>" +
           "<label>Instructions<textarea id=\\"entityInstructions\\" placeholder=\\"Optional\\"></textarea></label>" +
           "<button class=\\"primary\\" type=\\"submit\\">Create squad</button><div class=\\"notice\\"></div>";
+      }
+      if (kind === "skill") {
+        return "<label>Name<input id=\\"entityTitle\\" required placeholder=\\"review-helper\\"></label>" +
+          "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
+          "<label>SKILL.md<textarea id=\\"entityContent\\" placeholder=\\"Skill instructions\\"></textarea></label>" +
+          "<label>Supporting files<textarea id=\\"entityFiles\\" placeholder=\\"path/to/file.md\\n---\\ncontent\\n===\\nnotes.md\\n---\\nmore content\\"></textarea></label>" +
+          "<button class=\\"primary\\" type=\\"submit\\">Create skill</button><div class=\\"notice\\"></div>";
       }
       return "<label>Title<input id=\\"entityTitle\\" required placeholder=\\"Autopilot title\\"></label>" +
         "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
@@ -3763,6 +3959,23 @@ export function renderMulticaDashboardHtml(): string {
       return String(value || "").split(",").map(item => item.trim()).filter(Boolean);
     }
 
+    function parseSkillFiles(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return [];
+      return raw.split(/\\n={3,}\\n/g).map(block => {
+        const parts = block.split(/\\n---\\n/);
+        if (parts.length < 2) throw new Error("Skill file blocks require path, ---, and content");
+        const path = parts.shift().trim();
+        const content = parts.join("\\n---\\n");
+        if (!path) throw new Error("Skill file path is required");
+        return { path, content };
+      });
+    }
+
+    function formatSkillFiles(files) {
+      return (files || []).map(file => file.path + "\\n---\\n" + (file.content || "")).join("\\n===\\n");
+    }
+
     function readLocalDateTime(id) {
       const raw = document.getElementById(id)?.value || "";
       if (!raw) return null;
@@ -3844,6 +4057,13 @@ export function renderMulticaDashboardHtml(): string {
       return Math.floor(value) + "s";
     }
 
+    function shortDate(value) {
+      if (!value) return "never";
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) return String(value);
+      return String(date.getMonth() + 1).padStart(2, "0") + "/" + String(date.getDate()).padStart(2, "0");
+    }
+
     function runningTasks() {
       return state.tasks.filter(isActiveTask);
     }
@@ -3906,6 +4126,7 @@ export function renderMulticaDashboardHtml(): string {
     window.openSquad = openSquad;
     window.openProject = openProject;
     window.openRuntime = openRuntime;
+    window.openSkill = openSkill;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
@@ -3920,8 +4141,11 @@ export function renderMulticaDashboardHtml(): string {
     window.setAutopilotStatus = setAutopilotStatus;
     window.archiveAutopilot = archiveAutopilot;
     window.archiveAgent = archiveAgent;
+    window.archiveSkill = archiveSkill;
     window.updateSelectedAgent = updateSelectedAgent;
+    window.updateSelectedAgentSkills = updateSelectedAgentSkills;
     window.updateSelectedRuntime = updateSelectedRuntime;
+    window.updateSelectedSkill = updateSelectedSkill;
     window.refreshSquadMemberOptions = refreshSquadMemberOptions;
     window.refreshAssigneeOptions = refreshAssigneeOptions;
     window.refreshIssueAssigneeOptions = refreshIssueAssigneeOptions;

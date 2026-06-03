@@ -24,6 +24,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
@@ -33,18 +34,21 @@ import type {
   RunAutopilotInput,
   SendChatMessageInput,
   CreateMulticaReactionInput,
+  MulticaSkill,
   MulticaSubscriptionReason,
+  SetAgentSkillsInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
   UpdateChatSessionInput,
   UpdateIssueInput,
-	  UpdateIssueCommentInput,
-	  UpdateLabelInput,
-	  UpdateProjectInput,
-	  UpdateRuntimeInput,
-	  UpdateSquadInput,
-	  UpdateWorkspaceMemberInput,
-	} from "./types.js";
+  UpdateIssueCommentInput,
+  UpdateLabelInput,
+  UpdateProjectInput,
+  UpdateRuntimeInput,
+  UpdateSkillInput,
+  UpdateSquadInput,
+  UpdateWorkspaceMemberInput,
+} from "./types.js";
 
 const log = createLogger("multica-api");
 const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
@@ -103,6 +107,60 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/agents/:id", (c) => {
     return c.json({ agent: store.archiveAgent(c.req.param("id")) });
+  });
+  app.get("/api/multica/agents/:id/skills", (c) => {
+    const skills = store.listAgentSkills(c.req.param("id"));
+    return c.json({ skills, total: skills.length });
+  });
+  app.put("/api/multica/agents/:id/skills", async (c) => {
+    const body = await readJson<SetAgentSkillsInput>(c);
+    const skills = store.setAgentSkills(c.req.param("id"), body);
+    return c.json({ skills, total: skills.length });
+  });
+  app.get("/api/agents/:id/skills", (c) => c.json(store.listAgentSkills(c.req.param("id"), { includeFiles: false })));
+  app.put("/api/agents/:id/skills", async (c) => {
+    const body = await readJson<SetAgentSkillsInput>(c);
+    return c.json(store.setAgentSkills(c.req.param("id"), body).map(skillSummary));
+  });
+
+  app.get("/api/multica/skills", (c) => {
+    const includeFiles = c.req.query("includeFiles") === "true";
+    const skills = store.listSkills(c.req.query("workspaceId") ?? c.req.query("workspace_id"), { includeFiles });
+    return c.json({ skills: includeFiles ? skills : skills.map(skillSummary), total: skills.length });
+  });
+  app.post("/api/multica/skills", async (c) => {
+    const body = await readJson<CreateSkillInput>(c);
+    return c.json({ skill: store.createSkill(body) }, 201);
+  });
+  app.get("/api/multica/skills/:id", (c) => {
+    const skill = store.getSkill(c.req.param("id"));
+    if (!skill) return c.json({ error: "skill not found" }, 404);
+    return c.json({ skill });
+  });
+  app.patch("/api/multica/skills/:id", async (c) => {
+    const body = await readJson<UpdateSkillInput>(c);
+    return c.json({ skill: store.updateSkill(c.req.param("id"), body) });
+  });
+  app.delete("/api/multica/skills/:id", (c) => {
+    return c.json({ skill: store.archiveSkill(c.req.param("id")) });
+  });
+  app.get("/api/skills", (c) => c.json(store.listSkills(c.req.query("workspaceId") ?? c.req.query("workspace_id"), { includeFiles: false }).map(skillSummary)));
+  app.post("/api/skills", async (c) => {
+    const body = await readJson<CreateSkillInput>(c);
+    return c.json(store.createSkill(body), 201);
+  });
+  app.get("/api/skills/:id", (c) => {
+    const skill = store.getSkill(c.req.param("id"));
+    if (!skill) return c.json({ error: "skill not found" }, 404);
+    return c.json(skill);
+  });
+  app.patch("/api/skills/:id", async (c) => {
+    const body = await readJson<UpdateSkillInput>(c);
+    return c.json(store.updateSkill(c.req.param("id"), body));
+  });
+  app.delete("/api/skills/:id", (c) => {
+    store.archiveSkill(c.req.param("id"));
+    return c.body(null, 204);
   });
 
   app.get("/api/multica/members", (c) => {
@@ -1004,4 +1062,9 @@ function detectContentTypeFromFilename(filename: string): string {
   if (ext === ".pdf") return "application/pdf";
   if (ext === ".md" || ext === ".txt" || ext === ".log") return "text/plain";
   return "application/octet-stream";
+}
+
+function skillSummary(skill: MulticaSkill): Omit<MulticaSkill, "content" | "files"> {
+  const { content: _content, files: _files, ...summary } = skill;
+  return summary;
 }

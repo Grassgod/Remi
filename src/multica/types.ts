@@ -27,15 +27,26 @@ export type MulticaSubscriptionReason = "created" | "assigned" | "commented" | "
 export type MulticaPinnedItemType = "issue" | "project";
 
 export interface MulticaSkillFile {
+  id?: string;
+  skillId?: string;
   path: string;
   content: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MulticaSkill {
+  id?: string;
+  workspaceId?: string;
   name: string;
   description?: string;
   content: string;
+  config?: Record<string, unknown>;
   files?: MulticaSkillFile[];
+  createdBy?: string | null;
+  archivedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface MulticaAgent {
@@ -515,6 +526,36 @@ export interface CreateAgentInput {
   customArgs?: string[];
   mcpConfig?: unknown | null;
   thinkingLevel?: string | null;
+}
+
+export interface CreateSkillInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name: string;
+  description?: string;
+  content?: string;
+  config?: Record<string, unknown> | null;
+  files?: MulticaSkillFile[];
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface UpdateSkillInput {
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name?: string;
+  description?: string;
+  content?: string;
+  config?: Record<string, unknown> | null;
+  files?: MulticaSkillFile[];
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface SetAgentSkillsInput {
+  skillIds?: string[];
+  skill_ids?: string[];
 }
 
 export interface CreateWorkspaceMemberInput {
