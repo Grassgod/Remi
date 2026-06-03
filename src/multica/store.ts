@@ -40,6 +40,7 @@ import type {
   MulticaAgentActivityBucket,
   MulticaAgentRunCount,
   MulticaAssigneeType,
+  MulticaAssigneeFrequencyEntry,
   MulticaAttachment,
   MulticaChatMessage,
   MulticaChatSession,
@@ -1286,6 +1287,12 @@ export class MulticaStore {
     return rows.map(toGitHubPullRequest);
   }
 
+  listGitHubPullRequestsForIssue(issueId: string): MulticaGitHubPullRequest[] | null {
+    const issue = this.getIssue(issueId);
+    if (!issue) return null;
+    return this.listGitHubPullRequests({ workspaceId: issue.workspaceId, issueId });
+  }
+
   upsertGitHubPullRequest(input: {
     id?: string;
     workspaceId?: string | null;
@@ -2161,6 +2168,74 @@ export class MulticaStore {
     return { groups: [...groups.values()] };
   }
 
+  listAssigneeFrequency(input: {
+    workspaceId?: string | null;
+    actorId?: string | null;
+    actor_id?: string | null;
+    memberId?: string | null;
+    member_id?: string | null;
+    userId?: string | null;
+    user_id?: string | null;
+  } = {}): MulticaAssigneeFrequencyEntry[] {
+    const workspaceId = input.workspaceId ?? "local";
+    const actorId = input.actorId ?? input.actor_id ?? input.memberId ?? input.member_id ?? input.userId ?? input.user_id ?? null;
+    const frequency = new Map<string, { assigneeType: MulticaAssigneeType; assigneeId: string; frequency: number }>();
+    const add = (assigneeType: unknown, assigneeId: unknown, count = 1) => {
+      const type = nullableString(assigneeType) as MulticaAssigneeType | null;
+      const id = nullableString(assigneeId);
+      if (!type || !id) return;
+      if (type !== "agent" && type !== "member" && type !== "squad") return;
+      const key = `${type}:${id}`;
+      const current = frequency.get(key) ?? { assigneeType: type, assigneeId: id, frequency: 0 };
+      current.frequency += count;
+      frequency.set(key, current);
+    };
+
+    const issueRows = actorId
+      ? this.db.query(`
+          SELECT assignee_type, assignee_id, COUNT(*) AS frequency
+          FROM multica_issues
+          WHERE workspace_id = ? AND created_by = ? AND assignee_type IS NOT NULL AND assignee_id IS NOT NULL
+          GROUP BY assignee_type, assignee_id
+        `).all(workspaceId, actorId) as Row[]
+      : this.db.query(`
+          SELECT assignee_type, assignee_id, COUNT(*) AS frequency
+          FROM multica_issues
+          WHERE workspace_id = ? AND assignee_type IS NOT NULL AND assignee_id IS NOT NULL
+          GROUP BY assignee_type, assignee_id
+        `).all(workspaceId) as Row[];
+    for (const row of issueRows) add(row.assignee_type, row.assignee_id, Number(row.frequency ?? 0));
+
+    const activityRows = actorId
+      ? this.db.query(`
+          SELECT a.data
+          FROM multica_issue_activity a
+          JOIN multica_issues i ON i.id = a.issue_id
+          WHERE i.workspace_id = ? AND a.actor_type = 'member' AND a.actor_id = ?
+            AND a.type IN ('assignee_changed', 'issue_assigned')
+        `).all(workspaceId, actorId) as Row[]
+      : this.db.query(`
+          SELECT a.data
+          FROM multica_issue_activity a
+          JOIN multica_issues i ON i.id = a.issue_id
+          WHERE i.workspace_id = ? AND a.type IN ('assignee_changed', 'issue_assigned')
+        `).all(workspaceId) as Row[];
+    for (const row of activityRows) {
+      const data = parseJson<Record<string, unknown>>(row.data, {});
+      add(data.to_type ?? data.toType ?? data.assignee_type ?? data.assigneeType, data.to_id ?? data.toId ?? data.assignee_id ?? data.assigneeId);
+    }
+
+    return [...frequency.values()]
+      .map((entry) => ({
+        assigneeType: entry.assigneeType,
+        assignee_type: entry.assigneeType,
+        assigneeId: entry.assigneeId,
+        assignee_id: entry.assigneeId,
+        frequency: entry.frequency,
+      }))
+      .sort((left, right) => right.frequency - left.frequency || left.assigneeType.localeCompare(right.assigneeType) || left.assigneeId.localeCompare(right.assigneeId));
+  }
+
   batchUpdateIssues(input: BatchUpdateIssuesInput): { updated: number; issues: MulticaIssue[] } {
     const issueIds = input.issueIds ?? input.issue_ids ?? [];
     const updates = input.updates ?? {};
@@ -2418,8 +2493,10 @@ export class MulticaStore {
   assignIssue(id: string, input: AssignIssueInput): AssignIssueResult {
     const current = this.getIssue(id);
     if (!current) throw new Error(`Issue not found: ${id}`);
-    const assigneeType = input.assigneeType ?? null;
-    const assigneeId = input.assigneeId ?? null;
+    const assigneeType = input.assigneeType ?? input.assignee_type ?? null;
+    const assigneeId = input.assigneeId ?? input.assignee_id ?? null;
+    const actorType = input.actorType ?? input.actor_type ?? "system";
+    const actorId = input.actorId ?? input.actor_id ?? null;
     const now = nowIso();
 
     if (Boolean(assigneeType) !== Boolean(assigneeId)) {
@@ -2432,8 +2509,8 @@ export class MulticaStore {
         [now, id],
       );
       this.appendIssueActivity(id, {
-        actorType: "system",
-        actorId: null,
+        actorType,
+        actorId,
         type: "issue_unassigned",
         body: null,
         data: { cancelled },
@@ -2483,11 +2560,23 @@ export class MulticaStore {
     }
 
     this.appendIssueActivity(id, {
-      actorType: "system",
-      actorId: null,
+      actorType,
+      actorId,
       type: "issue_assigned",
       body: taskAgent ? `Queued ${taskAgent.name}` : null,
-      data: { assigneeType, assigneeId, taskId: task?.id ?? null, cancelled },
+      data: {
+        assigneeType,
+        assignee_type: assigneeType,
+        assigneeId,
+        assignee_id: assigneeId,
+        toType: assigneeType,
+        to_type: assigneeType,
+        toId: assigneeId,
+        to_id: assigneeId,
+        taskId: task?.id ?? null,
+        task_id: task?.id ?? null,
+        cancelled,
+      },
     });
     if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
     return { issue: this.getIssue(id)!, task };

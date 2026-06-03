@@ -470,6 +470,14 @@ export interface MulticaIssueAssigneeGroup {
   total: number;
 }
 
+export interface MulticaAssigneeFrequencyEntry {
+  assigneeType: MulticaAssigneeType;
+  assignee_type: MulticaAssigneeType;
+  assigneeId: string;
+  assignee_id: string;
+  frequency: number;
+}
+
 export interface MulticaIssueChildProgress {
   parentIssueId: string;
   total: number;
@@ -1091,8 +1099,14 @@ export interface ListIssuesInput {
 
 export interface AssignIssueInput {
   assigneeType?: MulticaAssigneeType | null;
+  assignee_type?: MulticaAssigneeType | null;
   assigneeId?: string | null;
+  assignee_id?: string | null;
   prompt?: string | null;
+  actorType?: string | null;
+  actor_type?: string | null;
+  actorId?: string | null;
+  actor_id?: string | null;
 }
 
 export interface AssignIssueResult {

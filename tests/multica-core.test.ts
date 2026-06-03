@@ -283,6 +283,44 @@ describe("Bun Multica core store", () => {
     expect(store.getTask(squadAssigned.task!.id)?.status).toBe("cancelled");
   });
 
+  it("aggregates assignee frequency from created issues and assignment activity", () => {
+    const store = createStore();
+    const alice = store.createWorkspaceMember({ name: "Alice", role: "member" });
+    const bob = store.createWorkspaceMember({ name: "Bob", role: "member" });
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const created = store.createIssue({
+      title: "Created with assignee",
+      createdBy: alice.id,
+      assigneeType: "member",
+      assigneeId: bob.id,
+    });
+    const reassigned = store.createIssue({ title: "Reassigned later", createdBy: alice.id });
+
+    store.assignIssue(reassigned.id, {
+      assignee_type: "member",
+      assignee_id: bob.id,
+      actorType: "member",
+      actorId: alice.id,
+    });
+    store.assignIssue(created.id, {
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      actor_type: "member",
+      actor_id: alice.id,
+    });
+
+    const frequency = store.listAssigneeFrequency({ memberId: alice.id });
+
+    expect(frequency.find((entry) => entry.assigneeId === bob.id)).toMatchObject({
+      assigneeType: "member",
+      assignee_type: "member",
+      assigneeId: bob.id,
+      assignee_id: bob.id,
+      frequency: 2,
+    });
+    expect(frequency.find((entry) => entry.assigneeId === agent.id)?.frequency).toBe(2);
+  });
+
   it("assigns human-readable issue keys per workspace", () => {
     const store = createStore();
     const first = store.createIssue({ title: "First issue" });
@@ -2659,6 +2697,13 @@ describe("Bun Multica API", () => {
     expect(listedBody.total).toBe(1);
     expect(listedBody.pullRequests[0].number).toBe(7);
 
+    const issuePullRequests = await app.request(`/api/issues/${encodeURIComponent(issue.id)}/pull-requests`);
+    const issuePullRequestsBody = await issuePullRequests.json();
+    expect(issuePullRequests.status).toBe(200);
+    expect(issuePullRequestsBody.pull_requests[0].repo_owner).toBe("example");
+    expect(issuePullRequestsBody.pull_requests[0].html_url).toBe("https://github.com/example/remi/pull/7");
+    expect(issuePullRequestsBody.pull_requests[0].checks_passed).toBe(2);
+
     const merged = await app.request("/api/multica/github/pull-requests", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2707,5 +2752,34 @@ describe("Bun Multica API", () => {
     });
     expect(webhook.status).toBe(202);
     expect((await webhook.json()).pullRequest.issueId).toBe(webhookIssue.id);
+  });
+
+  it("serves assignee frequency through original Multica route", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const alice = store.createWorkspaceMember({ name: "Alice API", role: "member" });
+    const bob = store.createWorkspaceMember({ name: "Bob API", role: "member" });
+    const issue = store.createIssue({
+      title: "Assigned on create",
+      createdBy: alice.id,
+      assigneeType: "member",
+      assigneeId: bob.id,
+    });
+    store.assignIssue(issue.id, {
+      assigneeType: "member",
+      assigneeId: bob.id,
+      actorType: "member",
+      actorId: alice.id,
+    });
+
+    const response = await app.request(`/api/assignee-frequency?memberId=${encodeURIComponent(alice.id)}`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body[0]).toMatchObject({
+      assignee_type: "member",
+      assignee_id: bob.id,
+      frequency: 2,
+    });
   });
 });

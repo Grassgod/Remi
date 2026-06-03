@@ -51,6 +51,7 @@ import type {
   SendChatMessageInput,
   CreateMulticaReactionInput,
   MulticaNotificationPreferences,
+  MulticaGitHubPullRequest,
   MulticaSkill,
   MulticaSubscriptionReason,
   MulticaGitHubPullRequestState,
@@ -388,6 +389,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       issueId: c.req.query("issueId") ?? c.req.query("issue_id"),
     });
     return c.json({ pullRequests, total: pullRequests.length });
+  });
+  app.get("/api/issues/:id/pull-requests", (c) => {
+    const pullRequests = store.listGitHubPullRequestsForIssue(c.req.param("id"));
+    if (!pullRequests) return c.json({ error: "issue not found" }, 404);
+    return c.json(issuePullRequestsResponse(pullRequests));
+  });
+  app.get("/api/multica/issues/:id/pull-requests", (c) => {
+    const pullRequests = store.listGitHubPullRequestsForIssue(c.req.param("id"));
+    if (!pullRequests) return c.json({ error: "issue not found" }, 404);
+    return c.json(issuePullRequestsResponse(pullRequests));
   });
   app.post("/api/multica/github/pull-requests", async (c) => {
     const body = await readJson<any>(c);
@@ -913,6 +924,8 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/issues", (c) => c.json(listIssuesResponse(issueListQuery(c))));
   app.get("/api/multica/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(c))));
   app.get("/api/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(c))));
+  app.get("/api/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
+  app.get("/api/multica/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
   app.get("/api/multica/issues/search", (c) => {
     const result = store.searchIssues({
       q: c.req.query("q") ?? "",
@@ -1465,8 +1478,67 @@ function issueListQuery(c: { req: { query: (name: string) => string | undefined 
   };
 }
 
+function assigneeFrequencyQuery(c: { req: { query: (name: string) => string | undefined } }): {
+  workspaceId?: string | null;
+  actorId?: string | null;
+  memberId?: string | null;
+  userId?: string | null;
+} {
+  return {
+    workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local",
+    actorId: c.req.query("actorId") ?? c.req.query("actor_id") ?? null,
+    memberId: c.req.query("memberId") ?? c.req.query("member_id") ?? null,
+    userId: c.req.query("userId") ?? c.req.query("user_id") ?? null,
+  };
+}
+
 function splitQueryList(value: string | undefined): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function issuePullRequestsResponse(pullRequests: MulticaGitHubPullRequest[]): {
+  pull_requests: Array<MulticaGitHubPullRequest & {
+    workspace_id: string;
+    issue_id: string | null;
+    repo_owner: string;
+    repo_name: string;
+    html_url: string;
+    author_login: string | null;
+    author_avatar_url: string | null;
+    merged_at: string | null;
+    closed_at: string | null;
+    pr_created_at: string;
+    pr_updated_at: string;
+    mergeable_state: string | null;
+    checks_conclusion: string | null;
+    checks_passed: number;
+    checks_failed: number;
+    checks_pending: number;
+    changed_files: number;
+  }>;
+} {
+  return {
+    pull_requests: pullRequests.map((pr) => ({
+      ...pr,
+      workspace_id: pr.workspaceId,
+      issue_id: pr.issueId,
+      repo_owner: pr.repoOwner,
+      repo_name: pr.repoName,
+      html_url: pr.htmlUrl,
+      author_login: pr.authorLogin,
+      author_avatar_url: pr.authorAvatarUrl,
+      merged_at: pr.mergedAt,
+      closed_at: pr.closedAt,
+      pr_created_at: pr.prCreatedAt,
+      pr_updated_at: pr.prUpdatedAt,
+      mergeable_state: pr.mergeableState,
+      checks_conclusion: pr.checksConclusion,
+      checks_passed: pr.checksPassed,
+      checks_failed: pr.checksFailed,
+      checks_pending: pr.checksPending,
+      changed_files: pr.changedFiles,
+    })),
+  };
 }
 
 function issueTimelineResponse(
