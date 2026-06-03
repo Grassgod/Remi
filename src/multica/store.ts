@@ -42,6 +42,9 @@ import type {
   MulticaIssuePriority,
   MulticaIssueSearchResult,
   MulticaLabel,
+  MulticaNotificationGroupKey,
+  MulticaNotificationPreferences,
+  MulticaNotificationPreferenceResponse,
   MulticaPinnedItem,
   MulticaPinnedItemType,
   MulticaIssueReaction,
@@ -221,6 +224,14 @@ export class MulticaStore {
 
       CREATE INDEX IF NOT EXISTS idx_multica_access_tokens_workspace ON multica_access_tokens(workspace_id, type);
       CREATE INDEX IF NOT EXISTS idx_multica_access_tokens_hash ON multica_access_tokens(token_hash);
+
+      CREATE TABLE IF NOT EXISTS multica_notification_preferences (
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        member_id TEXT NOT NULL DEFAULT '',
+        preferences TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(workspace_id, member_id)
+      );
 
       CREATE TABLE IF NOT EXISTS multica_issues (
         id TEXT PRIMARY KEY,
@@ -948,6 +959,38 @@ export class MulticaStore {
     const now = nowIso();
     this.db.run("UPDATE multica_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
     return this.getWorkspaceMember(id)!;
+  }
+
+  getNotificationPreferences(input: { workspaceId?: string | null; memberId?: string | null } = {}): MulticaNotificationPreferenceResponse {
+    const workspaceId = input.workspaceId ?? "local";
+    const memberId = input.memberId ?? null;
+    const row = this.db.query(
+      "SELECT * FROM multica_notification_preferences WHERE workspace_id = ? AND member_id = ?",
+    ).get(workspaceId, memberId ?? "") as Row | null;
+    return {
+      workspaceId,
+      memberId,
+      preferences: row ? normalizeNotificationPreferences(parseJson(row.preferences, {})) : {},
+      updatedAt: row ? String(row.updated_at ?? "") : null,
+    };
+  }
+
+  updateNotificationPreferences(input: {
+    workspaceId?: string | null;
+    memberId?: string | null;
+    preferences: MulticaNotificationPreferences;
+  }): MulticaNotificationPreferenceResponse {
+    const workspaceId = input.workspaceId ?? "local";
+    const memberId = input.memberId ?? null;
+    const preferences = normalizeNotificationPreferences(input.preferences);
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_notification_preferences (workspace_id, member_id, preferences, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(workspace_id, member_id) DO UPDATE SET preferences = excluded.preferences, updated_at = excluded.updated_at`,
+      [workspaceId, memberId ?? "", toJson(preferences), now],
+    );
+    return this.getNotificationPreferences({ workspaceId, memberId });
   }
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MulticaCreatedAccessToken> {
@@ -3210,6 +3253,7 @@ export class MulticaStore {
     if (!issue) throw new Error(`Issue not found: ${input.issueId}`);
     const member = this.getWorkspaceMember(input.memberId);
     if (!member || member.archivedAt) return null;
+    if (this.isNotificationMuted(issue.workspaceId, input.memberId, input.type)) return null;
     const id = createId("inb");
     const now = nowIso();
     this.db.run(
@@ -3370,6 +3414,15 @@ export class MulticaStore {
         actorId,
       });
     }
+  }
+
+  private isNotificationMuted(workspaceId: string, memberId: string, type: string): boolean {
+    const group = notificationGroupForInboxType(type);
+    if (!group) return false;
+    const memberPreferences = this.getNotificationPreferences({ workspaceId, memberId }).preferences;
+    if (memberPreferences[group] === "muted") return true;
+    const workspacePreferences = this.getNotificationPreferences({ workspaceId }).preferences;
+    return workspacePreferences[group] === "muted";
   }
 
   private triggerMemberMentions(issue: MulticaIssue, comment: MulticaIssueComment): string[] {
@@ -3667,6 +3720,35 @@ function parseJson<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+const NOTIFICATION_GROUPS: MulticaNotificationGroupKey[] = [
+  "assignments",
+  "status_changes",
+  "comments",
+  "updates",
+  "agent_activity",
+  "system_notifications",
+];
+
+function normalizeNotificationPreferences(value: unknown): MulticaNotificationPreferences {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  const normalized: MulticaNotificationPreferences = {};
+  for (const group of NOTIFICATION_GROUPS) {
+    const pref = raw[group];
+    if (pref === "all" || pref === "muted") normalized[group] = pref;
+  }
+  return normalized;
+}
+
+function notificationGroupForInboxType(type: string): MulticaNotificationGroupKey | null {
+  if (type === "issue_assigned" || type === "unassigned") return "assignments";
+  if (type === "comment_created" || type === "comment_mention") return "comments";
+  if (type === "status_changed") return "status_changes";
+  if (type.startsWith("agent_")) return "agent_activity";
+  if (type.startsWith("system_")) return "system_notifications";
+  return "updates";
 }
 
 function normalizeSkillFiles(files: MulticaSkillFile[]): MulticaSkillFile[] {

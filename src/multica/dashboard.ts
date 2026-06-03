@@ -1400,6 +1400,7 @@ export function renderMulticaDashboardHtml(): string {
       skills: [],
       tokens: [],
       createdToken: null,
+      notificationPreferences: {},
       labels: [],
       pins: [],
       inboxItems: [],
@@ -1561,7 +1562,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, tokens, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, skills, tokens, notifications, chats, inbox, labels, pins, usageDaily, usageByAgent, runtimeDaily] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1572,6 +1573,7 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/autopilots"),
           api("/api/multica/skills"),
           api("/api/multica/tokens"),
+          api("/api/multica/notification-preferences"),
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
           api("/api/multica/labels"),
@@ -1590,6 +1592,7 @@ export function renderMulticaDashboardHtml(): string {
         state.autopilots = autopilots.autopilots || [];
         state.skills = skills.skills || [];
         state.tokens = tokens.tokens || [];
+        state.notificationPreferences = notifications.preferences || {};
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
@@ -2721,6 +2724,20 @@ export function renderMulticaDashboardHtml(): string {
       await refresh({ silent: true });
     }
 
+    async function updateNotificationPreferences(event) {
+      event.preventDefault();
+      const preferences = {};
+      notificationGroups().forEach(group => {
+        preferences[group.key] = document.getElementById("notification_" + group.key)?.checked ? "all" : "muted";
+      });
+      const result = await api("/api/multica/notification-preferences", {
+        method: "PUT",
+        body: JSON.stringify({ preferences })
+      });
+      state.notificationPreferences = result.preferences || preferences;
+      renderSettings();
+    }
+
     async function markInboxRead(id) {
       await api("/api/multica/inbox/" + encodeURIComponent(id) + "/read", { method: "POST" });
       await refresh({ silent: true });
@@ -3369,6 +3386,13 @@ export function renderMulticaDashboardHtml(): string {
           "</div>" +
         "</article>" +
         "<article class=\\"entity-card\\">" +
+          "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">N</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Notifications</div><div class=\\"entity-subtitle\\">Inbox event groups</div></div></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"updateNotificationPreferences(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"message-list\\">" + renderNotificationPreferences() + "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Save notifications</button>" +
+          "</form>" +
+        "</article>" +
+        "<article class=\\"entity-card\\">" +
           "<div class=\\"entity-head\\"><span class=\\"agent-avatar\\">T</span><div class=\\"entity-main\\"><div class=\\"entity-title\\">Access token</div><div class=\\"entity-subtitle\\">Personal and daemon tokens</div></div></div>" +
           (state.createdToken ? "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Created token</div><div class=\\"detail-text\\">" + esc(state.createdToken) + "</div></div>" : "") +
           "<form class=\\"sheet-form\\" onsubmit=\\"createToken(event)\\" style=\\"padding:0;\\">" +
@@ -3387,6 +3411,16 @@ export function renderMulticaDashboardHtml(): string {
           (token.revokedAt ? "" : "<button class=\\"destructive\\" onclick=\\"revokeToken('" + escAttr(token.id) + "')\\">Revoke</button>") +
         "</div>"
       ).join("") : "<div class=\\"empty-column\\">No access tokens</div>";
+    }
+
+    function renderNotificationPreferences() {
+      return notificationGroups().map(group => {
+        const enabled = state.notificationPreferences[group.key] !== "muted";
+        return "<label class=\\"message-row\\" style=\\"display:flex; gap:10px; align-items:flex-start;\\">" +
+          "<input id=\\"notification_" + escAttr(group.key) + "\\" type=\\"checkbox\\" " + (enabled ? "checked" : "") + ">" +
+          "<span><strong>" + esc(group.label) + "</strong><span class=\\"message-content\\">" + esc(group.description) + "</span></span>" +
+        "</label>";
+      }).join("");
     }
 
     function renderInbox() {
@@ -4407,6 +4441,17 @@ export function renderMulticaDashboardHtml(): string {
       ).join("");
     }
 
+    function notificationGroups() {
+      return [
+        { key: "assignments", label: "Assignments", description: "Issue assignment and unassignment inbox items." },
+        { key: "status_changes", label: "Status changes", description: "Issue status updates." },
+        { key: "comments", label: "Comments", description: "New comments and direct mentions." },
+        { key: "updates", label: "Updates", description: "Other issue and workspace updates." },
+        { key: "agent_activity", label: "Agent activity", description: "Agent and runtime activity notifications." },
+        { key: "system_notifications", label: "System", description: "System-level notification preference." }
+      ];
+    }
+
     function mentionOptions() {
       const memberRows = state.members.map(member =>
         "<option value=\\"member:" + escAttr(member.id) + "\\">" + esc(member.name) + " / member</option>"
@@ -4762,6 +4807,7 @@ export function renderMulticaDashboardHtml(): string {
     window.archiveSkill = archiveSkill;
     window.createToken = createToken;
     window.revokeToken = revokeToken;
+    window.updateNotificationPreferences = updateNotificationPreferences;
     window.updateSelectedAgent = updateSelectedAgent;
     window.updateSelectedAgentSkills = updateSelectedAgentSkills;
     window.updateSelectedRuntime = updateSelectedRuntime;

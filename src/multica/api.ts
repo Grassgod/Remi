@@ -34,6 +34,7 @@ import type {
   RunAutopilotInput,
   SendChatMessageInput,
   CreateMulticaReactionInput,
+  MulticaNotificationPreferences,
   MulticaSkill,
   MulticaSubscriptionReason,
   SetAgentSkillsInput,
@@ -195,6 +196,34 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.delete("/api/multica/tokens/:id", (c) => {
     const token = store.revokeAccessToken(c.req.param("id"));
     return c.json({ token, ok: true });
+  });
+  app.get("/api/multica/notification-preferences", (c) => {
+    return c.json(store.getNotificationPreferences({
+      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      memberId: c.req.query("memberId") ?? c.req.query("member_id"),
+    }));
+  });
+  app.put("/api/multica/notification-preferences", async (c) => {
+    const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MulticaNotificationPreferences }>(c);
+    return c.json(store.updateNotificationPreferences({
+      workspaceId: body.workspaceId ?? body.workspace_id,
+      memberId: body.memberId ?? body.member_id,
+      preferences: body.preferences ?? {},
+    }));
+  });
+  app.get("/api/notification-preferences", (c) => {
+    return c.json(store.getNotificationPreferences({
+      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      memberId: c.req.query("memberId") ?? c.req.query("member_id"),
+    }));
+  });
+  app.put("/api/notification-preferences", async (c) => {
+    const body = await readJson<MulticaNotificationPreferences & { workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MulticaNotificationPreferences }>(c);
+    return c.json(store.updateNotificationPreferences({
+      workspaceId: body.workspaceId ?? body.workspace_id,
+      memberId: body.memberId ?? body.member_id,
+      preferences: body.preferences ?? body,
+    }));
   });
   app.get("/api/tokens", (c) => {
     const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));

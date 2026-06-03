@@ -25,6 +25,15 @@ export type MulticaChatSessionStatus = "active" | "archived";
 export type MulticaChatMessageRole = "user" | "assistant" | "system";
 export type MulticaSubscriptionReason = "created" | "assigned" | "commented" | "mentioned" | "manual";
 export type MulticaPinnedItemType = "issue" | "project";
+export type MulticaNotificationGroupKey =
+  | "assignments"
+  | "status_changes"
+  | "comments"
+  | "updates"
+  | "agent_activity"
+  | "system_notifications";
+export type MulticaNotificationGroupValue = "all" | "muted";
+export type MulticaNotificationPreferences = Partial<Record<MulticaNotificationGroupKey, MulticaNotificationGroupValue>>;
 
 export interface MulticaSkillFile {
   id?: string;
@@ -195,6 +204,13 @@ export interface MulticaAccessToken {
 
 export interface MulticaCreatedAccessToken extends MulticaAccessToken {
   token: string;
+}
+
+export interface MulticaNotificationPreferenceResponse {
+  workspaceId: string;
+  memberId: string | null;
+  preferences: MulticaNotificationPreferences;
+  updatedAt: string | null;
 }
 
 export interface CreateAccessTokenInput {

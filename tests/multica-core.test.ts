@@ -403,6 +403,20 @@ describe("Bun Multica core store", () => {
     expect(store.listInboxItems(bob.id).some((inboxItem) => inboxItem.id === item.id)).toBe(false);
   });
 
+  it("honors notification preferences when creating inbox items", () => {
+    const store = createStore();
+    const bob = store.createWorkspaceMember({ name: "Bob Approver" });
+    const issue = store.createIssue({ title: "Quiet assignment" });
+
+    store.updateNotificationPreferences({
+      preferences: { assignments: "muted" },
+    });
+    store.assignIssue(issue.id, { assigneeType: "member", assigneeId: bob.id });
+
+    expect(store.getNotificationPreferences().preferences.assignments).toBe("muted");
+    expect(store.listInboxItems(bob.id).filter((item) => item.type === "issue_assigned")).toHaveLength(0);
+  });
+
   it("tracks comment threads, reactions, and attachments", () => {
     const store = createStore();
     const issue = store.createIssue({ title: "Collaborate with context" });
@@ -865,6 +879,8 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain("function renderSettings()");
     expect(html).toContain("/api/multica/tokens");
     expect(html).toContain("function revokeToken");
+    expect(html).toContain("function renderNotificationPreferences");
+    expect(html).toContain("/api/multica/notification-preferences");
   });
 
   it("renders a real my issues page with member filtering", () => {
@@ -1711,5 +1727,21 @@ describe("Bun Multica API", () => {
 
     const archived = await app.request(`/api/multica/members/${body.member.id}`, { method: "DELETE" });
     expect((await archived.json()).member.archivedAt).toBeString();
+  });
+
+  it("serves notification preference endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+
+    const updated = await app.request("/api/multica/notification-preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preferences: { assignments: "muted", comments: "all" } }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).preferences.assignments).toBe("muted");
+
+    const listed = await app.request("/api/multica/notification-preferences");
+    expect((await listed.json()).preferences.assignments).toBe("muted");
   });
 });
