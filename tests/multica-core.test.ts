@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createMulticaApp } from "../src/multica/api.js";
+import { buildTaskPrompt } from "../src/multica/prompt.js";
 import { MulticaScheduler } from "../src/multica/scheduler.js";
 import { MulticaStore } from "../src/multica/store.js";
 
@@ -237,6 +238,32 @@ describe("Bun Multica core store", () => {
     expect(store.listAutopilotRuns(autopilot.id)[0]?.id).toBe(run.id);
   });
 
+  it("manages project resources and includes them in task prompts", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const project = store.createProject({
+      title: "Repo scoped work",
+      resources: [{
+        resourceType: "github_repo",
+        resourceRef: { url: "https://github.com/example/repo", defaultBranchHint: "main" },
+        label: "primary repo",
+      }],
+    });
+    const issue = store.createIssue({ title: "Use resources", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect the repo" });
+
+    expect(store.getProject(project.id)?.resourceCount).toBe(1);
+    expect(store.listProjectResources(project.id)[0]?.resourceRef.url).toBe("https://github.com/example/repo");
+
+    const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)!);
+    expect(prompt).toContain("## Project Context");
+    expect(prompt).toContain("https://github.com/example/repo");
+
+    const resourceId = store.listProjectResources(project.id)[0]!.id;
+    store.deleteProjectResource(project.id, resourceId);
+    expect(store.getProject(project.id)?.resourceCount).toBe(0);
+  });
+
   it("syncs issue and autopilot run state when tasks finish", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -393,6 +420,37 @@ describe("Bun Multica API", () => {
     expect(store.archiveProject(project.id).status).toBe("cancelled");
     expect(store.archiveSquad(squad.id).archivedAt).toBeString();
     expect(store.listSquads()).toHaveLength(0);
+  });
+
+  it("serves project resource endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const project = store.createProject({ title: "Resources" });
+
+    const created = await app.request(`/api/multica/projects/${project.id}/resources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resource_type: "github_repo",
+        resource_ref: { url: "git@github.com:example/repo.git", default_branch_hint: "main" },
+        label: "ssh repo",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.resource.resourceRef.url).toBe("git@github.com:example/repo.git");
+
+    const listed = await app.request(`/api/multica/projects/${project.id}/resources`);
+    expect((await listed.json()).total).toBe(1);
+
+    const detail = await app.request(`/api/multica/projects/${project.id}`);
+    expect((await detail.json()).resources).toHaveLength(1);
+
+    const deleted = await app.request(`/api/multica/projects/${project.id}/resources/${createdBody.resource.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(store.listProjectResources(project.id)).toHaveLength(0);
   });
 
   it("triggers autopilots through API and webhook endpoints", async () => {

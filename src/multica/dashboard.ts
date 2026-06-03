@@ -1372,6 +1372,9 @@ export function renderMulticaDashboardHtml(): string {
       selectedSquadId: null,
       selectedSquad: null,
       selectedSquadMembers: [],
+      selectedProjectId: null,
+      selectedProject: null,
+      selectedProjectResources: [],
       selectedAgentId: null,
       selectedAgent: null,
       chatEntries: []
@@ -1486,6 +1489,7 @@ export function renderMulticaDashboardHtml(): string {
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
         if (state.selectedSquadId) await loadSquadDetail(state.selectedSquadId, { silent: true });
+        if (state.selectedProjectId) await loadProjectDetail(state.selectedProjectId, { silent: true });
         if (state.selectedAgentId) await loadAgentDetail(state.selectedAgentId, { silent: true });
       } catch (err) {
         showNotice(String(err.message || err), options.agent ? els.agentNotice : els.notice);
@@ -1577,6 +1581,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedTaskId = id;
       state.selectedIssueId = null;
       state.selectedSquadId = null;
+      state.selectedProjectId = null;
       state.selectedAgentId = null;
       els.taskDrawer.classList.add("open");
       renderTaskDrawer({ loading: true });
@@ -1587,6 +1592,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedIssueId = id;
       state.selectedTaskId = null;
       state.selectedSquadId = null;
+      state.selectedProjectId = null;
       state.selectedAgentId = null;
       els.taskDrawer.classList.add("open");
       renderIssueDrawer({ loading: true });
@@ -1597,10 +1603,22 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = id;
       state.selectedTaskId = null;
       state.selectedIssueId = null;
+      state.selectedProjectId = null;
       state.selectedAgentId = null;
       els.taskDrawer.classList.add("open");
       renderSquadDrawer({ loading: true });
       await loadSquadDetail(id);
+    }
+
+    async function openProject(id) {
+      state.selectedProjectId = id;
+      state.selectedTaskId = null;
+      state.selectedIssueId = null;
+      state.selectedSquadId = null;
+      state.selectedAgentId = null;
+      els.taskDrawer.classList.add("open");
+      renderProjectDrawer({ loading: true });
+      await loadProjectDetail(id);
     }
 
     async function openAgent(id) {
@@ -1608,6 +1626,7 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedTaskId = null;
       state.selectedIssueId = null;
       state.selectedSquadId = null;
+      state.selectedProjectId = null;
       els.taskDrawer.classList.add("open");
       renderAgentDrawer({ loading: true });
       await loadAgentDetail(id);
@@ -1663,6 +1682,20 @@ export function renderMulticaDashboardHtml(): string {
       }
     }
 
+    async function loadProjectDetail(id, options = {}) {
+      try {
+        const result = await api("/api/multica/projects/" + encodeURIComponent(id));
+        state.selectedProject = result.project;
+        state.selectedProjectResources = result.resources || [];
+        state.selectedTask = null;
+        state.selectedIssue = null;
+        state.selectedSquad = null;
+        renderProjectDrawer();
+      } catch (err) {
+        if (!options.silent) showNotice(String(err.message || err), els.notice);
+      }
+    }
+
     async function loadAgentDetail(id, options = {}) {
       try {
         const result = await api("/api/multica/agents/" + encodeURIComponent(id));
@@ -1687,6 +1720,9 @@ export function renderMulticaDashboardHtml(): string {
       state.selectedSquadId = null;
       state.selectedSquad = null;
       state.selectedSquadMembers = [];
+      state.selectedProjectId = null;
+      state.selectedProject = null;
+      state.selectedProjectResources = [];
       state.selectedAgentId = null;
       state.selectedAgent = null;
       els.taskDrawer.classList.remove("open");
@@ -1837,13 +1873,22 @@ export function renderMulticaDashboardHtml(): string {
       const kind = els.entitySheet.dataset.kind;
       try {
         if (kind === "project") {
+          const repoUrl = document.getElementById("entityRepoUrl").value.trim();
           await api("/api/multica/projects", {
             method: "POST",
             body: JSON.stringify({
               title: document.getElementById("entityTitle").value,
               description: document.getElementById("entityDescription").value || null,
               priority: document.getElementById("entityPriority").value,
-              status: document.getElementById("entityStatus").value
+              status: document.getElementById("entityStatus").value,
+              resources: repoUrl ? [{
+                resourceType: "github_repo",
+                resourceRef: {
+                  url: repoUrl,
+                  defaultBranchHint: document.getElementById("entityRepoBranch").value.trim() || undefined
+                },
+                label: document.getElementById("entityRepoLabel").value.trim() || null
+              }] : []
             })
           });
         } else if (kind === "squad") {
@@ -1901,10 +1946,40 @@ export function renderMulticaDashboardHtml(): string {
     async function archiveProject(id) {
       try {
         await api("/api/multica/projects/" + encodeURIComponent(id), { method: "DELETE" });
+        if (state.selectedProjectId === id) closeDrawer();
         await refresh();
       } catch (err) {
         showNotice(String(err.message || err), els.notice);
       }
+    }
+
+    async function addProjectResource(event) {
+      event.preventDefault();
+      if (!state.selectedProject) return;
+      const url = document.getElementById("projectResourceUrl").value.trim();
+      if (!url) return;
+      await api("/api/multica/projects/" + encodeURIComponent(state.selectedProject.id) + "/resources", {
+        method: "POST",
+        body: JSON.stringify({
+          resourceType: "github_repo",
+          resourceRef: {
+            url,
+            defaultBranchHint: document.getElementById("projectResourceBranch").value.trim() || undefined
+          },
+          label: document.getElementById("projectResourceLabel").value.trim() || null
+        })
+      });
+      await loadProjectDetail(state.selectedProject.id);
+      await refresh({ silent: true });
+    }
+
+    async function removeProjectResource(resourceId) {
+      if (!state.selectedProject) return;
+      await api("/api/multica/projects/" + encodeURIComponent(state.selectedProject.id) + "/resources/" + encodeURIComponent(resourceId), {
+        method: "DELETE"
+      });
+      await loadProjectDetail(state.selectedProject.id);
+      await refresh({ silent: true });
     }
 
     async function archiveSquad(id) {
@@ -2210,7 +2285,7 @@ export function renderMulticaDashboardHtml(): string {
       els.projectsGrid.innerHTML = state.projects.map(project => {
         const progress = project.issueCount > 0 ? Math.round((project.doneCount / project.issueCount) * 100) : 0;
         const lead = project.leadId ? state.agents.find(a => a.id === project.leadId) : null;
-        return "<article class=\\"entity-card\\">" +
+        return "<article class=\\"entity-card\\" onclick=\\"openProject('" + escAttr(project.id) + "')\\">" +
           "<div class=\\"entity-head\\">" +
             "<span class=\\"agent-avatar\\">" + esc((project.icon || project.title || "P").slice(0, 1).toUpperCase()) + "</span>" +
             "<div class=\\"entity-main\\"><div class=\\"entity-title\\">" + esc(project.title) + "</div><div class=\\"entity-subtitle\\">" + esc(project.status) + " / " + esc(project.priority) + "</div></div>" +
@@ -2220,12 +2295,13 @@ export function renderMulticaDashboardHtml(): string {
             renderMetric(project.issueCount || 0, "issues") +
             renderMetric(project.doneCount || 0, "done") +
             renderMetric(progress + "%", "progress") +
+            renderMetric(project.resourceCount || 0, "resources") +
           "</div>" +
           "<div class=\\"issue-meta\\">" +
             (lead ? "<span class=\\"status-badge\\">" + esc(lead.name) + "</span>" : "") +
             "<span class=\\"status-badge\\">" + esc(timeAgo(project.updatedAt)) + "</span>" +
           "</div>" +
-          "<button class=\\"destructive\\" onclick=\\"archiveProject('" + escAttr(project.id) + "')\\">Archive</button>" +
+          "<button class=\\"destructive\\" onclick=\\"event.stopPropagation(); archiveProject('" + escAttr(project.id) + "')\\">Archive</button>" +
         "</article>";
       }).join("");
     }
@@ -2404,6 +2480,54 @@ export function renderMulticaDashboardHtml(): string {
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Comments</div><div class=\\"message-list\\">" + renderIssueComments() + "</div></div>" +
           "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Activity</div><div class=\\"message-list\\">" + renderIssueActivity() + "</div></div>" +
         "</div>";
+    }
+
+    function renderProjectDrawer(options = {}) {
+      if (options.loading || !state.selectedProject) {
+        els.taskDrawer.innerHTML =
+          "<div class=\\"drawer-head\\"><div class=\\"drawer-title\\"><strong>Loading</strong><span>Project detail</span></div><button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button></div>" +
+          "<div class=\\"drawer-body\\"><div class=\\"empty-column\\">Loading</div></div>";
+        return;
+      }
+      const project = state.selectedProject;
+      const progress = project.issueCount > 0 ? Math.round((project.doneCount / project.issueCount) * 100) : 0;
+      els.taskDrawer.innerHTML =
+        "<div class=\\"drawer-head\\">" +
+          "<div class=\\"drawer-title\\"><strong>" + esc(project.title || "") + "</strong><span>" + esc(project.status) + " / " + esc(shortId(project.id)) + "</span></div>" +
+          "<button class=\\"destructive\\" onclick=\\"archiveProject('" + escAttr(project.id) + "')\\">Archive</button>" +
+          "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
+        "</div>" +
+        "<div class=\\"drawer-body\\">" +
+          "<div class=\\"metric-row\\">" +
+            renderMetric(project.issueCount || 0, "issues") +
+            renderMetric(project.doneCount || 0, "done") +
+            renderMetric(progress + "%", "progress") +
+            renderMetric(state.selectedProjectResources.length, "resources") +
+          "</div>" +
+          renderDetailBlock("Description", project.description || "") +
+          "<div class=\\"detail-block\\"><div class=\\"detail-label\\">Resources</div><div class=\\"message-list\\">" + renderProjectResources() + "</div></div>" +
+          "<form class=\\"sheet-form\\" onsubmit=\\"addProjectResource(event)\\" style=\\"padding:0;\\">" +
+            "<div class=\\"detail-grid\\">" +
+              "<label>Git repo URL<input id=\\"projectResourceUrl\\" required placeholder=\\"https://github.com/owner/repo\\"></label>" +
+              "<label>Default branch<input id=\\"projectResourceBranch\\" placeholder=\\"main\\"></label>" +
+              "<label>Label<input id=\\"projectResourceLabel\\" placeholder=\\"Optional\\"></label>" +
+            "</div>" +
+            "<button class=\\"outline\\" type=\\"submit\\">Add resource</button>" +
+          "</form>" +
+        "</div>";
+    }
+
+    function renderProjectResources() {
+      if (!state.selectedProjectResources.length) return "<div class=\\"empty-column\\">No resources</div>";
+      return state.selectedProjectResources.map(resource => {
+        const url = resource.resourceRef?.url || "";
+        const branch = resource.resourceRef?.defaultBranchHint || resource.resourceRef?.default_branch_hint || "";
+        return "<div class=\\"message-row\\">" +
+          "<div class=\\"message-head\\"><span>" + esc(resource.resourceType) + "</span><span>" + esc(resource.label || "resource") + "</span></div>" +
+          "<div class=\\"message-content\\">" + esc(url || JSON.stringify(resource.resourceRef || {})) + (branch ? " / " + esc(branch) : "") + "</div>" +
+          "<button class=\\"destructive\\" onclick=\\"removeProjectResource('" + escAttr(resource.id) + "')\\">Remove</button>" +
+        "</div>";
+      }).join("");
     }
 
     function renderAgentDrawer(options = {}) {
@@ -2619,6 +2743,9 @@ export function renderMulticaDashboardHtml(): string {
           "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
           "<label>Status<select id=\\"entityStatus\\"><option value=\\"planned\\">planned</option><option value=\\"in_progress\\">in_progress</option><option value=\\"paused\\">paused</option><option value=\\"completed\\">completed</option></select></label>" +
           "<label>Priority<select id=\\"entityPriority\\"><option value=\\"none\\">none</option><option value=\\"low\\">low</option><option value=\\"medium\\">medium</option><option value=\\"high\\">high</option><option value=\\"urgent\\">urgent</option></select></label>" +
+          "<label>Git repo URL<input id=\\"entityRepoUrl\\" placeholder=\\"https://github.com/owner/repo\\"></label>" +
+          "<label>Default branch<input id=\\"entityRepoBranch\\" placeholder=\\"main\\"></label>" +
+          "<label>Resource label<input id=\\"entityRepoLabel\\" placeholder=\\"Optional\\"></label>" +
           "<button class=\\"primary\\" type=\\"submit\\">Create project</button><div class=\\"notice\\"></div>";
       }
       if (kind === "squad") {
@@ -2839,9 +2966,12 @@ export function renderMulticaDashboardHtml(): string {
     window.openTask = openTask;
     window.openAgent = openAgent;
     window.openSquad = openSquad;
+    window.openProject = openProject;
     window.closeDrawer = closeDrawer;
     window.runAutopilot = runAutopilot;
     window.archiveProject = archiveProject;
+    window.addProjectResource = addProjectResource;
+    window.removeProjectResource = removeProjectResource;
     window.archiveSquad = archiveSquad;
     window.addSquadMember = addSquadMember;
     window.removeSquadMember = removeSquadMember;

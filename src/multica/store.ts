@@ -10,6 +10,7 @@ import type {
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateProjectInput,
+  CreateProjectResourceInput,
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
@@ -22,6 +23,7 @@ import type {
   MulticaIssue,
   MulticaIssueWithTasks,
   MulticaProject,
+  MulticaProjectResource,
   MulticaRuntime,
   MulticaSquad,
   MulticaSquadMember,
@@ -156,6 +158,22 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_projects_workspace ON multica_projects(workspace_id);
+
+      CREATE TABLE IF NOT EXISTS multica_project_resources (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        resource_type TEXT NOT NULL,
+        resource_ref TEXT NOT NULL DEFAULT '{}',
+        label TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        UNIQUE(project_id, resource_type, resource_ref),
+        FOREIGN KEY(project_id) REFERENCES multica_projects(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_project_resources_project ON multica_project_resources(project_id, position);
 
       CREATE TABLE IF NOT EXISTS multica_squads (
         id TEXT PRIMARY KEY,
@@ -747,26 +765,32 @@ export class MulticaStore {
     if (!input.title?.trim()) throw new Error("Project title is required");
     const id = input.id ?? createId("prj");
     const now = nowIso();
-    this.db.run(
-      `INSERT INTO multica_projects (
-        id, title, description, icon, status, priority, workspace_id,
-        lead_type, lead_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        input.title.trim(),
-        input.description ?? null,
-        input.icon ?? null,
-        input.status ?? "planned",
-        input.priority ?? "none",
-        input.workspaceId ?? "local",
-        input.leadType ?? null,
-        input.leadId ?? null,
-        now,
-        now,
-      ],
-    );
-    return this.getProject(id)!;
+    const tx = this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO multica_projects (
+          id, title, description, icon, status, priority, workspace_id,
+          lead_type, lead_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          input.title.trim(),
+          input.description ?? null,
+          input.icon ?? null,
+          input.status ?? "planned",
+          input.priority ?? "none",
+          input.workspaceId ?? "local",
+          input.leadType ?? null,
+          input.leadId ?? null,
+          now,
+          now,
+        ],
+      );
+      for (const resource of input.resources ?? []) {
+        this.createProjectResource(id, resource);
+      }
+      return this.getProject(id)!;
+    });
+    return tx();
   }
 
   getProject(id: string): MulticaProject | null {
@@ -813,6 +837,59 @@ export class MulticaStore {
 
   archiveProject(id: string): MulticaProject {
     return this.updateProject(id, { status: "cancelled" });
+  }
+
+  listProjectResources(projectId: string): MulticaProjectResource[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multica_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC",
+    ).all(projectId) as Row[];
+    return rows.map(toProjectResource);
+  }
+
+  createProjectResource(projectId: string, input: CreateProjectResourceInput): MulticaProjectResource {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const resourceType = String(input.resourceType ?? input.resource_type ?? "").trim();
+    const rawRef = input.resourceRef ?? input.resource_ref ?? {};
+    const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
+    const id = input.id ?? createId("res");
+    const now = nowIso();
+    const position = input.position ?? this.countProjectResources(projectId);
+    this.db.run(
+      `INSERT INTO multica_project_resources (
+        id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        projectId,
+        project.workspaceId,
+        resourceType,
+        toJson(resourceRef),
+        input.label ?? null,
+        position,
+        now,
+        input.createdBy ?? null,
+      ],
+    );
+    this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+    return this.getProjectResource(id)!;
+  }
+
+  getProjectResource(id: string): MulticaProjectResource | null {
+    const row = this.db.query("SELECT * FROM multica_project_resources WHERE id = ?").get(id) as Row | null;
+    return row ? toProjectResource(row) : null;
+  }
+
+  deleteProjectResource(projectId: string, resourceId: string): void {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const now = nowIso();
+    const result = this.db.run(
+      "DELETE FROM multica_project_resources WHERE project_id = ? AND id = ?",
+      [projectId, resourceId],
+    );
+    if (result.changes === 0) throw new Error(`Project resource not found: ${resourceId}`);
+    this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
   }
 
   createSquad(input: CreateSquadInput): MulticaSquad {
@@ -1158,10 +1235,14 @@ export class MulticaStore {
   getTaskWithAgent(id: string): MulticaTaskWithAgent | null {
     const task = this.getTask(id);
     if (!task) return null;
+    const issue = task.issueId ? this.getIssue(task.issueId) : null;
+    const project = issue?.projectId ? this.getProject(issue.projectId) : null;
     return {
       ...task,
       agent: this.getAgent(task.agentId),
-      issue: task.issueId ? this.getIssue(task.issueId) : null,
+      issue,
+      project,
+      projectResources: project ? this.listProjectResources(project.id) : [],
     };
   }
 
@@ -1557,6 +1638,12 @@ export class MulticaStore {
       if (!String((err as Error).message ?? err).toLowerCase().includes("duplicate column")) throw err;
     }
   }
+
+  private countProjectResources(projectId: string): number {
+    const row = this.db.query("SELECT COUNT(*) AS count FROM multica_project_resources WHERE project_id = ?")
+      .get(projectId) as { count: number } | null;
+    return Number(row?.count ?? 0);
+  }
 }
 
 type Row = Record<string, unknown>;
@@ -1593,11 +1680,44 @@ function hasPlainMention(body: string, name: string): boolean {
   return new RegExp(`(^|\\s)@${escaped}(?=$|\\s|[.,:;!?])`, "i").test(body);
 }
 
+function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
+  if (!resourceType) throw new Error("resourceType is required");
+  if (resourceType !== "github_repo") throw new Error(`Unknown project resource type: ${resourceType}`);
+  const url = String(rawRef.url ?? "").trim();
+  if (!url) throw new Error("github_repo url is required");
+  if (!isValidGitRepoUrl(url)) throw new Error("github_repo url must be a valid http(s), ssh, git, or scp-like URL");
+  const defaultBranchHint = String(rawRef.defaultBranchHint ?? rawRef.default_branch_hint ?? "").trim();
+  return defaultBranchHint
+    ? { url, defaultBranchHint, default_branch_hint: defaultBranchHint }
+    : { url };
+}
+
+function isValidGitRepoUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return Boolean(url.host) && ["http", "https", "ssh", "git"].includes(url.protocol.replace(":", ""));
+  } catch {
+    if (value.includes(" ") || value.includes("://")) return false;
+    const colon = value.indexOf(":");
+    if (colon <= 0 || colon === value.length - 1) return false;
+    const at = value.indexOf("@");
+    if (at >= colon) return false;
+    const host = value.slice(at >= 0 ? at + 1 : 0, colon);
+    const path = value.slice(colon + 1);
+    return Boolean(host && path);
+  }
+}
+
 function projectSelect(suffix: string): string {
   return `
     SELECT p.*,
       COUNT(i.id) AS issue_count,
-      COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count
+      COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count,
+      (
+        SELECT COUNT(*)
+        FROM multica_project_resources pr
+        WHERE pr.project_id = p.id
+      ) AS resource_count
     FROM multica_projects p
     LEFT JOIN multica_issues i ON i.project_id = p.id
     ${suffix.includes("ORDER BY") ? suffix.replace("ORDER BY", "GROUP BY p.id ORDER BY") : `${suffix} GROUP BY p.id`}
@@ -1682,8 +1802,23 @@ function toProject(row: Row): MulticaProject {
     leadId: nullableString(row.lead_id),
     issueCount: Number(row.issue_count ?? 0),
     doneCount: Number(row.done_count ?? 0),
+    resourceCount: Number(row.resource_count ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toProjectResource(row: Row): MulticaProjectResource {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    resourceType: String(row.resource_type),
+    resourceRef: parseJson(row.resource_ref, {}),
+    label: nullableString(row.label),
+    position: Number(row.position ?? 0),
+    createdAt: String(row.created_at),
+    createdBy: nullableString(row.created_by),
   };
 }
 

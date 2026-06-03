@@ -13,6 +13,7 @@ import type {
   CreateIssueInput,
   CreateIssueWithTaskInput,
   CreateProjectInput,
+  CreateProjectResourceInput,
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
@@ -126,7 +127,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/projects/:id", (c) => {
     const project = store.getProject(c.req.param("id"));
     if (!project) return c.json({ error: "project not found" }, 404);
-    return c.json({ project });
+    return c.json({ project, resources: store.listProjectResources(project.id) });
   });
   app.patch("/api/multica/projects/:id", async (c) => {
     const body = await readJson<UpdateProjectInput>(c);
@@ -134,6 +135,18 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/projects/:id", (c) => {
     return c.json({ project: store.archiveProject(c.req.param("id")) });
+  });
+  app.get("/api/multica/projects/:id/resources", (c) => {
+    const resources = store.listProjectResources(c.req.param("id"));
+    return c.json({ resources, total: resources.length });
+  });
+  app.post("/api/multica/projects/:id/resources", async (c) => {
+    const body = await readJson<CreateProjectResourceInput>(c);
+    return c.json({ resource: store.createProjectResource(c.req.param("id"), body) }, 201);
+  });
+  app.delete("/api/multica/projects/:id/resources/:resourceId", (c) => {
+    store.deleteProjectResource(c.req.param("id"), c.req.param("resourceId"));
+    return c.json({ ok: true });
   });
 
   app.get("/api/multica/squads", (c) => {

@@ -85,8 +85,21 @@ export interface MulticaProject {
   leadId: string | null;
   issueCount: number;
   doneCount: number;
+  resourceCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaProjectResource {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  resourceType: string;
+  resourceRef: Record<string, unknown>;
+  label: string | null;
+  position: number;
+  createdAt: string;
+  createdBy: string | null;
 }
 
 export interface MulticaIssue {
@@ -215,6 +228,8 @@ export interface MulticaTask {
 export interface MulticaTaskWithAgent extends MulticaTask {
   agent: MulticaAgent | null;
   issue: MulticaIssue | null;
+  project: MulticaProject | null;
+  projectResources: MulticaProjectResource[];
 }
 
 export interface MulticaTaskMessage {
@@ -345,6 +360,7 @@ export interface CreateProjectInput {
   priority?: MulticaProjectPriority;
   leadType?: "member" | "agent" | null;
   leadId?: string | null;
+  resources?: CreateProjectResourceInput[];
 }
 
 export interface UpdateProjectInput {
@@ -355,6 +371,17 @@ export interface UpdateProjectInput {
   priority?: MulticaProjectPriority;
   leadType?: "member" | "agent" | null;
   leadId?: string | null;
+}
+
+export interface CreateProjectResourceInput {
+  id?: string;
+  resourceType?: string;
+  resource_type?: string;
+  resourceRef?: Record<string, unknown>;
+  resource_ref?: Record<string, unknown>;
+  label?: string | null;
+  position?: number | null;
+  createdBy?: string | null;
 }
 
 export interface CreateSquadInput {
