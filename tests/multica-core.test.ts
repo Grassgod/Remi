@@ -1416,6 +1416,56 @@ describe("Bun Multica API", () => {
     expect(store.getIssue(second.id)).toBeNull();
   });
 
+  it("serves quick-create issue compatibility endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Quick Codex", provider: "codex" });
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    const squad = store.createSquad({ name: "Quick squad", leaderId: leader.id });
+    const project = store.createProject({ title: "Quick project" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: agent.id,
+        prompt: "Create an issue for improving onboarding screenshots",
+        project_id: project.id,
+        workspace_id: "local",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const createdBody = await created.json();
+    expect(createdBody.task_id).toStartWith("tsk_");
+    const task = store.getTask(createdBody.task_id)!;
+    expect(task.agentId).toBe(agent.id);
+    expect(task.issueId).toBeString();
+    const issue = store.getIssue(task.issueId!)!;
+    expect(issue.title).toBe("Create an issue for improving onboarding screenshots");
+    expect(issue.projectId).toBe(project.id);
+    expect(issue.assigneeType).toBe("agent");
+    expect(issue.contextRefs[0]).toEqual({ type: "quick_create", prompt: "Create an issue for improving onboarding screenshots" });
+
+    const squadCreated = await app.request("/api/multica/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ squad_id: squad.id, prompt: "Plan squad handoff" }),
+    });
+    expect(squadCreated.status).toBe(202);
+    const squadBody = await squadCreated.json();
+    expect(squadBody.task.agentId).toBe(leader.id);
+    expect(squadBody.issue.assigneeType).toBe("squad");
+    expect(squadBody.task_id).toBe(squadBody.task.id);
+
+    const badPrompt = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id, prompt: "   " }),
+    });
+    expect(badPrompt.status).toBe(400);
+    expect((await badPrompt.json()).error).toBe("prompt is required");
+  });
+
   it("serves issue hierarchy and planning fields through API endpoints", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

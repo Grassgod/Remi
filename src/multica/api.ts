@@ -34,6 +34,7 @@ import type {
   CreateWorkspaceMemberInput,
   ImportSkillInput,
   ListIssuesInput,
+  QuickCreateIssueInput,
   RegisterRuntimeInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
@@ -787,6 +788,23 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateIssueWithTaskInput>(c);
     return c.json(store.createIssue(body), 201);
   });
+  app.post("/api/multica/issues/quick-create", async (c) => {
+    const body = await readJson<QuickCreateIssueInput>(c);
+    const result = safeQuickCreateIssue(store, body);
+    if ("error" in result) return c.json({ error: result.error }, 400);
+    return c.json({
+      taskId: result.task.id,
+      task_id: result.task.id,
+      issue: result.issue,
+      task: result.task,
+    }, 202);
+  });
+  app.post("/api/issues/quick-create", async (c) => {
+    const body = await readJson<QuickCreateIssueInput>(c);
+    const result = safeQuickCreateIssue(store, body);
+    if ("error" in result) return c.json({ error: result.error }, 400);
+    return c.json({ task_id: result.task.id }, 202);
+  });
   app.get("/api/multica/issues/:id", (c) => {
     const issue = store.getIssueWithTasks(c.req.param("id"));
     if (!issue) return c.json({ error: "issue not found" }, 404);
@@ -1243,6 +1261,27 @@ function issueListQuery(c: { req: { query: (name: string) => string | undefined 
 
 function splitQueryList(value: string | undefined): string[] {
   return String(value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function safeQuickCreateIssue(store: MulticaStore, input: QuickCreateIssueInput): ReturnType<MulticaStore["quickCreateIssue"]> | { error: string } {
+  try {
+    return store.quickCreateIssue(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message === "prompt is required"
+      || message === "exactly one of agent_id or squad_id is required"
+      || message.startsWith("No runnable agent")
+      || message.startsWith("Project not found")
+      || message === "Project belongs to another workspace"
+      || message.startsWith("Agent not found")
+      || message.startsWith("Squad not found")
+      || message.startsWith("Member not found")
+    ) {
+      return { error: message };
+    }
+    throw error;
+  }
 }
 
 function usageQuery(c: { req: { query: (name: string) => string | undefined } }, extra: { runtimeId?: string | null } = {}): {

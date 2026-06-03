@@ -66,6 +66,8 @@ import type {
   MulticaProject,
   MulticaProjectResource,
   MulticaProjectSearchResult,
+  QuickCreateIssueInput,
+  QuickCreateIssueResult,
   MulticaRuntime,
   MulticaRuntimeDaily,
   MulticaRuntimeModel,
@@ -2053,6 +2055,54 @@ export class MulticaStore {
     });
     if (current.projectId) this.db.run("UPDATE multica_projects SET updated_at = ? WHERE id = ?", [now, current.projectId]);
     return { issue: this.getIssue(id)!, task };
+  }
+
+  quickCreateIssue(input: QuickCreateIssueInput): QuickCreateIssueResult {
+    const prompt = input.prompt?.trim();
+    if (!prompt) throw new Error("prompt is required");
+    const agentId = input.agentId ?? input.agent_id ?? null;
+    const squadId = input.squadId ?? input.squad_id ?? null;
+    if (Boolean(agentId) === Boolean(squadId)) throw new Error("exactly one of agent_id or squad_id is required");
+
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const projectId = input.projectId ?? input.project_id ?? null;
+    if (projectId) {
+      const project = this.getProject(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (project.workspaceId !== workspaceId) throw new Error("Project belongs to another workspace");
+    }
+
+    const assigneeType: MulticaAssigneeType = squadId ? "squad" : "agent";
+    const assigneeId = squadId ?? agentId!;
+    this.validateIssueAssignee(assigneeType, assigneeId);
+    const taskAgent = this.resolveRunnableAgentForAssignee(assigneeType, assigneeId);
+    if (!taskAgent) throw new Error(`No runnable agent for ${assigneeType}: ${assigneeId}`);
+
+    const issue = this.createIssue({
+      title: quickCreateTitle(prompt),
+      description: prompt,
+      workspaceId,
+      projectId,
+      assigneeType,
+      assigneeId,
+      status: "in_progress",
+      createdBy: input.requesterId ?? input.requester_id ?? null,
+      contextRefs: [{ type: "quick_create", prompt }],
+    });
+    const task = this.createTask({
+      agentId: taskAgent.id,
+      issueId: issue.id,
+      workspaceId,
+      prompt: quickCreateTaskPrompt(prompt, projectId),
+    });
+    this.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: input.requesterId ?? input.requester_id ?? null,
+      type: "quick_create_queued",
+      body: prompt,
+      data: { taskId: task.id, assigneeType, assigneeId, projectId },
+    });
+    return { issue: this.getIssue(issue.id)!, task };
   }
 
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MulticaIssueComment {
@@ -4668,6 +4718,20 @@ function hasIssueMutation(input: UpdateIssueInput): boolean {
     "contextRefs",
     "context_refs",
   );
+}
+
+function quickCreateTitle(prompt: string): string {
+  const firstLine = prompt.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? prompt.trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine;
+}
+
+function quickCreateTaskPrompt(prompt: string, projectId: string | null): string {
+  return [
+    "Create or refine a Multica issue from this quick-create request.",
+    projectId ? `Project ID: ${projectId}` : "Project ID: none",
+    "",
+    prompt,
+  ].join("\n");
 }
 
 function normalizeIssuePosition(value: number | null | undefined): number {

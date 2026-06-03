@@ -853,6 +853,25 @@ export interface AssignIssueResult {
   task: MulticaTask | null;
 }
 
+export interface QuickCreateIssueInput {
+  agentId?: string | null;
+  agent_id?: string | null;
+  squadId?: string | null;
+  squad_id?: string | null;
+  prompt: string;
+  projectId?: string | null;
+  project_id?: string | null;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  requesterId?: string | null;
+  requester_id?: string | null;
+}
+
+export interface QuickCreateIssueResult {
+  issue: MulticaIssue;
+  task: MulticaTask;
+}
+
 export interface CreateIssueDependencyInput {
   id?: string;
   dependsOnIssueId?: string;
