@@ -9,6 +9,7 @@ import type {
   CreateAgentInput,
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
+  CreateCloudRuntimeNodeInput,
   CreateChatSessionInput,
   CreateAttachmentInput,
   CreateFeedbackInput,
@@ -48,6 +49,7 @@ import type {
   MulticaAttachment,
   MulticaChatMessage,
   MulticaChatSession,
+  MulticaCloudRuntimeNode,
   MulticaCommentReaction,
   MulticaDaemonHeartbeatAck,
   MulticaInboxItem,
@@ -227,6 +229,25 @@ export class MulticaStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS multica_cloud_runtime_nodes (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL DEFAULT 'local',
+        instance_id TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT 'local',
+        instance_type TEXT NOT NULL,
+        image_id TEXT NOT NULL DEFAULT '',
+        subnet_id TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'launching',
+        tags TEXT NOT NULL DEFAULT '{}',
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_cloud_runtime_nodes_owner
+        ON multica_cloud_runtime_nodes(owner_id, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_runtime_models (
         runtime_id TEXT NOT NULL,
@@ -1997,6 +2018,68 @@ export class MulticaStore {
   deleteRuntime(id: string): boolean {
     const result = this.db.run("DELETE FROM multica_runtimes WHERE id = ?", [id]);
     return result.changes > 0;
+  }
+
+  listCloudRuntimeNodes(options: { limit?: number; offset?: number; ownerId?: string | null } = {}): MulticaCloudRuntimeNode[] {
+    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
+    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const rows = options.ownerId
+      ? this.db.query("SELECT * FROM multica_cloud_runtime_nodes WHERE owner_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?").all(options.ownerId, limit, offset) as Row[]
+      : this.db.query("SELECT * FROM multica_cloud_runtime_nodes ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset) as Row[];
+    return rows.map(toCloudRuntimeNode);
+  }
+
+  createCloudRuntimeNode(input: CreateCloudRuntimeNodeInput, ownerId = "local"): MulticaCloudRuntimeNode {
+    const instanceType = String(input.instanceType ?? input.instance_type ?? "").trim();
+    if (!instanceType) throw new Error("instance_type is required");
+    const id = createId("crn");
+    const now = nowIso();
+    const name = String(input.name ?? "").trim() || `local-${instanceType}`;
+    this.db.run(
+      `INSERT INTO multica_cloud_runtime_nodes (
+        id, owner_id, instance_id, region, instance_type, image_id, subnet_id,
+        name, status, tags, metadata, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?, ?)`,
+      [
+        id,
+        ownerId,
+        `local-${id}`,
+        String(input.region ?? "local").trim() || "local",
+        instanceType,
+        String(input.imageId ?? input.image_id ?? "").trim(),
+        String(input.subnetId ?? input.subnet_id ?? "").trim(),
+        name,
+        toJson(input.tags ?? {}),
+        toJson(input.metadata ?? { local: true }),
+        now,
+        now,
+      ],
+    );
+    return this.getCloudRuntimeNode(id)!;
+  }
+
+  getCloudRuntimeNode(id: string): MulticaCloudRuntimeNode | null {
+    const row = this.db.query("SELECT * FROM multica_cloud_runtime_nodes WHERE id = ?").get(id) as Row | null;
+    return row ? toCloudRuntimeNode(row) : null;
+  }
+
+  deleteCloudRuntimeNode(id: string): boolean {
+    const result = this.db.run("DELETE FROM multica_cloud_runtime_nodes WHERE id = ?", [id]);
+    return result.changes > 0;
+  }
+
+  setCloudRuntimeNodeStatus(id: string, status: string): MulticaCloudRuntimeNode | null {
+    const current = this.getCloudRuntimeNode(id);
+    if (!current) return null;
+    this.db.run("UPDATE multica_cloud_runtime_nodes SET status = ?, updated_at = ? WHERE id = ?", [status, nowIso(), id]);
+    return this.getCloudRuntimeNode(id);
+  }
+
+  execCloudRuntimeNode(id: string, command: string): { node: MulticaCloudRuntimeNode; exit_code: number; stdout: string; stderr: string } | null {
+    const node = this.getCloudRuntimeNode(id);
+    if (!node) return null;
+    const output = command.trim() ? `local cloud runtime node ${id}: ${command.trim()}` : `local cloud runtime node ${id}`;
+    return { node, exit_code: 0, stdout: output, stderr: "" };
   }
 
   listRuntimeModels(runtimeId: string): MulticaRuntimeModel[] {
@@ -6303,6 +6386,38 @@ function toRuntime(row: Row): MulticaRuntime {
     lastHeartbeatAt: nullableString(row.last_heartbeat_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toCloudRuntimeNode(row: Row): MulticaCloudRuntimeNode {
+  const createdAt = String(row.created_at);
+  const updatedAt = String(row.updated_at);
+  const ownerId = String(row.owner_id ?? "local");
+  const instanceId = String(row.instance_id ?? "");
+  const instanceType = String(row.instance_type ?? "");
+  const imageId = String(row.image_id ?? "");
+  const subnetId = String(row.subnet_id ?? "");
+  return {
+    id: String(row.id),
+    ownerId,
+    owner_id: ownerId,
+    instanceId,
+    instance_id: instanceId,
+    region: String(row.region ?? "local"),
+    instanceType,
+    instance_type: instanceType,
+    imageId,
+    image_id: imageId,
+    subnetId,
+    subnet_id: subnetId,
+    name: String(row.name ?? ""),
+    status: String(row.status ?? "unknown"),
+    tags: parseJson<Record<string, string>>(row.tags, {}),
+    metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
   };
 }
 

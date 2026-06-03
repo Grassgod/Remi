@@ -19,6 +19,7 @@ import type {
   CreateAgentInput,
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
+  CreateCloudRuntimeNodeInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateAgentFromTemplateInput,
@@ -258,17 +259,38 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json(workspaceReposResponse(c.req.param("workspaceId")));
   });
   app.get("/api/daemon/ws", (c) => c.json({ error: "daemon websocket is not implemented in local Bun Multica" }, 501));
-  app.get("/api/cloud-runtime", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.get("/api/cloud-runtime/healthz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.get("/api/cloud-runtime/readyz", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.get("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.delete("/api/cloud-runtime/nodes", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes/start", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes/stop", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes/reboot", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes/status", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
-  app.post("/api/cloud-runtime/nodes/exec", (c) => c.json(cloudRuntimeUnavailableResponse(), 503));
+  app.get("/api/cloud-runtime", (c) => c.json({ configured: true, mode: "local" }));
+  app.get("/api/cloud-runtime/healthz", (c) => c.json({ ok: true, configured: true, mode: "local" }));
+  app.get("/api/cloud-runtime/readyz", (c) => c.json({ ok: true, configured: true, mode: "local" }));
+  app.get("/api/cloud-runtime/nodes", (c) => c.json(store.listCloudRuntimeNodes({
+    limit: parseOptionalInt(c.req.query("limit")),
+    offset: parseOptionalInt(c.req.query("offset")),
+  })));
+  app.post("/api/cloud-runtime/nodes", async (c) => {
+    const body = await readJson<CreateCloudRuntimeNodeInput>(c);
+    return c.json(store.createCloudRuntimeNode(body), 201);
+  });
+  app.delete("/api/cloud-runtime/nodes", async (c) => {
+    const body = await readJson<{ id?: string; node_id?: string; nodeId?: string }>(c);
+    const id = body.id ?? body.node_id ?? body.nodeId ?? "";
+    const deleted = id ? store.deleteCloudRuntimeNode(id) : false;
+    if (!deleted) return c.json({ error: "cloud runtime node not found" }, 404);
+    return c.body(null, 204);
+  });
+  app.post("/api/cloud-runtime/nodes/start", async (c) => cloudRuntimeStatusResponse(c, store, await readJson(c), "running"));
+  app.post("/api/cloud-runtime/nodes/stop", async (c) => cloudRuntimeStatusResponse(c, store, await readJson(c), "stopped"));
+  app.post("/api/cloud-runtime/nodes/reboot", async (c) => cloudRuntimeStatusResponse(c, store, await readJson(c), "running"));
+  app.post("/api/cloud-runtime/nodes/status", async (c) => {
+    const body = await readJson<{ id?: string; node_id?: string; nodeId?: string; status?: string }>(c);
+    return cloudRuntimeStatusResponse(c, store, body, body.status ?? "running");
+  });
+  app.post("/api/cloud-runtime/nodes/exec", async (c) => {
+    const body = await readJson<{ id?: string; node_id?: string; nodeId?: string; command?: string; cmd?: string }>(c);
+    const id = body.id ?? body.node_id ?? body.nodeId ?? "";
+    const result = store.execCloudRuntimeNode(id, body.command ?? body.cmd ?? "");
+    if (!result) return c.json({ error: "cloud runtime node not found" }, 404);
+    return c.json(result);
+  });
   app.get("/api/me", (c) => c.json(store.getCurrentUser()));
   app.patch("/api/me", async (c) => {
     const body = await readJson<any>(c);
@@ -2434,10 +2456,6 @@ function workspaceReposResponse(workspaceId: string): {
   };
 }
 
-function cloudRuntimeUnavailableResponse(): { error: string; configured: false } {
-  return { error: "cloud runtime service is not configured", configured: false };
-}
-
 function githubAppSlug(): string {
   return (process.env.GITHUB_APP_SLUG ?? "").trim();
 }
@@ -2475,6 +2493,13 @@ function githubSetupResponse(installationId?: string, state?: string): {
   if (!isGitHubAppConfigured()) return { configured: false, error: "github app is not configured" };
   if (!installationId || !state) return { configured: true, error: "missing_params" };
   return { configured: true, installation_id: installationId, state };
+}
+
+function cloudRuntimeStatusResponse(c: any, store: MulticaStore, body: any, status: string) {
+  const id = body.id ?? body.node_id ?? body.nodeId ?? "";
+  const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
+  if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
+  return c.json(node);
 }
 
 function taskCompatibilityResponse(task: MulticaTask): MulticaTask & {

@@ -134,6 +134,29 @@ export interface MulticaRuntime {
   updatedAt: string;
 }
 
+export interface MulticaCloudRuntimeNode {
+  id: string;
+  ownerId: string;
+  owner_id: string;
+  instanceId: string;
+  instance_id: string;
+  region: string;
+  instanceType: string;
+  instance_type: string;
+  imageId: string;
+  image_id: string;
+  subnetId: string;
+  subnet_id: string;
+  name: string;
+  status: string;
+  tags: Record<string, string>;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  created_at: string;
+  updatedAt: string;
+  updated_at: string;
+}
+
 export interface MulticaRuntimeLocalSkillSummary {
   key: string;
   name: string;
@@ -1086,6 +1109,19 @@ export interface CreateWorkspaceInvitationInput {
   inviteeEmail?: string;
   invitee_email?: string;
   role?: string;
+}
+
+export interface CreateCloudRuntimeNodeInput {
+  instanceType?: string;
+  instance_type?: string;
+  name?: string;
+  region?: string;
+  imageId?: string;
+  image_id?: string;
+  subnetId?: string;
+  subnet_id?: string;
+  tags?: Record<string, string>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface UpdateRuntimeInput {

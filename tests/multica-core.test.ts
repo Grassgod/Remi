@@ -2225,9 +2225,46 @@ describe("Bun Multica API", () => {
 
     expect((await app.request("/readyz")).status).toBe(200);
     expect((await app.request("/healthz")).status).toBe(200);
-    const cloudRuntime = await app.request("/api/cloud-runtime/nodes");
-    expect(cloudRuntime.status).toBe(503);
-    expect((await cloudRuntime.json()).configured).toBe(false);
+    const cloudHealth = await app.request("/api/cloud-runtime/healthz");
+    expect(await cloudHealth.json()).toMatchObject({ ok: true, configured: true, mode: "local" });
+
+    const createdCloudNode = await app.request("/api/cloud-runtime/nodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance_type: "g5.xlarge", name: "Local GPU", tags: { env: "test" } }),
+    });
+    expect(createdCloudNode.status).toBe(201);
+    const createdCloudNodeBody = await createdCloudNode.json();
+    expect(createdCloudNodeBody.instance_type).toBe("g5.xlarge");
+    expect(createdCloudNodeBody.name).toBe("Local GPU");
+    expect(createdCloudNodeBody.status).toBe("launching");
+    expect(createdCloudNodeBody.tags.env).toBe("test");
+
+    const cloudRuntime = await app.request("/api/cloud-runtime/nodes?limit=10&offset=0");
+    const cloudRuntimeBody = await cloudRuntime.json();
+    expect(cloudRuntime.status).toBe(200);
+    expect(cloudRuntimeBody[0].id).toBe(createdCloudNodeBody.id);
+
+    const startedCloudNode = await app.request("/api/cloud-runtime/nodes/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: createdCloudNodeBody.id }),
+    });
+    expect((await startedCloudNode.json()).status).toBe("running");
+
+    const execCloudNode = await app.request("/api/cloud-runtime/nodes/exec", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: createdCloudNodeBody.id, command: "echo ok" }),
+    });
+    expect((await execCloudNode.json()).stdout).toContain("echo ok");
+
+    const deletedCloudNode = await app.request("/api/cloud-runtime/nodes", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: createdCloudNodeBody.id }),
+    });
+    expect(deletedCloudNode.status).toBe(204);
 
     const active = await app.request(`/api/issues/${issue.id}/active-task`);
     const activeBody = await active.json();
