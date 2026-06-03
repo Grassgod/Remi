@@ -1194,6 +1194,7 @@ export function renderMulticaDashboardHtml(): string {
           <div class="nav-item" data-page="inbox"><span class="nav-icon"></span><span>Inbox</span></div>
           <div class="nav-item" data-page="my-issues"><span class="nav-icon"></span><span>My Issues</span></div>
         </div>
+        <div class="nav-group" id="pinnedNav"></div>
         <div class="nav-group">
           <div class="nav-label">Workspace</div>
           <div class="nav-item active" data-page="issues"><span class="nav-icon issue"></span><span>Issues</span></div>
@@ -1362,6 +1363,7 @@ export function renderMulticaDashboardHtml(): string {
       squads: [],
       autopilots: [],
       labels: [],
+      pins: [],
       inboxItems: [],
       mode: "board",
       activeOnly: false,
@@ -1410,6 +1412,7 @@ export function renderMulticaDashboardHtml(): string {
       squadsGrid: document.getElementById("squadsGrid"),
       runtimesGrid: document.getElementById("runtimesGrid"),
       inboxList: document.getElementById("inboxList"),
+      pinnedNav: document.getElementById("pinnedNav"),
       agentSelect: document.getElementById("agentSelect"),
       chatAgent: document.getElementById("chatAgent"),
       notice: document.getElementById("notice"),
@@ -1486,7 +1489,7 @@ export function renderMulticaDashboardHtml(): string {
     async function refresh(options = {}) {
       if (!options.silent) showProgress();
       try {
-        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels] = await Promise.all([
+        const [agents, issues, tasks, runtimes, members, projects, squads, autopilots, chats, inbox, labels, pins] = await Promise.all([
           api("/api/multica/agents"),
           api("/api/multica/issues"),
           api("/api/multica/tasks"),
@@ -1497,7 +1500,8 @@ export function renderMulticaDashboardHtml(): string {
           api("/api/multica/autopilots"),
           api("/api/multica/chats"),
           api("/api/multica/inbox"),
-          api("/api/multica/labels")
+          api("/api/multica/labels"),
+          api("/api/multica/pins")
         ]);
         state.agents = agents.agents || [];
         state.issues = issues.issues || [];
@@ -1510,6 +1514,7 @@ export function renderMulticaDashboardHtml(): string {
         state.chatSessions = chats.sessions || [];
         state.inboxItems = inbox.items || [];
         state.labels = labels.labels || [];
+        state.pins = pins.pins || [];
         render();
         if (state.selectedTaskId) await loadTaskDetail(state.selectedTaskId, { silent: true });
         if (state.selectedIssueId) await loadIssueDetail(state.selectedIssueId, { silent: true });
@@ -2155,6 +2160,41 @@ export function renderMulticaDashboardHtml(): string {
       await refresh({ silent: true });
     }
 
+    async function pinItem(itemType, itemId, workspaceId = "local") {
+      try {
+        await api("/api/multica/pins", {
+          method: "POST",
+          body: JSON.stringify({ itemType, itemId, workspaceId })
+        });
+        await refresh({ silent: true });
+        if (itemType === "issue" && state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+        if (itemType === "project" && state.selectedProjectId) await loadProjectDetail(state.selectedProjectId);
+      } catch (err) {
+        showNotice(String(err.message || err), els.notice);
+      }
+    }
+
+    async function unpinItem(itemType, itemId) {
+      await api("/api/multica/pins/" + encodeURIComponent(itemType) + "/" + encodeURIComponent(itemId), {
+        method: "DELETE"
+      });
+      await refresh({ silent: true });
+      if (itemType === "issue" && state.selectedIssueId) await loadIssueDetail(state.selectedIssueId);
+      if (itemType === "project" && state.selectedProjectId) await loadProjectDetail(state.selectedProjectId);
+    }
+
+    async function openPinnedItem(pinId) {
+      const pin = state.pins.find(item => item.id === pinId);
+      if (!pin) return;
+      if (pin.itemType === "issue") {
+        switchPage("issues");
+        await openIssue(pin.itemId);
+      } else if (pin.itemType === "project") {
+        switchPage("projects");
+        await openProject(pin.itemId);
+      }
+    }
+
     async function archiveSquad(id) {
       try {
         await api("/api/multica/squads/" + encodeURIComponent(id), { method: "DELETE" });
@@ -2308,6 +2348,7 @@ export function renderMulticaDashboardHtml(): string {
       renderAgents();
       renderRuntimes();
       renderInbox();
+      renderPinnedNav();
       renderRuntimeStrip();
       renderRunningPill();
       renderSearchResults();
@@ -2333,6 +2374,23 @@ export function renderMulticaDashboardHtml(): string {
         els.placeholderTitle.textContent = meta.placeholder || meta.title;
         els.placeholderText.textContent = meta.text || "";
       }
+    }
+
+    function renderPinnedNav() {
+      if (!els.pinnedNav) return;
+      if (!state.pins.length) {
+        els.pinnedNav.innerHTML = "";
+        return;
+      }
+      els.pinnedNav.innerHTML =
+        "<div class=\\"nav-label\\">Pinned</div>" +
+        state.pins.slice(0, 8).map(pin => {
+          const target = pinnedTarget(pin);
+          return "<div class=\\"nav-item\\" onclick=\\"openPinnedItem('" + escAttr(pin.id) + "')\\">" +
+            "<span class=\\"nav-icon " + (pin.itemType === "issue" ? "issue" : "") + "\\"></span>" +
+            "<span class=\\"workspace-name\\">" + esc(target.label) + "</span>" +
+          "</div>";
+        }).join("");
     }
 
     function renderToolbar() {
@@ -2711,6 +2769,7 @@ export function renderMulticaDashboardHtml(): string {
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
           "<div class=\\"drawer-title\\"><strong>" + esc(issue.title || "") + "</strong><span>" + esc(issueLabel(issue)) + "</span></div>" +
+          renderPinButton("issue", issue.id, issue.workspaceId) +
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
         "<div class=\\"drawer-body\\">" +
@@ -2738,6 +2797,7 @@ export function renderMulticaDashboardHtml(): string {
       els.taskDrawer.innerHTML =
         "<div class=\\"drawer-head\\">" +
           "<div class=\\"drawer-title\\"><strong>" + esc(project.title || "") + "</strong><span>" + esc(project.status) + " / " + esc(shortId(project.id)) + "</span></div>" +
+          renderPinButton("project", project.id, project.workspaceId) +
           "<button class=\\"destructive\\" onclick=\\"archiveProject('" + escAttr(project.id) + "')\\">Archive</button>" +
           "<button class=\\"icon\\" onclick=\\"closeDrawer()\\">x</button>" +
         "</div>" +
@@ -3008,6 +3068,23 @@ export function renderMulticaDashboardHtml(): string {
     function labelStyle(label) {
       const color = String(label?.color || "#6b7280");
       return "background: color-mix(in oklab, " + escAttr(color) + " 14%, transparent); color: color-mix(in oklab, " + escAttr(color) + " 72%, var(--foreground));";
+    }
+
+    function renderPinButton(itemType, itemId, workspaceId = "local") {
+      const pinned = state.pins.some(pin => pin.itemType === itemType && pin.itemId === itemId);
+      if (pinned) {
+        return "<button class=\\"outline\\" onclick=\\"unpinItem('" + escAttr(itemType) + "', '" + escAttr(itemId) + "')\\">Unpin</button>";
+      }
+      return "<button class=\\"outline\\" onclick=\\"pinItem('" + escAttr(itemType) + "', '" + escAttr(itemId) + "', '" + escAttr(workspaceId || "local") + "')\\">Pin</button>";
+    }
+
+    function pinnedTarget(pin) {
+      if (pin.itemType === "issue") {
+        const issue = state.issues.find(item => item.id === pin.itemId);
+        return { label: issue ? issueLabel(issue) + " " + issue.title : shortId(pin.itemId), target: issue };
+      }
+      const project = state.projects.find(item => item.id === pin.itemId);
+      return { label: project ? project.title : shortId(pin.itemId), target: project };
     }
 
     function renderIssueActivity() {
@@ -3368,6 +3445,9 @@ export function renderMulticaDashboardHtml(): string {
     window.archiveProject = archiveProject;
     window.addProjectResource = addProjectResource;
     window.removeProjectResource = removeProjectResource;
+    window.pinItem = pinItem;
+    window.unpinItem = unpinItem;
+    window.openPinnedItem = openPinnedItem;
     window.archiveSquad = archiveSquad;
     window.addSquadMember = addSquadMember;
     window.removeSquadMember = removeSquadMember;

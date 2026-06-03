@@ -270,6 +270,31 @@ describe("Bun Multica core store", () => {
     expect(store.listLabelsForIssue(issue.id)).toEqual([]);
   });
 
+  it("manages pinned issue and project shortcuts", () => {
+    const store = createStore();
+    const issue = store.createIssue({ title: "Pinned issue", workspaceId: "local" });
+    const project = store.createProject({ title: "Pinned project", workspaceId: "local" });
+
+    const issuePin = store.createPinnedItem({ itemType: "issue", itemId: issue.id, workspaceId: "local", userId: "local" });
+    const projectPin = store.createPinnedItem({ item_type: "project", item_id: project.id, workspace_id: "local", user_id: "local" });
+
+    expect(issuePin.position).toBe(1);
+    expect(projectPin.position).toBe(2);
+    expect(store.listPinnedItems("local", "local").map((pin) => pin.itemType)).toEqual(["issue", "project"]);
+    expect(() => store.createPinnedItem({ itemType: "issue", itemId: issue.id })).toThrow("already pinned");
+    expect(() => store.createPinnedItem({ itemType: "issue", itemId: issue.id, workspaceId: "remote" })).toThrow("Issue not found");
+    expect(() => store.createPinnedItem({ itemType: "agent", itemId: issue.id })).toThrow("item_type");
+
+    const reordered = store.reorderPinnedItems("local", "local", [
+      { id: issuePin.id, position: 20 },
+      { id: projectPin.id, position: 10 },
+    ]);
+    expect(reordered.map((pin) => pin.id)).toEqual([projectPin.id, issuePin.id]);
+
+    store.deletePinnedItem("local", "local", "project", project.id);
+    expect(store.listPinnedItems("local", "local").map((pin) => pin.id)).toEqual([issuePin.id]);
+  });
+
   it("skips agent self-mentions", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Loop Guard", provider: "codex" });
@@ -729,6 +754,53 @@ describe("Bun Multica API", () => {
       method: "DELETE",
     });
     expect((await detached.json()).labels).toHaveLength(0);
+  });
+
+  it("serves pinned item endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const issue = store.createIssue({ title: "Pinned API issue", workspaceId: "local" });
+    const project = store.createProject({ title: "Pinned API project", workspaceId: "local" });
+
+    const issuePin = await app.request("/api/multica/pins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ itemType: "issue", itemId: issue.id, workspaceId: "local", userId: "local" }),
+    });
+    expect(issuePin.status).toBe(201);
+    const issuePinBody = await issuePin.json();
+    expect(issuePinBody.pin.itemType).toBe("issue");
+
+    const projectPin = await app.request("/api/pins", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_type: "project", item_id: project.id, workspace_id: "local", user_id: "local" }),
+    });
+    expect(projectPin.status).toBe(201);
+    const projectPinBody = await projectPin.json();
+
+    const listed = await app.request("/api/multica/pins?workspaceId=local&userId=local");
+    expect((await listed.json()).pins).toHaveLength(2);
+
+    const reordered = await app.request("/api/pins/reorder", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspaceId: "local",
+        userId: "local",
+        items: [
+          { id: issuePinBody.pin.id, position: 2 },
+          { id: projectPinBody.pin.id, position: 1 },
+        ],
+      }),
+    });
+    expect((await reordered.json()).pins.map((pin: any) => pin.id)).toEqual([projectPinBody.pin.id, issuePinBody.pin.id]);
+
+    const deleted = await app.request(`/api/multica/pins/project/${project.id}?workspaceId=local&userId=local`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(store.listPinnedItems("local", "local")).toHaveLength(1);
   });
 
   it("serves issue subscribers and member inbox endpoints", async () => {

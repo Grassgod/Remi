@@ -21,6 +21,7 @@ export type MulticaAutopilotRunSource = "manual" | "schedule" | "webhook" | "api
 export type MulticaChatSessionStatus = "active" | "archived";
 export type MulticaChatMessageRole = "user" | "assistant" | "system";
 export type MulticaSubscriptionReason = "created" | "assigned" | "commented" | "mentioned" | "manual";
+export type MulticaPinnedItemType = "issue" | "project";
 
 export interface MulticaSkillFile {
   path: string;
@@ -218,6 +219,16 @@ export interface MulticaLabel {
   color: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MulticaPinnedItem {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  itemType: MulticaPinnedItemType;
+  itemId: string;
+  position: number;
+  createdAt: string;
 }
 
 export interface MulticaSquad {
@@ -495,6 +506,23 @@ export interface CreateLabelInput {
 export interface UpdateLabelInput {
   name?: string;
   color?: string;
+}
+
+export interface CreatePinnedItemInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  userId?: string | null;
+  user_id?: string | null;
+  itemType?: MulticaPinnedItemType | string;
+  item_type?: MulticaPinnedItemType | string;
+  itemId?: string;
+  item_id?: string;
+}
+
+export interface ReorderPinnedItemInput {
+  id: string;
+  position: number;
 }
 
 export interface CreateProjectInput {

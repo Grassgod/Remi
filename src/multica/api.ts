@@ -15,12 +15,14 @@ import type {
   CreateIssueInput,
   CreateIssueWithTaskInput,
   CreateLabelInput,
+  CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
   RegisterRuntimeInput,
+  ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
   SendChatMessageInput,
@@ -300,6 +302,42 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/labels/:id", (c) => {
     return c.json({ label: store.deleteLabel(c.req.param("id")) });
+  });
+
+  app.get("/api/multica/pins", (c) => {
+    const pins = store.listPinnedItems(c.req.query("workspaceId"), c.req.query("userId"));
+    return c.json({ pins, total: pins.length });
+  });
+  app.post("/api/multica/pins", async (c) => {
+    const body = await readJson<CreatePinnedItemInput>(c);
+    return c.json({ pin: store.createPinnedItem(body) }, 201);
+  });
+  app.put("/api/multica/pins/reorder", async (c) => {
+    const body = await readJson<{ workspaceId?: string; workspace_id?: string; userId?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
+    const pins = store.reorderPinnedItems(body.workspaceId ?? body.workspace_id, body.userId ?? body.user_id, body.items ?? []);
+    return c.json({ pins, total: pins.length });
+  });
+  app.delete("/api/multica/pins/:itemType/:itemId", (c) => {
+    store.deletePinnedItem(c.req.query("workspaceId"), c.req.query("userId"), c.req.param("itemType"), c.req.param("itemId"));
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/pins", (c) => {
+    const pins = store.listPinnedItems(c.req.query("workspaceId"), c.req.query("userId"));
+    return c.json({ pins, total: pins.length });
+  });
+  app.post("/api/pins", async (c) => {
+    const body = await readJson<CreatePinnedItemInput>(c);
+    return c.json({ pin: store.createPinnedItem(body) }, 201);
+  });
+  app.put("/api/pins/reorder", async (c) => {
+    const body = await readJson<{ workspaceId?: string; workspace_id?: string; userId?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
+    const pins = store.reorderPinnedItems(body.workspaceId ?? body.workspace_id, body.userId ?? body.user_id, body.items ?? []);
+    return c.json({ pins, total: pins.length });
+  });
+  app.delete("/api/pins/:itemType/:itemId", (c) => {
+    store.deletePinnedItem(c.req.query("workspaceId"), c.req.query("userId"), c.req.param("itemType"), c.req.param("itemId"));
+    return c.json({ ok: true });
   });
 
   app.get("/api/multica/issues", (c) => {

@@ -12,6 +12,7 @@ import type {
   CreateIssueCommentInput,
   CreateIssueInput,
   CreateLabelInput,
+  CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateSquadInput,
@@ -30,6 +31,8 @@ import type {
   MulticaIssueComment,
   MulticaIssue,
   MulticaLabel,
+  MulticaPinnedItem,
+  MulticaPinnedItemType,
   MulticaIssueReaction,
   MulticaIssueSubscriber,
   MulticaIssueWithTasks,
@@ -45,6 +48,7 @@ import type {
   MulticaSubscriptionReason,
   MulticaWorkspaceMember,
   RegisterRuntimeInput,
+  ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
   SendChatMessageInput,
@@ -302,6 +306,20 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_project_resources_project ON multica_project_resources(project_id, position);
+
+      CREATE TABLE IF NOT EXISTS multica_pinned_items (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        user_id TEXT NOT NULL DEFAULT 'local',
+        item_type TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        position REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(workspace_id, user_id, item_type, item_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_pinned_items_user_ws
+        ON multica_pinned_items(workspace_id, user_id, position, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_squads (
         id TEXT PRIMARY KEY,
@@ -1418,6 +1436,72 @@ export class MulticaStore {
     return this.updateProject(id, { status: "cancelled" });
   }
 
+  listPinnedItems(workspaceId?: string | null, userId?: string | null): MulticaPinnedItem[] {
+    const resolvedWorkspaceId = workspaceId ?? "local";
+    const resolvedUserId = userId ?? "local";
+    const rows = this.db.query(
+      `SELECT * FROM multica_pinned_items
+       WHERE workspace_id = ? AND user_id = ?
+       ORDER BY position ASC, created_at ASC`,
+    ).all(resolvedWorkspaceId, resolvedUserId) as Row[];
+    return rows.map(toPinnedItem);
+  }
+
+  createPinnedItem(input: CreatePinnedItemInput): MulticaPinnedItem {
+    const itemType = normalizePinnedItemType(input.itemType ?? input.item_type);
+    const itemId = String(input.itemId ?? input.item_id ?? "").trim();
+    if (!itemId) throw new Error("item_id is required");
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const userId = input.userId ?? input.user_id ?? "local";
+    this.validatePinnedItemTarget(workspaceId, itemType, itemId);
+    const existing = this.db.query(
+      "SELECT id FROM multica_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
+    ).get(workspaceId, userId, itemType, itemId) as Row | null;
+    if (existing) throw new Error("Item already pinned");
+    const maxRow = this.db.query(
+      "SELECT COALESCE(MAX(position), 0) AS max_position FROM multica_pinned_items WHERE workspace_id = ? AND user_id = ?",
+    ).get(workspaceId, userId) as Row | null;
+    const id = input.id ?? createId("pin");
+    const position = Number(maxRow?.max_position ?? 0) + 1;
+    this.db.run(
+      `INSERT INTO multica_pinned_items (id, workspace_id, user_id, item_type, item_id, position, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, userId, itemType, itemId, position, nowIso()],
+    );
+    return this.getPinnedItem(id)!;
+  }
+
+  getPinnedItem(id: string): MulticaPinnedItem | null {
+    const row = this.db.query("SELECT * FROM multica_pinned_items WHERE id = ?").get(id) as Row | null;
+    return row ? toPinnedItem(row) : null;
+  }
+
+  deletePinnedItem(workspaceId: string | null | undefined, userId: string | null | undefined, itemType: string, itemId: string): void {
+    const normalizedType = normalizePinnedItemType(itemType);
+    this.db.run(
+      "DELETE FROM multica_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
+      [workspaceId ?? "local", userId ?? "local", normalizedType, itemId],
+    );
+  }
+
+  reorderPinnedItems(workspaceId: string | null | undefined, userId: string | null | undefined, items: ReorderPinnedItemInput[]): MulticaPinnedItem[] {
+    const resolvedWorkspaceId = workspaceId ?? "local";
+    const resolvedUserId = userId ?? "local";
+    const tx = this.db.transaction(() => {
+      for (const item of items) {
+        if (!item.id) throw new Error("items[].id is required");
+        const position = Number(item.position);
+        if (!Number.isFinite(position)) throw new Error("items[].position must be a finite number");
+        this.db.run(
+          "UPDATE multica_pinned_items SET position = ? WHERE id = ? AND workspace_id = ? AND user_id = ?",
+          [position, item.id, resolvedWorkspaceId, resolvedUserId],
+        );
+      }
+      return this.listPinnedItems(resolvedWorkspaceId, resolvedUserId);
+    });
+    return tx();
+  }
+
   listProjectResources(projectId: string): MulticaProjectResource[] {
     if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
     const rows = this.db.query(
@@ -2258,6 +2342,16 @@ export class MulticaStore {
     };
   }
 
+  private validatePinnedItemTarget(workspaceId: string, itemType: MulticaPinnedItemType, itemId: string): void {
+    if (itemType === "issue") {
+      const row = this.db.query("SELECT id FROM multica_issues WHERE id = ? AND workspace_id = ?").get(itemId, workspaceId) as Row | null;
+      if (!row) throw new Error(`Issue not found: ${itemId}`);
+      return;
+    }
+    const project = this.getProject(itemId);
+    if (!project || project.workspaceId !== workspaceId) throw new Error(`Project not found: ${itemId}`);
+  }
+
   private linkAttachmentsToComment(commentId: string, issueId: string, attachmentIds: string[]): void {
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
@@ -2580,6 +2674,11 @@ function normalizeLabelColor(value: string | undefined): string {
   return (color.startsWith("#") ? color : `#${color}`).toLowerCase();
 }
 
+function normalizePinnedItemType(value: string | undefined): MulticaPinnedItemType {
+  if (value === "issue" || value === "project") return value;
+  throw new Error("item_type must be 'issue' or 'project'");
+}
+
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
   if (!resourceType) throw new Error("resourceType is required");
   if (resourceType !== "github_repo") throw new Error(`Unknown project resource type: ${resourceType}`);
@@ -2858,6 +2957,18 @@ function toLabel(row: Row): MulticaLabel {
     color: String(row.color ?? "#6b7280"),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toPinnedItem(row: Row): MulticaPinnedItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    userId: String(row.user_id ?? "local"),
+    itemType: String(row.item_type ?? "issue") as MulticaPinnedItemType,
+    itemId: String(row.item_id ?? ""),
+    position: Number(row.position ?? 0),
+    createdAt: String(row.created_at),
   };
 }
 
