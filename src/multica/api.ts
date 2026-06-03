@@ -871,6 +871,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     });
     return c.json(result);
   });
+  app.get("/api/projects", (c) => c.json(store.listProjects(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local")));
+  app.post("/api/projects", async (c) => {
+    const body = await readJson<CreateProjectInput>(c);
+    return c.json(store.createProject(body), 201);
+  });
   app.post("/api/multica/projects", async (c) => {
     const body = await readJson<CreateProjectInput>(c);
     return c.json({ project: store.createProject(body) }, 201);
@@ -899,10 +904,37 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     store.deleteProjectResource(c.req.param("id"), c.req.param("resourceId"));
     return c.json({ ok: true });
   });
+  app.get("/api/projects/:id", (c) => {
+    const project = store.getProject(c.req.param("id"));
+    if (!project) return c.json({ error: "project not found" }, 404);
+    return c.json(project);
+  });
+  app.put("/api/projects/:id", async (c) => {
+    const body = await readJson<UpdateProjectInput>(c);
+    return c.json(store.updateProject(c.req.param("id"), body));
+  });
+  app.delete("/api/projects/:id", (c) => {
+    store.archiveProject(c.req.param("id"));
+    return c.body(null, 204);
+  });
+  app.get("/api/projects/:id/resources", (c) => c.json(store.listProjectResources(c.req.param("id"))));
+  app.post("/api/projects/:id/resources", async (c) => {
+    const body = await readJson<CreateProjectResourceInput>(c);
+    return c.json(store.createProjectResource(c.req.param("id"), body), 201);
+  });
+  app.delete("/api/projects/:id/resources/:resourceId", (c) => {
+    store.deleteProjectResource(c.req.param("id"), c.req.param("resourceId"));
+    return c.body(null, 204);
+  });
 
   app.get("/api/multica/squads", (c) => {
     const squads = store.listSquads(c.req.query("workspaceId"));
     return c.json({ squads, total: squads.length });
+  });
+  app.get("/api/squads", (c) => c.json(store.listSquads(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local")));
+  app.post("/api/squads", async (c) => {
+    const body = await readJson<CreateSquadInput>(c);
+    return c.json(store.createSquad(body), 201);
   });
   app.post("/api/multica/squads", async (c) => {
     const body = await readJson<CreateSquadInput>(c);
@@ -936,10 +968,45 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     store.removeSquadMember(c.req.param("id"), body);
     return c.json({ ok: true });
   });
+  app.get("/api/squads/:id", (c) => {
+    const squad = store.getSquad(c.req.param("id"));
+    if (!squad) return c.json({ error: "squad not found" }, 404);
+    return c.json(squad);
+  });
+  app.put("/api/squads/:id", async (c) => {
+    const body = await readJson<UpdateSquadInput>(c);
+    return c.json(store.updateSquad(c.req.param("id"), body));
+  });
+  app.delete("/api/squads/:id", (c) => {
+    store.archiveSquad(c.req.param("id"));
+    return c.body(null, 204);
+  });
+  app.get("/api/squads/:id/members", (c) => c.json(store.listSquadMembers(c.req.param("id"))));
+  app.get("/api/squads/:id/members/status", (c) => c.json(squadMemberStatusResponse(store, c.req.param("id"))));
+  app.post("/api/squads/:id/members", async (c) => {
+    const body = await readJson<AddSquadMemberInput>(c);
+    return c.json(store.addSquadMember(c.req.param("id"), body), 201);
+  });
+  app.patch("/api/squads/:id/members/role", async (c) => {
+    const body = await readJson<AddSquadMemberInput>(c);
+    return c.json(store.addSquadMember(c.req.param("id"), body));
+  });
+  app.delete("/api/squads/:id/members", async (c) => {
+    const body = await readJson<RemoveSquadMemberInput>(c);
+    store.removeSquadMember(c.req.param("id"), body);
+    return c.body(null, 204);
+  });
 
   app.get("/api/multica/autopilots", (c) => {
     const autopilots = store.listAutopilots(c.req.query("workspaceId"));
     return c.json({ autopilots, total: autopilots.length });
+  });
+  app.get("/api/autopilots", (c) => c.json(store.listAutopilots(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local")));
+  app.post("/api/autopilots", async (c) => {
+    const body = await readJson<CreateAutopilotInput>(c);
+    const autopilot = store.createAutopilot(body);
+    scheduler?.sync();
+    return c.json(autopilot, 201);
   });
   app.post("/api/multica/autopilots", async (c) => {
     const body = await readJson<CreateAutopilotInput>(c);
@@ -1026,6 +1093,50 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const statusCode = result.status === "rejected" ? 401 : result.status === "accepted" ? 201 : result.status === "failed" ? 500 : 200;
     return c.json(webhookDeliveryResponse(result), statusCode);
   });
+  app.get("/api/autopilots/:id", (c) => {
+    const autopilot = store.getAutopilot(c.req.param("id"));
+    if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+    return c.json(autopilot);
+  });
+  app.patch("/api/autopilots/:id", async (c) => {
+    const body = await readJson<UpdateAutopilotInput>(c);
+    const autopilot = store.updateAutopilot(c.req.param("id"), body);
+    scheduler?.sync();
+    return c.json(autopilot);
+  });
+  app.delete("/api/autopilots/:id", (c) => {
+    store.archiveAutopilot(c.req.param("id"));
+    scheduler?.sync();
+    return c.body(null, 204);
+  });
+  app.post("/api/autopilots/:id/trigger", async (c) => {
+    const body = await readJson<RunAutopilotInput>(c);
+    return c.json(store.runAutopilot(c.req.param("id"), { ...body, source: body.source ?? "api" }), 201);
+  });
+  app.get("/api/autopilots/:id/runs", (c) => c.json(store.listAutopilotRuns(c.req.param("id"))));
+  app.get("/api/autopilots/:id/runs/:runId", (c) => {
+    const run = store.getAutopilotRun(c.req.param("runId"));
+    if (!run || run.autopilotId !== c.req.param("id")) return c.json({ error: "autopilot run not found" }, 404);
+    return c.json(run);
+  });
+  app.get("/api/autopilots/:id/deliveries", (c) => c.json(store.listWebhookDeliveries(c.req.param("id"))));
+  app.get("/api/autopilots/:id/deliveries/:deliveryId", (c) => {
+    const delivery = store.getWebhookDelivery(c.req.param("deliveryId"));
+    if (!delivery || delivery.autopilotId !== c.req.param("id")) return c.json({ error: "delivery not found" }, 404);
+    return c.json(delivery);
+  });
+  app.post("/api/autopilots/:id/deliveries/:deliveryId/replay", (c) => {
+    const result = store.replayWebhookDelivery(c.req.param("id"), c.req.param("deliveryId"));
+    return c.json(webhookDeliveryResponse(result), 201);
+  });
+  app.post("/api/autopilots/:id/triggers", (c) => c.json(autopilotTriggerPlaceholder(c.req.param("id")), 201));
+  app.patch("/api/autopilots/:id/triggers/:triggerId", (c) => c.json(autopilotTriggerPlaceholder(c.req.param("id"), c.req.param("triggerId"))));
+  app.delete("/api/autopilots/:id/triggers/:triggerId", (c) => c.body(null, 204));
+  app.post("/api/autopilots/:id/triggers/:triggerId/rotate-webhook-token", (c) => c.json({
+    ...autopilotTriggerPlaceholder(c.req.param("id"), c.req.param("triggerId")),
+    webhook_token: c.req.param("triggerId"),
+  }));
+  app.put("/api/autopilots/:id/triggers/:triggerId/signing-secret", (c) => c.body(null, 204));
 
   app.get("/api/multica/labels", (c) => {
     const labels = store.listLabels(c.req.query("workspaceId"));
@@ -1333,24 +1444,46 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/issues/:id/comments", (c) => {
     return c.json({ comments: store.listIssueComments(c.req.param("id")) });
   });
+  app.get("/api/issues/:id/comments", (c) => {
+    return c.json(store.listIssueComments(c.req.param("id")));
+  });
   app.post("/api/multica/issues/:id/comments", async (c) => {
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(c.req.param("id"), body) }, 201);
   });
+  app.post("/api/issues/:id/comments", async (c) => {
+    const body = await readJson<CreateIssueCommentInput>(c);
+    return c.json(store.createIssueComment(c.req.param("id"), body), 201);
+  });
   app.get("/api/multica/issues/:id/reactions", (c) => {
     return c.json({ reactions: store.listIssueReactions(c.req.param("id")) });
+  });
+  app.get("/api/issues/:id/reactions", (c) => {
+    return c.json(store.listIssueReactions(c.req.param("id")));
   });
   app.post("/api/multica/issues/:id/reactions", async (c) => {
     const body = await readJson<CreateMulticaReactionInput>(c);
     return c.json({ reaction: store.addIssueReaction(c.req.param("id"), normalizeReactionInput(body)) }, 201);
+  });
+  app.post("/api/issues/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    return c.json(store.addIssueReaction(c.req.param("id"), normalizeReactionInput(body)), 201);
   });
   app.delete("/api/multica/issues/:id/reactions", async (c) => {
     const body = await readJson<CreateMulticaReactionInput>(c);
     store.removeIssueReaction(c.req.param("id"), normalizeReactionInput(body));
     return c.json({ ok: true });
   });
+  app.delete("/api/issues/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    store.removeIssueReaction(c.req.param("id"), normalizeReactionInput(body));
+    return c.body(null, 204);
+  });
   app.get("/api/multica/issues/:id/attachments", (c) => {
     return c.json({ attachments: store.listAttachmentsForIssue(c.req.param("id")) });
+  });
+  app.get("/api/issues/:id/attachments", (c) => {
+    return c.json(store.listAttachmentsForIssue(c.req.param("id")));
   });
   app.post("/api/multica/issues/:id/attachments", async (c) => {
     const body = await readJson<CreateAttachmentInput>(c);
@@ -1416,12 +1549,22 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.get("/api/multica/issues/:id/metadata", (c) => {
     return c.json({ metadata: store.listIssueMetadata(c.req.param("id")) });
   });
+  app.get("/api/issues/:id/metadata", (c) => {
+    return c.json(store.listIssueMetadata(c.req.param("id")));
+  });
   app.put("/api/multica/issues/:id/metadata/:key", async (c) => {
     const body = await readJson<{ value?: unknown }>(c);
     return c.json({ metadata: store.setIssueMetadataKey(c.req.param("id"), c.req.param("key"), body.value) });
   });
+  app.put("/api/issues/:id/metadata/:key", async (c) => {
+    const body = await readJson<{ value?: unknown }>(c);
+    return c.json(store.setIssueMetadataKey(c.req.param("id"), c.req.param("key"), body.value));
+  });
   app.delete("/api/multica/issues/:id/metadata/:key", (c) => {
     return c.json({ metadata: store.deleteIssueMetadataKey(c.req.param("id"), c.req.param("key")) });
+  });
+  app.delete("/api/issues/:id/metadata/:key", (c) => {
+    return c.json(store.deleteIssueMetadataKey(c.req.param("id"), c.req.param("key")));
   });
 
   app.get("/api/multica/inbox", (c) => {
@@ -1486,6 +1629,15 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/comments/:id/resolve", (c) => {
     return c.json({ comment: store.unresolveIssueComment(c.req.param("id")) });
+  });
+  app.post("/api/comments/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    return c.json(store.addCommentReaction(c.req.param("id"), normalizeReactionInput(body)), 201);
+  });
+  app.delete("/api/comments/:id/reactions", async (c) => {
+    const body = await readJson<CreateMulticaReactionInput>(c);
+    store.removeCommentReaction(c.req.param("id"), normalizeReactionInput(body));
+    return c.body(null, 204);
   });
 
   app.get("/api/multica/comments/:id/reactions", (c) => {
@@ -2289,6 +2441,43 @@ function inboxCompatibilityResponse(item: MulticaInboxItem): MulticaInboxItem & 
     actor_type: item.actorType,
     actor_id: item.actorId,
     created_at: item.createdAt,
+  };
+}
+
+function squadMemberStatusResponse(store: MulticaStore, squadId: string): Array<{
+  member_type: string;
+  member_id: string;
+  status: string;
+}> {
+  return store.listSquadMembers(squadId).map((member) => {
+    if (member.memberType === "agent") {
+      const agent = store.getAgent(member.memberId);
+      return {
+        member_type: member.memberType,
+        member_id: member.memberId,
+        status: agent?.archivedAt ? "archived" : agent ? "available" : "missing",
+      };
+    }
+    const workspaceMember = store.getWorkspaceMember(member.memberId);
+    return {
+      member_type: member.memberType,
+      member_id: member.memberId,
+      status: workspaceMember?.archivedAt ? "archived" : workspaceMember ? "available" : "missing",
+    };
+  });
+}
+
+function autopilotTriggerPlaceholder(autopilotId: string, triggerId = `trg_${autopilotId}`): {
+  id: string;
+  autopilot_id: string;
+  kind: string;
+  configured: false;
+} {
+  return {
+    id: triggerId,
+    autopilot_id: autopilotId,
+    kind: "webhook",
+    configured: false,
   };
 }
 

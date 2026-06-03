@@ -2558,6 +2558,71 @@ describe("Bun Multica API", () => {
     expect(store.listProjectResources(project.id)).toHaveLength(0);
   });
 
+  it("serves original project, squad, and autopilot compatibility endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Original Codex", provider: "codex" });
+    const app = createMulticaApp({ store });
+
+    const project = await app.request("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Original Project", priority: "high" }),
+    });
+    const projectBody = await project.json();
+    expect(project.status).toBe(201);
+    expect(projectBody.title).toBe("Original Project");
+    expect((await (await app.request("/api/projects")).json())[0].id).toBe(projectBody.id);
+
+    const resource = await app.request(`/api/projects/${projectBody.id}/resources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resource_type: "github_repo", resource_ref: { url: "https://github.com/example/repo" } }),
+    });
+    const resourceBody = await resource.json();
+    expect(resource.status).toBe(201);
+    expect((await (await app.request(`/api/projects/${projectBody.id}/resources`)).json())[0].id).toBe(resourceBody.id);
+
+    const squad = await app.request("/api/squads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Original Squad", leaderId: agent.id }),
+    });
+    const squadBody = await squad.json();
+    expect(squad.status).toBe(201);
+    expect((await (await app.request(`/api/squads/${squadBody.id}/members/status`)).json())[0].status).toBe("available");
+
+    const autopilot = await app.request("/api/autopilots", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Original Autopilot",
+        projectId: projectBody.id,
+        assigneeId: agent.id,
+        triggerKind: "webhook",
+      }),
+    });
+    const autopilotBody = await autopilot.json();
+    expect(autopilot.status).toBe(201);
+    expect(autopilotBody.title).toBe("Original Autopilot");
+
+    const run = await app.request(`/api/autopilots/${autopilotBody.id}/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: "Run original autopilot" }),
+    });
+    const runBody = await run.json();
+    expect(run.status).toBe(201);
+    expect(runBody.source).toBe("api");
+    expect((await (await app.request(`/api/autopilots/${autopilotBody.id}/runs/${runBody.id}`)).json()).id).toBe(runBody.id);
+
+    const trigger = await app.request(`/api/autopilots/${autopilotBody.id}/triggers`, { method: "POST" });
+    expect((await trigger.json()).configured).toBe(false);
+
+    expect((await app.request(`/api/projects/${projectBody.id}/resources/${resourceBody.id}`, { method: "DELETE" })).status).toBe(204);
+    expect((await app.request(`/api/squads/${squadBody.id}`, { method: "DELETE" })).status).toBe(204);
+    expect((await app.request(`/api/autopilots/${autopilotBody.id}`, { method: "DELETE" })).status).toBe(204);
+  });
+
   it("serves issue metadata endpoints", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });
@@ -2820,7 +2885,8 @@ describe("Bun Multica API", () => {
       }),
     });
     expect(issueAttachment.status).toBe(201);
-    expect((await issueAttachment.json()).attachment.issueId).toBe(issue.id);
+    const issueAttachmentBody = await issueAttachment.json();
+    expect(issueAttachmentBody.attachment.issueId).toBe(issue.id);
 
     const root = await app.request(`/api/multica/issues/${issue.id}/comments`, {
       method: "POST",
@@ -2828,6 +2894,12 @@ describe("Bun Multica API", () => {
       body: JSON.stringify({ body: "Root API comment" }),
     });
     const rootBody = await root.json();
+    const originalComment = await app.request(`/api/issues/${issue.id}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Original API comment" }),
+    });
+    expect((await originalComment.json()).body).toBe("Original API comment");
 
     const pendingAttachment = store.createAttachment({
       filename: "reply.md",
@@ -2867,6 +2939,15 @@ describe("Bun Multica API", () => {
       body: JSON.stringify({ emoji: "👍", actor_type: "member", actor_id: "local" }),
     });
     expect((await issueReaction.json()).reaction.emoji).toBe("👍");
+    expect((await (await app.request(`/api/issues/${issue.id}/reactions`)).json())[0].emoji).toBe("👍");
+    const metadata = await app.request(`/api/issues/${issue.id}/metadata/original_path`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: true }),
+    });
+    expect((await metadata.json()).original_path).toBe(true);
+    expect((await (await app.request(`/api/issues/${issue.id}/metadata`)).json()).original_path).toBe(true);
+    expect((await (await app.request(`/api/issues/${issue.id}/attachments`)).json())[0].id).toBe(issueAttachmentBody.attachment.id);
 
     const commentReaction = await app.request(`/api/multica/comments/${replyBody.comment.id}/reactions`, {
       method: "POST",
@@ -2874,12 +2955,18 @@ describe("Bun Multica API", () => {
       body: JSON.stringify({ emoji: "👀", actorType: "agent", actorId: "agt-api" }),
     });
     expect((await commentReaction.json()).reaction.emoji).toBe("👀");
+    const originalCommentReaction = await app.request(`/api/comments/${replyBody.comment.id}/reactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emoji: "✅", actorType: "member", actorId: "local" }),
+    });
+    expect((await originalCommentReaction.json()).emoji).toBe("✅");
 
     const detail = await app.request(`/api/multica/issues/${issue.id}`);
     const detailBody = await detail.json();
     expect(detailBody.issue.reactions).toHaveLength(1);
     expect(detailBody.issue.attachments).toHaveLength(1);
-    expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(1);
+    expect(detailBody.comments.find((comment: any) => comment.id === replyBody.comment.id).reactions).toHaveLength(2);
 
     const timeline = await app.request(`/api/issues/${issue.id}/timeline`);
     const timelineBody = await timeline.json();
