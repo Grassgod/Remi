@@ -1080,6 +1080,7 @@ export interface RegisterRuntimeInput {
 
 export interface UpdateMulticaUserInput {
   name?: string;
+  email?: string;
   avatarUrl?: string | null;
   avatar_url?: string | null;
   language?: string | null;

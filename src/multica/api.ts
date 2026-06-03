@@ -89,6 +89,8 @@ import type {
 const log = createLogger("multica-api");
 const SUBSCRIPTION_REASONS: MulticaSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
+const LOCAL_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
+const localAuthCodes = new Map<string, { code: string; expiresAt: number }>();
 
 type NormalizedGitHubPullRequestBody = {
   workspaceId: string | null;
@@ -202,12 +204,24 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     return c.json({ token: token.token });
   });
   app.post("/auth/logout", (c) => c.json({ message: "logged out" }));
-  app.post("/auth/send-code", (c) => c.json({ error: "email auth is not configured in local Bun Multica" }, 501));
-  app.post("/auth/verify-code", (c) => c.json({ error: "email auth is not configured in local Bun Multica" }, 501));
-  app.post("/auth/google", (c) => c.json({ error: "google auth is not configured in local Bun Multica" }, 501));
+  app.post("/auth/send-code", async (c) => {
+    const result = sendLocalAuthCode(store, await readJson(c));
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/auth/verify-code", async (c) => {
+    const result = await verifyLocalAuthCode(store, await readJson(c));
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/auth/google", async (c) => {
+    const result = await localGoogleAuthFallback(store, await readJson(c));
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
   app.get("/health/realtime", (c) => c.json({ connections: 0, enabled: false }));
   app.get("/api/github/setup", (c) => c.json(githubSetupResponse(c.req.query("installation_id"), c.req.query("state"))));
-  app.post("/api/webhooks/github", (c) => c.json({ configured: false }, 202));
+  app.post("/api/webhooks/github", async (c) => c.json(handleGitHubWebhook(store, await readJson(c)), 202));
   app.post("/api/webhooks/autopilots/:token", async (c) => {
     const rawBody = await c.req.raw.text();
     let body: RunAutopilotInput & { payload?: unknown };
@@ -691,31 +705,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.post("/api/multica/github/webhook", async (c) => {
     const body = await readJson<any>(c);
-    if (body.zen) return c.json({ ok: "pong" });
-    const pr = body.pull_request;
-    const repo = body.repository;
-    if (!pr || !repo) return c.json({ ok: true, ignored: true });
-    const pullRequest = store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody({
-      workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
-      repoOwner: repo.owner?.login,
-      repoName: repo.name,
-      number: pr.number,
-      title: pr.title,
-      state: pr.merged ? "merged" : pr.draft ? "draft" : pr.state,
-      htmlUrl: pr.html_url,
-      branch: pr.head?.ref,
-      authorLogin: pr.user?.login,
-      authorAvatarUrl: pr.user?.avatar_url,
-      mergedAt: pr.merged_at,
-      closedAt: pr.closed_at,
-      prCreatedAt: pr.created_at,
-      prUpdatedAt: pr.updated_at,
-      mergeableState: pr.mergeable_state,
-      additions: pr.additions,
-      deletions: pr.deletions,
-      changedFiles: pr.changed_files,
-    }));
-    return c.json({ pullRequest }, 202);
+    return c.json(handleGitHubWebhook(store, body), 202);
   });
   app.get("/api/tokens", (c) => {
     const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
@@ -2493,6 +2483,127 @@ function githubSetupResponse(installationId?: string, state?: string): {
   if (!isGitHubAppConfigured()) return { configured: false, error: "github app is not configured" };
   if (!installationId || !state) return { configured: true, error: "missing_params" };
   return { configured: true, installation_id: installationId, state };
+}
+
+function sendLocalAuthCode(
+  store: MulticaStore,
+  body: { email?: string; name?: string },
+): { ok: true; sent: true; email: string; code: string; expires_at: string } | { error: string; status: 400 } {
+  const email = normalizeAuthEmail(body.email);
+  if (typeof email !== "string") return email;
+  const code = createLocalAuthCode(email);
+  const expiresAt = Date.now() + LOCAL_AUTH_CODE_TTL_MS;
+  localAuthCodes.set(email, { code, expiresAt });
+  if (body.name || email !== store.getCurrentUser().email) {
+    store.updateCurrentUser({
+      name: String(body.name ?? store.getCurrentUser().name).trim() || "Local User",
+      email,
+    });
+  }
+  return {
+    ok: true,
+    sent: true,
+    email,
+    code,
+    expires_at: new Date(expiresAt).toISOString(),
+  };
+}
+
+async function verifyLocalAuthCode(
+  store: MulticaStore,
+  body: { email?: string; code?: string; name?: string },
+): Promise<Awaited<ReturnType<typeof localAuthResponse>> | { error: string; status: 400 | 401 }> {
+  const email = normalizeAuthEmail(body.email);
+  if (typeof email !== "string") return email;
+  const code = String(body.code ?? "").trim();
+  if (!code) return { error: "code is required", status: 400 };
+  const expected = localAuthCodes.get(email);
+  if (!expected || expected.expiresAt < Date.now() || expected.code !== code) {
+    return { error: "invalid code", status: 401 };
+  }
+  localAuthCodes.delete(email);
+  return localAuthResponse(store, email, body.name);
+}
+
+async function localGoogleAuthFallback(
+  store: MulticaStore,
+  body: { email?: string; name?: string; credential?: string; token?: string },
+): Promise<Awaited<ReturnType<typeof localAuthResponse>> | { error: string; status: 400 }> {
+  const email = normalizeAuthEmail(body.email ?? store.getCurrentUser().email);
+  if (typeof email !== "string") return email;
+  return localAuthResponse(store, email, body.name);
+}
+
+async function localAuthResponse(store: MulticaStore, email: string, name?: string): Promise<{
+  ok: true;
+  token: string;
+  access_token: string;
+  token_type: "bearer";
+  user: ReturnType<MulticaStore["getCurrentUser"]>;
+}> {
+  const current = store.getCurrentUser();
+  const user = store.updateCurrentUser({
+    name: String(name ?? current.name).trim() || "Local User",
+    email,
+  });
+  const token = await store.createAccessToken({
+    workspaceId: "local",
+    name: `Local login for ${email}`,
+    type: "pat",
+    expiresInDays: 30,
+  });
+  return {
+    ok: true,
+    token: token.token,
+    access_token: token.token,
+    token_type: "bearer",
+    user,
+  };
+}
+
+function normalizeAuthEmail(value: unknown): string | { error: string; status: 400 } {
+  const email = String(value ?? "").trim().toLowerCase();
+  if (!email) return { error: "email is required", status: 400 };
+  if (email.length > 254) return { error: "email is too long", status: 400 };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is invalid", status: 400 };
+  return email;
+}
+
+function createLocalAuthCode(email: string): string {
+  if (process.env.MULTICA_LOCAL_AUTH_CODE) return process.env.MULTICA_LOCAL_AUTH_CODE.trim();
+  const digest = createHmac("sha256", process.env.MULTICA_TOKEN || "local-bun-multica")
+    .update(email)
+    .update(String(Math.floor(Date.now() / LOCAL_AUTH_CODE_TTL_MS)))
+    .digest("hex");
+  return String(parseInt(digest.slice(0, 8), 16) % 1_000_000).padStart(6, "0");
+}
+
+function handleGitHubWebhook(store: MulticaStore, body: any): { ok: string } | { ok: true; ignored: true } | { pullRequest: MulticaGitHubPullRequest } {
+  if (body.zen) return { ok: "pong" };
+  const pr = body.pull_request;
+  const repo = body.repository;
+  if (!pr || !repo) return { ok: true, ignored: true };
+  const pullRequest = store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody({
+    workspaceId: body.workspaceId ?? body.workspace_id ?? "local",
+    repoOwner: repo.owner?.login,
+    repoName: repo.name,
+    number: pr.number,
+    title: pr.title,
+    state: pr.merged ? "merged" : pr.draft ? "draft" : pr.state,
+    htmlUrl: pr.html_url,
+    branch: pr.head?.ref,
+    authorLogin: pr.user?.login,
+    authorAvatarUrl: pr.user?.avatar_url,
+    mergedAt: pr.merged_at,
+    closedAt: pr.closed_at,
+    prCreatedAt: pr.created_at,
+    prUpdatedAt: pr.updated_at,
+    mergeableState: pr.mergeable_state,
+    additions: pr.additions,
+    deletions: pr.deletions,
+    changedFiles: pr.changed_files,
+  }));
+  return { pullRequest };
 }
 
 function cloudRuntimeStatusResponse(c: any, store: MulticaStore, body: any, status: string) {

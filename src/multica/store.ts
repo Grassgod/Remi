@@ -1329,6 +1329,7 @@ export class MulticaStore {
     const current = this.getCurrentUser();
     const name = input.name === undefined ? current.name : String(input.name).trim();
     if (!name) throw new Error("name is required");
+    const email = input.email === undefined ? current.email : normalizeEmail(input.email);
     const language = hasAnyField(input, "language")
       ? normalizeOptionalLanguage(input.language)
       : current.language;
@@ -1350,6 +1351,7 @@ export class MulticaStore {
     this.db.run(
       `UPDATE multica_users SET
         name = ?,
+        email = ?,
         avatar_url = ?,
         language = ?,
         timezone = ?,
@@ -1360,6 +1362,7 @@ export class MulticaStore {
        WHERE id = ?`,
       [
         name,
+        email,
         avatarUrl,
         language,
         timezone,
@@ -6528,6 +6531,14 @@ function cleanOptionalLocalSkillString(value: string | null | undefined): string
 function cleanOptionalString(value: unknown): string | null {
   const trimmed = String(value ?? "").trim();
   return trimmed || null;
+}
+
+function normalizeEmail(value: unknown): string {
+  const email = String(value ?? "").trim().toLowerCase();
+  if (!email) throw new Error("email is required");
+  if (email.length > 254) throw new Error("email is too long");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("email is invalid");
+  return email;
 }
 
 function normalizeFeedbackMetadata(value: Record<string, unknown>): Record<string, unknown> {

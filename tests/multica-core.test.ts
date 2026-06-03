@@ -2056,9 +2056,32 @@ describe("Bun Multica API", () => {
     });
     expect(leave.status).toBe(204);
 
-    expect((await app.request("/auth/send-code", { method: "POST" })).status).toBe(501);
-    expect((await app.request("/auth/verify-code", { method: "POST" })).status).toBe(501);
-    expect((await app.request("/auth/google", { method: "POST" })).status).toBe(501);
+    const sentCode = await app.request("/auth/send-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "Compat@Example.com", name: "Compat User" }),
+    });
+    const sentCodeBody = await sentCode.json();
+    expect(sentCode.status).toBe(200);
+    expect(sentCodeBody.email).toBe("compat@example.com");
+    expect(sentCodeBody.code).toMatch(/^\d{6}$/);
+    const verifiedCode = await app.request("/auth/verify-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "compat@example.com", code: sentCodeBody.code }),
+    });
+    const verifiedCodeBody = await verifiedCode.json();
+    expect(verifiedCode.status).toBe(200);
+    expect(verifiedCodeBody.access_token).toStartWith("mul_");
+    expect(verifiedCodeBody.user.email).toBe("compat@example.com");
+    const googleLogin = await app.request("/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "google@example.com", name: "Google User" }),
+    });
+    const googleLoginBody = await googleLogin.json();
+    expect(googleLogin.status).toBe(200);
+    expect(googleLoginBody.user.name).toBe("Google User");
     expect((await (await app.request("/health/realtime")).json()).enabled).toBe(false);
     expect((await (await app.request("/api/github/setup")).json()).configured).toBe(false);
     expect((await app.request("/api/webhooks/github", { method: "POST" })).status).toBe(202);
@@ -3509,6 +3532,34 @@ describe("Bun Multica API", () => {
     });
     expect(webhook.status).toBe(202);
     expect((await webhook.json()).pullRequest.issueId).toBe(webhookIssue.id);
+
+    const originalWebhookIssue = store.createIssue({ title: "GitHub original webhook issue" });
+    const originalWebhook = await app.request("/api/webhooks/github", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repository: { name: "remi", owner: { login: "example" } },
+        pull_request: {
+          number: 9,
+          title: `${originalWebhookIssue.key} original webhook linked PR`,
+          state: "closed",
+          draft: false,
+          merged: true,
+          html_url: "https://github.com/example/remi/pull/9",
+          head: { ref: `feature/${originalWebhookIssue.key}-original-webhook` },
+          user: { login: "octocat" },
+          merged_at: "2026-06-03T02:00:00.000Z",
+          closed_at: "2026-06-03T02:00:00.000Z",
+          created_at: "2026-06-03T00:00:00.000Z",
+          updated_at: "2026-06-03T02:00:00.000Z",
+        },
+      }),
+    });
+    const originalWebhookBody = await originalWebhook.json();
+    expect(originalWebhook.status).toBe(202);
+    expect(originalWebhookBody.pullRequest.issueId).toBe(originalWebhookIssue.id);
+    expect(originalWebhookBody.pullRequest.state).toBe("merged");
+    expect(store.getIssue(originalWebhookIssue.id)?.status).toBe("done");
   });
 
   it("serves configured GitHub setup and connect compatibility responses", async () => {
