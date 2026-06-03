@@ -11,6 +11,7 @@ export type MulticaTaskStatus =
 export type MulticaRuntimeStatus = "online" | "offline";
 export type MulticaRuntimeVisibility = "private" | "public";
 export type MulticaRuntimeLocalSkillRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+export type MulticaRuntimeModelListRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MulticaIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MulticaIssueDependencyType = "blocks" | "blocked_by" | "related";
 export type MulticaProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
@@ -165,6 +166,18 @@ export interface MulticaRuntimeLocalSkillImportRequest {
   skillId: string | null;
   error: string | null;
   createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt: string | null;
+}
+
+export interface MulticaRuntimeModelListRequest {
+  id: string;
+  runtimeId: string;
+  status: MulticaRuntimeModelListRequestStatus;
+  models: MulticaRuntimeModel[];
+  supported: boolean;
+  error: string | null;
   createdAt: string;
   updatedAt: string;
   runStartedAt: string | null;
@@ -911,6 +924,13 @@ export interface ReportRuntimeLocalSkillImportInput {
     provider?: string;
     files?: MulticaSkillFile[];
   } | null;
+  error?: string;
+}
+
+export interface ReportRuntimeModelListInput {
+  status?: string;
+  models?: MulticaRuntimeModel[];
+  supported?: boolean;
   error?: string;
 }
 

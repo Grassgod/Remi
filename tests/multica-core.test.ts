@@ -1557,6 +1557,66 @@ describe("Bun Multica API", () => {
     expect(updatedBody.runtime.maxConcurrency).toBe(4);
   });
 
+  it("serves runtime model list request flow", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_models_flow", name: "Models runtime", provider: "codex" });
+    const app = createMulticaApp({ store });
+
+    const created = await app.request("/api/runtimes/rt_models_flow/models", { method: "POST" });
+    expect(created.status).toBe(200);
+    const createdBody = await created.json();
+    expect(createdBody.id).toStartWith("rml_");
+    expect(createdBody.status).toBe("pending");
+
+    const claimed = await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", { method: "POST" });
+    const claimedBody = await claimed.json();
+    expect(claimedBody.request.id).toBe(createdBody.id);
+    expect(claimedBody.request.status).toBe("running");
+
+    const reported = await app.request(`/api/daemon/runtimes/rt_models_flow/models/${createdBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        supported: true,
+        models: [{
+          id: "gpt-5.1-codex",
+          label: "GPT-5.1 Codex",
+          provider: "openai",
+          default: true,
+          thinking: {
+            supported_levels: [{ value: "high", label: "High", description: "More reasoning" }],
+            default_level: "high",
+          },
+        }],
+      }),
+    });
+    expect(reported.status).toBe(200);
+
+    const detail = await app.request(`/api/runtimes/rt_models_flow/models/${createdBody.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.status).toBe("completed");
+    expect(detailBody.models[0].default).toBe(true);
+    expect(detailBody.models[0].thinking.supportedLevels[0].value).toBe("high");
+
+    const models = await app.request("/api/runtimes/rt_models_flow/models");
+    const modelsBody = await models.json();
+    expect(modelsBody.models[0].id).toBe("gpt-5.1-codex");
+    expect(modelsBody.models[0].thinking.supportedLevels[0].label).toBe("High");
+
+    const failed = await app.request("/api/multica/runtimes/rt_models_flow/models", { method: "POST" });
+    const failedBody = await failed.json();
+    await app.request(`/api/daemon/runtimes/rt_models_flow/models/${failedBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "failed", error: "provider not available" }),
+    });
+    const failedDetail = await app.request(`/api/multica/runtimes/rt_models_flow/models/${failedBody.id}`);
+    const failedDetailBody = await failedDetail.json();
+    expect(failedDetailBody.status).toBe("failed");
+    expect(failedDetailBody.error).toBe("provider not available");
+  });
+
   it("serves runtime local skill list and import request flows", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "skill-runtime", provider: "claude", workspaceId: "local" });

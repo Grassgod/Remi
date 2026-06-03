@@ -75,7 +75,10 @@ import type {
   MulticaRuntimeLocalSkillListRequest,
   MulticaRuntimeLocalSkillRequestStatus,
   MulticaRuntimeLocalSkillSummary,
+  MulticaRuntimeModelListRequest,
+  MulticaRuntimeModelListRequestStatus,
   QuickCreateIssueInput,
+  ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
@@ -223,6 +226,21 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_runtime_models_runtime ON multica_runtime_models(runtime_id, is_default);
+
+      CREATE TABLE IF NOT EXISTS multica_runtime_model_list_requests (
+        id TEXT PRIMARY KEY,
+        runtime_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        models TEXT NOT NULL DEFAULT '[]',
+        supported INTEGER NOT NULL DEFAULT 1,
+        error TEXT,
+        run_started_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(runtime_id) REFERENCES multica_runtimes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_runtime_model_list_runtime ON multica_runtime_model_list_requests(runtime_id, status, created_at);
 
       CREATE TABLE IF NOT EXISTS multica_runtime_local_skill_list_requests (
         id TEXT PRIMARY KEY,
@@ -1507,6 +1525,73 @@ export class MulticaStore {
     if (!row) throw new Error(`Runtime not found: ${runtimeId}`);
     this.replaceRuntimeModels(runtimeId, models, String(row.provider), nowIso());
     return this.listRuntimeModels(runtimeId);
+  }
+
+  createRuntimeModelListRequest(runtimeId: string): MulticaRuntimeModelListRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const id = createId("rml");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multica_runtime_model_list_requests (
+        id, runtime_id, status, models, supported, created_at, updated_at
+      ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
+      [id, runtimeId, now, now],
+    );
+    return this.getRuntimeModelListRequest(runtimeId, id)!;
+  }
+
+  getRuntimeModelListRequest(runtimeId: string, requestId: string): MulticaRuntimeModelListRequest | null {
+    const row = this.db.query(
+      "SELECT * FROM multica_runtime_model_list_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? toRuntimeModelListRequest(row) : null;
+  }
+
+  claimRuntimeModelListRequest(runtimeId: string): MulticaRuntimeModelListRequest | null {
+    const row = this.db.query(
+      `SELECT * FROM multica_runtime_model_list_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (!row) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multica_runtime_model_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, String(row.id)],
+    );
+    return this.getRuntimeModelListRequest(runtimeId, String(row.id));
+  }
+
+  reportRuntimeModelListResult(runtimeId: string, requestId: string, input: ReportRuntimeModelListInput): MulticaRuntimeModelListRequest {
+    const current = this.getRuntimeModelListRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    const status = normalizeRuntimeModelListStatus(input.status);
+    const now = nowIso();
+    if (status === "completed") {
+      const runtime = this.getRuntime(runtimeId);
+      if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+      const models = normalizeRuntimeModels(input.models ?? [], runtime.provider);
+      this.db.transaction(() => {
+        this.replaceRuntimeModels(runtimeId, models, runtime.provider, now);
+        this.db.run(
+          `UPDATE multica_runtime_model_list_requests
+           SET status = 'completed', models = ?, supported = ?, error = NULL, updated_at = ?
+           WHERE id = ?`,
+          [toJson(models), input.supported === false ? 0 : 1, now, requestId],
+        );
+      })();
+    } else {
+      this.db.run(
+        `UPDATE multica_runtime_model_list_requests
+         SET status = 'failed', error = ?, updated_at = ?
+         WHERE id = ?`,
+        [input.error ?? "runtime model list failed", now, requestId],
+      );
+    }
+    return this.getRuntimeModelListRequest(runtimeId, requestId)!;
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MulticaRuntimeLocalSkillListRequest {
@@ -5298,6 +5383,26 @@ function toRuntimeLocalSkillImportRequest(row: Row): MulticaRuntimeLocalSkillImp
     updatedAt: String(row.updated_at),
     runStartedAt: nullableString(row.run_started_at),
   };
+}
+
+function toRuntimeModelListRequest(row: Row): MulticaRuntimeModelListRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    status: normalizeRuntimeModelListStatus(row.status),
+    models: parseJson(row.models, []),
+    supported: Number(row.supported ?? 1) !== 0,
+    error: nullableString(row.error),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    runStartedAt: nullableString(row.run_started_at),
+  };
+}
+
+function normalizeRuntimeModelListStatus(value: unknown): MulticaRuntimeModelListRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
 }
 
 function normalizeRuntimeLocalSkillStatus(value: unknown): MulticaRuntimeLocalSkillRequestStatus {

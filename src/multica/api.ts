@@ -42,6 +42,7 @@ import type {
   RegisterRuntimeInput,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
+  ReportRuntimeModelListInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -453,6 +454,14 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<{ models?: any[]; supported?: boolean }>(c);
     return c.json({ runtimeId: c.req.param("id"), supported: body.supported !== false, models: store.updateRuntimeModels(c.req.param("id"), body.models ?? []) });
   });
+  app.post("/api/multica/runtimes/:id/models", (c) => {
+    return c.json(store.createRuntimeModelListRequest(c.req.param("id")));
+  });
+  app.get("/api/multica/runtimes/:id/models/:requestId", (c) => {
+    const request = store.getRuntimeModelListRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
   app.get("/api/runtimes/:id/models", (c) => {
     const runtime = store.getRuntime(c.req.param("id"));
     if (!runtime) return c.json({ error: "runtime not found" }, 404);
@@ -461,6 +470,22 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.put("/api/runtimes/:id/models", async (c) => {
     const body = await readJson<{ models?: any[]; supported?: boolean }>(c);
     return c.json({ runtime_id: c.req.param("id"), supported: body.supported !== false, models: store.updateRuntimeModels(c.req.param("id"), body.models ?? []) });
+  });
+  app.post("/api/runtimes/:id/models", (c) => {
+    return c.json(store.createRuntimeModelListRequest(c.req.param("id")));
+  });
+  app.get("/api/runtimes/:id/models/:requestId", (c) => {
+    const request = store.getRuntimeModelListRequest(c.req.param("id"), c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/models/claim", (c) => {
+    return c.json({ request: store.claimRuntimeModelListRequest(c.req.param("runtimeId")) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/models/:requestId/result", async (c) => {
+    const body = await readJson<ReportRuntimeModelListInput>(c);
+    store.reportRuntimeModelListResult(c.req.param("runtimeId"), c.req.param("requestId"), body);
+    return c.json({ status: "ok" });
   });
   app.post("/api/multica/runtimes/:id/local-skills", (c) => {
     return c.json(store.createRuntimeLocalSkillListRequest(c.req.param("id")));
