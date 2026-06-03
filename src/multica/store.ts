@@ -5,6 +5,7 @@ import type {
   AddSquadMemberInput,
   AssignIssueInput,
   AssignIssueResult,
+  CreateAccessTokenInput,
   CreateAgentInput,
   CreateAutopilotInput,
   CreateChatSessionInput,
@@ -21,6 +22,9 @@ import type {
   CreateWorkspaceMemberInput,
   MulticaAutopilot,
   MulticaAutopilotRun,
+  MulticaAccessToken,
+  MulticaCreatedAccessToken,
+  MulticaAccessTokenType,
   MulticaAgent,
   MulticaAssigneeType,
   MulticaAttachment,
@@ -141,6 +145,22 @@ export class MulticaStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_multica_workspace_members_workspace ON multica_workspace_members(workspace_id);
+
+      CREATE TABLE IF NOT EXISTS multica_access_tokens (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'pat',
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        last_used_at TEXT,
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_multica_access_tokens_workspace ON multica_access_tokens(workspace_id, type);
+      CREATE INDEX IF NOT EXISTS idx_multica_access_tokens_hash ON multica_access_tokens(token_hash);
 
       CREATE TABLE IF NOT EXISTS multica_issues (
         id TEXT PRIMARY KEY,
@@ -714,6 +734,63 @@ export class MulticaStore {
     const now = nowIso();
     this.db.run("UPDATE multica_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
     return this.getWorkspaceMember(id)!;
+  }
+
+  async createAccessToken(input: CreateAccessTokenInput): Promise<MulticaCreatedAccessToken> {
+    const name = input.name?.trim();
+    if (!name) throw new Error("Token name is required");
+    const type = normalizeAccessTokenType(input.type);
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const token = generateAccessToken(type);
+    const hash = await hashAccessToken(token);
+    const id = input.id ?? createId(type === "daemon" ? "dtk" : "pat");
+    const now = nowIso();
+    const expiresAt = normalizeAccessTokenExpiry(input.expiresInDays ?? input.expires_in_days ?? null);
+    this.db.run(
+      `INSERT INTO multica_access_tokens (
+        id, workspace_id, name, type, token_hash, token_prefix, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, name, type, hash, token.slice(0, 12), expiresAt, now],
+    );
+    return {
+      ...this.getAccessToken(id)!,
+      token,
+    };
+  }
+
+  listAccessTokens(workspaceId?: string | null): MulticaAccessToken[] {
+    const rows = workspaceId
+      ? this.db.query("SELECT * FROM multica_access_tokens WHERE workspace_id = ? ORDER BY created_at DESC").all(workspaceId) as Row[]
+      : this.db.query("SELECT * FROM multica_access_tokens ORDER BY created_at DESC").all() as Row[];
+    return rows.map(toAccessToken);
+  }
+
+  getAccessToken(id: string): MulticaAccessToken | null {
+    const row = this.db.query("SELECT * FROM multica_access_tokens WHERE id = ?").get(id) as Row | null;
+    return row ? toAccessToken(row) : null;
+  }
+
+  revokeAccessToken(id: string): MulticaAccessToken | null {
+    const current = this.getAccessToken(id);
+    if (!current) return null;
+    if (!current.revokedAt) {
+      this.db.run("UPDATE multica_access_tokens SET revoked_at = ? WHERE id = ?", [nowIso(), id]);
+    }
+    return this.getAccessToken(id);
+  }
+
+  async verifyAccessToken(rawToken: string, allowedTypes?: MulticaAccessTokenType[]): Promise<MulticaAccessToken | null> {
+    const token = rawToken.trim();
+    if (!token) return null;
+    const hash = await hashAccessToken(token);
+    const row = this.db.query("SELECT * FROM multica_access_tokens WHERE token_hash = ?").get(hash) as Row | null;
+    if (!row) return null;
+    const accessToken = toAccessToken(row);
+    if (allowedTypes?.length && !allowedTypes.includes(accessToken.type)) return null;
+    if (accessToken.revokedAt) return null;
+    if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= Date.now()) return null;
+    this.db.run("UPDATE multica_access_tokens SET last_used_at = ? WHERE id = ?", [nowIso(), accessToken.id]);
+    return this.getAccessToken(accessToken.id);
   }
 
   registerRuntime(input: RegisterRuntimeInput): MulticaRuntime {
@@ -3491,6 +3568,30 @@ function normalizeRuntimeConcurrency(value: number | null | undefined): number {
   return Math.floor(concurrency);
 }
 
+function normalizeAccessTokenType(value: string | undefined): MulticaAccessTokenType {
+  const type = String(value ?? "pat").trim().toLowerCase();
+  if (type === "pat" || type === "daemon") return type;
+  throw new Error("token type must be pat or daemon");
+}
+
+function normalizeAccessTokenExpiry(days: number | null | undefined): string | null {
+  if (days == null) return null;
+  const value = Number(days);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return new Date(Date.now() + Math.floor(value) * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function generateAccessToken(type: MulticaAccessTokenType): string {
+  const prefix = type === "daemon" ? "mdt" : "mul";
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+async function hashAccessToken(token: string): Promise<string> {
+  const bytes = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function normalizeIssuePosition(value: number | null | undefined): number {
   const position = Number(value ?? 0);
   if (!Number.isFinite(position)) throw new Error("position must be a finite number");
@@ -3692,6 +3793,20 @@ function toWorkspaceMember(row: Row): MulticaWorkspaceMember {
     archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+  };
+}
+
+function toAccessToken(row: Row): MulticaAccessToken {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    name: String(row.name ?? ""),
+    type: normalizeAccessTokenType(String(row.type ?? "pat")),
+    tokenPrefix: String(row.token_prefix ?? ""),
+    lastUsedAt: nullableString(row.last_used_at),
+    expiresAt: nullableString(row.expires_at),
+    revokedAt: nullableString(row.revoked_at),
+    createdAt: String(row.created_at),
   };
 }
 

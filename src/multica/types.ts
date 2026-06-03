@@ -144,6 +144,34 @@ export interface MulticaWorkspaceMember {
   updatedAt: string;
 }
 
+export type MulticaAccessTokenType = "pat" | "daemon";
+
+export interface MulticaAccessToken {
+  id: string;
+  workspaceId: string;
+  name: string;
+  type: MulticaAccessTokenType;
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface MulticaCreatedAccessToken extends MulticaAccessToken {
+  token: string;
+}
+
+export interface CreateAccessTokenInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name: string;
+  type?: MulticaAccessTokenType | string;
+  expiresInDays?: number | null;
+  expires_in_days?: number | null;
+}
+
 export interface MulticaProject {
   id: string;
   workspaceId: string;

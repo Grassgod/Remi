@@ -805,6 +805,46 @@ describe("Bun Multica API", () => {
     expect((await status.json()).status).toBe("completed");
   });
 
+  it("protects APIs with bearer auth and accepts created local tokens", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store, authToken: "root-secret" });
+
+    const unauthorized = await app.request("/api/multica/agents");
+    expect(unauthorized.status).toBe(401);
+
+    const created = await app.request("/api/multica/tokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
+      body: JSON.stringify({ name: "Local daemon", type: "daemon", workspaceId: "local" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.token.token).toStartWith("mdt_");
+    expect(createdBody.token.tokenPrefix).toBe(createdBody.token.token.slice(0, 12));
+
+    const withLocalToken = await app.request("/api/multica/agents", {
+      headers: { Authorization: `Bearer ${createdBody.token.token}` },
+    });
+    expect(withLocalToken.status).toBe(200);
+
+    const listed = await app.request("/api/tokens", {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    const listedBody = await listed.json();
+    expect(listedBody[0].lastUsedAt).toBeString();
+
+    const revoked = await app.request(`/api/tokens/${createdBody.token.id}`, {
+      method: "DELETE",
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect(revoked.status).toBe(204);
+
+    const afterRevoke = await app.request("/api/multica/agents", {
+      headers: { Authorization: `Bearer ${createdBody.token.token}` },
+    });
+    expect(afterRevoke.status).toBe(401);
+  });
+
   it("serves runtime metadata updates and usage endpoints", async () => {
     const store = createStore();
     const member = store.createWorkspaceMember({ name: "Ada", workspaceId: "local" });

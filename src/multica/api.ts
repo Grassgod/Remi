@@ -11,6 +11,7 @@ import { MulticaStore } from "./store.js";
 import type {
   AddSquadMemberInput,
   AssignIssueInput,
+  CreateAccessTokenInput,
   CreateAttachmentInput,
   CreateAgentInput,
   CreateAutopilotInput,
@@ -69,7 +70,7 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     app.use("*", async (c, next) => {
       const header = c.req.header("Authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-      if (token !== authToken) return c.json({ error: "unauthorized" }, 401);
+      if (token !== authToken && !await store.verifyAccessToken(token)) return c.json({ error: "unauthorized" }, 401);
       await next();
     });
   }
@@ -123,6 +124,31 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/multica/members/:id", (c) => {
     return c.json({ member: store.archiveWorkspaceMember(c.req.param("id")) });
+  });
+
+  app.get("/api/multica/tokens", (c) => {
+    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    return c.json({ tokens, total: tokens.length });
+  });
+  app.post("/api/multica/tokens", async (c) => {
+    const body = await readJson<CreateAccessTokenInput>(c);
+    return c.json({ token: await store.createAccessToken(body) }, 201);
+  });
+  app.delete("/api/multica/tokens/:id", (c) => {
+    const token = store.revokeAccessToken(c.req.param("id"));
+    return c.json({ token, ok: true });
+  });
+  app.get("/api/tokens", (c) => {
+    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    return c.json(tokens);
+  });
+  app.post("/api/tokens", async (c) => {
+    const body = await readJson<CreateAccessTokenInput>(c);
+    return c.json(await store.createAccessToken(body), 201);
+  });
+  app.delete("/api/tokens/:id", (c) => {
+    store.revokeAccessToken(c.req.param("id"));
+    return c.body(null, 204);
   });
 
   app.get("/api/multica/runtimes", (c) => c.json({ runtimes: store.listRuntimes() }));
