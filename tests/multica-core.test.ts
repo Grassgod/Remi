@@ -2735,6 +2735,73 @@ describe("Bun Multica API", () => {
     expect((await afterArchive.json()).items).toHaveLength(0);
   });
 
+  it("serves original agent, skill file, chat, and inbox compatibility endpoints", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const alice = store.createWorkspaceMember({ name: "Original Alice" });
+    const bob = store.createWorkspaceMember({ name: "Original Bob" });
+
+    const createdAgent = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Original Codex", provider: "codex" }),
+    });
+    const agent = await createdAgent.json();
+    expect(createdAgent.status).toBe(201);
+    expect(agent.provider).toBe("codex");
+
+    const archived = await app.request(`/api/agents/${agent.id}/archive`, { method: "POST" });
+    expect((await archived.json()).archivedAt).toBeString();
+    const restored = await app.request(`/api/agents/${agent.id}/restore`, { method: "POST" });
+    expect((await restored.json()).archivedAt).toBeNull();
+
+    const skill = store.createSkill({ name: "Original Skill", content: "# Skill" });
+    const file = await app.request(`/api/skills/${skill.id}/files`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "notes/check.md", content: "Check" }),
+    });
+    const fileBody = await file.json();
+    expect(fileBody.path).toBe("notes/check.md");
+    const files = await app.request(`/api/skills/${skill.id}/files`);
+    expect((await files.json())[0].content).toBe("Check");
+
+    const chat = await app.request("/api/chat/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId: agent.id, title: "Original chat" }),
+    });
+    const chatBody = await chat.json();
+    expect(chatBody.agent_id).toBe(agent.id);
+    const sent = await app.request(`/api/chat/sessions/${chatBody.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "Hello original" }),
+    });
+    const sentBody = await sent.json();
+    expect(sentBody.message.chat_session_id).toBe(chatBody.id);
+    expect(sentBody.task.chat_session_id).toBe(chatBody.id);
+    const pending = await app.request(`/api/chat/sessions/${chatBody.id}/pending-task`);
+    expect((await pending.json()).task_id).toBe(sentBody.task.id);
+    const pendingAll = await app.request("/api/chat/pending-tasks");
+    expect((await pendingAll.json()).tasks[0].chat_session_id).toBe(chatBody.id);
+    expect((await app.request(`/api/chat/sessions/${chatBody.id}/read`, { method: "POST" })).status).toBe(204);
+
+    const issue = store.createIssue({ title: "Original inbox", createdBy: alice.id });
+    store.addIssueSubscriber(issue.id, bob.id);
+    store.createIssueComment(issue.id, { authorType: "member", authorId: alice.id, body: "Ping Bob" });
+    const inbox = await app.request(`/api/inbox?member_id=${encodeURIComponent(bob.id)}`);
+    const inboxBody = await inbox.json();
+    expect(inboxBody[0].member_id).toBe(bob.id);
+    expect((await (await app.request(`/api/inbox/unread-count?member_id=${encodeURIComponent(bob.id)}`)).json()).count).toBe(1);
+    expect((await (await app.request(`/api/inbox/mark-all-read?member_id=${encodeURIComponent(bob.id)}`, { method: "POST" })).json()).count).toBe(1);
+    expect((await (await app.request(`/api/inbox/archive-all-read?member_id=${encodeURIComponent(bob.id)}`, { method: "POST" })).json()).count).toBe(1);
+    expect((await app.request(`/api/chat/sessions/${chatBody.id}`, { method: "DELETE" })).status).toBe(204);
+
+    expect((await app.request(`/api/skills/${skill.id}/files/${fileBody.id}`, { method: "DELETE" })).status).toBe(204);
+    expect((await (await app.request(`/api/agents/${agent.id}/cancel-tasks`, { method: "POST" })).json()).cancelled).toBe(0);
+  });
+
   it("serves comment threads, reactions, and attachments through API", async () => {
     const store = createStore();
     const app = createMulticaApp({ store });

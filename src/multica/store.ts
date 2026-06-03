@@ -958,6 +958,26 @@ export class MulticaStore {
     return this.getAgent(id)!;
   }
 
+  restoreAgent(id: string): MulticaAgent {
+    const row = this.db.query("SELECT id FROM multica_agents WHERE id = ?").get(id) as Row | null;
+    if (!row) throw new Error(`Agent not found: ${id}`);
+    const now = nowIso();
+    this.db.run("UPDATE multica_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+    return this.getAgent(id)!;
+  }
+
+  cancelAgentTasks(agentId: string): number {
+    if (!this.db.query("SELECT id FROM multica_agents WHERE id = ?").get(agentId)) throw new Error(`Agent not found: ${agentId}`);
+    let cancelled = 0;
+    for (const task of this.listAgentTasks(agentId)) {
+      if (task.status === "queued" || task.status === "dispatched" || task.status === "running") {
+        this.cancelTask(task.id);
+        cancelled += 1;
+      }
+    }
+    return cancelled;
+  }
+
   createSkill(input: CreateSkillInput): MulticaSkill {
     const name = input.name?.trim();
     if (!name) throw new Error("Skill name is required");
@@ -1044,8 +1064,41 @@ export class MulticaStore {
   }
 
   listSkillFiles(skillId: string): MulticaSkillFile[] {
+    if (!this.db.query("SELECT id FROM multica_skills WHERE id = ? AND archived_at IS NULL").get(skillId)) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
     const rows = this.db.query("SELECT * FROM multica_skill_files WHERE skill_id = ? ORDER BY path ASC").all(skillId) as Row[];
     return rows.map(toSkillFile);
+  }
+
+  upsertSkillFile(skillId: string, file: MulticaSkillFile): MulticaSkillFile {
+    if (!this.db.query("SELECT id FROM multica_skills WHERE id = ? AND archived_at IS NULL").get(skillId)) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
+    const normalized = normalizeSkillFiles([file])[0]!;
+    const existing = this.db.query(
+      "SELECT * FROM multica_skill_files WHERE skill_id = ? AND path = ?",
+    ).get(skillId, normalized.path) as Row | null;
+    const id = existing ? String(existing.id) : file.id ?? createId("skf");
+    const createdAt = existing ? String(existing.created_at) : nowIso();
+    const updatedAt = nowIso();
+    this.db.run(
+      `INSERT INTO multica_skill_files (id, skill_id, path, content, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(skill_id, path) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+      [id, skillId, normalized.path, normalized.content, createdAt, updatedAt],
+    );
+    const row = this.db.query("SELECT * FROM multica_skill_files WHERE skill_id = ? AND path = ?")
+      .get(skillId, normalized.path) as Row | null;
+    return toSkillFile(row!);
+  }
+
+  deleteSkillFile(skillId: string, fileId: string): boolean {
+    if (!this.db.query("SELECT id FROM multica_skills WHERE id = ? AND archived_at IS NULL").get(skillId)) {
+      throw new Error(`Skill not found: ${skillId}`);
+    }
+    const result = this.db.run("DELETE FROM multica_skill_files WHERE skill_id = ? AND id = ?", [skillId, fileId]);
+    return result.changes > 0;
   }
 
   listAgentSkills(agentId: string, options: { includeFiles?: boolean } = { includeFiles: true }): MulticaSkill[] {
@@ -3325,6 +3378,52 @@ export class MulticaStore {
     return toInboxItem(row!, this.getIssue(String(row!.issue_id)));
   }
 
+  countUnreadInboxItems(memberId?: string | null): number {
+    const resolvedMemberId = memberId ?? this.listWorkspaceMembers()[0]?.id ?? null;
+    if (!resolvedMemberId) return 0;
+    const row = this.db.query(
+      "SELECT COUNT(*) AS count FROM multica_inbox_items WHERE member_id = ? AND archived = 0 AND read = 0",
+    ).get(resolvedMemberId) as { count: number } | null;
+    return Number(row?.count ?? 0);
+  }
+
+  markAllInboxItemsRead(memberId?: string | null): number {
+    const resolvedMemberId = memberId ?? this.listWorkspaceMembers()[0]?.id ?? null;
+    if (!resolvedMemberId) return 0;
+    const result = this.db.run(
+      "UPDATE multica_inbox_items SET read = 1 WHERE member_id = ? AND archived = 0 AND read = 0",
+      [resolvedMemberId],
+    );
+    return result.changes;
+  }
+
+  archiveAllInboxItems(memberId?: string | null, mode: "all" | "read" | "completed" = "all"): number {
+    const resolvedMemberId = memberId ?? this.listWorkspaceMembers()[0]?.id ?? null;
+    if (!resolvedMemberId) return 0;
+    if (mode === "read") {
+      return this.db.run(
+        "UPDATE multica_inbox_items SET archived = 1, read = 1 WHERE member_id = ? AND archived = 0 AND read = 1",
+        [resolvedMemberId],
+      ).changes;
+    }
+    if (mode === "completed") {
+      return this.db.run(
+        `UPDATE multica_inbox_items
+         SET archived = 1, read = 1
+         WHERE member_id = ?
+           AND archived = 0
+           AND issue_id IN (
+             SELECT id FROM multica_issues WHERE status IN ('done', 'completed', 'closed', 'cancelled')
+           )`,
+        [resolvedMemberId],
+      ).changes;
+    }
+    return this.db.run(
+      "UPDATE multica_inbox_items SET archived = 1, read = 1 WHERE member_id = ? AND archived = 0",
+      [resolvedMemberId],
+    ).changes;
+  }
+
   listIssueReactions(issueId: string): MulticaIssueReaction[] {
     if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
     const rows = this.db.query(
@@ -4299,6 +4398,43 @@ export class MulticaStore {
       [input.title?.trim() || current.title, input.status ?? current.status, now, id],
     );
     return this.getChatSession(id)!;
+  }
+
+  deleteChatSession(id: string): boolean {
+    const current = this.getChatSession(id);
+    if (!current) return false;
+    for (const task of this.listTasks().filter((task) => task.chatSessionId === id)) {
+      if (task.status === "queued" || task.status === "dispatched" || task.status === "running") {
+        this.cancelTask(task.id);
+      }
+    }
+    this.updateChatSession(id, { status: "archived" });
+    return true;
+  }
+
+  markChatSessionRead(id: string): void {
+    if (!this.getChatSession(id)) throw new Error(`Chat session not found: ${id}`);
+    this.db.run("UPDATE multica_chat_sessions SET updated_at = ? WHERE id = ?", [nowIso(), id]);
+  }
+
+  getPendingChatTask(chatSessionId: string): MulticaTask | null {
+    if (!this.getChatSession(chatSessionId)) throw new Error(`Chat session not found: ${chatSessionId}`);
+    return this.listTasks()
+      .filter((task) =>
+        task.chatSessionId === chatSessionId &&
+        (task.status === "queued" || task.status === "dispatched" || task.status === "running")
+      )
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0] ?? null;
+  }
+
+  listPendingChatTasks(workspaceId?: string | null): MulticaTask[] {
+    return this.listTasks()
+      .filter((task) =>
+        task.chatSessionId &&
+        (workspaceId ? task.workspaceId === workspaceId : true) &&
+        (task.status === "queued" || task.status === "dispatched" || task.status === "running")
+      )
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   }
 
   listChatMessages(chatSessionId: string): MulticaChatMessage[] {

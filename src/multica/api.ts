@@ -52,16 +52,21 @@ import type {
   CreateMulticaReactionInput,
   MulticaNotificationPreferences,
   MulticaGitHubPullRequest,
+  MulticaChatMessage,
+  MulticaChatSession,
+  MulticaInboxItem,
   MulticaIssue,
   MulticaTask,
   MulticaRuntime,
   MulticaSkill,
+  MulticaSkillFile,
   MulticaSubscriptionReason,
   MulticaGitHubPullRequestState,
   MulticaTimelineEntry,
   MulticaWebhookDeliveryResult,
   MulticaWebhookProvider,
   MulticaWebhookSignatureStatus,
+  SendChatMessageResult,
   SetAgentSkillsInput,
   UpdateAgentInput,
   UpdateAutopilotInput,
@@ -361,10 +366,10 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<SetAgentSkillsInput>(c);
     return c.json(store.setAgentSkills(c.req.param("id"), body).map(skillSummary));
   });
-  app.post("/api/multica/agents/from-template", async (c) => {
-    const body = await readJson<CreateAgentFromTemplateInput>(c);
-    const result = await createAgentFromTemplate(store, body);
-    return c.json(result, 201);
+  app.get("/api/agents", (c) => c.json(store.listAgents()));
+  app.post("/api/agents", async (c) => {
+    const body = await readJson<CreateAgentInput>(c);
+    return c.json(store.createAgent(body), 201);
   });
   app.post("/api/agents/from-template", async (c) => {
     const body = await readJson<CreateAgentFromTemplateInput>(c);
@@ -374,6 +379,23 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
       imported_skill_ids: result.imported_skill_ids,
       reused_skill_ids: result.reused_skill_ids,
     }, 201);
+  });
+  app.get("/api/agents/:id", (c) => {
+    const agent = store.getAgent(c.req.param("id"));
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    return c.json(agent);
+  });
+  app.put("/api/agents/:id", async (c) => {
+    const body = await readJson<UpdateAgentInput>(c);
+    return c.json(store.updateAgent(c.req.param("id"), body));
+  });
+  app.post("/api/agents/:id/archive", (c) => c.json(store.archiveAgent(c.req.param("id"))));
+  app.post("/api/agents/:id/restore", (c) => c.json(store.restoreAgent(c.req.param("id"))));
+  app.post("/api/agents/:id/cancel-tasks", (c) => c.json({ cancelled: store.cancelAgentTasks(c.req.param("id")) }));
+  app.post("/api/multica/agents/from-template", async (c) => {
+    const body = await readJson<CreateAgentFromTemplateInput>(c);
+    const result = await createAgentFromTemplate(store, body);
+    return c.json(result, 201);
   });
   app.get("/api/multica/agent-task-snapshot", (c) => {
     const tasks = store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
@@ -460,6 +482,16 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   });
   app.delete("/api/skills/:id", (c) => {
     store.archiveSkill(c.req.param("id"));
+    return c.body(null, 204);
+  });
+  app.get("/api/skills/:id/files", (c) => c.json(store.listSkillFiles(c.req.param("id"))));
+  app.put("/api/skills/:id/files", async (c) => {
+    const body = await readJson<MulticaSkillFile>(c);
+    return c.json(store.upsertSkillFile(c.req.param("id"), body));
+  });
+  app.delete("/api/skills/:id/files/:fileId", (c) => {
+    const deleted = store.deleteSkillFile(c.req.param("id"), c.req.param("fileId"));
+    if (!deleted) return c.json({ error: "skill file not found" }, 404);
     return c.body(null, 204);
   });
 
@@ -1402,6 +1434,14 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/multica/inbox/:id/archive", (c) => {
     return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
   });
+  app.get("/api/inbox", (c) => c.json(store.listInboxItems(c.req.query("memberId") ?? c.req.query("member_id")).map(inboxCompatibilityResponse)));
+  app.get("/api/inbox/unread-count", (c) => c.json({ count: store.countUnreadInboxItems(c.req.query("memberId") ?? c.req.query("member_id")) }));
+  app.post("/api/inbox/mark-all-read", (c) => c.json({ count: store.markAllInboxItemsRead(c.req.query("memberId") ?? c.req.query("member_id")) }));
+  app.post("/api/inbox/archive-all", (c) => c.json({ count: store.archiveAllInboxItems(c.req.query("memberId") ?? c.req.query("member_id"), "all") }));
+  app.post("/api/inbox/archive-all-read", (c) => c.json({ count: store.archiveAllInboxItems(c.req.query("memberId") ?? c.req.query("member_id"), "read") }));
+  app.post("/api/inbox/archive-completed", (c) => c.json({ count: store.archiveAllInboxItems(c.req.query("memberId") ?? c.req.query("member_id"), "completed") }));
+  app.post("/api/inbox/:id/read", (c) => c.json(inboxCompatibilityResponse(store.markInboxItemRead(c.req.param("id")))));
+  app.post("/api/inbox/:id/archive", (c) => c.json(inboxCompatibilityResponse(store.archiveInboxItem(c.req.param("id")))));
 
   app.put("/api/multica/comments/:id", async (c) => {
     const body = await readJson<UpdateIssueCommentInput>(c);
@@ -1562,6 +1602,45 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/multica/chats/:id/messages", async (c) => {
     const body = await readJson<SendChatMessageInput>(c);
     return c.json(store.sendChatMessage(c.req.param("id"), body), 201);
+  });
+  app.get("/api/chat/sessions", (c) => c.json(store.listChatSessions(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local").map(chatSessionCompatibilityResponse)));
+  app.post("/api/chat/sessions", async (c) => {
+    const body = await readJson<CreateChatSessionInput>(c);
+    return c.json(chatSessionCompatibilityResponse(store.createChatSession(body)), 201);
+  });
+  app.get("/api/chat/sessions/:sessionId", (c) => {
+    const session = store.getChatSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "chat session not found" }, 404);
+    return c.json(chatSessionCompatibilityResponse(session));
+  });
+  app.patch("/api/chat/sessions/:sessionId", async (c) => {
+    const body = await readJson<UpdateChatSessionInput>(c);
+    return c.json(chatSessionCompatibilityResponse(store.updateChatSession(c.req.param("sessionId"), body)));
+  });
+  app.delete("/api/chat/sessions/:sessionId", (c) => {
+    const deleted = store.deleteChatSession(c.req.param("sessionId"));
+    if (!deleted) return c.json({ error: "chat session not found" }, 404);
+    return c.body(null, 204);
+  });
+  app.get("/api/chat/sessions/:sessionId/messages", (c) => {
+    return c.json(store.listChatMessages(c.req.param("sessionId")).map(chatMessageCompatibilityResponse));
+  });
+  app.post("/api/chat/sessions/:sessionId/messages", async (c) => {
+    const body = await readJson<SendChatMessageInput>(c);
+    return c.json(sendChatMessageCompatibilityResponse(store.sendChatMessage(c.req.param("sessionId"), body)), 201);
+  });
+  app.get("/api/chat/sessions/:sessionId/pending-task", (c) => {
+    const task = store.getPendingChatTask(c.req.param("sessionId"));
+    return c.json(task ? { task_id: task.id, status: task.status, created_at: task.createdAt } : {});
+  });
+  app.post("/api/chat/sessions/:sessionId/read", (c) => {
+    store.markChatSessionRead(c.req.param("sessionId"));
+    return c.body(null, 204);
+  });
+  app.get("/api/chat/pending-tasks", (c) => {
+    const tasks = store.listPendingChatTasks(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local")
+      .map((task) => ({ task_id: task.id, status: task.status, chat_session_id: task.chatSessionId }));
+    return c.json({ tasks });
   });
 
   app.get("/api/multica/tasks", (c) => {
@@ -2144,6 +2223,72 @@ function taskCompatibilityResponse(task: MulticaTask): MulticaTask & {
     completed_at: task.completedAt,
     failed_at: task.failedAt,
     cancelled_at: task.cancelledAt,
+  };
+}
+
+function chatSessionCompatibilityResponse(session: MulticaChatSession): MulticaChatSession & {
+  workspace_id: string;
+  agent_id: string;
+  session_id: string | null;
+  work_dir: string | null;
+  latest_task_id: string | null;
+  created_at: string;
+  updated_at: string;
+} {
+  return {
+    ...session,
+    workspace_id: session.workspaceId,
+    agent_id: session.agentId,
+    session_id: session.sessionId,
+    work_dir: session.workDir,
+    latest_task_id: session.latestTaskId,
+    created_at: session.createdAt,
+    updated_at: session.updatedAt,
+  };
+}
+
+function chatMessageCompatibilityResponse(message: MulticaChatMessage): MulticaChatMessage & {
+  chat_session_id: string;
+  task_id: string | null;
+  created_at: string;
+} {
+  return {
+    ...message,
+    chat_session_id: message.chatSessionId,
+    task_id: message.taskId,
+    created_at: message.createdAt,
+  };
+}
+
+function sendChatMessageCompatibilityResponse(result: SendChatMessageResult): SendChatMessageResult & {
+  session: ReturnType<typeof chatSessionCompatibilityResponse>;
+  message: ReturnType<typeof chatMessageCompatibilityResponse>;
+  task: ReturnType<typeof taskCompatibilityResponse>;
+} {
+  return {
+    ...result,
+    session: chatSessionCompatibilityResponse(result.session),
+    message: chatMessageCompatibilityResponse(result.message),
+    task: taskCompatibilityResponse(result.task),
+  };
+}
+
+function inboxCompatibilityResponse(item: MulticaInboxItem): MulticaInboxItem & {
+  workspace_id: string;
+  issue_id: string;
+  member_id: string;
+  actor_type: string;
+  actor_id: string | null;
+  created_at: string;
+} {
+  return {
+    ...item,
+    workspace_id: item.workspaceId,
+    issue_id: item.issueId,
+    member_id: item.memberId,
+    actor_type: item.actorType,
+    actor_id: item.actorId,
+    created_at: item.createdAt,
   };
 }
 
