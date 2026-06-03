@@ -2531,15 +2531,28 @@ export function renderMulticaDashboardHtml(): string {
             })
           });
         } else if (kind === "skill") {
-          await api("/api/multica/skills", {
-            method: "POST",
-            body: JSON.stringify({
-              name: document.getElementById("entityTitle").value,
-              description: document.getElementById("entityDescription").value || "",
-              content: document.getElementById("entityContent").value || "",
-              files: parseSkillFiles(document.getElementById("entityFiles").value)
-            })
-          });
+          const sourceUrl = document.getElementById("entitySourceUrl").value.trim();
+          if (sourceUrl) {
+            await api("/api/multica/skills/import", {
+              method: "POST",
+              body: JSON.stringify({
+                url: sourceUrl,
+                name: document.getElementById("entityTitle").value.trim() || undefined,
+                description: document.getElementById("entityDescription").value || undefined,
+                workspaceId: "local"
+              })
+            });
+          } else {
+            await api("/api/multica/skills", {
+              method: "POST",
+              body: JSON.stringify({
+                name: document.getElementById("entityTitle").value,
+                description: document.getElementById("entityDescription").value || "",
+                content: document.getElementById("entityContent").value || "",
+                files: parseSkillFiles(document.getElementById("entityFiles").value)
+              })
+            });
+          }
         } else if (kind === "member") {
           await api("/api/multica/members", {
             method: "POST",
@@ -4448,11 +4461,12 @@ export function renderMulticaDashboardHtml(): string {
           "<button class=\\"primary\\" type=\\"submit\\">Create squad</button><div class=\\"notice\\"></div>";
       }
       if (kind === "skill") {
-        return "<label>Name<input id=\\"entityTitle\\" required placeholder=\\"review-helper\\"></label>" +
+        return "<label>Import URL<input id=\\"entitySourceUrl\\" placeholder=\\"https://github.com/owner/repo/tree/main/skill\\"></label>" +
+          "<label>Name<input id=\\"entityTitle\\" placeholder=\\"review-helper\\"></label>" +
           "<label>Description<textarea id=\\"entityDescription\\" placeholder=\\"Optional\\"></textarea></label>" +
           "<label>SKILL.md<textarea id=\\"entityContent\\" placeholder=\\"Skill instructions\\"></textarea></label>" +
           "<label>Supporting files<textarea id=\\"entityFiles\\" placeholder=\\"path/to/file.md\\n---\\ncontent\\n===\\nnotes.md\\n---\\nmore content\\"></textarea></label>" +
-          "<button class=\\"primary\\" type=\\"submit\\">Create skill</button><div class=\\"notice\\"></div>";
+          "<button class=\\"primary\\" type=\\"submit\\">Save skill</button><div class=\\"notice\\"></div>";
       }
       if (kind === "member") {
         return "<label>Name<input id=\\"entityTitle\\" required placeholder=\\"Member name\\"></label>" +

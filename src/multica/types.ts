@@ -40,6 +40,7 @@ export type MulticaNotificationGroupValue = "all" | "muted";
 export type MulticaNotificationPreferences = Partial<Record<MulticaNotificationGroupKey, MulticaNotificationGroupValue>>;
 export type MulticaGitHubPullRequestState = "open" | "closed" | "merged" | "draft";
 export type MulticaGitHubChecksConclusion = "passed" | "failed" | "pending" | null;
+export type MulticaSkillImportSource = "github" | "skills_sh" | "clawhub";
 
 export interface MulticaSkillFile {
   id?: string;
@@ -653,6 +654,18 @@ export interface CreateSkillInput {
   content?: string;
   config?: Record<string, unknown> | null;
   files?: MulticaSkillFile[];
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface ImportSkillInput {
+  url?: string;
+  sourceUrl?: string;
+  source_url?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  name?: string | null;
+  description?: string | null;
   createdBy?: string | null;
   created_by?: string | null;
 }

@@ -14,6 +14,7 @@ import { MulticaStore } from "../src/multica/store.js";
 let db: Database | null = null;
 let previousUploadDir: string | undefined;
 let uploadDir: string | null = null;
+let previousFetch: typeof globalThis.fetch | null = null;
 
 function createStore(): MulticaStore {
   db = new Database(":memory:");
@@ -30,6 +31,10 @@ afterEach(() => {
   if (previousUploadDir === undefined) delete process.env.MULTICA_UPLOAD_DIR;
   else process.env.MULTICA_UPLOAD_DIR = previousUploadDir;
   previousUploadDir = undefined;
+  if (previousFetch) {
+    globalThis.fetch = previousFetch;
+    previousFetch = null;
+  }
 });
 
 function useUploadDir(): string {
@@ -37,6 +42,18 @@ function useUploadDir(): string {
   uploadDir = mkdtempSync(join(tmpdir(), "multica-upload-"));
   process.env.MULTICA_UPLOAD_DIR = uploadDir;
   return uploadDir;
+}
+
+function mockFetch(handler: (url: string) => Response | Promise<Response>): void {
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => handler(String(input))) as typeof globalThis.fetch;
+}
+
+function jsonResponse(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("Bun Multica core store", () => {
@@ -972,6 +989,8 @@ describe("Bun Multica dashboard", () => {
     expect(html).toContain('id="skillsGrid"');
     expect(html).toContain("function renderSkills()");
     expect(html).toContain("/api/multica/skills");
+    expect(html).toContain("/api/multica/skills/import");
+    expect(html).toContain("entitySourceUrl");
     expect(html).toContain("updateSelectedAgentSkills");
   });
 
@@ -1146,6 +1165,76 @@ describe("Bun Multica API", () => {
     expect(deleted.status).toBe(204);
     const afterDelete = await app.request(`/api/multica/agents/${agent.id}/skills`);
     expect((await afterDelete.json()).skills).toHaveLength(0);
+  });
+
+  it("imports skills from GitHub and skills.sh URLs", async () => {
+    const store = createStore();
+    const app = createMulticaApp({ store });
+    const skillMd = [
+      "---",
+      "name: review-helper",
+      "description: Review imported pull requests",
+      "---",
+      "# Review Helper",
+    ].join("\n");
+    const requestedUrls: string[] = [];
+
+    mockFetch((url) => {
+      requestedUrls.push(url);
+      if (url === "https://api.github.com/repos/example/skills/commits/main") return new Response("sha", { status: 200 });
+      if (url === "https://raw.githubusercontent.com/example/skills/main/review-helper/SKILL.md") return new Response(skillMd);
+      if (url === "https://api.github.com/repos/example/skills/contents/review-helper?ref=main") {
+        return jsonResponse([
+          { name: "SKILL.md", path: "review-helper/SKILL.md", type: "file", download_url: "https://raw.githubusercontent.com/example/skills/main/review-helper/SKILL.md" },
+          { name: "templates", path: "review-helper/templates", type: "dir", url: "https://api.github.com/repos/example/skills/contents/review-helper/templates?ref=main" },
+          { name: "logo.png", path: "review-helper/logo.png", type: "file", download_url: "https://raw.githubusercontent.com/example/skills/main/review-helper/logo.png" },
+        ]);
+      }
+      if (url === "https://api.github.com/repos/example/skills/contents/review-helper/templates?ref=main") {
+        return jsonResponse([
+          { name: "check.md", path: "review-helper/templates/check.md", type: "file", download_url: "https://raw.githubusercontent.com/example/skills/main/review-helper/templates/check.md" },
+        ]);
+      }
+      if (url === "https://raw.githubusercontent.com/example/skills/main/review-helper/templates/check.md") return new Response("Check list");
+
+      if (url === "https://api.github.com/repos/example/skills") return jsonResponse({ default_branch: "main" });
+      if (url === "https://raw.githubusercontent.com/example/skills/main/skills/review-helper/SKILL.md") return new Response(skillMd);
+      if (url === "https://api.github.com/repos/example/skills/contents/skills/review-helper?ref=main") {
+        return jsonResponse([
+          { name: "SKILL.md", path: "skills/review-helper/SKILL.md", type: "file", download_url: "https://raw.githubusercontent.com/example/skills/main/skills/review-helper/SKILL.md" },
+          { name: "notes.md", path: "skills/review-helper/notes.md", type: "file", download_url: "https://raw.githubusercontent.com/example/skills/main/skills/review-helper/notes.md" },
+        ]);
+      }
+      if (url === "https://raw.githubusercontent.com/example/skills/main/skills/review-helper/notes.md") return new Response("Notes");
+      return new Response("not found", { status: 404 });
+    });
+
+    const githubImport = await app.request("/api/multica/skills/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://github.com/example/skills/tree/main/review-helper", workspaceId: "local" }),
+    });
+    expect(githubImport.status).toBe(201);
+    const githubBody = await githubImport.json();
+    expect(githubBody.source).toBe("github");
+    expect(githubBody.skill.name).toBe("review-helper");
+    expect(githubBody.skill.description).toBe("Review imported pull requests");
+    expect(githubBody.skill.config.origin.type).toBe("github");
+    expect(githubBody.skill.files).toHaveLength(1);
+    expect(githubBody.skill.files[0].path).toBe("templates/check.md");
+    expect(githubBody.skill.files[0].content).toBe("Check list");
+
+    const skillsShImport = await app.request("/api/skills/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://skills.sh/example/skills/review-helper", workspaceId: "local", name: "Imported Review" }),
+    });
+    expect(skillsShImport.status).toBe(201);
+    const skillsShBody = await skillsShImport.json();
+    expect(skillsShBody.name).toBe("Imported Review");
+    expect(skillsShBody.config.origin.type).toBe("skills_sh");
+    expect(skillsShBody.files[0].path).toBe("notes.md");
+    expect(requestedUrls).toContain("https://api.github.com/repos/example/skills/contents/skills/review-helper?ref=main");
   });
 
   it("serves runtime metadata updates and usage endpoints", async () => {

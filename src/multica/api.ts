@@ -8,6 +8,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { createLogger } from "../logger.js";
 import { renderMulticaDashboardHtml } from "./dashboard.js";
 import { MulticaScheduler } from "./scheduler.js";
+import { buildImportedSkillInput, SkillImportError } from "./skill-import.js";
 import { MulticaStore } from "./store.js";
 import type {
   AddSquadMemberInput,
@@ -29,6 +30,7 @@ import type {
   CreateSquadInput,
   CreateTaskInput,
   CreateWorkspaceMemberInput,
+  ImportSkillInput,
   RegisterRuntimeInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
@@ -113,6 +115,9 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
 
   app.onError((err, c) => {
     log.error(err.message);
+    if (err instanceof SkillImportError) {
+      return c.json({ error: err.message }, err.status as 400 | 502);
+    }
     return c.json({ error: err.message }, 500);
   });
 
@@ -164,6 +169,12 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
     const body = await readJson<CreateSkillInput>(c);
     return c.json({ skill: store.createSkill(body) }, 201);
   });
+  app.post("/api/multica/skills/import", async (c) => {
+    const body = await readJson<ImportSkillInput>(c);
+    const imported = await buildImportedSkillInput(body);
+    const skill = store.createSkill(imported.skillInput);
+    return c.json({ skill, source: imported.source, sourceUrl: imported.sourceUrl }, 201);
+  });
   app.get("/api/multica/skills/:id", (c) => {
     const skill = store.getSkill(c.req.param("id"));
     if (!skill) return c.json({ error: "skill not found" }, 404);
@@ -180,6 +191,11 @@ export function createMulticaApp(options: MulticaApiOptions = {}): Hono {
   app.post("/api/skills", async (c) => {
     const body = await readJson<CreateSkillInput>(c);
     return c.json(store.createSkill(body), 201);
+  });
+  app.post("/api/skills/import", async (c) => {
+    const body = await readJson<ImportSkillInput>(c);
+    const imported = await buildImportedSkillInput(body);
+    return c.json(store.createSkill(imported.skillInput), 201);
   });
   app.get("/api/skills/:id", (c) => {
     const skill = store.getSkill(c.req.param("id"));
