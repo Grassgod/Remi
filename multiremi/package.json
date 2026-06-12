@@ -1,0 +1,35 @@
+{
+  "name": "multimira",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:web": "turbo dev --filter=@multimira/web",
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "clean": "turbo clean && rm -rf node_modules",
+    "ui:add": "cd packages/ui && npx shadcn@latest add",
+    "generate:reserved-slugs": "node scripts/generate-reserved-slugs.mjs"
+  },
+  "packageManager": "pnpm@10.28.2",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "@types/react": "catalog:",
+      "@types/react-dom": "catalog:",
+      "@xmldom/xmldom": "^0.8.13"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "catalog:",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.20.0",
+    "turbo": "^2.5.4",
+    "typescript": "catalog:"
+  }
+}
