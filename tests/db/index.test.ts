@@ -5,9 +5,9 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
-import { getDb, closeDb, kvGet, kvSet, kvDelete } from "./index";
-import { VectorStore } from "./vector-store";
-import type { EmbeddingConfig } from "./embedding";
+import { getDb, closeDb, kvGet, kvSet, kvDelete } from "../../src/db/index";
+import { VectorStore } from "../../src/db/vector-store";
+import type { EmbeddingConfig } from "../../src/db/embedding";
 
 describe("SQLite + sqlite-vec basics", () => {
   test("sqlite-vec extension loads successfully", () => {
