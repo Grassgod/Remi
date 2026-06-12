@@ -1,0 +1,75 @@
+version: 2
+
+project_name: multimira
+
+builds:
+  - id: multimira
+    main: ./cmd/multimira
+    dir: server
+    binary: multimira
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  # Legacy archive name kept so already-released CLIs (whose `multimira update`
+  # looks for `multimira_{os}_{arch}.{ext}`) can keep self-updating. Remove
+  # once those versions are no longer in use.
+  - id: legacy
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  # Versioned archive name used by current CLI / install scripts /
+  # desktop bootstrap going forward.
+  - id: versioned
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}-cli-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: multimira
+    ids:
+      - versioned
+    repository:
+      owner: multimira-ai
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/multimira-ai/multimira"
+    description: "Multimira CLI — local agent runtime and management tool for the Multimira platform"
+    license: "Apache-2.0"
+    install: |
+      bin.install "multimira"
+    test: |
+      system "#{bin}/multimira", "version"
