@@ -3,37 +3,24 @@ import { useAuthStore } from "../auth";
 import { paths } from "./paths";
 
 /**
- * Priority (onboarded-first):
- *   !hasOnboarded               → /onboarding
- *   hasOnboarded + workspace[0] → /<first.slug>/issues
- *   hasOnboarded + no workspace → /workspaces/new
+ * Destination after auth:
+ *   workspace[0] → /<first.slug>/issues
+ *   no workspace → /workspaces/new
  *
- * V3 invariant: `onboarded_at != null` is the single source of truth for
- * "may access /<slug>/*". The web workspace layout and the desktop App.tsx
- * overlay decision both gate on this — sending an un-onboarded user
- * straight to /issues would just be redirected back to /onboarding by
- * the layout gate, costing a navigation round-trip. Check onboarded
- * first.
+ * NOTE (self-host customization): the consumer onboarding funnel is disabled
+ * here — we never route to the /onboarding wizard. `hasOnboarded` is kept for
+ * signature/call-site compatibility but no longer gates anything (the matching
+ * workspace-layout gate is also relaxed). Brand-new users land on the simple
+ * create-workspace page instead of the 5-step questionnaire/runtime wizard.
  *
- * In v3 "has workspace but !onboarded" is physically rare (a user can
- * only land in that state by closing the app between Step 2 and Step 3
- * — both questionnaire and runtime picker steps run after workspace
- * creation but before CompleteOnboarding). OnboardingFlow's Step 2
- * already recognizes existing workspaces and offers "Continue with
- * {name}", so the recovery is seamless.
- *
- * Callers that need invitation-aware routing (callback / login) handle
- * the "un-onboarded with pending invites" branch themselves before calling
- * this resolver — this resolver only deals with the post-invite-check
- * destination.
+ * Callers that need invitation-aware routing (callback / login) handle the
+ * pending-invites branch themselves before calling this resolver.
  */
 export function resolvePostAuthDestination(
   workspaces: Workspace[],
   hasOnboarded: boolean,
 ): string {
-  if (!hasOnboarded) {
-    return paths.onboarding();
-  }
+  void hasOnboarded; // onboarding funnel disabled; param retained for compat
   const first = workspaces[0];
   if (first) {
     return paths.workspace(first.slug).issues();

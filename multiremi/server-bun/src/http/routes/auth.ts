@@ -123,6 +123,12 @@ export function authRoutes(cfg: Config, db?: Db): Hono {
         cfg.jwtSecret,
         cfg.authTokenTtlSeconds,
       );
+      // Cookie-mode clients (the web app, cookieAuth=true) rely on the SERVER
+      // setting the session cookie — they do NOT persist the body token. Mirror
+      // /auth/dev-login so a Feishu SSO session actually authenticates /api/*;
+      // without this the next request carries no token and the gate returns
+      // 401 {"error":"unauthorized"}.
+      c.header("Set-Cookie", `multimira_token=${token}; Path=/; Max-Age=2592000; SameSite=Lax`);
       return c.json({
         token,
         user: { id: u.id, name: u.name, email: u.email, avatar_url: u.avatarUrl },

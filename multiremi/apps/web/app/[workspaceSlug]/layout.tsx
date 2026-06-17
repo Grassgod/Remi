@@ -32,17 +32,10 @@ export default function WorkspaceLayout({
     if (!isAuthLoading && !user) router.replace(paths.login());
   }, [isAuthLoading, user, router]);
 
-  // Hard onboarding gate. Authenticated user but onboarded_at NULL means
-  // they bypassed /onboarding (typed the URL, deeplink, etc.). Redirect
-  // back so the questionnaire + Step 3 finish. The reverse gate lives in
-  // `apps/web/app/(auth)/onboarding/page.tsx` — onboarded users hitting
-  // /onboarding bounce out to their workspace. Together those two effects
-  // make `onboarded_at` the single source of truth for "may access /<slug>/*".
-  useEffect(() => {
-    if (user && user.onboarded_at == null) {
-      router.replace(paths.onboarding());
-    }
-  }, [user, router]);
+  // Onboarding funnel disabled (self-host customization): users with
+  // onboarded_at NULL are allowed straight into the workspace. The old hard
+  // gate here used to bounce them to the /onboarding wizard; we no longer run
+  // that consumer flow, so access is gated on auth alone (effect above).
 
   // Resolve workspace by slug from the React Query list cache.
   // Enabled only when user is authenticated — otherwise the list query isn't seeded.

@@ -20,15 +20,15 @@ function makeWs(slug: string): Workspace {
 }
 
 describe("resolvePostAuthDestination", () => {
-  it("!onboarded → /onboarding (even with a workspace)", () => {
-    // V3 invariant: onboarded_at is the single source of truth for
-    // workspace access. A user holding workspaces but flagged !onboarded
-    // (rare mid-flow state: closed app between Step 2 and Step 3) gets
-    // routed to /onboarding so they can finish; the layout hard gate
-    // would redirect them anyway.
+  it("onboarding funnel disabled: !onboarded routes like onboarded (never /onboarding)", () => {
+    // Self-host customization: the consumer onboarding wizard is disabled, so
+    // `hasOnboarded=false` no longer routes to /onboarding. A user with a
+    // workspace goes to it; without one, to the simple create-workspace page.
     const ws = [makeWs("acme")];
-    expect(resolvePostAuthDestination(ws, false)).toBe(paths.onboarding());
-    expect(resolvePostAuthDestination([], false)).toBe(paths.onboarding());
+    expect(resolvePostAuthDestination(ws, false)).toBe(
+      paths.workspace("acme").issues(),
+    );
+    expect(resolvePostAuthDestination([], false)).toBe(paths.newWorkspace());
   });
 
   it("onboarded + workspace[0] → /<first.slug>/issues", () => {
