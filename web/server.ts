@@ -46,6 +46,7 @@ import { ConfigHubPlugin, setConfigHubInstance } from "../src/plugins/config-hub
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../src/project/store.js";
+import { PluginRegistry } from "../src/plugins/registry.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -90,6 +91,11 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     console.error("[API Error]", err);
     return c.json({ error: "Internal server error" }, 500);
   });
+
+  // ── Plugins (web surface): DB migrate/seed, middleware, and routes ──
+  // Built-in SSO/config-hub stay wired explicitly above (middleware ordering).
+  // Plugin middleware mounts here (before route handlers) so it applies to them.
+  new PluginRegistry().load(remiConfig).dispatchWeb(app, { db: getDb(), config: remiConfig });
 
   // Register all handler modules
   registerStatusHandlers(app, data);

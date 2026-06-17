@@ -132,15 +132,16 @@ export interface ServiceConfig {
 }
 
 /**
- * Bot profile — configurable bot persona for specific groups.
- * Each profile overrides provider defaults (cwd, tools, system prompt)
- * and can control reply behavior (thread vs direct).
+ * Plugin system settings — [plugins] in remi.toml.
+ * Per-plugin config lives in [plugin.<id>] sub-tables (see RemiConfig.pluginConfigs).
  */
-export interface ByteDanceSSOConfig {
-  clientId: string;
-  ssoHost: string;
-  bytecloudHost: string;
-  scopes: string[];
+export interface PluginsConfig {
+  /** Directory scanned for external drop-in plugins. Default ~/.remi/plugins. */
+  dir: string;
+  /** Plugin ids explicitly enabled (allowlist; complements [plugin.<id>].enabled). */
+  enabled: string[];
+  /** Load external plugins from `dir`. Default true. */
+  allowExternal: boolean;
 }
 
 // SSO inbound login (web Authorization Code / OIDC) is managed by
@@ -245,8 +246,10 @@ export interface TracingConfig {
 export interface RemiConfig {
   provider: ProviderConfig;
   feishu: FeishuConfig;
-  /** ByteDance SSO config (optional) — outbound Device Code flow. */
-  bytedanceSso?: ByteDanceSSOConfig;
+  /** Plugin system settings ([plugins] in remi.toml). */
+  plugins: PluginsConfig;
+  /** Per-plugin config sub-tables keyed by plugin id (from [plugin.<id>]). */
+  pluginConfigs: Record<string, Record<string, unknown>>;
   /** Auth bootstrap (who is admin on first login). */
   auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
@@ -330,6 +333,8 @@ export function defaultRemiConfig(): RemiConfig {
     services: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
+    plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
+    pluginConfigs: {},
     auth: { adminEmails: [] },
     ccSwitch: { enabled: false, configDir: join(homedir(), ".remi", "cc-switch") },
     tracing: {
@@ -371,7 +376,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
 
   const providerData = (fileData.provider ?? {}) as Record<string, unknown>;
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
-  const bytedanceSsoData = fileData.bytedance_sso as Record<string, unknown> | undefined;
+  const pluginsData = (fileData.plugins ?? {}) as Record<string, unknown>;
+  // [plugin.<id>] sub-tables → keep only object values (skip scalar misconfig).
+  const rawPluginData = (fileData.plugin ?? {}) as Record<string, unknown>;
+  const pluginConfigsData: Record<string, Record<string, unknown>> = {};
+  for (const [k, v] of Object.entries(rawPluginData)) {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      pluginConfigsData[k] = v as Record<string, unknown>;
+    }
+  }
   const authData = (fileData.auth ?? {}) as Record<string, unknown>;
   // Note: legacy [sso] and [[clusters]] in remi.toml are read by SSO plugin's
   // seed routine (one-time migration to DB), not parsed here anymore.
@@ -428,14 +441,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       userAccessToken: env.FEISHU_USER_ACCESS_TOKEN ?? (feishuData.user_access_token as string) ?? "",
       triggerUserIds: (feishuData.trigger_user_ids as string[]) ?? [],
     },
-    bytedanceSso: bytedanceSsoData
-      ? {
-          clientId: env.BYTEDANCE_SSO_CLIENT_ID ?? (bytedanceSsoData.client_id as string) ?? "",
-          ssoHost: env.BYTEDANCE_SSO_HOST ?? (bytedanceSsoData.sso_host as string) ?? "https://sso.bytedance.com",
-          bytecloudHost: env.BYTEDANCE_BYTECLOUD_HOST ?? (bytedanceSsoData.bytecloud_host as string) ?? "https://cloud.bytedance.net",
-          scopes: (bytedanceSsoData.scopes as string[]) ?? ["read", "ciam.device.read"],
-        }
-      : undefined,
+    plugins: {
+      dir: (typeof pluginsData.dir === "string" ? pluginsData.dir : join(homedir(), ".remi", "plugins")).replace(
+        /^~(?=\/|$)/,
+        homedir(),
+      ),
+      enabled: Array.isArray(pluginsData.enabled) ? (pluginsData.enabled as string[]) : [],
+      allowExternal: (pluginsData.allow_external as boolean) ?? true,
+    },
+    pluginConfigs: pluginConfigsData,
     auth: {
       adminEmails: ((authData.admin_emails as string[]) ?? [])
         .map((s) => s.trim().toLowerCase())

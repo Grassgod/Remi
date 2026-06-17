@@ -1,0 +1,14 @@
+{
+  "name": "@remi/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Remi plugin SDK — manifest, plugin contract types, and helpers for building Remi plugins.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

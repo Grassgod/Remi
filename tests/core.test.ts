@@ -128,6 +128,8 @@ function makeConfig(tmpDir: string): RemiConfig {
     services: [],
     botMenu: {},
     proxy: { http: "", noProxy: "" },
+    plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
+    pluginConfigs: {},
     auth: { adminEmails: [] },
     ccSwitch: { enabled: false, configDir: join(tmpDir, "cc-switch") },
     tracing: {

@@ -76,11 +76,6 @@ register("serve", "Production daemon (PM2 subprocess)", async () => {
   return { run: runServe };
 }, true);
 
-register("chat", "Interactive CLI REPL", async () => {
-  const { runChat } = await import("./chat.js");
-  return { run: runChat };
-}, true);
-
 register("auth", "Feishu OAuth (legacy)", async () => {
   const { runAuthCmd } = await import("./auth-cmd.js");
   return { run: runAuthCmd };
@@ -105,17 +100,43 @@ function showHelp(): void {
   console.log("");
 }
 
-export async function dispatch(args: string[]): Promise<void> {
-  const cmd = args[0] ?? "chat";
-  const cmdArgs = args.slice(1);
-
-  if (cmd === "--help" || cmd === "-h" || cmd === "help") {
-    showHelp();
-    return;
+/** Register CLI subcommands contributed by plugins (in-tree + external). Best-effort. */
+function loadPluginCommands(): void {
+  try {
+    const { loadConfig } = require("../config.js");
+    const { PluginRegistry } = require("../plugins/registry.js");
+    const builtins = new Set(Object.keys(COMMANDS));
+    // Guard: a plugin must not shadow a built-in command.
+    const safeRegister: typeof register = (name, description, loader, hidden) => {
+      if (builtins.has(name)) {
+        console.error(`[plugins] command "${name}" conflicts with a built-in command, ignored`);
+        return;
+      }
+      register(name, description, loader, hidden);
+    };
+    new PluginRegistry().load(loadConfig()).dispatchCli(safeRegister);
+  } catch {
+    // never block the dispatcher on plugin load issues
   }
+}
+
+export async function dispatch(args: string[]): Promise<void> {
+  const cmd = args[0] ?? "help";
+  const cmdArgs = args.slice(1);
 
   if (cmd === "--version" || cmd === "-V") {
     console.log(VERSION);
+    return;
+  }
+
+  // Only load plugin CLI commands when needed: for help (discoverability) or an
+  // unknown command (might be plugin-provided). Skip the scan for known built-in
+  // commands so `remi serve`/`status`/etc. don't run external plugin code.
+  const isHelp = cmd === "--help" || cmd === "-h" || cmd === "help";
+  if (isHelp || !COMMANDS[cmd]) loadPluginCommands();
+
+  if (isHelp) {
+    showHelp();
     return;
   }
 

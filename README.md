@@ -2,13 +2,13 @@
 
 > A personal AI assistant platform built on Bun — your AI lives in chat, remembers what matters, and grows with you.
 
-Remi is an extensible AI assistant runtime that connects modern LLM agents (Claude Code, and pluggable backends) to the messengers and tools you already use. Unlike a stateless chatbot, Remi maintains a structured, file-based memory of your work, relationships, and decisions, and orchestrates long-running missions through a queue-driven scheduler. It is designed to be self-hosted, hackable, and to scale from a CLI REPL on your laptop to a full daemon serving Feishu/Lark groups with a Web Dashboard.
+Remi is an extensible AI assistant runtime that connects modern LLM agents (Claude Code, and pluggable backends) to the messengers and tools you already use. Unlike a stateless chatbot, Remi maintains a structured, file-based memory of your work, relationships, and decisions, and orchestrates long-running missions through a queue-driven scheduler. It is designed to be self-hosted, hackable, and to scale from a single process on your laptop to a full daemon serving Feishu/Lark groups with a Web Dashboard.
 
 ## Highlights
 
 - **Hub-and-Spoke orchestration** — A single `Remi` core (`src/core.ts`) routes messages between any **Connector** (input adapter) and any **Provider** (AI backend). Per-chat async locks serialize concurrent traffic without blocking unrelated lanes.
 - **Markdown-based memory (CoALA-inspired)** — Persistent memory stored as plain Markdown under `~/.remi/memory/`, organized into semantic, episodic, procedural, and working layers. Versioned automatically, queryable through MCP tools, and human-readable on disk.
-- **Multi-connector by design** — Ships with a CLI REPL and a full Feishu/Lark connector (cards, streaming, mentions, reactions, threading, dynamic menus). The `Connector` interface is a small surface — Slack, Discord, or HTTP webhooks fit the same shape.
+- **Multi-connector by design** — Ships with a full Feishu/Lark connector (cards, streaming, mentions, reactions, threading, dynamic menus). The `Connector` interface is a small surface — Slack, Discord, or HTTP webhooks fit the same shape.
 - **Multi-provider backends** — Claude Code CLI provider (uses your Claude subscription via long-running subprocess + JSONL streaming, no API key required) and an Aiden CLI provider, behind a 3-method `Provider` interface. Plug in any LLM by implementing `send`, `healthCheck`, and `name`.
 - **BunQueue task pipeline** — Durable queues for conversation persistence, memory extraction, scheduled missions, and cron jobs. One unified `[[cron.jobs]]` config drives heartbeats, daily compaction, skill reports, and one-shot agents.
 - **SvelteKit-style Web Dashboard** — A React + Vite + Tailwind dashboard (`web/frontend/`) backed by a Hono API (`web/server.ts`) for inspecting conversations, missions, memory entities, traces, and queue health.
@@ -24,9 +24,9 @@ Remi is an extensible AI assistant runtime that connects modern LLM agents (Clau
    ┌─────────────┐         │                                         │         ┌──────────────┐
    │ Connectors  │ ──IM──▶ │  Lane Lock → Session → Memory → Route   │ ──send─▶│  Providers   │
    │             │         │                                         │         │              │
-   │ • CLI       │         │   ┌─────────┐  ┌─────────┐ ┌─────────┐  │         │ • Claude CLI │
-   │ • Feishu    │ ◀─reply─│   │ Memory  │  │  Queue  │ │ Tracing │  │ ◀─resp──│ • Aiden CLI  │
-   │ • (Slack…)  │         │   │  Store  │  │ BunQueue│ │ +Metrics│  │         │ • (custom)   │
+   │ • Feishu    │         │   ┌─────────┐  ┌─────────┐ ┌─────────┐  │         │ • Claude CLI │
+   │ • (Slack…)  │ ◀─reply─│   │ Memory  │  │  Queue  │ │ Tracing │  │ ◀─resp──│ • Aiden CLI  │
+   │ • (HTTP…)   │         │   │  Store  │  │ BunQueue│ │ +Metrics│  │         │ • (custom)   │
    └─────────────┘         │   └────┬────┘  └────┬────┘ └─────────┘  │         └──────────────┘
                            └────────┼────────────┼───────────────────┘
                                     │            │
@@ -65,14 +65,6 @@ git clone https://github.com/grasscoder/remi.git
 cd remi
 bun install
 ```
-
-### Run the CLI REPL
-
-```bash
-bun run src/main.ts chat
-```
-
-This starts an interactive chat with Remi using the default Claude CLI provider. Memory is persisted at `~/.remi/memory/`.
 
 ### Run as a daemon (connectors + scheduler)
 

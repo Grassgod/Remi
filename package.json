@@ -28,7 +28,7 @@
     "remi": "./src/main.ts"
   },
   "scripts": {
-    "start": "bun run src/main.ts",
+    "start": "bun run src/main.ts serve",
     "serve": "bun run src/main.ts serve",
     "test": "bun test",
     "build": "bun run scripts/build.ts"

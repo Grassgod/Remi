@@ -23,7 +23,6 @@ export { AcpProvider } from "./providers/acp/index.js";
 
 // Connectors
 export { type Connector, type IncomingMessage, type MessageHandler } from "./connectors/base.js";
-export { CLIConnector } from "./connectors/cli.js";
 
 // Memory
 export { MemoryStore } from "./memory/store.js";

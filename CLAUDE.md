@@ -8,7 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 bun install                          # Install dependencies
 bun test                             # Run all tests (bun:test)
 bun test tests/memory.test.ts        # Run single test file
-bun run src/main.ts                  # Interactive CLI REPL (default)
 bun run src/main.ts serve            # Daemon mode (connectors + scheduler)
 ```
 
@@ -32,7 +31,7 @@ Connector → IncomingMessage → Remi → Provider.send() → AgentResponse →
 
 **Providers**: `ClaudeCLIProvider` uses Claude Code subscription via long-running subprocess with bidirectional JSONL streaming. No API key needed.
 
-**Connectors**: `CLIConnector` (dev REPL).
+**Connectors**: `FeishuConnector` (Feishu/Lark — cards, streaming, threads, menus).
 
 **Memory**: Dual-layer markdown files at `~/.remi/memory/`. `MemoryStore` handles read/write with automatic `.versions/` backups. Context is loaded natively by Claude Code via CLAUDE.md + MEMORY.md; recall MCP tool provides on-demand search.
 

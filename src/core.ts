@@ -25,8 +25,9 @@ import { AcpProvider, resolveAcpPermissionMode } from "./providers/acp/index.js"
 import { FeishuConnector } from "./connectors/feishu/index.js";
 import { flushDedupCacheSync, MenuSyncer } from "@remi/feishu-channel";
 
-import { AuthStore, FeishuAuthAdapter, ByteDanceSSOAdapter } from "./auth/index.js";
+import { AuthStore, FeishuAuthAdapter } from "./auth/index.js";
 import type { TokenSyncRule } from "./auth/token-sync.js";
+import { PluginRegistry } from "./plugins/registry.js";
 import { MemoryStore } from "./memory/store.js";
 import { RemiQueueManager } from "./queue/index.js";
 import { MetricsCollector } from "./metrics/collector.js";
@@ -948,13 +949,16 @@ export class Remi {
         }),
       );
     }
-    if (config.bytedanceSso?.clientId) {
-      authStore.registerAdapter(
-        new ByteDanceSSOAdapter(config.bytedanceSso),
-      );
-      log.info("Registered ByteDance SSO adapter (1Passport)");
-    }
     remi.authStore = authStore;
+
+    // Plugins (core surface) — auth adapters contributed by in-tree or external
+    // (~/.remi/plugins) plugins. ByteDance SSO is an external plugin. Best-effort:
+    // a broken plugin must never block the daemon from booting.
+    try {
+      new PluginRegistry().load(config).dispatchCore({ authStore, config });
+    } catch (e) {
+      log.warn("Plugin core dispatch failed:", e);
+    }
 
     // 2. Providers — register primary + both ACP agents
     const provider = Remi._buildProvider(config);

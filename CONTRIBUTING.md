@@ -45,8 +45,8 @@ bun test tests/memory.test.ts
 # Watch mode (re-run on save)
 bun test --watch
 
-# Run the CLI locally
-bun run src/main.ts chat
+# Run the daemon locally (connectors + scheduler)
+bun run src/main.ts serve
 
 # Develop the Web Dashboard
 cd web/frontend && bun run dev

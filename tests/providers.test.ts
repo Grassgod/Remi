@@ -8,6 +8,17 @@ import {
   ClaudeAdapter,
 } from "@remi/acp-provider";
 import { CodexAdapter } from "../src/providers/acp/adapters/codex.js";
+import { isAbsolute } from "node:path";
+
+/**
+ * codex resolution is machine-dependent: when no explicit/env executable is
+ * given, the resolver discovers an installed codex-acp binary (e.g. under
+ * ~/.npm-global/bin) and returns its absolute path; otherwise it returns the
+ * provided fallback. Accept either so the test is hermetic across machines.
+ */
+function isCodexExecutable(resolved: string, fallback: string): boolean {
+  return resolved === fallback || (isAbsolute(resolved) && resolved.endsWith("/codex-acp"));
+}
 
 describe("AcpProvider", () => {
   it("defaults Claude ACP sessions to bypassPermissions", () => {
@@ -51,7 +62,8 @@ describe("AcpProvider", () => {
 
   it("preserves explicit ACP executables", () => {
     expect(resolveAcpExecutableForAgent("claude", "/tmp/custom-agent", "claude-agent-acp")).toBe("/tmp/custom-agent");
-    expect(resolveAcpExecutableForAgent("codex", null, "codex-agent-acp")).toBe("codex-agent-acp");
+    // codex with no explicit executable: fallback OR a discovered codex-acp binary.
+    expect(isCodexExecutable(resolveAcpExecutableForAgent("codex", null, "codex-agent-acp"), "codex-agent-acp")).toBe(true);
   });
 
   it("uses the Codex ACP executable environment override", () => {
@@ -66,10 +78,11 @@ describe("AcpProvider", () => {
   });
 
   it("checks Codex ACP health via the Codex ACP executable", () => {
-    expect(resolveAcpHealthCheckCommand("codex", null, "codex-acp")).toEqual({
-      command: "codex-acp",
-      args: ["--version"],
-    });
+    // codex with no explicit executable: fallback OR a discovered codex-acp binary.
+    const codexHealth = resolveAcpHealthCheckCommand("codex", null, "codex-acp");
+    expect(codexHealth.args).toEqual(["--version"]);
+    expect(isCodexExecutable(codexHealth.command, "codex-acp")).toBe(true);
+    // Explicit executable is always preserved verbatim.
     expect(resolveAcpHealthCheckCommand("codex", "/tmp/codex-acp", "codex-acp")).toEqual({
       command: "/tmp/codex-acp",
       args: ["--version"],

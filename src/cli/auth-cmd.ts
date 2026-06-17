@@ -9,7 +9,7 @@ const log = createLogger("auth-cmd");
 
 export async function runAuthCmd(args: string[]): Promise<void> {
   try {
-    await runAuth(args[0]);
+    await runAuth();
   } catch (e) {
     log.error("Auth error:", e);
     process.exit(1);

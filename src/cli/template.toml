@@ -15,10 +15,12 @@ domain = "feishu"
 # http = "http://proxy:8118"
 # no_proxy = "localhost,127.0.0.1"
 
-# ── ByteDance SSO (optional, ByteDance employees only) ───
-# Only used inside ByteDance — leave commented out for public/open-source use.
-# Run `bun run src/main.ts auth bytedance-sso` after configuring.
-# [bytedance_sso]
+# ── External plugins (optional) ──────────────────────────
+# Drop-in plugins load from ~/.remi/plugins/<id>/ (plugin.json + built entry).
+# Configure a plugin via its own [plugin.<id>] section. Example: ByteDance SSO
+# (a private, ByteDance-only plugin distributed separately — not in this repo):
+# [plugin.bytedance-passport]
+# enabled = true
 # client_id = ""
 
 # ── Image Generation (optional) ──────────────────────────
