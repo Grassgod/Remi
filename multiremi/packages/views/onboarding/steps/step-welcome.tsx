@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { ArrowRight, Download, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@multimira/ui/components/ui/button";
-import { MultimiraIcon } from "@multimira/ui/components/common/multimira-icon";
+import { MultiremiIcon } from "@multimira/ui/components/common/multimira-icon";
 import { captureDownloadIntent } from "@multimira/core/analytics";
 import { cn } from "@multimira/ui/lib/utils";
 import { DragStrip } from "@multimira/views/platform";
@@ -79,7 +79,7 @@ export function StepWelcome({
         <div className="flex flex-1 flex-col justify-center px-6 pb-12 sm:px-10 md:px-20 lg:px-20 xl:px-24">
           <div className="flex w-full max-w-[540px] flex-col gap-8">
             <div className="flex items-center gap-2.5">
-              <MultimiraIcon className="size-5 text-foreground" noSpin />
+              <MultiremiIcon className="size-5 text-foreground" noSpin />
               <span className="font-serif text-xl font-medium tracking-tight">
                 {t(($) => $.welcome.wordmark)}
               </span>

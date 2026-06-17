@@ -1,7 +1,7 @@
 import { cn } from "@multimira/ui/lib/utils";
 
 export const githubUrl = "https://github.com/multimira-ai/multimira";
-export const twitterUrl = "https://x.com/MultimiraAI";
+export const twitterUrl = "https://x.com/MultiremiAI";
 
 export function GitHubMark({ className }: { className?: string }) {
   return (

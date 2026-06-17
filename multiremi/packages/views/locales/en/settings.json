@@ -81,7 +81,7 @@
     },
     "system": {
       "title": "System Notifications",
-      "description": "Control native OS notification banners shown when Multimira is in the background.",
+      "description": "Control native OS notification banners shown when Multiremi is in the background.",
       "label": "Show system notifications",
       "hint": "Show a banner from your operating system for new inbox items when the app isn't focused."
     }
@@ -175,7 +175,7 @@
     "toast_failed": "Failed to update setting"
   },
   "github": {
-    "page_description": "Connect a GitHub App, control how Pull Requests show up inside Multimira, and decide what your agents leave behind in commit history.",
+    "page_description": "Connect a GitHub App, control how Pull Requests show up inside Multiremi, and decide what your agents leave behind in commit history.",
     "section_master": "Enable GitHub features",
     "master_description_on": "When off, every GitHub UI affordance is hidden and no new side-effects are written. Existing data is kept on the backend. Not a development team? Just turn it off here.",
     "master_description_off": "GitHub features are turned off. The PR sidebar, co-author trailer, and auto-link are paused. Data on the backend is not deleted.",
@@ -192,7 +192,7 @@
     "disconnect": "Disconnect",
     "disconnecting": "Disconnecting…",
     "disconnect_confirm_title": "Disconnect GitHub App",
-    "disconnect_confirm_description": "Multimira will stop receiving webhooks for this installation. Existing PR mirrors and links are kept; reconnect any time to resume updates.",
+    "disconnect_confirm_description": "Multiremi will stop receiving webhooks for this installation. Existing PR mirrors and links are kept; reconnect any time to resume updates.",
     "disconnect_confirm_cancel": "Cancel",
     "disconnect_confirm_action": "Disconnect",
     "not_configured": "GitHub integration is not configured for this deployment. Operators must set",
@@ -219,7 +219,7 @@
   },
   "lark": {
     "section_title": "Lark",
-    "page_description": "Connect each Multimira Agent to a Lark (飞书) PersonalAgent Bot. Members can DM the Bot, @ it in groups, and type /issue to spin up a new Multimira issue.",
+    "page_description": "Connect each Multiremi Agent to a Lark (飞书) PersonalAgent Bot. Members can DM the Bot, @ it in groups, and type /issue to spin up a new Multiremi issue.",
     "not_enabled_title": "Lark integration not enabled",
     "not_enabled_description_prefix": "Set",
     "not_enabled_description_suffix": "on the server to enable Lark Bot installations.",
@@ -285,7 +285,7 @@
     "install_error_expired": "QR expired before authorization. Scan again.",
     "install_error_access_denied": "Install cancelled in Lark.",
     "install_error_protocol": "Lark refused the install — try again.",
-    "install_error_bot_info": "Authorized, but Multimira couldn't fetch the Bot's identity. Try again.",
+    "install_error_bot_info": "Authorized, but Multiremi couldn't fetch the Bot's identity. Try again.",
     "install_error_conflict": "Could not save the installation. Another bot may already be bound to this agent.",
     "install_error_installer_bind": "Installed the bot, but could not bind your Lark identity. Try again or contact support.",
     "install_error_session_lost": "Install session expired or was lost. Scan again to start over.",

@@ -19,13 +19,13 @@ const jsonLd = {
   "@graph": [
     {
       "@type": "Organization",
-      name: "Multimira",
+      name: "Multiremi",
       url: "https://www.multimira.ai",
       sameAs: ["https://github.com/multimira-ai/multimira"],
     },
     {
       "@type": "SoftwareApplication",
-      name: "Multimira",
+      name: "Multiremi",
       applicationCategory: "ProjectManagement",
       operatingSystem: "Web",
       description:

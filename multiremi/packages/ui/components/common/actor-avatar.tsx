@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Bot, Users } from "lucide-react";
 import { cn } from "@multimira/ui/lib/utils";
-import { MultimiraIcon } from "./multimira-icon";
+import { MultiremiIcon } from "./multimira-icon";
 
 interface ActorAvatarProps {
   name: string;
@@ -54,7 +54,7 @@ function ActorAvatar({
           onError={() => setImgError(true)}
         />
       ) : isSystem ? (
-        <MultimiraIcon noSpin style={{ width: size * 0.55, height: size * 0.55 }} />
+        <MultiremiIcon noSpin style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : isAgent ? (
         <Bot style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : isSquad ? (

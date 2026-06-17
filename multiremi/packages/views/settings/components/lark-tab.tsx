@@ -57,7 +57,7 @@ const LARK_INTL_CONNECT_ENABLED: boolean = false;
 // backend enforces it; the UI hides the button for non-admins to match).
 //
 // Adding a new installation flows through the Agent detail page: the
-// install path is per-agent (each Multimira Agent gets exactly one Bot —
+// install path is per-agent (each Multiremi Agent gets exactly one Bot —
 // see the (workspace_id, agent_id) UNIQUE in lark_installation), so
 // asking the user to pick an agent here would re-create that page's
 // picker. The "Bind your first agent" copy in the empty state hints
@@ -220,8 +220,8 @@ function InstallationRow({
   onDisconnect: () => void;
 }) {
   const { t } = useT("settings");
-  // The bot is bound 1:1 to a Multimira Agent (per the (workspace_id,
-  // agent_id) UNIQUE in lark_installation). Render the Multimira agent's
+  // The bot is bound 1:1 to a Multiremi Agent (per the (workspace_id,
+  // agent_id) UNIQUE in lark_installation). Render the Multiremi agent's
   // identity here rather than the raw Lark app_id / bot_open_id — those
   // mean nothing to product users. getAgentName falls back to
   // "Unknown Agent" when the agent has been deleted; the Disconnect

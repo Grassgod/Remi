@@ -96,7 +96,7 @@ function mergeQuestionnaire(
  *     the install-runtime / create-agent guide issues on landing.
  *   - Runtime-connected (runtime picked on Step 3): completeOnboarding
  *     marks onboarded; we push a {choice:"runtime", runtimeId} welcome
- *     signal and navigate. The welcome hook creates the Multimira Helper
+ *     signal and navigate. The welcome hook creates the Multiremi Helper
  *     agent on the picked runtime and shows the starter-card Modal.
  *
  * V3 contract: this file never touches createAgent / createIssue. The

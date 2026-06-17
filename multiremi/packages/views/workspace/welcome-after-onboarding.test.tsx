@@ -159,7 +159,7 @@ describe("WelcomeAfterOnboarding", () => {
       mockListAgents.mockResolvedValueOnce([]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
-        name: "Multimira Helper",
+        name: "Multiremi Helper",
         description: "Built-in workspace assistant.",
         avatar_url: null,
         visibility: "workspace",
@@ -175,33 +175,33 @@ describe("WelcomeAfterOnboarding", () => {
       expect(screen.getByText(/Preparing your Helper/i)).toBeInTheDocument();
 
       await waitFor(() => {
-        expect(screen.getByText(/welcome to Multimira/i)).toBeInTheDocument();
+        expect(screen.getByText(/welcome to Multiremi/i)).toBeInTheDocument();
       });
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
       expect(agentArgs.runtime_id).toBe("rt-1");
-      expect(agentArgs.name).toBe("Multimira Helper");
-      expect(agentArgs.instructions).toContain("Multimira Helper");
+      expect(agentArgs.name).toBe("Multiremi Helper");
+      expect(agentArgs.instructions).toContain("Multiremi Helper");
 
       // 3 starter card titles come from HELPER_STARTER_PROMPTS (TS const,
       // EN under the test's en locale).
       expect(
-        screen.getByText("Introduce Multimira to me"),
+        screen.getByText("Introduce Multiremi to me"),
       ).toBeInTheDocument();
       expect(
         screen.getByText("Walk me through the core features"),
       ).toBeInTheDocument();
       expect(
-        screen.getByText("Show me what Multimira can do for me — as slides"),
+        screen.getByText("Show me what Multiremi can do for me — as slides"),
       ).toBeInTheDocument();
     });
 
-    it("reuses an existing Multimira Helper agent instead of creating duplicates", async () => {
+    it("reuses an existing Multiremi Helper agent instead of creating duplicates", async () => {
       mockListAgents.mockResolvedValueOnce([
         {
           id: "agent-existing",
-          name: "Multimira Helper",
+          name: "Multiremi Helper",
           description: "",
           avatar_url: null,
           visibility: "workspace",
@@ -216,7 +216,7 @@ describe("WelcomeAfterOnboarding", () => {
 
       renderWelcome();
       await waitFor(() => {
-        expect(screen.getByText(/welcome to Multimira/i)).toBeInTheDocument();
+        expect(screen.getByText(/welcome to Multiremi/i)).toBeInTheDocument();
       });
 
       expect(mockCreateAgent).not.toHaveBeenCalled();
@@ -226,7 +226,7 @@ describe("WelcomeAfterOnboarding", () => {
       mockListAgents.mockResolvedValueOnce([]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
-        name: "Multimira Helper",
+        name: "Multiremi Helper",
         description: "",
         avatar_url: null,
         visibility: "workspace",
@@ -252,7 +252,7 @@ describe("WelcomeAfterOnboarding", () => {
       renderWelcome();
       await waitFor(() =>
         expect(
-          screen.getByText("Introduce Multimira to me"),
+          screen.getByText("Introduce Multiremi to me"),
         ).toBeInTheDocument(),
       );
 
@@ -261,9 +261,9 @@ describe("WelcomeAfterOnboarding", () => {
       expect(ctaEmpty).toBeDisabled();
 
       // Toggle two cards.
-      fireEvent.click(screen.getByText("Introduce Multimira to me"));
+      fireEvent.click(screen.getByText("Introduce Multiremi to me"));
       fireEvent.click(
-        screen.getByText("Show me what Multimira can do for me — as slides"),
+        screen.getByText("Show me what Multiremi can do for me — as slides"),
       );
 
       // CTA enables and reflects the count.
@@ -274,8 +274,8 @@ describe("WelcomeAfterOnboarding", () => {
       await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledTimes(2));
       const titles = mockCreateIssue.mock.calls.map(([args]) => args.title);
       expect(titles).toEqual([
-        "Introduce Multimira to me",
-        "Show me what Multimira can do for me — as slides",
+        "Introduce Multiremi to me",
+        "Show me what Multiremi can do for me — as slides",
       ]);
       // Both assigned to the same Helper agent.
       mockCreateIssue.mock.calls.forEach(([args]) => {
@@ -302,7 +302,7 @@ describe("WelcomeAfterOnboarding", () => {
       mockListAgents.mockResolvedValueOnce([]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
-        name: "Multimira Helper",
+        name: "Multiremi Helper",
         description: "",
         avatar_url: null,
         visibility: "workspace",
@@ -321,27 +321,27 @@ describe("WelcomeAfterOnboarding", () => {
 
       await waitFor(() =>
         expect(
-          screen.getByText("Multimira를 간단히 소개해 주세요"),
+          screen.getByText("Multiremi를 간단히 소개해 주세요"),
         ).toBeInTheDocument(),
       );
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
-      expect(agentArgs.description).toContain("Multimira 사용 어시스턴트");
+      expect(agentArgs.description).toContain("Multiremi 사용 어시스턴트");
       expect(agentArgs.instructions).toContain(
-        "당신은 이 Multimira 워크스페이스에 내장된 AI 어시스턴트",
+        "당신은 이 Multiremi 워크스페이스에 내장된 AI 어시스턴트",
       );
 
-      fireEvent.click(screen.getByText("Multimira를 간단히 소개해 주세요"));
+      fireEvent.click(screen.getByText("Multiremi를 간단히 소개해 주세요"));
       fireEvent.click(
         await screen.findByRole("button", { name: /작업 1개를 나에게 할당/i }),
       );
 
       await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledTimes(1));
       const [issueArgs] = mockCreateIssue.mock.calls[0]!;
-      expect(issueArgs.title).toBe("Multimira를 간단히 소개해 주세요");
+      expect(issueArgs.title).toBe("Multiremi를 간단히 소개해 주세요");
       expect(issueArgs.description).toContain(
-        "Multimira를 1-2문단으로 간단히 소개해 주세요",
+        "Multiremi를 1-2문단으로 간단히 소개해 주세요",
       );
     });
 
@@ -349,7 +349,7 @@ describe("WelcomeAfterOnboarding", () => {
       mockListAgents.mockResolvedValueOnce([]);
       mockCreateAgent.mockResolvedValueOnce({
         id: "agent-1",
-        name: "Multimira Helper",
+        name: "Multiremi Helper",
         description: "",
         avatar_url: null,
         visibility: "workspace",
@@ -368,18 +368,18 @@ describe("WelcomeAfterOnboarding", () => {
 
       await waitFor(() =>
         expect(
-          screen.getByText("Multimira を簡単に紹介してください"),
+          screen.getByText("Multiremi を簡単に紹介してください"),
         ).toBeInTheDocument(),
       );
 
       expect(mockCreateAgent).toHaveBeenCalledTimes(1);
       const [agentArgs] = mockCreateAgent.mock.calls[0]!;
-      expect(agentArgs.description).toContain("Multimira の使い方アシスタント");
+      expect(agentArgs.description).toContain("Multiremi の使い方アシスタント");
       expect(agentArgs.instructions).toContain(
-        "あなたは Multimira Helper、この Multimira ワークスペースに組み込まれた AI アシスタント",
+        "あなたは Multiremi Helper、この Multiremi ワークスペースに組み込まれた AI アシスタント",
       );
 
-      fireEvent.click(screen.getByText("Multimira を簡単に紹介してください"));
+      fireEvent.click(screen.getByText("Multiremi を簡単に紹介してください"));
       fireEvent.click(
         await screen.findByRole("button", {
           name: /1 件のタスクを私に割り当てる/,
@@ -388,9 +388,9 @@ describe("WelcomeAfterOnboarding", () => {
 
       await waitFor(() => expect(mockCreateIssue).toHaveBeenCalledTimes(1));
       const [issueArgs] = mockCreateIssue.mock.calls[0]!;
-      expect(issueArgs.title).toBe("Multimira を簡単に紹介してください");
+      expect(issueArgs.title).toBe("Multiremi を簡単に紹介してください");
       expect(issueArgs.description).toContain(
-        "Multimira を1〜2段落で簡単に紹介してください",
+        "Multiremi を1〜2段落で簡単に紹介してください",
       );
     });
   });
@@ -427,7 +427,7 @@ describe("WelcomeAfterOnboarding", () => {
 
       // Modal appears once all 3 API calls succeed.
       await waitFor(() => {
-        expect(screen.getByText(/Welcome to Multimira/i)).toBeInTheDocument();
+        expect(screen.getByText(/Welcome to Multiremi/i)).toBeInTheDocument();
       });
 
       expect(mockCreateIssue).toHaveBeenCalledTimes(2);
@@ -446,7 +446,7 @@ describe("WelcomeAfterOnboarding", () => {
       // install-runtime mention chip pointing at MUL-1 / issue-install.
       const [secondCall] = mockCreateIssue.mock.calls.slice(1);
       expect(secondCall![0].title).toBe(
-        "Step 2 — Create your first Multimira Agent",
+        "Step 2 — Create your first Multiremi Agent",
       );
       expect(secondCall![0].status).toBe("todo");
       expect(secondCall![0].description).toContain(
@@ -475,7 +475,7 @@ describe("WelcomeAfterOnboarding", () => {
       await waitFor(() =>
         expect(useWelcomeStore.getState().dismissed).toBe(true),
       );
-      expect(screen.queryByText(/Welcome to Multimira/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Welcome to Multiremi/i)).not.toBeInTheDocument();
     });
 
     it("uses Korean persisted skip-path issue and comment artifacts under ko locale", async () => {
@@ -500,7 +500,7 @@ describe("WelcomeAfterOnboarding", () => {
       renderWelcome({ locale: "ko" });
 
       await waitFor(() => {
-        expect(screen.getByText(/Multimira에 오신 것을 환영합니다/i)).toBeInTheDocument();
+        expect(screen.getByText(/Multiremi에 오신 것을 환영합니다/i)).toBeInTheDocument();
       });
 
       expect(mockCreateIssue).toHaveBeenCalledTimes(2);
@@ -509,10 +509,10 @@ describe("WelcomeAfterOnboarding", () => {
         "1단계 — agent를 사용하려면 runtime 연결하기",
       );
       expect(installCall![0].description).toContain(
-        "Multimira에 오신 것을 환영합니다.",
+        "Multiremi에 오신 것을 환영합니다.",
       );
       expect(guideCall![0].title).toBe(
-        "2단계 — 첫 Multimira Agent 만들기",
+        "2단계 — 첫 Multiremi Agent 만들기",
       );
       expect(guideCall![0].description).toContain(
         "runtime이 online 상태가 되면",
@@ -553,7 +553,7 @@ describe("WelcomeAfterOnboarding", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText(/Multimira へようこそ/),
+          screen.getByText(/Multiremi へようこそ/),
         ).toBeInTheDocument();
       });
 
@@ -562,9 +562,9 @@ describe("WelcomeAfterOnboarding", () => {
       expect(installCall![0].title).toBe(
         "ステップ1 — agent を使うために runtime を接続する",
       );
-      expect(installCall![0].description).toContain("Multimira へようこそ。");
+      expect(installCall![0].description).toContain("Multiremi へようこそ。");
       expect(guideCall![0].title).toBe(
-        "ステップ2 — 最初の Multimira Agent を作成する",
+        "ステップ2 — 最初の Multiremi Agent を作成する",
       );
       expect(guideCall![0].description).toContain("runtime が online になったら");
       expect(guideCall![0].description).toContain(

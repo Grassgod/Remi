@@ -186,7 +186,7 @@ describe("ThinkingPropRow", () => {
     renderRow({ value: "" });
 
     await screen.findByText("Thinking");
-    // Empty value means Multimira omits --effort, so the local CLI's
+    // Empty value means Multiremi omits --effort, so the local CLI's
     // config decides — chip + tooltip both read "Follow CLI config".
     expect((await screen.findAllByText("Follow CLI config")).length).toBeGreaterThan(0);
   });

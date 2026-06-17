@@ -1,8 +1,8 @@
 {
   "fab": {
-    "running": "Multimira 正在工作...",
+    "running": "Multiremi 正在工作...",
     "unread_other": "{{count}} 条未读对话",
-    "default": "问 Multimira"
+    "default": "问 Multiremi"
   },
   "input": {
     "placeholder_no_agent": "创建一个智能体后才能开始对话",
@@ -84,7 +84,7 @@
     "first_time_pillars_suffix": "。",
     "first_time_actions": "让它做一份总结、规划你的一天，或交给它一个小任务。",
     "returning_title_named": "你好，我是 {{name}}",
-    "returning_title_default": "欢迎使用 Multimira",
+    "returning_title_default": "欢迎使用 Multiremi",
     "returning_subtitle": "试试问"
   },
   "starter_prompts": {

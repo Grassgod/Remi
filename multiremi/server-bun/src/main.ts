@@ -16,7 +16,7 @@ const cfg = loadConfig();
 const dbHandle = cfg.databaseUrl ? createDb(cfg.databaseUrl) : undefined;
 const app = createApp(cfg, dbHandle?.db);
 
-log.info(`Multimira (bun) server starting on :${cfg.port}`);
+log.info(`Multiremi (bun) server starting on :${cfg.port}`);
 if (!cfg.jwtSecret) log.warn("JWT_SECRET is empty — auth will reject all tokens");
 if (!dbHandle) log.warn("DATABASE_URL is empty — DB-backed routes disabled");
 

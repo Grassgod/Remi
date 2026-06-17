@@ -9,7 +9,7 @@ import { setCurrentWorkspace } from "@multimira/core/platform";
 import { useAuthStore } from "@multimira/core/auth";
 import { NoAccessPage } from "@multimira/views/workspace/no-access-page";
 import { WelcomeAfterOnboarding } from "@multimira/views/workspace/welcome-after-onboarding";
-import { MultimiraIcon } from "@multimira/ui/components/common/multimira-icon";
+import { MultiremiIcon } from "@multimira/ui/components/common/multimira-icon";
 import { useWorkspaceSeen } from "@multimira/views/workspace/use-workspace-seen";
 
 export default function WorkspaceLayout({
@@ -69,7 +69,7 @@ export default function WorkspaceLayout({
 
   const loadingIndicator = (
     <div className="flex h-svh items-center justify-center">
-      <MultimiraIcon className="size-6 animate-pulse" />
+      <MultiremiIcon className="size-6 animate-pulse" />
     </div>
   );
 

@@ -60,7 +60,7 @@ export type UseCase =
 
 /**
  * Questionnaire shape. `use_case` allows multiple values (users hire
- * Multimira for several jobs at once); `source` and `role` are single-
+ * Multiremi for several jobs at once); `source` and `role` are single-
  * select — for `source` we capture the primary acquisition channel
  * for clean self-reported-attribution math (the array shape is
  * preserved for back-compat with v2 multi-select rows; the client

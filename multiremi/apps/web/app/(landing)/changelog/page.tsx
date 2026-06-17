@@ -4,10 +4,10 @@ import { ChangelogPageClient } from "@/features/landing/components/changelog-pag
 export const metadata: Metadata = {
   title: "Changelog",
   description:
-    "See what's new in Multimira — latest features, improvements, and fixes.",
+    "See what's new in Multiremi — latest features, improvements, and fixes.",
   openGraph: {
-    title: "Changelog | Multimira",
-    description: "Latest updates and releases from Multimira.",
+    title: "Changelog | Multiremi",
+    description: "Latest updates and releases from Multiremi.",
     url: "/changelog",
   },
   alternates: {

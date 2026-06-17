@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Multimira backend — Bun/TypeScript rewrite (in progress). Unified ACP agent layer ported from Remi.",
+  "description": "Multiremi backend — Bun/TypeScript rewrite (in progress). Unified ACP agent layer ported from Remi.",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test"

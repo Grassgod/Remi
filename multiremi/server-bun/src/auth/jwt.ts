@@ -7,7 +7,7 @@
 import { SignJWT, jwtVerify } from "jose";
 
 export interface AuthClaims {
-  /** Multimira user id (JWT `sub`). */
+  /** Multiremi user id (JWT `sub`). */
   sub: string;
   email: string;
   name: string;

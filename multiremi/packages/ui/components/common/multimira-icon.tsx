@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { cn } from "../../lib/utils";
 
-interface MultimiraIconProps extends React.ComponentProps<"span"> {
+interface MultiremiIconProps extends React.ComponentProps<"span"> {
   /**
    * If true, play a one-time entrance spin animation.
    */
@@ -27,18 +27,18 @@ const borderedSizes = {
 };
 
 /**
- * Pure CSS 8-pointed asterisk icon matching the Multimira logo.
+ * Pure CSS 8-pointed asterisk icon matching the Multiremi logo.
  * Uses currentColor so it adapts to light/dark themes automatically.
  * Clip-path polygon traced from the original SVG path coordinates.
  */
-export function MultimiraIcon({
+export function MultiremiIcon({
   className,
   animate = false,
   noSpin = false,
   bordered = false,
   size = "sm",
   ...props
-}: MultimiraIconProps) {
+}: MultiremiIconProps) {
   const [entranceDone, setEntranceDone] = useState(!animate);
 
   useEffect(() => {

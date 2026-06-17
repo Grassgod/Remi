@@ -1,4 +1,4 @@
-/** A Lark Bot installation bound to a single Multimira agent.
+/** A Lark Bot installation bound to a single Multiremi agent.
  *
  * Wire shape mirrors `LarkInstallationResponse` in
  * `server/internal/handler/lark.go`. New fields the backend adds in the

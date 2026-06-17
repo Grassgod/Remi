@@ -15,7 +15,7 @@ export const SOURCE_BACKFILL_MAX_DISMISSALS = 3;
 
 /**
  * Should we ask this already-onboarded user where they heard about
- * Multimira?
+ * Multiremi?
  *
  * Returns true for users who:
  *  - have completed onboarding (`onboarded_at` set), and

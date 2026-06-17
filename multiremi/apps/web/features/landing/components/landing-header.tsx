@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
-import { MultimiraIcon } from "@multimira/ui/components/common/multimira-icon";
+import { MultiremiIcon } from "@multimira/ui/components/common/multimira-icon";
 import { cn } from "@multimira/ui/lib/utils";
 import { useAuthStore } from "@multimira/core/auth";
 import { docsHrefForLocale, useLocale } from "../i18n";
@@ -37,7 +37,7 @@ export function LandingHeader({
       <div className="mx-auto flex h-[76px] max-w-[1320px] items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-6 lg:gap-8">
           <Link href="/" className="flex shrink-0 items-center gap-3">
-            <MultimiraIcon
+            <MultiremiIcon
               className={cn(
                 "size-5",
                 variant === "dark" ? "text-white" : "text-[#0a0d12]",

@@ -128,7 +128,7 @@ describe("RuntimeMachineFilterDropdown", () => {
       }),
       makeMachine({
         id: "m-cloud",
-        title: "Multimira cloud",
+        title: "Multiremi cloud",
         section: "cloud",
         isCurrent: false,
         mode: "cloud",
@@ -151,7 +151,7 @@ describe("RuntimeMachineFilterDropdown", () => {
     // The menu items themselves also render.
     expect(screen.getByText("dev.local")).toBeTruthy();
     expect(screen.getByText("build-server")).toBeTruthy();
-    expect(screen.getByText("Multimira cloud")).toBeTruthy();
+    expect(screen.getByText("Multiremi cloud")).toBeTruthy();
   });
 
   it("fires onChange(null) when the All-runtimes row is clicked", () => {

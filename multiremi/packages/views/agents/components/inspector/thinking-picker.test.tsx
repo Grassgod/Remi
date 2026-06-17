@@ -48,7 +48,7 @@ describe("ThinkingPicker", () => {
   it('renders "Follow CLI config" when value is empty', () => {
     renderPicker({ value: "" });
     // The trigger and the tooltip both carry the label. Empty value means
-    // Multimira omits --effort, so the local CLI's config decides the
+    // Multiremi omits --effort, so the local CLI's config decides the
     // reasoning level — see thinking-prop-row.tsx for the contract.
     expect(screen.getAllByText("Follow CLI config").length).toBeGreaterThan(0);
   });

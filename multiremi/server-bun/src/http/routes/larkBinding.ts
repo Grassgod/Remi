@@ -111,7 +111,7 @@ export function larkBindingRoutes(db?: Db): Hono<AppEnv> {
           return c.json({ error: "binding token invalid or expired" }, 410);
         case "conflict":
           return c.json(
-            { error: "this Lark account is already bound to a different Multimira user" },
+            { error: "this Lark account is already bound to a different Multiremi user" },
             409,
           );
         case "not_member":

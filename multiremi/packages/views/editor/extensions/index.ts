@@ -127,7 +127,7 @@ export interface EditorExtensionsOptions {
   /**
    * When true, the `@` suggestion picker is not attached. The mention node
    * type is still registered in the schema so any mention pasted in from
-   * another Multimira editor renders as the normal mention pill instead of
+   * another Multiremi editor renders as the normal mention pill instead of
    * being silently dropped by ProseMirror's schema check. Use for editors
    * where *creating* a new mention has no business meaning (e.g. agent
    * system prompts) but *preserving* an existing one still matters.

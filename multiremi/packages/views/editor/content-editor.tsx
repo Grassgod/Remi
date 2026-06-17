@@ -97,7 +97,7 @@ interface ContentEditorProps {
   /**
    * When true, the `@` suggestion picker is disabled but the mention node
    * type remains in the schema, so existing mentions pasted in from other
-   * Multimira editors still render as the normal pill. Use for editors where
+   * Multiremi editors still render as the normal pill. Use for editors where
    * *creating* a new mention has no business meaning (e.g. agent system
    * prompts) but *preserving* an existing one still matters.
    */

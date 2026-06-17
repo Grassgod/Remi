@@ -62,8 +62,8 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.multimira.ai"),
   title: {
-    default: "Multimira — Project Management for Human + Agent Teams",
-    template: "%s | Multimira",
+    default: "Multiremi — Project Management for Human + Agent Teams",
+    template: "%s | Multiremi",
   },
   description:
     "Open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",
@@ -73,7 +73,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Multimira",
+    siteName: "Multiremi",
     locale: "en_US",
   },
   twitter: {

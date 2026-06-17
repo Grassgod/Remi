@@ -121,7 +121,7 @@ describe("LoginPage", () => {
   // Email step rendering
   // -------------------------------------------------------------------------
 
-  it("renders email form with 'Sign in to Multimira' title", () => {
+  it("renders email form with 'Sign in to Multiremi' title", () => {
     renderWithI18n(<LoginPage onSuccess={onSuccess} cliCallback={CLI_CB} />);
     expect(
       screen.getByText(/sign in to multimira/i),

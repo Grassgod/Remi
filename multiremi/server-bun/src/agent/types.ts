@@ -1,5 +1,5 @@
 /**
- * The Multimira-Bun agent contract. ONE interface for all agents — the Go
+ * The Multiremi-Bun agent contract. ONE interface for all agents — the Go
  * backend's 12 per-agent implementations collapse into a single ACP-driven
  * provider (see ./acp/provider.ts).
  */

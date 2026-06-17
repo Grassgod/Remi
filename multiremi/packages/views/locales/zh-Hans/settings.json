@@ -81,7 +81,7 @@
     },
     "system": {
       "title": "系统通知",
-      "description": "控制 Multimira 在后台时是否显示操作系统的原生通知横幅。",
+      "description": "控制 Multiremi 在后台时是否显示操作系统的原生通知横幅。",
       "label": "显示系统通知",
       "hint": "App 未获得焦点时，新的收件箱条目通过操作系统弹出通知横幅。"
     }
@@ -175,7 +175,7 @@
     "toast_failed": "更新设置失败"
   },
   "github": {
-    "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multimira 中，并决定智能体在 commit 记录里留下哪些痕迹。",
+    "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multiremi 中，并决定智能体在 commit 记录里留下哪些痕迹。",
     "section_master": "启用 GitHub 功能",
     "master_description_on": "关闭后，所有 GitHub 入口都会被隐藏，也不再产生新的副作用。后台已有数据不会被删除。团队不使用 GitHub？在这里直接关掉即可。",
     "master_description_off": "GitHub 功能已关闭。PR 侧栏、Co-authored-by trailer 与自动关联都已暂停。后台数据未删除。",
@@ -192,7 +192,7 @@
     "disconnect": "断开",
     "disconnecting": "断开中…",
     "disconnect_confirm_title": "断开 GitHub App",
-    "disconnect_confirm_description": "Multimira 将不再接收该安装的 webhook。已有的 PR 镜像与关联会保留，再次连接即可恢复同步。",
+    "disconnect_confirm_description": "Multiremi 将不再接收该安装的 webhook。已有的 PR 镜像与关联会保留，再次连接即可恢复同步。",
     "disconnect_confirm_cancel": "取消",
     "disconnect_confirm_action": "断开",
     "not_configured": "当前部署没有配置 GitHub 集成。运维需要设置",
@@ -219,7 +219,7 @@
   },
   "lark": {
     "section_title": "飞书",
-    "page_description": "将每个 Multimira 智能体绑定到飞书 PersonalAgent Bot。成员可在飞书私聊 Bot、群聊 @ Bot，或输入 /issue 直接创建 Multimira issue。",
+    "page_description": "将每个 Multiremi 智能体绑定到飞书 PersonalAgent Bot。成员可在飞书私聊 Bot、群聊 @ Bot，或输入 /issue 直接创建 Multiremi issue。",
     "not_enabled_title": "未启用飞书集成",
     "not_enabled_description_prefix": "需要在服务器上设置",
     "not_enabled_description_suffix": "才能启用飞书 Bot 绑定。",
@@ -285,7 +285,7 @@
     "install_error_expired": "二维码过期，请重新扫码。",
     "install_error_access_denied": "已在飞书内取消安装。",
     "install_error_protocol": "飞书拒绝了安装请求，请重试。",
-    "install_error_bot_info": "授权完成，但 Multimira 无法获取 Bot 身份信息，请重试。",
+    "install_error_bot_info": "授权完成，但 Multiremi 无法获取 Bot 身份信息，请重试。",
     "install_error_conflict": "未能保存安装信息：该智能体可能已绑定其他 Bot。",
     "install_error_installer_bind": "已安装 Bot，但未能绑定你的飞书身份。请重试或联系管理员。",
     "install_error_session_lost": "安装会话已失效或丢失，请重新扫码。",

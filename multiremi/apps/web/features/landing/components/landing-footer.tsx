@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { MultimiraIcon } from "@multimira/ui/components/common/multimira-icon";
+import { MultiremiIcon } from "@multimira/ui/components/common/multimira-icon";
 import { cn } from "@multimira/ui/lib/utils";
 import { useAuthStore } from "@multimira/core/auth";
 import { captureDownloadIntent } from "@multimira/core/analytics";
@@ -29,7 +29,7 @@ export function LandingFooter() {
           {/* Left — newsletter / CTA */}
           <div className="lg:w-[340px] lg:shrink-0">
             <Link href="#product" className="flex items-center gap-3">
-              <MultimiraIcon className="size-5 text-white" noSpin />
+              <MultiremiIcon className="size-5 text-white" noSpin />
               <span className="text-[18px] font-semibold tracking-[0.04em] lowercase">
                 multimira
               </span>
@@ -128,7 +128,7 @@ export function LandingFooter() {
         {/* Giant logo */}
         <div className="relative overflow-hidden pb-4">
           <div className="flex items-end gap-6 sm:gap-8">
-            <MultimiraIcon
+            <MultiremiIcon
               className="size-[clamp(4rem,12vw,10rem)] shrink-0 text-white"
               noSpin
             />

@@ -81,7 +81,7 @@
     },
     "system": {
       "title": "システム通知",
-      "description": "Multimira がバックグラウンドにあるときに表示される OS のネイティブ通知バナーを制御します。",
+      "description": "Multiremi がバックグラウンドにあるときに表示される OS のネイティブ通知バナーを制御します。",
       "label": "システム通知を表示",
       "hint": "アプリにフォーカスがないときに、新しいインボックス項目について OS のバナーを表示します。"
     }
@@ -175,7 +175,7 @@
     "toast_failed": "設定を更新できませんでした"
   },
   "github": {
-    "page_description": "GitHub App を接続し、Pull request が Multimira 内でどう表示されるかを制御し、エージェントがコミット履歴に残す情報を設定します。",
+    "page_description": "GitHub App を接続し、Pull request が Multiremi 内でどう表示されるかを制御し、エージェントがコミット履歴に残す情報を設定します。",
     "section_master": "GitHub 機能を有効にする",
     "master_description_on": "オフにすると、すべての GitHub UI が非表示になり、新しい副作用が記録されなくなります。既存のデータはバックエンドに保持されます。開発チームではありませんか？ここでオフにできます。",
     "master_description_off": "GitHub 機能はオフです。PR サイドバー、Co-authored-by トレーラー、自動リンクが一時停止されています。バックエンドのデータは削除されません。",
@@ -192,7 +192,7 @@
     "disconnect": "接続解除",
     "disconnecting": "接続解除中…",
     "disconnect_confirm_title": "GitHub App の接続を解除",
-    "disconnect_confirm_description": "Multimira はこのインストールの Webhook 受信を停止します。既存の PR ミラーとリンクは保持され、いつでも再接続して更新を再開できます。",
+    "disconnect_confirm_description": "Multiremi はこのインストールの Webhook 受信を停止します。既存の PR ミラーとリンクは保持され、いつでも再接続して更新を再開できます。",
     "disconnect_confirm_cancel": "キャンセル",
     "disconnect_confirm_action": "接続解除",
     "not_configured": "このデプロイには GitHub 連携が設定されていません。運営者が次の値を設定する必要があります:",
@@ -219,7 +219,7 @@
   },
   "lark": {
     "section_title": "Lark",
-    "page_description": "各 Multimira エージェントを Lark (飞书) PersonalAgent ボットに接続します。メンバーはボットに DM したり、グループで @ メンションしたり、/issue と入力して新しい Multimira イシューを起こすことができます。",
+    "page_description": "各 Multiremi エージェントを Lark (飞书) PersonalAgent ボットに接続します。メンバーはボットに DM したり、グループで @ メンションしたり、/issue と入力して新しい Multiremi イシューを起こすことができます。",
     "not_enabled_title": "Lark 連携が有効化されていません",
     "not_enabled_description_prefix": "Lark ボットの設置を有効化するにはサーバーに",
     "not_enabled_description_suffix": "を設定してください。",
@@ -285,7 +285,7 @@
     "install_error_expired": "承認前に QR が期限切れになりました。もう一度スキャンしてください。",
     "install_error_access_denied": "Lark で設置がキャンセルされました。",
     "install_error_protocol": "Lark が設置を拒否しました — もう一度お試しください。",
-    "install_error_bot_info": "承認はされましたが、Multimira がボットの識別子を取得できませんでした。もう一度お試しください。",
+    "install_error_bot_info": "承認はされましたが、Multiremi がボットの識別子を取得できませんでした。もう一度お試しください。",
     "install_error_conflict": "設置を保存できませんでした。別のボットがすでにこのエージェントに接続されている可能性があります。",
     "install_error_installer_bind": "ボットは設置されましたが、Lark の身元情報を連携できませんでした。もう一度お試しいただくか、サポートにお問い合わせください。",
     "install_error_session_lost": "設置セッションが期限切れまたは失われました。もう一度スキャンしてやり直してください。",

@@ -12,7 +12,7 @@ export default function NotFound() {
         The page you are looking for doesn&rsquo;t exist or has been moved.
       </p>
       <Link href="/" className={buttonVariants({ className: "mt-2" })}>
-        Back to Multimira
+        Back to Multiremi
       </Link>
     </main>
   );

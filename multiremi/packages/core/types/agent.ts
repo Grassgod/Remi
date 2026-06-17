@@ -571,7 +571,7 @@ export interface RuntimeModelThinking {
   supported_levels: RuntimeModelThinkingLevel[];
   /** Informational: the level the upstream CLI documents as its built-in
    *  default when no `--effort` flag is passed. Surfaced by the daemon
-   *  but not actively rendered today — Multimira's empty `thinking_level`
+   *  but not actively rendered today — Multiremi's empty `thinking_level`
    *  means "no override; let the local CLI config decide", which may
    *  itself differ from this value. */
   default_level?: string;

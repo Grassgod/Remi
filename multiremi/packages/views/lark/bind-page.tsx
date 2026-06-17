@@ -17,7 +17,7 @@ type RedeemState =
 
 // LarkBindPage is the destination the Bot's "you need to bind" reply
 // card points at. The user lands here logged out OR logged in; we
-// require auth before redeeming because the redeemer's Multimira
+// require auth before redeeming because the redeemer's Multiremi
 // identity is taken from the session (the token alone never proves
 // who is binding — see lark.BindingTokenService.RedeemAndBind).
 //

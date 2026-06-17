@@ -104,7 +104,7 @@ describe("LoginPage", () => {
   it("renders Feishu-only login for regular (non-CLI) web users", () => {
     render(<LoginPage />, { wrapper: createWrapper() });
 
-    expect(screen.getByText("Sign in to Multimira")).toBeInTheDocument();
+    expect(screen.getByText("Sign in to Multiremi")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Sign in with Feishu" })
     ).toBeInTheDocument();
@@ -210,7 +210,7 @@ describe("LoginPage", () => {
         );
       });
       expect(
-        await screen.findByRole("button", { name: "Open Multimira Desktop" }),
+        await screen.findByRole("button", { name: "Open Multiremi Desktop" }),
       ).toBeInTheDocument();
     } finally {
       Object.defineProperty(window, "location", {

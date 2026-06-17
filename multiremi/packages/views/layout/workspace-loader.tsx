@@ -1,6 +1,6 @@
 "use client";
 
-import { MultimiraIcon } from "@multimira/ui/components/common/multimira-icon";
+import { MultiremiIcon } from "@multimira/ui/components/common/multimira-icon";
 import { useT } from "../i18n";
 
 /**
@@ -22,7 +22,7 @@ export function WorkspaceLoader({ name }: { name?: string | null }) {
       role="status"
     >
       <div className="flex flex-col items-center gap-4">
-        <MultimiraIcon className="size-8 animate-pulse" />
+        <MultiremiIcon className="size-8 animate-pulse" />
         {name ? (
           <p className="text-sm text-muted-foreground">
             {t(($) => $.workspace_loader.loading_named_prefix)}{" "}

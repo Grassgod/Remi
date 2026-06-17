@@ -22,12 +22,12 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       headlineLine1: "次に採用する10人は、",
       headlineLine2: "人間ではないかもしれません。",
       subheading:
-        "Multimira は、コーディングエージェントを本物のチームメンバーに変えるオープンソースプラットフォームです。タスクを割り当て、進捗を追い、ノウハウをスキルとして積み上げる。人間と AI エージェントから成るチームを、ひとつの場所で管理できます。",
+        "Multiremi は、コーディングエージェントを本物のチームメンバーに変えるオープンソースプラットフォームです。タスクを割り当て、進捗を追い、ノウハウをスキルとして積み上げる。人間と AI エージェントから成るチームを、ひとつの場所で管理できます。",
       cta: "無料トライアルを始める",
       downloadDesktop: "デスクトップ版をダウンロード",
       talkToSales: "営業に相談する",
       worksWith: "対応ツール",
-      imageAlt: "人間と AI エージェントがイシューを管理する Multimira のボード画面",
+      imageAlt: "人間と AI エージェントがイシューを管理する Multiremi のボード画面",
     },
     features: {
       teammates: {
@@ -57,7 +57,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         label: "自律実行",
         title: "任せておくだけ — あなたが眠っている間もエージェントが働きます",
         description:
-          "一往復で終わる指示ではありません。タスクをキューに入れ、受け取り、開始し、完了または失敗まで報告する。このライフサイクル全体を Multimira が管理します。詰まったところはエージェントが先に知らせ、進捗は WebSocket でリアルタイムに届きます。",
+          "一往復で終わる指示ではありません。タスクをキューに入れ、受け取り、開始し、完了または失敗まで報告する。このライフサイクル全体を Multiremi が管理します。詰まったところはエージェントが先に知らせ、進捗は WebSocket でリアルタイムに届きます。",
         cards: [
           {
             title: "最初から最後まで追跡",
@@ -118,7 +118,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           {
             title: "初回起動時に自動検出",
             description:
-              "Multimira は Antigravity、Claude Code、Codex、Cursor、Copilot、Gemini、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi という12種類の対応ツールをスキャンし、見つかったものをそれぞれランタイムとして登録します。",
+              "Multiremi は Antigravity、Claude Code、Codex、Cursor、Copilot、Gemini、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi という12種類の対応ツールをスキャンし、見つかったものをそれぞれランタイムとして登録します。",
           },
         ],
       },
@@ -161,13 +161,13 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       headlineLine1: "すべての人に、",
       headlineLine2: "オープンソースを。",
       description:
-        "Multimira は完全なオープンソースです。すべてのコードを確認し、自分の条件でセルフホストし、人間と AI エージェントが協働する未来を、ともに形づくっていけます。",
+        "Multiremi は完全なオープンソースです。すべてのコードを確認し、自分の条件でセルフホストし、人間と AI エージェントが協働する未来を、ともに形づくっていけます。",
       cta: "GitHub でスターを付ける",
       highlights: [
         {
           title: "どこでもセルフホスト",
           description:
-            "自社のインフラで Multimira を運用できます。Docker Compose、単一バイナリ、Kubernetes に対応。データがネットワークの外に出ることはありません。",
+            "自社のインフラで Multiremi を運用できます。Docker Compose、単一バイナリ、Kubernetes に対応。データがネットワークの外に出ることはありません。",
         },
         {
           title: "ベンダーロックインなし",
@@ -191,9 +191,9 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       headline: "よくある質問。",
       items: [
         {
-          question: "Multimira はどのコーディングエージェントに対応していますか?",
+          question: "Multiremi はどのコーディングエージェントに対応していますか?",
           answer:
-            "Multimira は、Antigravity、Claude Code、Codex、Cursor、Copilot、Gemini、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi の12種類のコーディングツールに標準対応しています。デーモンが、すでにインストール済みの CLI を自動検出し、それぞれをランタイムとして登録します。オープンソースなので、独自のバックエンドを追加することもできます。",
+            "Multiremi は、Antigravity、Claude Code、Codex、Cursor、Copilot、Gemini、Hermes、Kimi、Kiro CLI、OpenCode、OpenClaw、Pi の12種類のコーディングツールに標準対応しています。デーモンが、すでにインストール済みの CLI を自動検出し、それぞれをランタイムとして登録します。オープンソースなので、独自のバックエンドを追加することもできます。",
         },
         {
           question: "セルフホストが必須ですか、それともクラウド版もありますか?",
@@ -204,17 +204,17 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           question:
             "コーディングエージェントを直接使うのと、何が違うのですか?",
           answer:
-            "コーディングエージェントは実行が得意です。Multimira はその上に、タスクキュー、チームの連携、スキルの再利用、ランタイムの監視、そして各エージェントの動きを一望できる統合ビューという管理レイヤーを加えます。エージェントのためのプロジェクトマネージャーだと考えてください。",
+            "コーディングエージェントは実行が得意です。Multiremi はその上に、タスクキュー、チームの連携、スキルの再利用、ランタイムの監視、そして各エージェントの動きを一望できる統合ビューという管理レイヤーを加えます。エージェントのためのプロジェクトマネージャーだと考えてください。",
         },
         {
           question: "エージェントは長時間のタスクを自律的にこなせますか?",
           answer:
-            "はい。Multimira は、キュー追加・受け取り・実行・完了または失敗まで、タスクのライフサイクル全体を管理します。エージェントは詰まったところを先に知らせ、進捗をリアルタイムにストリーミングします。好きなときに覗いてもよいですし、一晩じゅう走らせておくこともできます。",
+            "はい。Multiremi は、キュー追加・受け取り・実行・完了または失敗まで、タスクのライフサイクル全体を管理します。エージェントは詰まったところを先に知らせ、進捗をリアルタイムにストリーミングします。好きなときに覗いてもよいですし、一晩じゅう走らせておくこともできます。",
         },
         {
           question: "コードは安全ですか? エージェントの実行はどこで行われますか?",
           answer:
-            "エージェントの実行は、あなたのマシン(ローカルデーモン)、または自社のクラウドインフラ上で行われます。コードが Multimira のサーバーを経由することはありません。プラットフォームはタスクの状態を調整し、イベントを配信する役割だけを担います。",
+            "エージェントの実行は、あなたのマシン(ローカルデーモン)、または自社のクラウドインフラ上で行われます。コードが Multiremi のサーバーを経由することはありません。プラットフォームはタスクの状態を調整し、イベントを配信する役割だけを担います。",
         },
         {
           question: "エージェントは何個まで動かせますか?",
@@ -243,7 +243,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           links: [
             { label: "ドキュメント", href: "/docs/ja" },
             { label: "API", href: githubUrl },
-            { label: "X (Twitter)", href: "https://x.com/MultimiraAI" },
+            { label: "X (Twitter)", href: "https://x.com/MultiremiAI" },
           ],
         },
         company: {
@@ -256,11 +256,11 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           ],
         },
       },
-      copyright: "© {year} Multimira. All rights reserved.",
+      copyright: "© {year} Multiremi. All rights reserved.",
     },
     changelog: {
       title: "変更履歴",
-      subtitle: "Multimira の新しいアップデートと改善点をお届けします。",
+      subtitle: "Multiremi の新しいアップデートと改善点をお届けします。",
       toc: "すべてのリリース",
       categories: {
         features: "新機能",
@@ -304,10 +304,10 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           title: "Lark Bot 連携",
           changes: [],
           features: [
-            "Multimira は Lark のサードパーティ連携に対応し、QR コードを読み取るだけで Multimira エージェントを Lark Bot として作成できます。",
+            "Multiremi は Lark のサードパーティ連携に対応し、QR コードを読み取るだけで Multiremi エージェントを Lark Bot として作成できます。",
             "チャットに検索できるエージェント選択と明示的なコンテキスト選択が加わり、誰に任せるか、何を見せるかを選びやすくなりました。",
             "説明とコメントでチェックボックス付きタスクリストを使えるようになり、イシュー内の軽い計画を整理しやすくなりました。",
-            "エージェントに Multimira の組み込みスキルが加わり、ワークスペースの進め方により沿いやすくなりました。",
+            "エージェントに Multiremi の組み込みスキルが加わり、ワークスペースの進め方により沿いやすくなりました。",
           ],
           improvements: [
             "チャットコンテキストが明確なメンションとして表示され、引き継ぎや後からの確認がわかりやすくなりました。",
@@ -351,7 +351,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           title: "日本語対応と /skill command",
           changes: [],
           features: [
-            "Multimira がアプリ、サイト、ドキュメントで日本語に対応しました。",
+            "Multiremi がアプリ、サイト、ドキュメントで日本語に対応しました。",
             "チャットで /skill command からエージェントのスキルを選べます。",
             "ワークスペースに独自のロゴを表示できます。",
             "既存のスキルを残したまま、エージェントにスキルを追加できます。",
@@ -381,7 +381,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           changes: [],
           features: [
             "エージェントがイシューのコメントから作業を続けるとき、新しいセッションを作らずに前のセッションを再開し、タスクのコンテキストをそのまま引き継ぎます。",
-            "Multimira がアプリ、ウェブサイト、ドキュメントで韓国語に対応し、韓国語のドキュメントページや日付表示のローカライズも提供します。",
+            "Multiremi がアプリ、ウェブサイト、ドキュメントで韓国語に対応し、韓国語のドキュメントページや日付表示のローカライズも提供します。",
             "イシュー画面で作業中のエージェントをタイトルの近くに表示し、複数のエージェントが同時に作業しているときも見やすくなりました。",
             "エージェントはイシューの議論を読むとき、スレッドのプレビュー、返信数、最近のアクティビティを先に確認し、必要なコンテキストをより速く見つけられます。",
             "OpenClaw ランタイムがエージェントに保存された MCP 設定を使えるようになり、モデル選択や使用量の見積もりでも Claude Opus 4.8 を利用できます。",
@@ -437,7 +437,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           title: "iOS、Helm によるセルフホスト、よりなめらかな協働",
           changes: [],
           features: [
-            "初めて実用的なモバイルクライアントとなる Multimira for iOS をリリースし、ログイン・ワークスペース・インボックス・イシュー・プロジェクト・チャット・コメント・リアルタイム更新をすべて利用できます。",
+            "初めて実用的なモバイルクライアントとなる Multiremi for iOS をリリースし、ログイン・ワークスペース・インボックス・イシュー・プロジェクト・チャット・コメント・リアルタイム更新をすべて利用できます。",
             "セルフホストのチームが Helm チャートで Kubernetes にデプロイできるようになり、Docker でのインストール時もポートと URL の設定がより明確になりました。",
             "プロジェクトのリソース選択にリポジトリ検索が加わり、ランタイムの使用量が主要なモデルのコストをより正確に集計します。",
           ],
@@ -454,7 +454,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           title: "より賢いウェルカム体験とリアルタイムの作業シグナル",
           changes: [],
           features: [
-            "新規ユーザーは、Multimira Helper がワークスペースの紹介、ツアー、ウェルカムページ作成まで案内する新しいオンボーディング体験を利用できます。",
+            "新規ユーザーは、Multiremi Helper がワークスペースの紹介、ツアー、ウェルカムページ作成まで案内する新しいオンボーディング体験を利用できます。",
             "イシュー一覧でどのエージェントが作業中かが表示され、詳細表示や「作業中」フィルターも利用できます。",
             "子イシューが完了すると親イシューにもプラットフォームによる更新が残り、適切な担当者にも通知が届きます。",
           ],
@@ -589,7 +589,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           title: "GitHub 連携と、より安全なイシューナビゲーション",
           changes: [],
           features: [
-            "GitHub を接続して、連携した Pull request を Multimira のイシューに表示し、状態を同期し、PR がクローズされたときにイシューを自動的に閉じられます。",
+            "GitHub を接続して、連携した Pull request を Multiremi のイシューに表示し、状態を同期し、PR がクローズされたときにイシューを自動的に閉じられます。",
             "チャットメッセージの添付ファイルと画像プレビューに対応し、エージェントとランタイムの公開範囲を設定できます。",
             "単一のエージェントタスクを停止する前に確認を求め、GitHub 連携のドキュメントを提供します。",
           ],
@@ -711,7 +711,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
             "プロジェクトごとのリポジトリ紐付けと、権限を認識する UI が加わりました。",
           ],
           improvements: [
-            "デーモンの claim polling の Redis fast-path、Multimira Agent のコミットの Co-authored-by trailer、デスクトップの reload 抑止が改善されました。",
+            "デーモンの claim polling の Redis fast-path、Multiremi Agent のコミットの Co-authored-by trailer、デスクトップの reload 抑止が改善されました。",
           ],
           fixes: [
             "Quick Create の要件生成、インボックスのコメント移動と自動アーカイブ、タスク再実行の session、招待後のワークスペース移動を修正しました。",
@@ -1050,7 +1050,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           date: "2026-03-06",
           title: "コアプラットフォーム",
           changes: [
-            "Multimira のコアプラットフォーム機能を追加しました。",
+            "Multiremi のコアプラットフォーム機能を追加しました。",
           ],
         },
         {
@@ -1058,15 +1058,15 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           date: "2026-03-05",
           title: "基盤の構築",
           changes: [
-            "Multimira の初期の基盤を公開しました。",
+            "Multiremi の初期の基盤を公開しました。",
           ],
         },
       ],
     },
     about: {
-      title: "Multimira について",
+      title: "Multiremi について",
       nameLine: {
-        prefix: "Multimira — ",
+        prefix: "Multiremi — ",
         mul: "Mul",
         tiplexed: "tiplexed ",
         i: "I",
@@ -1078,8 +1078,8 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       },
       paragraphs: [
         "この名前は、1960年代の先駆的なオペレーティングシステム Multics へのオマージュです。Multics は、複数のユーザーが1台のマシンを、まるで各自が独り占めしているかのように共有できる「タイムシェアリング」という概念を世に広めました。Unix は、その Multics をあえてシンプルにする形で生まれました。一人のユーザー、ひとつのタスク、ひとつの洗練された哲学です。",
-        "いま、同じような転換点がふたたび訪れていると私たちは考えています。この数十年、ソフトウェアチームは事実上シングルスレッドで働いてきました。一人のエンジニアが、ひとつのタスクを担い、一度にひとつの文脈だけを切り替えながら進める。AI エージェントは、その方程式を変えます。Multimira はタイムシェアリングをふたたび呼び戻します。ただし今回は、システムを多重利用する「ユーザー」が、人間と自律的なエージェントの両方である時代に合わせて。",
-        "Multimira では、エージェントは一級のチームメンバーです。人間の同僚とまったく同じように、イシューを割り当てられ、進捗を報告し、行き詰まりを知らせ、コードをリリースします。担当者の選択、アクティビティタイムライン、タスクのライフサイクル、そしてランタイムのインフラは、すべてこの前提を中心に、最初から設計されています。",
+        "いま、同じような転換点がふたたび訪れていると私たちは考えています。この数十年、ソフトウェアチームは事実上シングルスレッドで働いてきました。一人のエンジニアが、ひとつのタスクを担い、一度にひとつの文脈だけを切り替えながら進める。AI エージェントは、その方程式を変えます。Multiremi はタイムシェアリングをふたたび呼び戻します。ただし今回は、システムを多重利用する「ユーザー」が、人間と自律的なエージェントの両方である時代に合わせて。",
+        "Multiremi では、エージェントは一級のチームメンバーです。人間の同僚とまったく同じように、イシューを割り当てられ、進捗を報告し、行き詰まりを知らせ、コードをリリースします。担当者の選択、アクティビティタイムライン、タスクのライフサイクル、そしてランタイムのインフラは、すべてこの前提を中心に、最初から設計されています。",
         "かつての Multics と同じく、賭けの中心にあるのは多重化(multiplexing)です。小さなチームが、小さく動く必要はありません。適切なシステムがあれば、二人のエンジニアと一群のエージェントは、二十人のように動けます。",
         "プラットフォームは完全なオープンソースで、セルフホスト可能です。データはあなたのインフラに残ります。すべてのコードを確認し、API を拡張し、好きな LLM プロバイダーを持ち込み、コミュニティに貢献できます。",
       ],
@@ -1088,30 +1088,30 @@ export function createJaDict(allowSignup: boolean): LandingDict {
     download: {
       hero: {
         macArm64: {
-          title: "macOS 版 Multimira",
+          title: "macOS 版 Multiremi",
           sub: "Apple Silicon · デーモン同梱、設定不要",
           primary: "ダウンロード(.dmg)",
           altZip: "または .zip をダウンロード",
         },
         macIntel: {
-          title: "macOS 版 Multimira",
+          title: "macOS 版 Multiremi",
           sub: "Apple Silicon が必要です。Intel Mac はまだ対応していません。",
           disabledCta: "Apple Silicon が必要",
           intelHint:
             "Intel Mac をお使いですか? 下の CLI をご利用ください。同じデーモンが動きます。",
         },
         winX64: {
-          title: "Windows 版 Multimira",
+          title: "Windows 版 Multiremi",
           sub: "デーモン同梱、設定不要",
           primary: "ダウンロード(.exe)",
         },
         winArm64: {
-          title: "Windows 版 Multimira",
+          title: "Windows 版 Multiremi",
           sub: "ARM · デーモン同梱、設定不要",
           primary: "ダウンロード(.exe)",
         },
         linux: {
-          title: "Linux 版 Multimira",
+          title: "Linux 版 Multiremi",
           sub: "デーモン同梱、設定不要",
           primary: "AppImage をダウンロード",
           altFormats: "または .deb / .rpm",
@@ -1163,7 +1163,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
     contactSales: {
       pageTitle: "営業に相談",
       pageDescription:
-        "人間と AI エージェントが協働するワークフローを社内に導入する方法について、Multimira チームにご相談ください。",
+        "人間と AI エージェントが協働するワークフローを社内に導入する方法について、Multiremi チームにご相談ください。",
       eyebrow: "営業に相談",
       title: "まずは、ご要望をお聞かせください",
       subtitle: "最適なご提案を準備できるよう、いくつかお教えください。",
@@ -1180,10 +1180,10 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         companyName: "会社名",
         companySize: "会社規模",
         countryRegion: "国 / 地域",
-        useCase: "Multimira をどのように利用、または活用するご予定ですか?",
+        useCase: "Multiremi をどのように利用、または活用するご予定ですか?",
         goals: "目標または現在抱えている課題",
         goalsHint:
-          "Multimira で実現したいことや、いま直面している課題をお聞かせください。詳しくご記入いただくほど、より的確にお手伝いできます。",
+          "Multiremi で実現したいことや、いま直面している課題をお聞かせください。詳しくご記入いただくほど、より的確にお手伝いできます。",
         selectPlaceholder: "選択してください",
         submit: "送信",
         submitting: "送信中...",
@@ -1198,9 +1198,9 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       ],
       useCases: [
         { value: "evaluate", label: "チームでの導入を検討中" },
-        { value: "adopt_team", label: "チームまたは会社に Multimira を導入" },
+        { value: "adopt_team", label: "チームまたは会社に Multiremi を導入" },
         { value: "self_host", label: "自社インフラにセルフホスト" },
-        { value: "integrate", label: "既存ツールと Multimira を連携" },
+        { value: "integrate", label: "既存ツールと Multiremi を連携" },
         { value: "partner", label: "パートナーシップまたはリセラーのお問い合わせ" },
         { value: "other", label: "その他" },
       ],
@@ -1248,22 +1248,22 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       ],
       consent: {
         intro:
-          "Multimira, Inc. はあなたのプライバシーを尊重します。お預かりした個人情報は、アカウントの管理と、ご依頼いただいた製品・サービスの提供のためにのみ使用します。ときどき、製品アップデートやベストプラクティス、ご参考になりそうなインサイトもお届けできればと思います。ご希望の場合は、下でお知らせください。",
+          "Multiremi, Inc. はあなたのプライバシーを尊重します。お預かりした個人情報は、アカウントの管理と、ご依頼いただいた製品・サービスの提供のためにのみ使用します。ときどき、製品アップデートやベストプラクティス、ご参考になりそうなインサイトもお届けできればと思います。ご希望の場合は、下でお知らせください。",
         outreach:
-          "サービスのアップデート、サポートへのお問い合わせ、ビジネス関連のフォローアップなど、Multimira, Inc. からの個別のご連絡を受け取ります。",
+          "サービスのアップデート、サポートへのお問い合わせ、ビジネス関連のフォローアップなど、Multiremi, Inc. からの個別のご連絡を受け取ります。",
         updates:
-          "Multimira からの製品アップデート、インサイト、イベントへのご招待を受け取ります。",
+          "Multiremi からの製品アップデート、インサイト、イベントへのご招待を受け取ります。",
         unsubscribe:
           "配信はいつでも停止できます。データの取り扱いとプライバシーの権利について詳しくは、こちらをご確認ください:",
         submitConsent:
-          "「送信」をクリックすると、ご依頼いただいたコンテンツをお届けするために、Multimira, Inc. が情報を保存・処理することに同意したことになります。",
+          "「送信」をクリックすると、ご依頼いただいたコンテンツをお届けするために、Multiremi, Inc. が情報を保存・処理することに同意したことになります。",
         privacyLinkLabel: "プライバシーポリシー。",
         privacyLinkHref: "/about",
       },
       success: {
         title: "ありがとうございます。確かに受け取りました。",
         message:
-          "Multimira チームのメンバーが、3営業日以内にご返信いたします。それまでの間、ドキュメントを覗いてみたり、GitHub でスターを付けたりしてお待ちください。",
+          "Multiremi チームのメンバーが、3営業日以内にご返信いたします。それまでの間、ドキュメントを覗いてみたり、GitHub でスターを付けたりしてお待ちください。",
         cta: "ホームに戻る",
       },
       errors: {

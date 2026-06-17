@@ -78,7 +78,7 @@ export interface MarkdownProps {
 }
 
 // Sanitization schema — extends GitHub defaults to allow code highlighting classes
-// and Multimira's internal mention/slash protocols.
+// and Multiremi's internal mention/slash protocols.
 const sanitizeSchema = {
   ...defaultSchema,
   protocols: {
@@ -107,7 +107,7 @@ const sanitizeSchema = {
 }
 
 /**
- * Custom URL transform that allows Multimira internal protocols while keeping
+ * Custom URL transform that allows Multiremi internal protocols while keeping
  * the default security for all other URLs.
  */
 function urlTransform(url: string): string {
