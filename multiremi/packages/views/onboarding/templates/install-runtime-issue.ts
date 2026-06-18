@@ -56,8 +56,8 @@ For English users, the fastest first path is Codex:
 4. Confirm your terminal can find it:
    which codex
    codex --version
-5. Restart the Multiremi daemon:
-   multimira daemon restart
+5. Restart the Remi daemon:
+   remi daemon restart
    If you use the desktop app, restarting the app is enough.
 6. Return to Runtimes and refresh. You should see a Codex runtime online.
 7. Create your first agent from that runtime, then assign an issue to the agent and set status to todo.
@@ -96,8 +96,8 @@ const zh = `欢迎来到 Multiremi。
 3. 在你想让 Kimi 工作的项目目录里启动一次:
    kimi
 4. 首次启动后输入 /login,按提示完成 Kimi Code 或 API key 配置。
-5. 重启 Multiremi 守护进程:
-   multimira daemon restart
+5. 重启 Remi 守护进程:
+   remi daemon restart
    如果你用桌面端,重启 app 即可。
 6. 回到 Runtimes 页面刷新。你应该能看到一个在线的 Kimi 运行时。
 7. 用这个运行时创建第一个智能体,再把一个 issue 分配给它,并把状态切到 todo。
@@ -135,8 +135,8 @@ runtime이 준비되기 전에는 다음을 해볼 수 있습니다:
 4. 터미널에서 찾을 수 있는지 확인합니다:
    which codex
    codex --version
-5. Multiremi daemon을 재시작합니다:
-   multimira daemon restart
+5. Remi daemon을 재시작합니다:
+   remi daemon restart
    데스크톱 앱을 사용한다면 앱을 재시작해도 됩니다.
 6. Runtimes로 돌아가 새로고침합니다. Codex runtime이 online으로 보여야 합니다.
 7. 해당 runtime으로 첫 agent를 만든 뒤 issue를 agent에게 배정하고 status를 todo로 바꿉니다.
@@ -174,8 +174,8 @@ runtime が準備できる前に、次のことを試せます:
 4. ターミナルから見つけられるか確認します:
    which codex
    codex --version
-5. Multiremi daemon を再起動します:
-   multimira daemon restart
+5. Remi daemon を再起動します:
+   remi daemon restart
    デスクトップアプリを使っている場合は、アプリを再起動するだけで十分です。
 6. Runtimes に戻って再読み込みします。Codex runtime が online と表示されるはずです。
 7. その runtime から最初の agent を作り、issue を agent に割り当てて status を todo にします。

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multimira/core/i18n/react";
 import { configStore } from "@multimira/core/config";
@@ -11,6 +11,14 @@ const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
 
 vi.mock("@multimira/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
+}));
+
+vi.mock("@multimira/core/api", () => ({
+  api: {
+    createPersonalAccessToken: vi.fn(async () => ({
+      token: "mul_testtoken",
+    })),
+  },
 }));
 
 vi.mock("@multimira/core/paths", () => ({
@@ -66,33 +74,27 @@ const ligatureClasses = [
 ];
 
 describe("ConnectRemoteDialog", () => {
-  it("uses cloud setup commands by default", () => {
+  it("uses generated self-host setup commands by default", async () => {
     const { baseElement } = renderDialog();
 
-    expect(baseElement).toHaveTextContent("multimira setup");
-    expect(baseElement).not.toHaveTextContent("multimira setup self-host");
-    expect(baseElement).toHaveTextContent(
-      "multimira config set server_url https://api.multimira.ai",
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent(
+        "remi setup self-host --server-url http://localhost:3000 --app-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
+      ),
     );
-    expect(baseElement).toHaveTextContent(
-      "multimira config set app_url https://multimira.ai",
-    );
+    expect(baseElement).toHaveTextContent("remi daemon start");
   });
 
-  it("uses self-host daemon URLs from runtime config", () => {
+  it("uses self-host daemon URLs from runtime config", async () => {
     const { baseElement } = renderDialog({
       daemonServerUrl: "https://api.example.com/",
       daemonAppUrl: "https://app.example.com/",
     });
 
-    expect(baseElement).toHaveTextContent(
-      "multimira setup self-host --server-url https://api.example.com --app-url https://app.example.com",
-    );
-    expect(baseElement).toHaveTextContent(
-      "multimira config set server_url https://api.example.com",
-    );
-    expect(baseElement).toHaveTextContent(
-      "multimira config set app_url https://app.example.com",
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent(
+        "remi setup self-host --server-url https://api.example.com --app-url https://app.example.com --workspace-id ws-test --token mul_testtoken --start",
+      ),
     );
   });
 
@@ -100,7 +102,7 @@ describe("ConnectRemoteDialog", () => {
     const { baseElement } = renderDialog();
 
     const setupCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("multimira setup"),
+      node.textContent?.includes("remi setup"),
     );
 
     expect(setupCode).toHaveClass(...ligatureClasses);
@@ -110,7 +112,7 @@ describe("ConnectRemoteDialog", () => {
     const { baseElement } = renderDialog();
 
     const tokenCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("multimira login --token <YOUR_TOKEN>"),
+      node.textContent?.includes("remi login --token"),
     );
 
     expect(tokenCode).toHaveClass(...ligatureClasses);

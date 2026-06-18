@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ── Remi One-Click Installer ─────────────────────────────────
 #
-# Usage: curl -fsSL https://github.com/grasscoder/remi/releases/latest/download/install.sh | bash
+# Usage: curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install.sh | bash
 #
 # Environment variables:
 #   REMI_VERSION  — Specific version to install (default: latest)
@@ -13,7 +13,7 @@ set -euo pipefail
 REMI_VERSION="${REMI_VERSION:-latest}"
 REMI_HOME="${REMI_HOME:-$HOME/.remi}"
 REMI_BIN_DIR="${REMI_BIN_DIR:-$HOME/.local/bin}"
-GITHUB_REPO="grasscoder/remi"
+GITHUB_REPO="Grassgod/remi"
 
 # ── Colors ────────────────────────────────────────────────────
 

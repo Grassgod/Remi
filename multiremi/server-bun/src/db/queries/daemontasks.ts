@@ -9,7 +9,7 @@
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../client.js";
-import { agent, agentRuntime, agentTaskQueue } from "../schema.js";
+import { agent, agentRuntime, agentTaskQueue, taskMessage, taskUsage } from "../schema.js";
 
 export type AgentRuntime = typeof agentRuntime.$inferSelect;
 export type AgentTask = typeof agentTaskQueue.$inferSelect;
@@ -51,6 +51,128 @@ export async function getAgentTask(db: Db, id: string): Promise<AgentTask | null
 export async function getAgentById(db: Db, id: string): Promise<Agent | null> {
   const [a] = await db.select().from(agent).where(eq(agent.id, id));
   return a ?? null;
+}
+
+export async function startAgentTask(
+  db: Db,
+  id: string,
+  sessionId?: string,
+  workDir?: string,
+): Promise<AgentTask | null> {
+  const [t] = await db
+    .update(agentTaskQueue)
+    .set({
+      status: "running",
+      startedAt: sql`coalesce(${agentTaskQueue.startedAt}, now())`,
+      ...(sessionId ? { sessionId } : {}),
+      ...(workDir ? { workDir } : {}),
+    })
+    .where(and(eq(agentTaskQueue.id, id), inArray(agentTaskQueue.status, ["dispatched", "running"])))
+    .returning();
+  return t ?? null;
+}
+
+export async function pinAgentTaskSession(
+  db: Db,
+  id: string,
+  sessionId?: string,
+  workDir?: string,
+): Promise<AgentTask | null> {
+  const [t] = await db
+    .update(agentTaskQueue)
+    .set({
+      ...(sessionId ? { sessionId } : {}),
+      ...(workDir ? { workDir } : {}),
+    })
+    .where(eq(agentTaskQueue.id, id))
+    .returning();
+  return t ?? null;
+}
+
+export interface TaskUsageInput {
+  provider: string;
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+export interface TaskMessageInput {
+  seq: number;
+  type: string;
+  tool?: string | null;
+  content?: string | null;
+  input?: unknown;
+  output?: string | null;
+}
+
+export async function insertTaskMessages(
+  db: Db,
+  taskId: string,
+  rows: TaskMessageInput[],
+): Promise<Array<typeof taskMessage.$inferSelect>> {
+  if (rows.length === 0) return [];
+  return db
+    .insert(taskMessage)
+    .values(
+      rows.map((row) => ({
+        taskId,
+        seq: row.seq,
+        type: row.type,
+        tool: row.tool ?? null,
+        content: row.content ?? null,
+        input: row.input ?? null,
+        output: row.output ?? null,
+      })),
+    )
+    .returning();
+}
+
+export async function upsertTaskUsage(db: Db, taskId: string, rows: TaskUsageInput[]): Promise<void> {
+  for (const row of rows) {
+    if (!row.provider || !row.model) continue;
+    await db
+      .insert(taskUsage)
+      .values({
+        taskId,
+        provider: row.provider,
+        model: row.model,
+        inputTokens: row.inputTokens ?? 0,
+        outputTokens: row.outputTokens ?? 0,
+        cacheReadTokens: row.cacheReadTokens ?? 0,
+        cacheWriteTokens: row.cacheWriteTokens ?? 0,
+      })
+      .onConflictDoUpdate({
+        target: [taskUsage.taskId, taskUsage.provider, taskUsage.model],
+        set: {
+          inputTokens: row.inputTokens ?? 0,
+          outputTokens: row.outputTokens ?? 0,
+          cacheReadTokens: row.cacheReadTokens ?? 0,
+          cacheWriteTokens: row.cacheWriteTokens ?? 0,
+          updatedAt: sql`now()`,
+        },
+      });
+  }
+}
+
+export async function recoverOrphanTasks(db: Db, runtimeId: string): Promise<number> {
+  const rows = await db
+    .update(agentTaskQueue)
+    .set({
+      status: "queued",
+      dispatchedAt: null,
+      startedAt: null,
+      waitReason: null,
+    })
+    .where(
+      and(
+        eq(agentTaskQueue.runtimeId, runtimeId),
+        inArray(agentTaskQueue.status, ["dispatched", "running", "waiting_local_directory"]),
+      ),
+    )
+    .returning({ id: agentTaskQueue.id });
+  return rows.length;
 }
 
 /**

@@ -157,9 +157,9 @@
   "connect": {
     "title": "添加电脑",
     "description": "在要添加的电脑上运行这两条命令。守护进程一上线，这里就会自动识别。",
-    "step1_label": "安装 Multiremi CLI",
+    "step1_label": "安装 Remi CLI",
     "step2_label": "启动守护进程",
-    "step2_hint": "会打开浏览器登录，然后在后台保持守护进程运行。",
+    "step2_hint": "会写入连接配置并在后台保持守护进程运行。",
     "live_listening": "等待你的电脑上线",
     "live_listening_hint": "守护进程一启动就会被识别，通常不到一分钟。",
     "troubleshooting": "那台电脑打不开浏览器？",

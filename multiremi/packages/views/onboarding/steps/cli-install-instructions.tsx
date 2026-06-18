@@ -8,9 +8,10 @@ import { cn } from "@multimira/ui/lib/utils";
 import { copyText } from "@multimira/ui/lib/clipboard";
 import { useT } from "../../i18n";
 
+const SETUP_CMD =
+  "remi setup self-host --server-url <SERVER_URL> --app-url <APP_URL> --workspace-id <WORKSPACE_ID> --token <YOUR_TOKEN> --start";
 const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multimira-ai/multimira/main/scripts/install.sh | bash";
-const SETUP_CMD = "multimira setup";
+  "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash";
 
 function CopyButton({ text }: { text: string }) {
   const { t } = useT("onboarding");
@@ -65,10 +66,8 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
 /**
  * CLI install instructions — two copy-and-run commands. Hardcoded because
  * there's nothing environmental to infer: step 1 is the public install
- * script, step 2 is the cloud `multimira setup` which the CLI itself knows
- * the endpoints for. Local development tests a self-host variant by
- * typing the extended command directly in the terminal; no need to
- * thread env vars through React.
+ * script, step 2 configures the Remi daemon against the target server and
+ * starts it.
  */
 export function CliInstallInstructions() {
   const { t } = useT("onboarding");

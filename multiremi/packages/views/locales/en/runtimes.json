@@ -169,9 +169,9 @@
   "connect": {
     "title": "Add a computer",
     "description": "Run these two commands on the computer you want to add. We'll detect it the moment the daemon comes online.",
-    "step1_label": "Install the Multiremi CLI",
+    "step1_label": "Install the Remi CLI",
     "step2_label": "Start the daemon",
-    "step2_hint": "Opens a browser to sign in, then keeps the daemon running in the background.",
+    "step2_hint": "Writes the connection config, then keeps the daemon running in the background.",
     "live_listening": "Waiting for your computer",
     "live_listening_hint": "We'll detect it as soon as the daemon starts — usually under a minute.",
     "troubleshooting": "Can't open a browser on that computer?",

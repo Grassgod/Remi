@@ -58,6 +58,55 @@ export async function createAgentRuntime(db: Db, input: NewAgentRuntime): Promis
 }
 
 /**
+ * Register (or re-register) a daemon's runtime. Upserts on the natural key
+ * UNIQUE (workspace_id, daemon_id, provider) so a daemon restarting under the
+ * same stable daemon_id reuses its row instead of creating duplicates. Marks it
+ * online + bumps last_seen_at; metadata (cli_version, …) is merged, not replaced,
+ * so unrelated keys (model lists, etc.) survive. Mirrors the Go register upsert.
+ */
+export async function upsertAgentRuntime(
+  db: Db,
+  input: {
+    workspaceId: string;
+    daemonId: string;
+    provider: string;
+    name: string;
+    deviceInfo?: string;
+    metadata?: Record<string, unknown>;
+    ownerId?: string;
+  },
+): Promise<AgentRuntime> {
+  const meta = JSON.stringify(input.metadata ?? {});
+  const [rt] = await db
+    .insert(agentRuntime)
+    .values({
+      workspaceId: input.workspaceId,
+      daemonId: input.daemonId,
+      provider: input.provider,
+      name: input.name,
+      runtimeMode: "local",
+      status: "online",
+      deviceInfo: input.deviceInfo ?? "",
+      metadata: input.metadata ?? {},
+      ownerId: input.ownerId,
+      lastSeenAt: sql`now()`,
+    })
+    .onConflictDoUpdate({
+      target: [agentRuntime.workspaceId, agentRuntime.daemonId, agentRuntime.provider],
+      set: {
+        name: input.name,
+        status: "online",
+        deviceInfo: input.deviceInfo ?? "",
+        metadata: sql`coalesce(${agentRuntime.metadata}, '{}'::jsonb) || ${meta}::jsonb`,
+        lastSeenAt: sql`now()`,
+        updatedAt: sql`now()`,
+      },
+    })
+    .returning();
+  return rt!;
+}
+
+/**
  * Partial update of an agent runtime by primary key (caller resolves +
  * authorizes the id first). Touches updated_at like the Go update queries.
  * Returns null if the row vanished between the load and the write.

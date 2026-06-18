@@ -19,8 +19,8 @@ export function configRoutes(): Hono {
       posthog_host: env.POSTHOG_HOST ?? "",
       analytics_environment:
         env.ANALYTICS_DISABLED === "true" || env.ANALYTICS_DISABLED === "1" ? "" : env.ANALYTICS_ENVIRONMENT ?? "",
-      daemon_server_url: env.DAEMON_SERVER_URL ?? "",
-      daemon_app_url: env.DAEMON_APP_URL ?? "",
+      daemon_server_url: env.REMI_DAEMON_SERVER_URL ?? env.DAEMON_SERVER_URL ?? "",
+      daemon_app_url: env.REMI_DAEMON_APP_URL ?? env.DAEMON_APP_URL ?? "",
       workspace_creation_disabled: env.DISABLE_WORKSPACE_CREATION === "true",
     });
   });

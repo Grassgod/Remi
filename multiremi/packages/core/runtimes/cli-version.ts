@@ -1,7 +1,7 @@
 /**
  * Frontend mirror of the server's MinQuickCreateCLIVersion gate. The
  * agent-create flow (Quick Create modal) requires the daemon's bundled
- * multimira CLI to be at least this version — older daemons either
+ * remi CLI to be at least this version — older daemons either
  * double-create issues on partial CLI failures or mishandle pasted
  * screenshot URLs (see PR #1851 / MUL-1496).
  *

@@ -8,7 +8,7 @@
 
 import { test, expect } from "bun:test";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { createApp } from "../src/http/app.js";
 import { createDb } from "../src/db/client.js";
 import { findOrCreateUser } from "../src/auth/users.js";
@@ -21,6 +21,8 @@ import {
   agent,
   agentRuntime,
   agentTaskQueue,
+  taskMessage,
+  taskUsage,
 } from "../src/db/schema.js";
 import type { Config } from "../src/config.js";
 
@@ -278,6 +280,121 @@ test.skipIf(!reachable)("POST /api/daemon/tasks/:id/report writes completed + fa
     });
     expect(noWs.status).toBe(400);
   } finally {
+    await cleanup();
+    await close();
+  }
+});
+
+test.skipIf(!reachable)("daemon split protocol claims, starts, reports usage, completes, and recovers orphans", async () => {
+  const { db, close } = createDb(DB_URL);
+  const app = createApp(cfg, db);
+  const stamp = Date.now();
+  const { u, ws, rt, ag, iss, cleanup } = await setupFixture(db, `bun-dt-sp-${stamp}`);
+  const token = await issueJWT({ sub: u.id, email: u.email, name: u.name }, SECRET);
+  const auth = { Authorization: `Bearer ${token}`, "X-Workspace-ID": ws.id, "Content-Type": "application/json" };
+
+  const [queued] = await db
+    .insert(agentTaskQueue)
+    .values({ agentId: ag.id, runtimeId: rt.id, issueId: iss.id, status: "queued" })
+    .returning();
+  const [orphan] = await db
+    .insert(agentTaskQueue)
+    .values({ agentId: ag.id, runtimeId: rt.id, issueId: iss.id, status: "running" })
+    .returning();
+
+  try {
+    const claim = await app.request(`/api/daemon/runtimes/${rt.id}/tasks/claim`, {
+      method: "POST",
+      headers: auth,
+      body: "{}",
+    });
+    expect(claim.status).toBe(200);
+    const claimed = (await claim.json()) as { task: { id: string; status: string; agent: { instructions: string } } | null };
+    expect(claimed.task?.id).toBe(queued!.id);
+    expect(claimed.task?.status).toBe("dispatched");
+    expect(claimed.task?.agent.instructions).toBe("do work");
+
+    const start = await app.request(`/api/daemon/tasks/${queued!.id}/start`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ session_id: "sess-start", work_dir: "/tmp/remi-work" }),
+    });
+    expect(start.status).toBe(200);
+    expect(((await start.json()) as { status: string }).status).toBe("running");
+
+    const messages = await app.request(`/api/daemon/tasks/${queued!.id}/messages`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        messages: [
+          { seq: 1, type: "thinking", content: "planning the change" },
+          { seq: 2, type: "tool_use", tool: "bash", input: { command: "pwd" } },
+        ],
+      }),
+    });
+    expect(messages.status).toBe(200);
+    expect(await messages.json()).toEqual({ status: "ok", persisted: 2 });
+    const messageRows = await db
+      .select()
+      .from(taskMessage)
+      .where(eq(taskMessage.taskId, queued!.id))
+      .orderBy(asc(taskMessage.seq));
+    expect(messageRows).toHaveLength(2);
+    expect(messageRows[0]!.type).toBe("thinking");
+    expect(messageRows[0]!.content).toBe("planning the change");
+    expect(messageRows[1]!.type).toBe("tool_use");
+    expect(messageRows[1]!.tool).toBe("bash");
+
+    const usage = await app.request(`/api/daemon/tasks/${queued!.id}/usage`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        usage: [{ provider: "codex", model: "gpt-test", inputTokens: 10, outputTokens: 20, cacheReadTokens: 3 }],
+      }),
+    });
+    expect(usage.status).toBe(200);
+    const [usageRow] = await db.select().from(taskUsage).where(eq(taskUsage.taskId, queued!.id));
+    expect(usageRow!.provider).toBe("codex");
+    expect(usageRow!.model).toBe("gpt-test");
+    expect(usageRow!.inputTokens).toBe(10);
+    expect(usageRow!.outputTokens).toBe(20);
+    expect(usageRow!.cacheReadTokens).toBe(3);
+
+    const session = await app.request(`/api/daemon/tasks/${queued!.id}/session`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ session_id: "sess-final", work_dir: "/tmp/remi-final" }),
+    });
+    expect(session.status).toBe(200);
+
+    const status = await app.request(`/api/daemon/tasks/${queued!.id}/status`, { method: "GET", headers: auth });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({ status: "running" });
+
+    const complete = await app.request(`/api/daemon/tasks/${queued!.id}/complete`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ text: "done", session_id: "sess-final", work_dir: "/tmp/remi-final" }),
+    });
+    expect(complete.status).toBe(200);
+    expect(((await complete.json()) as { status: string }).status).toBe("completed");
+    const [done] = await db.select().from(agentTaskQueue).where(eq(agentTaskQueue.id, queued!.id));
+    expect(done!.sessionId).toBe("sess-final");
+    expect(done!.workDir).toBe("/tmp/remi-final");
+
+    const recover = await app.request(`/api/daemon/runtimes/${rt.id}/recover-orphans`, {
+      method: "POST",
+      headers: auth,
+      body: "{}",
+    });
+    expect(recover.status).toBe(200);
+    expect(await recover.json()).toEqual({ recovered: 1 });
+    const [recovered] = await db.select().from(agentTaskQueue).where(eq(agentTaskQueue.id, orphan!.id));
+    expect(recovered!.status).toBe("queued");
+    expect(recovered!.startedAt).toBeNull();
+  } finally {
+    await db.delete(taskMessage).where(eq(taskMessage.taskId, queued!.id));
+    await db.delete(taskUsage).where(eq(taskUsage.taskId, queued!.id));
     await cleanup();
     await close();
   }

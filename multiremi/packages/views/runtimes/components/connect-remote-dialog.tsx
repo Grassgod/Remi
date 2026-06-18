@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@multimira/core/api";
 import { useWorkspaceId } from "@multimira/core/hooks";
 import { runtimeKeys } from "@multimira/core/runtimes/queries";
 import { useWSEvent } from "@multimira/core/realtime";
@@ -25,34 +26,34 @@ import { useT } from "../../i18n";
 
 type Step = "instructions" | "success";
 
+const SERVER_URL_PLACEHOLDER = "<SERVER_URL>";
+const APP_URL_PLACEHOLDER = "<APP_URL>";
+const WORKSPACE_ID_PLACEHOLDER = "<WORKSPACE_ID>";
 const INSTALL_CMD =
-  "curl -fsSL https://raw.githubusercontent.com/multimira-ai/multimira/main/scripts/install.sh | bash";
-const CLOUD_SERVER_URL = "https://api.multimira.ai";
-const CLOUD_APP_URL = "https://multimira.ai";
+  "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash";
 
 function normalizeCommandURL(url: string | undefined) {
   return url?.trim().replace(/\/+$/, "") ?? "";
 }
 
-function daemonCommands(serverUrl: string | undefined, appUrl: string | undefined) {
-  const normalizedServerUrl = normalizeCommandURL(serverUrl);
-  const normalizedAppUrl = normalizeCommandURL(appUrl);
-  if (normalizedServerUrl && normalizedAppUrl) {
-    return {
-      setupCmd: `multimira setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl}`,
-      tokenCmd: `multimira config set server_url ${normalizedServerUrl}
-multimira config set app_url ${normalizedAppUrl}
-multimira login --token <YOUR_TOKEN>
-multimira daemon start`,
-    };
-  }
+function daemonCommands(
+  serverUrl: string | undefined,
+  appUrl: string | undefined,
+  workspaceId: string | undefined,
+  token: string | null,
+) {
+  const normalizedServerUrl = normalizeCommandURL(serverUrl) || SERVER_URL_PLACEHOLDER;
+  const normalizedAppUrl = normalizeCommandURL(appUrl) || APP_URL_PLACEHOLDER;
+  const normalizedWorkspaceId = workspaceId?.trim() || WORKSPACE_ID_PLACEHOLDER;
+  const setupToken = token?.trim() || "<YOUR_TOKEN>";
+  const setupBase =
+    `remi setup self-host --server-url ${normalizedServerUrl} --app-url ${normalizedAppUrl} --workspace-id ${normalizedWorkspaceId}`;
 
   return {
-    setupCmd: "multimira setup",
-    tokenCmd: `multimira config set server_url ${CLOUD_SERVER_URL}
-multimira config set app_url ${CLOUD_APP_URL}
-multimira login --token <YOUR_TOKEN>
-multimira daemon start`,
+    setupCmd: `${setupBase} --token ${setupToken} --start`,
+    tokenCmd: `${setupBase}
+remi login --token ${setupToken}
+remi daemon start`,
   };
 }
 
@@ -64,9 +65,8 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const navigation = useNavigation();
   const newRuntimeIdRef = useRef<string | null>(null);
 
-  // `multimira setup` is one blocking command that handles config + login
-  // + daemon start; the dialog passively listens for the resulting
-  // `daemon:register` WS event and auto-advances to success.
+  // `remi setup ... --start` stores config + token and starts the daemon.
+  // The dialog listens for the resulting `daemon:register` WS event.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
       if (step !== "instructions") return;
@@ -192,7 +192,33 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const { t } = useT("runtimes");
   const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
   const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
-  const { setupCmd, tokenCmd } = daemonCommands(daemonServerUrl, daemonAppUrl);
+  const wsId = useWorkspaceId();
+  const [setupToken, setSetupToken] = useState<string | null>(null);
+  const [browserOrigin, setBrowserOrigin] = useState("");
+  useEffect(() => {
+    setBrowserOrigin(window.location.origin);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .createPersonalAccessToken({
+        name: `Remi daemon ${new Date().toISOString().slice(0, 10)}`,
+        expires_in_days: 365,
+      })
+      .then((result) => {
+        if (!cancelled) setSetupToken(result.token);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const { setupCmd, tokenCmd } = daemonCommands(
+    daemonServerUrl || browserOrigin,
+    daemonAppUrl || browserOrigin,
+    wsId,
+    setupToken,
+  );
   return (
     <>
       <DialogHeader className="px-6 pt-6 pb-2">
@@ -277,7 +303,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multimira daemon status"}
+              {"remi daemon status"}
             </code>
           </li>
           <li className="flex items-center gap-1.5">
@@ -290,7 +316,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multimira daemon logs -f"}
+              {"remi daemon logs -f"}
             </code>
           </li>
         </ul>

@@ -4,7 +4,8 @@
  * not workspace_id. Mirrors server/pkg/db/queries/personal_access_token.sql.
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import type { Db } from "../client.js";
 import { personalAccessToken } from "../schema.js";
 
@@ -34,6 +35,41 @@ export async function listPersonalAccessTokensByUser(
     .from(personalAccessToken)
     .where(and(eq(personalAccessToken.userId, userId), eq(personalAccessToken.revoked, false)))
     .orderBy(desc(personalAccessToken.createdAt));
+}
+
+/** Hex-encoded SHA-256 of a PAT string (mirrors auth.HashToken / routes/pat.ts). */
+export function hashPatToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Resolve an active PAT by its hash for the auth gate. Returns the row only when
+ * it is not revoked and not expired (expires_at NULL = never expires), mirroring
+ * the Go GetPersonalAccessTokenByHash query. null = no such valid token.
+ */
+export async function getPersonalAccessTokenByHash(
+  db: Db,
+  hash: string,
+): Promise<PersonalAccessToken | null> {
+  const [p] = await db
+    .select()
+    .from(personalAccessToken)
+    .where(
+      and(
+        eq(personalAccessToken.tokenHash, hash),
+        eq(personalAccessToken.revoked, false),
+        or(isNull(personalAccessToken.expiresAt), gt(personalAccessToken.expiresAt, sql`now()`)),
+      ),
+    );
+  return p ?? null;
+}
+
+/** Bump last_used_at on a PAT (fire-and-forget from the gate). */
+export async function touchPatLastUsed(db: Db, id: string): Promise<void> {
+  await db
+    .update(personalAccessToken)
+    .set({ lastUsedAt: sql`now()` })
+    .where(eq(personalAccessToken.id, id));
 }
 
 /**

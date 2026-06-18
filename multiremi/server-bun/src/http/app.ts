@@ -50,6 +50,7 @@ import { agentTemplateRoutes } from "./routes/agentTemplates.js";
 import { meRoutes } from "./routes/me.js";
 import { configRoutes } from "./routes/config.js";
 import { latencyRoutes } from "./routes/latency.js";
+import { remiInstallRoutes } from "./routes/remiInstall.js";
 import { miscRoutes } from "./routes/misc.js";
 import { issueExtrasRoutes } from "./routes/issueExtras.js";
 import { issueTasksRoutes } from "./routes/issueTasks.js";
@@ -65,6 +66,11 @@ import { miscActionsRoutes } from "./routes/miscActions.js";
 import { chatDepthRoutes } from "./routes/chatDepth.js";
 import { larkBindingRoutes } from "./routes/larkBinding.js";
 import { getWorkspaceBySlug } from "../db/queries/workspace.js";
+import {
+  getPersonalAccessTokenByHash,
+  hashPatToken,
+  touchPatLastUsed,
+} from "../db/queries/pat.js";
 
 /** Extract the bearer token from the Authorization header or the auth cookie. */
 function bearerFrom(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
@@ -118,6 +124,8 @@ export function createApp(cfg: Config = loadConfig(), db?: Db): Hono<AppEnv> {
   // Public UI latency probe. Mounted before the /api/* gate so login and
   // bootstrap screens can measure the current origin too.
   app.route("/", latencyRoutes());
+  // Public Remi daemon installer + release assets for self-host deployments.
+  app.route("/", remiInstallRoutes());
   // Public Feishu inbound webhook (Feishu calls it without a JWT).
   app.route("/lark", larkRoutes(db));
   // Public provider-signed inbound webhooks. These declare absolute
@@ -131,6 +139,22 @@ export function createApp(cfg: Config = loadConfig(), db?: Db): Hono<AppEnv> {
   app.use("/api/*", async (c, next) => {
     const token = bearerFrom(c);
     if (!token) return c.json({ error: "unauthorized" }, 401);
+
+    // Personal access tokens ("mul_") authenticate the remote daemon over HTTP
+    // (no DB credentials on the daemon side). Branch strictly on the prefix so
+    // JWT requests never pay the extra DB lookup. PATs are user-scoped: the
+    // workspace is still resolved from X-Workspace-ID + the membership check in
+    // each route gate. Mirrors server/internal/middleware/daemon_auth.go.
+    if (token.startsWith("mul_")) {
+      if (!db) return c.json({ error: "database not configured" }, 503);
+      const pat = await getPersonalAccessTokenByHash(db, hashPatToken(token));
+      if (!pat) return c.json({ error: "invalid token" }, 401);
+      c.set("user", { sub: pat.userId, email: "", name: "" });
+      // Refresh last_used_at without blocking the request.
+      void touchPatLastUsed(db, pat.id).catch(() => {});
+      return next();
+    }
+
     let claims;
     try {
       claims = await verifyJWT(token, cfg.jwtSecret);

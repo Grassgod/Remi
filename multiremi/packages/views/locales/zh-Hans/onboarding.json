@@ -118,7 +118,7 @@
   "cli_install": {
     "copy_aria": "复制",
     "intro": "这台电脑上需要装一个 agent 运行时（Claude Code、Codex、Cursor 等）才能运行你的智能体。也支持服务器和远程开发机。",
-    "step1_label": "安装 Multiremi CLI",
+    "step1_label": "安装 Remi CLI",
     "step2_label": "启动守护进程"
   },
   "cloud_waitlist": {

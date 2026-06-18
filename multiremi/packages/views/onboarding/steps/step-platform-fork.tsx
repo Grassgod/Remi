@@ -383,10 +383,9 @@ function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
     return () => window.clearInterval(id);
   }, [dialogOpen]);
 
-  // Stage thresholds are rough — `multimira setup` typical flow is
-  //   ~1s save config → browser-tab auth (user-driven, 5–30s) →
-  //   ~2s daemon boot → immediate WS register. So under 15s means
-  //   "still normal", 15–45s means "probably stuck on browser auth",
+  // Stage thresholds are rough — `remi setup ... --start` typical flow is
+  //   ~1s save config → ~2s daemon boot → immediate WS register.
+  //   So under 15s means "still normal", 15–45s means "still starting",
   //   45–90s means "probably an error in the terminal", 90s+ means
   //   "nothing's coming through, suggest alt paths" (the stalled tier
   //   parallels desktop StepRuntimeConnect's EmptyView — by that point
@@ -425,21 +424,21 @@ function CliWaitingStatus({ dialogOpen }: { dialogOpen: boolean }) {
         {stage === "normal" && (
           <>
             {t(($) => $.step_platform.stage_normal_prefix)}
-            <span className="font-mono">{"multimira setup"}</span>
+            <span className="font-mono">{"remi setup"}</span>
             {t(($) => $.step_platform.stage_normal_suffix)}
           </>
         )}
         {stage === "midway" && (
           <>
             {t(($) => $.step_platform.stage_midway_prefix)}
-            <span className="font-mono">{"multimira setup"}</span>
+            <span className="font-mono">{"remi setup"}</span>
             {t(($) => $.step_platform.stage_midway_suffix)}
           </>
         )}
         {stage === "slow" && (
           <>
             {t(($) => $.step_platform.stage_slow_prefix)}
-            <span className="font-mono">{"multimira setup"}</span>
+            <span className="font-mono">{"remi setup"}</span>
             {t(($) => $.step_platform.stage_slow_suffix)}
           </>
         )}
