@@ -6,7 +6,7 @@
 
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import type {
   Provider,
   SendOptions,
@@ -130,6 +130,9 @@ export function resolveAcpExecutableForAgent(agentType: string, executable: stri
     for (const candidate of candidates) {
       if (existsSync(candidate)) return candidate;
     }
+
+    const pathExecutable = resolveExecutableOnPath(REMI_CLAUDE_AGENT_ACP_WRAPPER);
+    if (pathExecutable) return pathExecutable;
   }
 
   if (agentType === "codex") {
@@ -145,9 +148,21 @@ export function resolveAcpExecutableForAgent(agentType: string, executable: stri
     for (const candidate of candidates) {
       if (existsSync(candidate)) return candidate;
     }
+
+    const pathExecutable = resolveExecutableOnPath("codex-acp");
+    if (pathExecutable) return pathExecutable;
   }
 
   return fallback;
+}
+
+function resolveExecutableOnPath(command: string): string | null {
+  const paths = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  for (const dir of paths) {
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 export interface AcpHealthCheckCommand {
@@ -160,16 +175,13 @@ export function resolveAcpHealthCheckCommand(
   executable: string | null | undefined,
   fallback: string,
 ): AcpHealthCheckCommand {
-  const explicit = typeof executable === "string" ? executable.trim() : "";
-
-  // Preserve the cheap Claude CLI check for the default Claude ACP setup. The
-  // Remi Claude ACP wrapper prepares a patched server and should not be invoked
-  // on every heartbeat just to check liveness.
-  if (agentType === "claude" && !explicit) {
-    return { command: "claude", args: ["--version"] };
-  }
-
   const command = resolveAcpExecutableForAgent(agentType, executable, fallback);
+  if (agentType === "claude" && command.endsWith(REMI_CLAUDE_AGENT_ACP_WRAPPER)) {
+    return { command, args: ["--verify-patch"] };
+  }
+  if (agentType === "codex") {
+    return { command, args: ["--help"] };
+  }
   return { command, args: ["--version"] };
 }
 
@@ -230,7 +242,7 @@ export class AcpProvider implements Provider {
 
   async *sendStream(message: string, options?: SendOptions): AsyncGenerator<ProviderEvent> {
     const chatId = options?.chatId ?? "__default__";
-    const entry = await this._ensureSession(chatId, options);
+    const entry = await abortableEnsureSession(this._ensureSession(chatId, options), options?.signal);
 
     this._activeStreaming.add(chatId);
     entry.lastUsed = Date.now();
@@ -488,6 +500,42 @@ export class AcpProvider implements Provider {
     }
     await this.clearSession();
   }
+}
+
+function abortableEnsureSession(promise: Promise<PoolEntry>, signal?: AbortSignal): Promise<PoolEntry> {
+  if (!signal) return promise;
+
+  const stopAfterAbort = (entry: PoolEntry) => {
+    entry.client.stop().catch(() => {});
+  };
+
+  if (signal.aborted) {
+    promise.then(stopAfterAbort).catch(() => {});
+    return Promise.reject(new Error("Cancelled"));
+  }
+
+  return new Promise((resolve, reject) => {
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      signal.removeEventListener("abort", onAbort);
+      promise.then(stopAfterAbort).catch(() => {});
+      reject(new Error("Cancelled"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((entry) => {
+      signal.removeEventListener("abort", onAbort);
+      if (aborted || signal.aborted) {
+        stopAfterAbort(entry);
+        reject(new Error("Cancelled"));
+        return;
+      }
+      resolve(entry);
+    }).catch((err) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(err);
+    });
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

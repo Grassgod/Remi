@@ -6,15 +6,15 @@
 # ---------------------------------------------------------------------------
 # [provider] — ACP agent configuration.
 # Remi uses the Agent Client Protocol (ACP) to communicate with coding agents.
-# Supported agents: claude (claude-agent-acp) and codex (codex-acp).
-# Install: npm install -g @agentclientprotocol/claude-agent-acp
-#          npm install -g @agentclientprotocol/codex-acp
+# Supported agents: claude (Remi Claude ACP wrapper) and codex (codex-acp).
+# Install: npm install -g @zed-industries/claude-agent-acp @anthropic-ai/claude-code
+#          npm install -g @openai/codex
 # ---------------------------------------------------------------------------
 [provider]
 default = "claude"         # "claude" or "codex"
 
 [provider.claude]
-# executable = "claude-agent-acp"   # auto-detected if not specified
+# executable = "remi-claude-agent-acp" # auto-detected if not specified
 # model = "claude-opus-4-7"         # optional model override
 timeout = 300
 

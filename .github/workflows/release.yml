@@ -24,11 +24,8 @@ jobs:
       - name: Build release archive
         run: bun run build
 
-      - name: Build Remi daemon CLI release archives
-        run: |
-          cd multiremi/server-bun
-          bun install
-          REMI_VERSION="${GITHUB_REF_NAME}" bun run build:remi-cli
+      - name: Build Multiremi daemon CLI release archives
+        run: MULTIREMI_VERSION="${GITHUB_REF_NAME}" bun run build:multiremi
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -37,4 +34,5 @@ jobs:
             dist/*.tar.gz
             scripts/install.sh
             scripts/install-remi.sh
+            scripts/install-multiremi.sh
           generate_release_notes: true

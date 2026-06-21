@@ -31,7 +31,10 @@
     "start": "bun run src/main.ts serve",
     "serve": "bun run src/main.ts serve",
     "test": "bun test",
-    "build": "bun run scripts/build.ts"
+    "build": "bun run scripts/build.ts",
+    "build:multiremi": "bun run scripts/build-multiremi.ts",
+    "smoke:multiremi:acp": "bun run scripts/smoke-multiremi-acp.ts",
+    "e2e:multiremi": "bun run scripts/e2e-multiremi.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
@@ -44,7 +47,8 @@
     "sqlite-vec": "^0.1.7-alpha.2"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "playwright-core": "^1.61.0"
   },
   "trustedDependencies": [
     "protobufjs"

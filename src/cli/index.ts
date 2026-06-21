@@ -64,9 +64,9 @@ register("update", "Download latest version from GitHub", async () => {
   return { run: runUpdate };
 });
 
-register("multica", "Bun Multica task runtime", async () => {
-  const { runMultica } = await import("./multica.js");
-  return { run: runMultica };
+register("multiremi", "Bun Multiremi task runtime", async () => {
+  const { runMultiremi } = await import("./multiremi.js");
+  return { run: runMultiremi };
 });
 
 // ── Internal commands (used by PM2, not user-facing) ─────

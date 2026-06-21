@@ -16,7 +16,12 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
-const PACKAGE_NAME = "@agentclientprotocol/claude-agent-acp";
+const PACKAGE_NAMES = [
+  "@zed-industries/claude-agent-acp",
+  "@agentclientprotocol/claude-agent-acp",
+];
+const SDK_PACKAGE_NAME = "@anthropic-ai/claude-agent-sdk";
+const MIN_CLAUDE_CODE_VERSION = "2.1.120";
 const PATCH_VERSION = "ask-bridge-v1";
 
 main().catch((err) => {
@@ -26,7 +31,8 @@ main().catch((err) => {
 });
 
 async function main() {
-  const patchedRoot = preparePatchedPackage();
+  const prepared = preparePatchedPackage();
+  const patchedRoot = prepared.root;
   const patchedIndex = join(patchedRoot, "dist", "index.js");
 
   if (process.argv.includes("--print-patched-agent")) {
@@ -34,15 +40,19 @@ async function main() {
     return;
   }
   if (process.argv.includes("--verify-patch")) {
-    verifyPatchedAgent(join(patchedRoot, "dist", "acp-agent.js"));
+    verifyPreparedPackage(patchedRoot, prepared.runtime);
     console.log(`ok ${patchedIndex}`);
     return;
   }
 
   const args = process.argv.slice(2);
+  const env = { ...process.env };
+  if (prepared.runtime.claudeCodeExecutable) {
+    env.CLAUDE_CODE_EXECUTABLE = prepared.runtime.claudeCodeExecutable;
+  }
   const child = spawn(process.execPath, [patchedIndex, ...args], {
     cwd: process.cwd(),
-    env: process.env,
+    env,
     stdio: "inherit",
   });
 
@@ -74,13 +84,20 @@ function preparePatchedPackage() {
   const pkg = readPackageJson(upstreamRoot);
   const acpAgentPath = join(upstreamRoot, "dist", "acp-agent.js");
   const upstreamHash = hashFile(acpAgentPath).slice(0, 12);
+  const runtime = resolveClaudeRuntime(upstreamRoot);
+  const runtimeCacheKey = runtime.cacheKey;
   const cacheRoot = process.env.REMI_CLAUDE_AGENT_ACP_CACHE
     ?? join(process.env.REMI_HOME ?? join(homedir(), ".remi"), "cache", "claude-agent-acp-remi");
-  const dest = join(cacheRoot, `${pkg.version}-${upstreamHash}-${PATCH_VERSION}`, "package");
+  const dest = join(
+    cacheRoot,
+    safeCacheSegment(pkg.name),
+    `${pkg.version}-${upstreamHash}-${PATCH_VERSION}-${safeCacheSegment(runtimeCacheKey)}`,
+    "package",
+  );
 
   if (existsSync(join(dest, "dist", "index.js"))) {
-    verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
-    return dest;
+    verifyPreparedPackage(dest, runtime);
+    return { root: dest, runtime };
   }
 
   const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
@@ -89,21 +106,22 @@ function preparePatchedPackage() {
   cpSync(upstreamRoot, tmp, { recursive: true });
   patchAcpAgent(join(tmp, "dist", "acp-agent.js"));
   if (existsSync(join(dest, "dist", "index.js"))) {
-    verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
+    verifyPreparedPackage(dest, runtime);
     rmSync(tmp, { recursive: true, force: true });
-    return dest;
+    return { root: dest, runtime };
   }
   try {
     renameSync(tmp, dest);
   } catch (err) {
     if (existsSync(join(dest, "dist", "index.js"))) {
-      verifyPatchedAgent(join(dest, "dist", "acp-agent.js"));
+      verifyPreparedPackage(dest, runtime);
       rmSync(tmp, { recursive: true, force: true });
-      return dest;
+      return { root: dest, runtime };
     }
     throw err;
   }
-  return dest;
+  verifyPreparedPackage(dest, runtime);
+  return { root: dest, runtime };
 }
 
 function findUpstreamPackageRoot() {
@@ -113,20 +131,24 @@ function findUpstreamPackageRoot() {
     process.env.REMI_CLAUDE_AGENT_ACP_PATH,
   ];
 
-  const localPackage = resolvePackageWithRequire();
+  const localPackage = resolvePackageWithRequire(PACKAGE_NAMES);
   if (localPackage) candidates.push(localPackage);
 
   const pathBinary = resolveCommand("claude-agent-acp");
   if (pathBinary) candidates.push(pathBinary);
 
   candidates.push(
+    join(homedir(), ".npm-global", "lib", "node_modules", "@zed-industries", "claude-agent-acp"),
     join(homedir(), ".npm-global", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+    join("/usr/local", "lib", "node_modules", "@zed-industries", "claude-agent-acp"),
     join("/usr/local", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+    join("/opt/homebrew", "lib", "node_modules", "@zed-industries", "claude-agent-acp"),
     join("/opt/homebrew", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
   );
 
   const npmRoot = npmGlobalRoot();
   if (npmRoot) {
+    candidates.push(join(npmRoot, "@zed-industries", "claude-agent-acp"));
     candidates.push(join(npmRoot, "@agentclientprotocol", "claude-agent-acp"));
   }
 
@@ -136,7 +158,7 @@ function findUpstreamPackageRoot() {
   }
 
   throw new Error(
-    `Could not locate ${PACKAGE_NAME}. Install claude-agent-acp or set REMI_CLAUDE_AGENT_ACP_DIR to its package directory.`,
+    `Could not locate claude-agent-acp (${PACKAGE_NAMES.join(" or ")}). Install claude-agent-acp or set REMI_CLAUDE_AGENT_ACP_DIR to its package directory.`,
   );
 }
 
@@ -163,7 +185,7 @@ function normalizePackageRoot(candidate) {
     if (existsSync(packageJsonPath)) {
       try {
         const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-        if (pkg.name === PACKAGE_NAME && existsSync(join(current, "dist", "index.js"))) {
+        if (PACKAGE_NAMES.includes(pkg.name) && existsSync(join(current, "dist", "index.js"))) {
           return current;
         }
       } catch {}
@@ -176,13 +198,15 @@ function normalizePackageRoot(candidate) {
   return null;
 }
 
-function resolvePackageWithRequire() {
-  try {
-    const require = createRequire(import.meta.url);
-    return require.resolve(`${PACKAGE_NAME}/package.json`);
-  } catch {
-    return null;
+function resolvePackageWithRequire(packageNames) {
+  const require = createRequire(import.meta.url);
+  const names = Array.isArray(packageNames) ? packageNames : [packageNames];
+  for (const packageName of names) {
+    try {
+      return require.resolve(`${packageName}/package.json`);
+    } catch {}
   }
+  return null;
 }
 
 function resolveCommand(command) {
@@ -209,8 +233,138 @@ function readPackageJson(root) {
   return JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
 }
 
+function resolveClaudeRuntime(upstreamRoot) {
+  const bundledRoot = join(upstreamRoot, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+  const bundled = readClaudeAgentSdkInfo(bundledRoot);
+  if (bundled && isVersionAtLeast(bundled.claudeCodeVersion, MIN_CLAUDE_CODE_VERSION)) {
+    return {
+      source: "bundled-sdk",
+      cacheKey: `bundled-sdk-${bundled.version}-${bundled.claudeCodeVersion}`,
+      claudeCodeExecutable: null,
+      version: bundled.claudeCodeVersion,
+    };
+  }
+
+  const executable = findCompatibleClaudeCodeExecutable();
+  if (executable) {
+    return {
+      source: "claude-cli",
+      cacheKey: `claude-cli-${executable.version}-${hashString(executable.path).slice(0, 8)}`,
+      claudeCodeExecutable: executable.path,
+      version: executable.version,
+    };
+  }
+
+  const bundledVersion = bundled
+    ? `${SDK_PACKAGE_NAME}@${bundled.version} / Claude Code ${bundled.claudeCodeVersion}`
+    : "missing bundled SDK";
+  throw new Error(
+    `Claude ACP bundled SDK is too old (${bundledVersion}) and no compatible Claude Code executable was found. Upgrade Claude Code or set REMI_CLAUDE_CODE_EXECUTABLE/CLAUDE_CODE_EXECUTABLE; minimum Claude Code version is ${MIN_CLAUDE_CODE_VERSION}.`,
+  );
+}
+
+function findCompatibleClaudeCodeExecutable() {
+  const candidates = [
+    process.env.REMI_CLAUDE_CODE_EXECUTABLE,
+    process.env.CLAUDE_CODE_EXECUTABLE,
+  ];
+
+  const pathBinary = resolveCommand("claude");
+  if (pathBinary) candidates.push(pathBinary);
+
+  candidates.push(
+    join(homedir(), ".local", "bin", "claude"),
+    join(homedir(), ".npm-global", "bin", "claude"),
+    join("/usr/local", "bin", "claude"),
+    join("/opt/homebrew", "bin", "claude"),
+  );
+
+  const npmRoot = npmGlobalRoot();
+  if (npmRoot) candidates.push(join(npmRoot, "@anthropic-ai", "claude-code", "bin", "claude"));
+
+  for (const candidate of candidates) {
+    const executable = normalizeExecutable(candidate);
+    if (!executable) continue;
+    const version = readClaudeCodeVersion(executable);
+    if (version && isVersionAtLeast(version, MIN_CLAUDE_CODE_VERSION)) {
+      return { path: executable, version };
+    }
+  }
+
+  return null;
+}
+
+function normalizeExecutable(candidate) {
+  if (!candidate) return null;
+  try {
+    const path = realpathSync(resolve(candidate));
+    if (statSync(path).isFile()) return path;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function readClaudeCodeVersion(executable) {
+  const result = spawnSync(executable, ["--version"], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5000,
+  });
+  if (result.status !== 0) return null;
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const match = output.match(/(\d+\.\d+\.\d+)/);
+  return match?.[1] ?? null;
+}
+
+function readClaudeAgentSdkInfo(root) {
+  const packageJsonPath = join(root, "package.json");
+  if (!existsSync(packageJsonPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+    if (pkg.name !== SDK_PACKAGE_NAME) return null;
+    return {
+      root,
+      version: String(pkg.version ?? "0.0.0"),
+      claudeCodeVersion: String(pkg.claudeCodeVersion ?? pkg.version ?? "0.0.0"),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function hashFile(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function hashString(value) {
+  return createHash("sha256").update(String(value)).digest("hex");
+}
+
+function safeCacheSegment(value) {
+  return String(value).replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "claude-agent-acp";
+}
+
+function isVersionAtLeast(actual, minimum) {
+  const actualParts = parseVersion(actual);
+  const minimumParts = parseVersion(minimum);
+  for (let i = 0; i < 3; i++) {
+    if (actualParts[i] > minimumParts[i]) return true;
+    if (actualParts[i] < minimumParts[i]) return false;
+  }
+  return true;
+}
+
+function parseVersion(version) {
+  return String(version)
+    .split(".")
+    .slice(0, 3)
+    .map((part) => {
+      const value = parseInt(part.replace(/[^0-9].*$/, ""), 10);
+      return Number.isFinite(value) ? value : 0;
+    })
+    .concat([0, 0, 0])
+    .slice(0, 3);
 }
 
 function patchAcpAgent(path) {
@@ -264,4 +418,16 @@ function verifyPatchedAgent(path) {
   if (!source.includes("response.outcome?.updatedInput ?? toolInput")) {
     throw new Error("Patched claude-agent-acp cannot forward Remi AskUserQuestion answers.");
   }
+}
+
+function verifyPreparedPackage(root, runtime) {
+  verifyPatchedAgent(join(root, "dist", "acp-agent.js"));
+  const sdk = readClaudeAgentSdkInfo(join(root, "node_modules", "@anthropic-ai", "claude-agent-sdk"));
+  if (sdk && isVersionAtLeast(sdk.claudeCodeVersion, MIN_CLAUDE_CODE_VERSION)) return;
+  if (runtime?.claudeCodeExecutable && isVersionAtLeast(runtime.version, MIN_CLAUDE_CODE_VERSION)) return;
+
+  const version = sdk ? `${sdk.version} / Claude Code ${sdk.claudeCodeVersion}` : "missing";
+  throw new Error(
+    `Prepared claude-agent-acp package has incompatible ${SDK_PACKAGE_NAME}: ${version}, and no compatible Claude Code executable was selected. Minimum Claude Code version is ${MIN_CLAUDE_CODE_VERSION}.`,
+  );
 }

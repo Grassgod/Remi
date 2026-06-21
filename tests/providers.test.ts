@@ -80,17 +80,16 @@ describe("AcpProvider", () => {
   it("checks Codex ACP health via the Codex ACP executable", () => {
     // codex with no explicit executable: fallback OR a discovered codex-acp binary.
     const codexHealth = resolveAcpHealthCheckCommand("codex", null, "codex-acp");
-    expect(codexHealth.args).toEqual(["--version"]);
+    expect(codexHealth.args).toEqual(["--help"]);
     expect(isCodexExecutable(codexHealth.command, "codex-acp")).toBe(true);
     // Explicit executable is always preserved verbatim.
     expect(resolveAcpHealthCheckCommand("codex", "/tmp/codex-acp", "codex-acp")).toEqual({
       command: "/tmp/codex-acp",
-      args: ["--version"],
+      args: ["--help"],
     });
-    expect(resolveAcpHealthCheckCommand("claude", null, "claude-agent-acp")).toEqual({
-      command: "claude",
-      args: ["--version"],
-    });
+    const claudeHealth = resolveAcpHealthCheckCommand("claude", null, "claude-agent-acp");
+    expect(claudeHealth.command.endsWith("/bin/remi-claude-agent-acp")).toBe(true);
+    expect(claudeHealth.args).toEqual(["--verify-patch"]);
   });
 
   it("constructs an ACP Codex provider", () => {

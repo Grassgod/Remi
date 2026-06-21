@@ -36,6 +36,7 @@ remi-jarvis-*.png
 
 .claude/CLAUDE.md
 .claude/settings.local.json
+.claude/worktrees/
 
 # ---------------------------------------------------------------------------
 # Remi runtime & secrets — never commit.
