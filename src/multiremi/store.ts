@@ -828,7 +828,9 @@ export class MultiremiStore {
 
       CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_issue ON multiremi_issue_subscribers(issue_id);
       CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_member ON multiremi_issue_subscribers(member_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_user ON multiremi_issue_subscribers(user_type, user_id);
+      -- The (user_type, user_id) index is created by ensureIssueSubscriberTypedSchema(),
+      -- which runs after this block and rebuilds pre-typed-column tables first. Creating
+      -- it here would crash on an existing DB whose subscribers table lacks user_type.
 
       CREATE TABLE IF NOT EXISTS multiremi_inbox_items (
         id TEXT PRIMARY KEY,
@@ -927,8 +929,9 @@ export class MultiremiStore {
 
       CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_issue ON multiremi_attachments(issue_id);
       CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_comment ON multiremi_attachments(comment_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_session ON multiremi_attachments(chat_session_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id);
+      -- chat_session_id / chat_message_id indexes are created after addColumnIfMissing (below);
+      -- those columns are added by upgrade migrations on pre-existing DBs, so indexing them
+      -- here would crash an old DB whose attachments table predates the columns.
       CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_workspace ON multiremi_attachments(workspace_id);
 
       CREATE TABLE IF NOT EXISTS multiremi_projects (
@@ -1188,7 +1191,8 @@ export class MultiremiStore {
       CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_status ON multiremi_tasks(status);
       CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_runtime ON multiremi_tasks(runtime_id);
       CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_issue ON multiremi_tasks(issue_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id);
+      -- trigger_comment_id index is created after addColumnIfMissing (below); the column is
+      -- added by an upgrade migration on pre-existing DBs.
       CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace ON multiremi_tasks(workspace_id);
 
       CREATE TABLE IF NOT EXISTS multiremi_task_messages (
