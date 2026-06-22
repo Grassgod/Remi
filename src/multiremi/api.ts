@@ -661,7 +661,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const workspaceId = c.req.param("id");
     const requester = loadCurrentWorkspaceMember(c, store, workspaceId);
     if (requester instanceof Response) return requester;
-    return c.json(store.listWorkspaceMembers(workspaceId).map((member) => workspaceMemberToGoResponse(member, { includeUser: true })));
+    return c.json(store.listWorkspaceMembers(workspaceId).map((member) => workspaceMemberToGoResponse(member, { includeName: true })));
   });
   app.patch("/api/workspaces/:id/members/:memberId", async (c) => {
     const workspaceId = c.req.param("id");
@@ -7504,7 +7504,7 @@ function normalizeGoWorkspaceMemberRole(value: unknown): { role: "owner" | "admi
   return { error: "invalid member role" };
 }
 
-function workspaceMemberToGoResponse(member: MultiremiWorkspaceMember, options: { includeUser?: boolean } = {}): Record<string, unknown> {
+function workspaceMemberToGoResponse(member: MultiremiWorkspaceMember, options: { includeUser?: boolean; includeName?: boolean } = {}): Record<string, unknown> {
   const response: Record<string, unknown> = {
     id: member.id,
     workspace_id: member.workspaceId,
@@ -7512,10 +7512,15 @@ function workspaceMemberToGoResponse(member: MultiremiWorkspaceMember, options: 
     role: member.role,
     created_at: member.createdAt,
   };
-  if (options.includeUser) {
+  // List responses include the display name (the web member/assignee filters call
+  // member.name.toLowerCase()) but NOT email — the Go-compat list omits email.
+  // Full user fields (incl. email) are only returned on the single-member update path.
+  if (options.includeUser || options.includeName) {
     response.name = member.name;
-    response.email = member.email ?? "";
     response.avatar_url = null;
+  }
+  if (options.includeUser) {
+    response.email = member.email ?? "";
   }
   return response;
 }
