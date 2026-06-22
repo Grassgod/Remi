@@ -95,45 +95,12 @@ export interface NotificationConfig {
   targets: string[];
 }
 
-export interface PipelineConfig {
-  notifications: {
-    dailyChangelog: NotificationConfig;
-    missionProgress: NotificationConfig;
-    evalReport: NotificationConfig;
-  };
-  pipeline: {
-    releaseBranch: string;
-    skipRfc: boolean;
-    skipDecompose: boolean;
-    testCommand: string;
-    lintCommand: string;
-    buildCommand: string;
-  };
-}
-
-export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  notifications: {
-    dailyChangelog: { enabled: true, targets: [] },
-    missionProgress: { enabled: true, targets: [] },
-    evalReport: { enabled: true, targets: [] },
-  },
-  pipeline: {
-    releaseBranch: "",
-    skipRfc: false,
-    skipDecompose: false,
-    testCommand: "bun test",
-    lintCommand: "",
-    buildCommand: "",
-  },
-};
-
 export interface Project {
   id: string;
   name: string;
   chatId: string | null;
   repoUrl: string | null;
   cwd: string | null;
-  pipelineConfig: PipelineConfig | null;
   initStatus: ProjectInitStatus;
   initSteps: InitStep[];
   createdAt: string;
@@ -546,35 +513,6 @@ export interface StepItem {
   thinking?: string;  // merged thinking before tool (if type=tool)
 }
 
-// Missions
-export interface MissionItem {
-  id: string;
-  title: string;
-  description: string | null;
-  status: string;
-  projectId: string;
-  chatId: string;
-  threadId: string | null;
-  currentStep: string;
-  mrUrl: string | null;
-  mrStatus: string | null;
-  createdBy: string | null;
-  createdByName: string | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  totalTokens: number;
-  totalCost: number;
-  totalDuration: number;
-}
-
-export interface MissionStats {
-  total: number;
-  byStatus: Record<string, number>;
-  totalCost: number;
-  totalTokens: number;
-}
-
 // Wiki
 export interface WikiFileNode {
   name: string;
@@ -653,29 +591,6 @@ export interface ChatInfo {
   conversationCount: number;
   messageCount: number;
   isP2P: boolean;
-}
-
-// ── Missions – Detail ──
-
-export interface ContractCase {
-  id: string;
-  description: string;
-  input: string;
-  expectedOutput: string;
-  type: "unit" | "integration" | "e2e";
-}
-
-export interface MissionDetailItem extends MissionItem {
-  outputDir: string | null;
-  contract: {
-    cases?: ContractCase[];
-    acceptanceCriteria: string[];
-    verificationResults?: {
-      caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;
-      overallPassed: boolean;
-      verifiedAt: string;
-    };
-  } | null;
 }
 
 // ── Skills ──
@@ -758,110 +673,4 @@ export interface McpScopeDetail {
     args: string[];
     envKeys: string[];
   }>;
-}
-
-// ── Eval Types ──
-
-export interface EvalCase {
-  id: string;
-  prd_url: string;
-  meego_url: string;
-  platform: string;
-  mr_list: string[];
-  repo: string;
-  gt: string;
-  original_gt: string;
-  revised_gt: string;
-  code_snippets: string;
-  status: string;
-  tags: string[];
-  notes: string;
-  created_at: string;
-  updated_at: string;
-  completeness?: Record<string, boolean>;
-}
-
-export interface EvalDimension {
-  name: string;       // 维度名称
-  score: number;
-  maxScore: number;
-  reason: string;
-  detail?: any;
-}
-
-export interface EvalClarifyResult {
-  ground_truth_feat: string;
-  split_feat: string;
-  mr_change_intent: string;
-  total_score: number;
-  reason: string;
-  improvement_suggestion: string;
-  dimensions: EvalDimension[];
-}
-
-export interface EvalRfcResult {
-  uniq_id: string;
-  clarify_gt_summary: string;
-  rfc_summary: string;
-  mr_summary: string;
-  total_score: number;
-  max_total_score: number;
-  overall_reason: string;
-  improvement_suggestion: string;
-  dimensions: EvalDimension[];
-  critical_gaps: Array<{
-    gap_type: string;
-    description: string;
-    severity: string;
-    mr_evidence: string;
-  }>;
-}
-
-export interface EvalOverview {
-  clarify: {
-    avgScore: number;
-    caseCount: number;
-    dimensions: Array<{ name: string; avgScore: number; maxScore: number }>;
-  };
-  rfc: {
-    avgScore: number;
-    caseCount: number;
-    dimensions: Array<{ name: string; avgScore: number; maxScore: number }>;
-    gapsBySeverity: Record<string, number>;
-  };
-  totalCases: number;
-  latestRun?: { date: string; runId: string };
-}
-
-export interface EvalCaseDetail {
-  case_id: string;
-  metadata: any;
-  gt: string;
-  clarify?: string;
-  design?: string;
-  baseline: {
-    clarify?: EvalClarifyResult;
-    rfc?: EvalRfcResult;
-  };
-}
-
-export interface EvalBaseline {
-  clarify: Record<string, EvalClarifyResult>;
-  rfc: Record<string, EvalRfcResult>;
-}
-
-export interface EvalRunSummary {
-  date: string;
-  runId: string;
-  meta?: any;
-  caseCount: number;
-}
-
-export interface EvalRunResult {
-  date: string;
-  runId: string;
-  meta?: any;
-  clarify: Record<string, EvalClarifyResult>;
-  rfc: Record<string, EvalRfcResult>;
-  report?: string;
 }

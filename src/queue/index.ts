@@ -6,7 +6,7 @@
  */
 
 import { Queue, Worker } from "bunqueue/client";
-import { QUEUES, type ConversationJobData, type MemoryJobData, type CronJobData, type MissionJobData } from "./queues.js";
+import { QUEUES, type ConversationJobData, type MemoryJobData, type CronJobData } from "./queues.js";
 import { handleConversationJob } from "./handlers/conversation.js";
 import { handleMemoryJob } from "./handlers/memory.js";
 import { handleCronJob } from "./handlers/cron-bridge.js";
@@ -26,7 +26,6 @@ export class RemiQueueManager {
   private conversationQueue: Queue<ConversationJobData>;
   private memoryQueue: Queue<MemoryJobData>;
   private cronQueue: Queue<CronJobData>;
-  private missionQueue: Queue<MissionJobData>;
 
   // ── Workers ──
   private workers: Worker[] = [];
@@ -51,18 +50,6 @@ export class RemiQueueManager {
     });
     this.cronQueue = new Queue<CronJobData>(QUEUES.CRON, {
       embedded: true,
-    });
-    this.missionQueue = new Queue<MissionJobData>(QUEUES.MISSION, {
-      embedded: true,
-    });
-  }
-
-  /** Enqueue a mission pipeline step. */
-  async enqueueMission(data: MissionJobData): Promise<void> {
-    await this.missionQueue.add("mission_step", data, {
-      attempts: 2,
-      backoff: { type: "fixed", delay: 30_000 },
-      removeOnComplete: { age: 86400 },
     });
   }
 
@@ -226,18 +213,7 @@ export class RemiQueueManager {
       { embedded: true, concurrency: 5 },
     );
 
-    // Mission Worker — pipeline step execution (different missions use independent thread sessions)
-    const missionWorker = new Worker<MissionJobData>(
-      QUEUES.MISSION,
-      async (job) => {
-        if (!self.remi) throw new Error("Remi not initialized for mission");
-        const { handleMissionJob } = await import("./handlers/mission.js");
-        await handleMissionJob(job, self.remi);
-      },
-      { embedded: true, concurrency: 5 },
-    );
-
-    this.workers = [convWorker, memWorker, cronWorker, missionWorker];
+    this.workers = [convWorker, memWorker, cronWorker];
 
     // Attach error handlers — log only, never push
     for (const w of this.workers) {
@@ -268,7 +244,6 @@ export class RemiQueueManager {
     try { await this.conversationQueue.close(); } catch { /* */ }
     try { await this.memoryQueue.close(); } catch { /* */ }
     try { await this.cronQueue.close(); } catch { /* */ }
-    try { await this.missionQueue.close(); } catch { /* */ }
     log.info("RemiQueueManager stopped");
   }
 
@@ -295,7 +270,7 @@ export class RemiQueueManager {
 
   private async cleanStaleJobs(): Promise<void> {
     const STALE_THRESHOLD = 30 * 60 * 1000; // 30 minutes (cron jobs like compaction/skill:gen can take 5-10min)
-    for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue, this.missionQueue]) {
+    for (const q of [this.conversationQueue, this.memoryQueue, this.cronQueue]) {
       try {
         const active = q.getActive();
         for (const job of active) {

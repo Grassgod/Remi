@@ -191,17 +191,6 @@ export function handleButtonClick(valueJson: string): boolean {
       return resolvePendingAction(value.action, value.decision);
     }
 
-    // Mission approve/reject button: { _action_type, missionId }
-    if (value._action_type?.startsWith("mission_")) {
-      // Handled externally by mission module — emit event via callback
-      if (_missionActionHandler) {
-        _missionActionHandler(value._action_type, value.missionId);
-        return true;
-      }
-      log.warn(`Mission action received but no handler registered: ${value._action_type}`);
-      return false;
-    }
-
     return false;
   } catch {
     log.warn(`Failed to parse button value: ${valueJson}`);
@@ -251,14 +240,4 @@ export function rejectAllPendingActions(reason: string): number {
 /** Get count of pending actions (for diagnostics). */
 export function getPendingActionCount(): number {
   return pendingActions.size;
-}
-
-// ── Mission action handler ──
-
-type MissionActionHandler = (actionType: string, missionId: string) => void;
-let _missionActionHandler: MissionActionHandler | null = null;
-
-/** Register a handler for mission approve/reject card button clicks. */
-export function registerMissionActionHandler(handler: MissionActionHandler): void {
-  _missionActionHandler = handler;
 }

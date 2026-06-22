@@ -101,21 +101,6 @@ export const updateProject = (alias: string, path: string) =>
 export const deleteProject = (alias: string) =>
   request(`/api/v1/projects/${encodeURIComponent(alias)}`, { method: "DELETE" });
 
-// Project Config
-export const getProjectConfig = (id: string) =>
-  request<import("./types").PipelineConfig>(`/api/v1/projects/${encodeURIComponent(id)}/config`);
-export const updateProjectConfig = (id: string, config: import("./types").PipelineConfig) =>
-  request<{ ok: boolean }>(`/api/v1/projects/${encodeURIComponent(id)}/config`, {
-    method: "PUT",
-    body: JSON.stringify(config),
-  });
-
-// Project Release
-export const createReleasePR = (id: string) =>
-  request<{ prUrl: string; prNumber: number }>(`/api/v1/projects/${encodeURIComponent(id)}/release`, { method: "POST" });
-export const confirmReleaseMerge = (id: string) =>
-  request<{ newBranch: string; newVersion: string }>(`/api/v1/projects/${encodeURIComponent(id)}/release/confirm`, { method: "POST" });
-
 // Project Init
 export const initProject = (input: import("./types").ProjectInitInput) =>
   request<{ id: string; status: string }>("/api/v1/projects/init", {
@@ -256,24 +241,6 @@ export const getConversationMessages = (chatId: string, threadId?: string, sessi
 export const getChats = () =>
   request<import("./types").ChatInfo[]>("/api/v1/chats");
 
-// Missions
-export const getMissions = (projectId?: string, status?: string) => {
-  const params = new URLSearchParams();
-  if (projectId) params.set("projectId", projectId);
-  if (status) params.set("status", status);
-  const qs = params.toString();
-  return request<import("./types").MissionItem[]>(`/api/v1/missions${qs ? `?${qs}` : ""}`);
-};
-export const getMission = (id: string) =>
-  request<import("./types").MissionItem>(`/api/v1/missions/${id}`);
-export const getMissionDetail = (id: string) =>
-  request<import("./types").MissionDetailItem>(`/api/v1/missions/${id}`);
-export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
-export const createMission = (data: { title: string; projectId: string; chatId: string; description?: string }) =>
-  request<import("./types").MissionItem>("/api/v1/missions", { method: "POST", body: JSON.stringify(data) });
-export const getMissionStats = (projectId: string) =>
-  request<import("./types").MissionStats>(`/api/v1/missions/stats?projectId=${encodeURIComponent(projectId)}`);
 
 // Wiki
 export const getWikiTree = () =>
@@ -391,75 +358,4 @@ export const deleteGroup = (chatId: string) =>
 export const syncGroupNames = () =>
   request<{ ok: true; updated: number }>("/api/v1/groups/sync-names", {
     method: "POST",
-  });
-
-// Missions — internal actions
-export const reEnqueueStep = (missionId: string, step: string) =>
-  request<{ ok: boolean }>("/api/internal/enqueue-intake", {
-    method: "POST",
-    body: JSON.stringify({ missionId, step }),
-  });
-
-export const requestChanges = (missionId: string, comments: string) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/request-changes`, {
-    method: "POST",
-    body: JSON.stringify({ comments }),
-  });
-
-export const createMissionMR = (missionId: string) =>
-  request<{ mrUrl: string }>(`/api/v1/missions/${missionId}/create-mr`, {
-    method: "POST",
-  });
-
-export const confirmMissionDone = (missionId: string) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/done`, {
-    method: "POST",
-  });
-
-// ── Eval ──
-export const getEvalOverview = () =>
-  request<import("./types").EvalOverview>("/api/v1/eval/overview");
-
-export const getEvalCases = () =>
-  request<import("./types").EvalCase[]>("/api/v1/eval/cases");
-
-export const getEvalCase = (id: string) =>
-  request<import("./types").EvalCaseDetail>("/api/v1/eval/cases/" + id);
-
-export const getEvalBaseline = () =>
-  request<import("./types").EvalBaseline>("/api/v1/eval/baseline");
-
-export const getEvalRuns = () =>
-  request<import("./types").EvalRunSummary[]>("/api/v1/eval/runs");
-
-export const getEvalRun = (id: string) =>
-  request<import("./types").EvalRunResult>("/api/v1/eval/runs/" + id);
-
-export const triggerEvalRun = (opts: { type: string; cases: string[] }) =>
-  request<{ ok: boolean; message?: string }>("/api/v1/eval/run", {
-    method: "POST",
-    body: JSON.stringify(opts),
-  });
-
-export const triggerEvalPrepare = (opts: { action: string; caseId?: string }) =>
-  request<{ ok: boolean }>("/api/v1/eval/prepare", {
-    method: "POST",
-    body: JSON.stringify(opts),
-  });
-
-export const createEvalCase = (data: Partial<import("./types").EvalCase>) =>
-  request<{ ok: boolean; id: string }>("/api/v1/eval/cases", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-
-export const updateEvalCase = (id: string, patch: Partial<import("./types").EvalCase>) =>
-  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
-
-export const deleteEvalCase = (id: string) =>
-  request<{ ok: boolean }>("/api/v1/eval/cases/" + id, {
-    method: "DELETE",
   });
