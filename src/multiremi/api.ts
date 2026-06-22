@@ -661,7 +661,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const workspaceId = c.req.param("id");
     const requester = loadCurrentWorkspaceMember(c, store, workspaceId);
     if (requester instanceof Response) return requester;
-    return c.json(store.listWorkspaceMembers(workspaceId).map((member) => workspaceMemberToGoResponse(member)));
+    return c.json(store.listWorkspaceMembers(workspaceId).map((member) => workspaceMemberToGoResponse(member, { includeUser: true })));
   });
   app.patch("/api/workspaces/:id/members/:memberId", async (c) => {
     const workspaceId = c.req.param("id");
