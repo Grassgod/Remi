@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 
 const BACKEND = "http://127.0.0.1:6130";
-const FRONTEND = "http://127.0.0.1:3001";
+const FRONTEND = "http://127.0.0.1:3000";
 
 function resolveChrome(): string {
   const root = join(homedir(), ".cache", "ms-playwright");
