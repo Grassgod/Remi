@@ -6,7 +6,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RemiConfig } from "./config.js";
@@ -16,6 +16,20 @@ const log = createLogger("pm2");
 
 const REMI_ROOT = resolve(import.meta.dir, "..");
 const ECOSYSTEM_PATH = join(homedir(), ".remi", "ecosystem.config.cjs");
+
+function defaultBunInterpreter(): string {
+  const bunPath = join(homedir(), ".bun", "bin", "bun");
+  return existsSync(bunPath) ? bunPath : "bun";
+}
+
+function resolveInterpreter(interpreter?: string | null): string {
+  return !interpreter || interpreter === "bun" ? defaultBunInterpreter() : interpreter;
+}
+
+export function resolvePm2Command(): string {
+  const pm2Path = join(homedir(), ".npm-global", "bin", "pm2");
+  return existsSync(pm2Path) ? pm2Path : "pm2";
+}
 
 /** Build proxy environment variables from config. */
 function buildProxyEnv(config: RemiConfig): Record<string, string> {
@@ -43,7 +57,7 @@ export function generateEcosystem(config: RemiConfig): string {
       name: "remi",
       script: "src/main.ts",
       args: "serve",
-      interpreter: "bun",
+      interpreter: resolveInterpreter(),
       cwd: REMI_ROOT,
       autorestart: true,
       max_restarts: 10,
@@ -58,7 +72,7 @@ export function generateEcosystem(config: RemiConfig): string {
     const app: Record<string, unknown> = {
       name: svc.name,
       script: svc.script,
-      interpreter: svc.interpreter || "bun",
+      interpreter: resolveInterpreter(svc.interpreter),
       cwd: svc.cwd,
       autorestart: true,
       max_restarts: 10,
@@ -105,8 +119,9 @@ export function pm2Start(config: RemiConfig): void {
 
   log.info("Starting all services with PM2...");
   try {
-    execSync(`pm2 start ${path}`, { stdio: "inherit" });
-    execSync("pm2 save", { stdio: "inherit" });
+    const pm2 = resolvePm2Command();
+    execFileSync(pm2, ["start", path], { stdio: "inherit" });
+    execFileSync(pm2, ["save"], { stdio: "inherit" });
     log.info("All services started. Run `pm2 status` to check.");
   } catch (e) {
     log.error("PM2 start failed:", e);
@@ -117,7 +132,7 @@ export function pm2Start(config: RemiConfig): void {
 /** Stop all PM2-managed services. */
 export function pm2Stop(): void {
   try {
-    execSync("pm2 stop all", { stdio: "inherit" });
+    execFileSync(resolvePm2Command(), ["stop", "all"], { stdio: "inherit" });
     log.info("All services stopped.");
   } catch (e) {
     log.error("PM2 stop failed:", e);

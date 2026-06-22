@@ -13,7 +13,7 @@ function makeTmpDir(): string {
 describe("Config", () => {
   let tmpDir: string;
   const savedEnv: Record<string, string | undefined> = {};
-  const envKeys = ["REMI_PROVIDER", "REMI_FALLBACK", "REMI_MODEL", "REMI_TIMEOUT"];
+  const envKeys = ["REMI_PROVIDER", "REMI_FALLBACK", "REMI_MODEL", "REMI_CODEX_MODEL", "REMI_CODEX_BASE_URL", "REMI_TIMEOUT"];
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
@@ -39,16 +39,22 @@ describe("Config", () => {
   it("loads defaults", () => {
     const config = loadConfig(join(tmpDir, "nonexistent.toml"));
     expect(config.provider.name).toBe("claude_cli");
+    expect(config.provider.codexModel).toBeNull();
+    expect(config.provider.codexBaseUrl).toBeNull();
     expect(config.provider.timeout).toBe(300);
     expect(config.memoryDir).toContain("memory");
   });
 
   it("respects env overrides", () => {
     process.env.REMI_PROVIDER = "claude_sdk";
+    process.env.REMI_CODEX_MODEL = "gpt-5.5[low]";
+    process.env.REMI_CODEX_BASE_URL = "https://ai.openremi.fun";
     process.env.REMI_TIMEOUT = "60";
 
     const config = loadConfig(join(tmpDir, "nonexistent.toml"));
     expect(config.provider.name).toBe("claude_sdk");
+    expect(config.provider.codexModel).toBe("gpt-5.5[low]");
+    expect(config.provider.codexBaseUrl).toBe("https://ai.openremi.fun");
     expect(config.provider.timeout).toBe(60);
   });
 
@@ -59,6 +65,8 @@ describe("Config", () => {
       `
 [provider]
 name = "claude_sdk"
+codex_model = "gpt-5.4-mini[low]"
+codex_base_url = "https://ai.openremi.fun"
 timeout = 120
 
 [feishu]
@@ -69,6 +77,8 @@ port = 8080
 
     const config = loadConfig(tomlPath);
     expect(config.provider.name).toBe("claude_sdk");
+    expect(config.provider.codexModel).toBe("gpt-5.4-mini[low]");
+    expect(config.provider.codexBaseUrl).toBe("https://ai.openremi.fun");
     expect(config.provider.timeout).toBe(120);
     expect(config.feishu.appId).toBe("test-app");
     expect(config.feishu.port).toBe(8080);

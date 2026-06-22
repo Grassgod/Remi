@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { ClaudeCLIProvider } from "../src/providers/claude-cli/provider.js";
-import { AcpProvider, resolveAcpExecutableForAgent, resolveAcpHealthCheckCommand, resolveAcpPermissionMode, resolveAvailableAcpPermissionMode } from "../src/providers/acp/provider.js";
+import { AcpProvider, buildCodexAcpEnv, resolveAcpExecutableForAgent, resolveAcpHealthCheckCommand, resolveAcpPermissionMode, resolveAvailableAcpPermissionMode } from "../src/providers/acp/provider.js";
 import { ClaudeAdapter } from "../src/providers/acp/adapters/claude.js";
 import { CodexAdapter } from "../src/providers/acp/adapters/codex.js";
 import type { ToolUseRequest } from "../src/providers/claude-cli/protocol.js";
@@ -55,7 +55,8 @@ describe("AcpProvider", () => {
 
   it("preserves explicit ACP executables", () => {
     expect(resolveAcpExecutableForAgent("claude", "/tmp/custom-agent", "claude-agent-acp")).toBe("/tmp/custom-agent");
-    expect(resolveAcpExecutableForAgent("codex", null, "codex-agent-acp")).toBe("codex-agent-acp");
+    const resolved = resolveAcpExecutableForAgent("codex", null, "codex-agent-acp");
+    expect(resolved.endsWith("/bin/codex-acp") || resolved === "codex-agent-acp").toBe(true);
   });
 
   it("uses the Codex ACP executable environment override", () => {
@@ -70,10 +71,9 @@ describe("AcpProvider", () => {
   });
 
   it("checks Codex ACP health via the Codex ACP executable", () => {
-    expect(resolveAcpHealthCheckCommand("codex", null, "codex-acp")).toEqual({
-      command: "codex-acp",
-      args: ["--version"],
-    });
+    const defaultCheck = resolveAcpHealthCheckCommand("codex", null, "codex-acp");
+    expect(defaultCheck.command.endsWith("/bin/codex-acp") || defaultCheck.command === "codex-acp").toBe(true);
+    expect(defaultCheck.args).toEqual(["--version"]);
     expect(resolveAcpHealthCheckCommand("codex", "/tmp/codex-acp", "codex-acp")).toEqual({
       command: "/tmp/codex-acp",
       args: ["--version"],
@@ -88,6 +88,18 @@ describe("AcpProvider", () => {
     const provider = new AcpProvider({ agentType: "codex" });
     expect(provider.name).toBe("acp:codex");
     expect(provider.adapter.defaultExecutable()).toBe("codex-acp");
+  });
+
+  it("injects a Codex ACP config for custom Responses base URLs", () => {
+    const env = buildCodexAcpEnv({ baseUrl: "https://ai.openremi.fun" });
+    const config = JSON.parse(env.CODEX_CONFIG);
+
+    expect(env.MODEL_PROVIDER).toBe("OpenAI");
+    expect(config.model_provider).toBe("OpenAI");
+    expect(config.model_providers.OpenAI.base_url).toBe("https://ai.openremi.fun");
+    expect(config.model_providers.OpenAI.wire_api).toBe("responses");
+    expect(config.model_providers.OpenAI.supports_websockets).toBe(false);
+    expect(config.features.responses_websockets_v2).toBe(false);
   });
 
   it("routes permission requests to the handler for the ACP session's chat", async () => {

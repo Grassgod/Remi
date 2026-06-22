@@ -36,7 +36,7 @@ import { insertConversationProcessing, completeConversation, failConversation, g
 import * as sessDb from "./db/sessions.js";
 import { createLogger, flushLogs } from "./logger.js";
 import { TraceCollector, type TraceContext, type Span } from "./tracing.js";
-import { writeEcosystem, runBuildsSync, getEcosystemPath } from "./pm2.js";
+import { writeEcosystem, runBuildsSync, getEcosystemPath, resolvePm2Command } from "./pm2.js";
 import {
   availableSwitchModes,
   buildSwitchTarget,
@@ -48,6 +48,10 @@ import {
 } from "./switch-mode.js";
 
 const log = createLogger("core");
+
+function isRecoverableSessionError(errText: string): boolean {
+  return /no conversation found|conversation not found|session not found/i.test(errText);
+}
 
 /** Simple promise-based mutex for per-lane serialization. */
 class AsyncLock {
@@ -280,6 +284,9 @@ export class Remi {
       const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
         ? (handler: any) => (provider as any).setPermissionHandler(handler, sessionKey)
         : undefined;
+      const setElicHandler = typeof (provider as any).setElicitationHandler === "function"
+        ? (handler: any) => (provider as any).setElicitationHandler(handler, sessionKey)
+        : undefined;
       const agentType = typeof (provider as any).adapter?.agentType === "string"
         ? (provider as any).adapter.agentType
         : provider.name.startsWith("acp:")
@@ -295,6 +302,7 @@ export class Remi {
         agentType,
         mode: effectiveMode,
         setPermissionHandler: setPermHandler,
+        setElicitationHandler: setElicHandler,
       });
       rootSpan.end();
     } catch (e) {
@@ -357,6 +365,16 @@ export class Remi {
       ? groupConfig.systemPrompt + chatMeta
       : chatMeta || undefined;
 
+    // Provider selection:
+    // 1. Group → GroupConfig.provider (DB)
+    // 2. P2P → DB session provider (user switched via /switch or bot menu)
+    // 3. Default → config.provider.name
+    const providerName =
+      groupConfig?.provider                              // group-level config (DB)
+      ?? sessRow?.provider                               // P2P user choice
+      ?? null;                                           // fall through to default
+    const provider = this._getProvider(providerName);
+
     const streamOptions = {
       systemPrompt: effectiveSystemPrompt,
       chatId: this._resolveSessionKey(msg),
@@ -369,16 +387,6 @@ export class Remi {
       traceId: msgTraceId,
       signal: abortController.signal,
     };
-
-    // Provider selection:
-    // 1. Group → GroupConfig.provider (DB)
-    // 2. P2P → DB session provider (user switched via /switch or bot menu)
-    // 3. Default → config.provider.name
-    const providerName =
-      groupConfig?.provider                              // group-level config (DB)
-      ?? sessRow?.provider                               // P2P user choice
-      ?? null;                                           // fall through to default
-    const provider = this._getProvider(providerName);
 
     if (typeof provider.sendStream !== "function") {
       throw new Error(`Provider "${provider.name}" does not support streaming`);
@@ -394,6 +402,7 @@ export class Remi {
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
     let promptTooLong = false;
     let staleSession = false;
+    let providerErrorText: string | null = null;
 
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
 
@@ -435,19 +444,30 @@ export class Remi {
       const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
       if (/prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(errText)) {
         promptTooLong = true;
-      } else if (existingSessionId && /no conversation found/i.test(errText)) {
+      } else if (existingSessionId && isRecoverableSessionError(errText)) {
         staleSession = true;
+      } else {
+        providerErrorText = errText;
       }
     }
 
     // Get response from provider after stream ends
     resultResponse = provider.getLastResponse?.() ?? null;
+    if (!promptTooLong && !staleSession && providerErrorText && !resultResponse) {
+      resultResponse = createAgentResponse({ text: `[Provider error: ${providerErrorText}]` });
+    }
     // Detect prompt-too-long from response text
     if (!promptTooLong && resultResponse && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(resultResponse.text)) {
       promptTooLong = true;
     }
-    if (!staleSession && existingSessionId && resultResponse && resultResponse.inputTokens === 0 && resultResponse.durationMs === 0) {
+    if (
+      !staleSession &&
+      existingSessionId &&
+      ((resultResponse && isRecoverableSessionError(resultResponse.text)) ||
+        (providerErrorText && isRecoverableSessionError(providerErrorText)))
+    ) {
       staleSession = true;
+      providerErrorText = null;
     }
 
     // End any unclosed tool spans
@@ -476,6 +496,8 @@ export class Remi {
         yield event;
       }
       resultResponse = provider.getLastResponse?.() ?? null;
+      staleSession = false;
+      providerErrorText = null;
     }
 
     // ── Auto-recovery: stale session → clear session + retry ──
@@ -538,6 +560,8 @@ export class Remi {
             yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: resultResponse.text }] };
           }
           fallbackSpan?.end();
+        } else {
+          yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: resultResponse.text }] };
         }
       } else {
         providerSpan?.end();
@@ -999,12 +1023,13 @@ export class Remi {
       const agentType = n.includes(":") ? n.split(":")[1] : "claude";
       return new AcpProvider({
         agentType,
-        model: config.provider.model,
+        model: agentType === "codex" ? (config.provider.codexModel ?? config.provider.model) : config.provider.model,
         timeout: config.provider.timeout,
         allowedTools: config.provider.allowedTools,
         cwd: homedir(),
         apiKey: config.provider.apiKey,
         baseUrl: config.provider.baseUrl,
+        codexBaseUrl: config.provider.codexBaseUrl,
         executable: config.provider.executable ?? undefined,
       });
     }
@@ -1029,7 +1054,7 @@ export class Remi {
     runBuildsSync(this.config);
     writeEcosystem(this.config);
 
-    const child = spawn("pm2", ["restart", getEcosystemPath(), "--update-env"], {
+    const child = spawn(resolvePm2Command(), ["restart", getEcosystemPath(), "--update-env"], {
       detached: true,
       stdio: "ignore",
     });

@@ -162,9 +162,12 @@ export class CCSwitchClient {
    */
   getMcpServersForApp(app: AppType = "claude"): Array<{
     name: string;
-    command: string;
+    type?: string;
+    command?: string;
     args?: string[];
-    env?: Record<string, string>;
+    env?: Array<{ name: string; value: string }>;
+    url?: string;
+    headers?: Array<{ name: string; value: string }>;
   }> {
     if (!this.dbExists) return [];
     try {
@@ -180,16 +183,70 @@ export class CCSwitchClient {
 
       return rows.map((row) => {
         const cfg = JSON.parse(row.server_config);
+        if (typeof cfg.url === "string" || cfg.type === "http" || cfg.type === "sse") {
+          return {
+            name: row.name,
+            type: cfg.type === "sse" ? "sse" : "http",
+            url: String(cfg.url ?? ""),
+            headers: normalizeAcpEnv(cfg.headers),
+          };
+        }
+
         return {
           name: row.name,
-          command: cfg.command,
-          args: cfg.args,
-          env: cfg.env,
+          command: String(cfg.command ?? ""),
+          args: Array.isArray(cfg.args) ? cfg.args.map(String) : [],
+          env: normalizeAcpEnv(cfg.env),
         };
       });
     } catch (e: any) {
       log.warn(`failed to read MCP servers from cc-switch.db: ${e.message}`);
       return [];
+    }
+  }
+
+  // ── Prompts ────────────────────────────────────────────────────
+
+  async promptsList(app?: AppType): Promise<string> {
+    const args = ["prompts", "list"];
+    if (app) args.push("--app", app);
+    return this.exec(args);
+  }
+
+  async promptsCurrent(app?: AppType): Promise<string> {
+    const args = ["prompts", "current"];
+    if (app) args.push("--app", app);
+    return this.exec(args);
+  }
+
+  async promptsCreate(name: string, app: AppType, content: string): Promise<string> {
+    const args = ["prompts", "create", name, "--app", app, "--content", content];
+    return this.exec(args);
+  }
+
+  async promptsActivate(id: string, app?: AppType): Promise<string> {
+    const args = ["prompts", "activate", id];
+    if (app) args.push("--app", app);
+    return this.exec(args);
+  }
+
+  async promptsEdit(id: string, content: string): Promise<string> {
+    return this.exec(["prompts", "edit", id, "--content", content]);
+  }
+
+  getActivePromptForApp(app: AppType): string | null {
+    if (!this.dbExists) return null;
+    try {
+      const { Database } = require("bun:sqlite");
+      const db = new Database(this.dbPath, { readonly: true });
+      const row = db.query(
+        "SELECT content FROM prompts WHERE app_type = ? AND enabled = 1 ORDER BY updated_at DESC LIMIT 1",
+      ).get(app) as { content: string } | null;
+      db.close();
+      return row?.content ?? null;
+    } catch (e: any) {
+      log.warn(`failed to read prompt from cc-switch.db: ${e.message}`);
+      return null;
     }
   }
 
@@ -211,6 +268,38 @@ export class CCSwitchClient {
     const args = ["provider", "switch", id];
     if (app) args.push("--app", app);
     return this.exec(args);
+  }
+
+  getProviderConfigForApp(app: AppType): {
+    apiKey?: string;
+    baseUrl?: string;
+    env?: Record<string, string>;
+  } | null {
+    if (!this.dbExists) return null;
+    try {
+      const { Database } = require("bun:sqlite");
+      const db = new Database(this.dbPath, { readonly: true });
+      const row = db.query(
+        "SELECT settings_config FROM providers WHERE app_type = ? AND is_current = 1 LIMIT 1",
+      ).get(app) as { settings_config: string } | null;
+      db.close();
+      if (!row) return null;
+
+      const cfg = JSON.parse(row.settings_config);
+      const env = cfg.env as Record<string, string> | undefined;
+      const apiKey =
+        env?.ANTHROPIC_API_KEY ?? env?.ANTHROPIC_AUTH_TOKEN ?? cfg.apiKey;
+      const baseUrl = env?.ANTHROPIC_BASE_URL ?? cfg.baseUrl;
+
+      return {
+        ...(apiKey && { apiKey }),
+        ...(baseUrl && { baseUrl }),
+        ...(env && { env }),
+      };
+    } catch (e: any) {
+      log.warn(`failed to read provider from cc-switch.db: ${e.message}`);
+      return null;
+    }
   }
 
   // ── Config ────────────────────────────────────────────────────
@@ -257,6 +346,30 @@ export class CCSwitchClient {
     if (stderr) log.debug(`stderr: ${stderr.trim()}`);
     return stdout.trim();
   }
+}
+
+function normalizeAcpEnv(env: unknown): Array<{ name: string; value: string }> {
+  if (!env) return [];
+
+  if (Array.isArray(env)) {
+    return env
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as Record<string, unknown>;
+        const name = typeof record.name === "string" ? record.name : typeof record.key === "string" ? record.key : "";
+        if (!name) return null;
+        return { name, value: record.value == null ? "" : String(record.value) };
+      })
+      .filter((item): item is { name: string; value: string } => item !== null);
+  }
+
+  if (typeof env === "object") {
+    return Object.entries(env as Record<string, unknown>)
+      .filter(([name]) => name.length > 0)
+      .map(([name, value]) => ({ name, value: value == null ? "" : String(value) }));
+  }
+
+  return [];
 }
 
 export const ccSwitch = new CCSwitchClient();

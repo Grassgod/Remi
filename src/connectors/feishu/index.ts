@@ -9,7 +9,8 @@
 import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse, ProviderEvent } from "../../providers/base.js";
-import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock, RequestPermissionParams, PermissionOutcome, PermissionOption } from "../../providers/acp/protocol.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate, ContentBlock, RequestPermissionParams, PermissionOutcome, PermissionOption, ElicitationCreateParams, ElicitationResult } from "../../providers/acp/protocol.js";
+import { elicitationToQuestions, answersToElicitationContent } from "../../providers/acp/elicitation.js";
 import { createAdapter, type AgentAdapter } from "../../providers/acp/adapters/index.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "../../providers/claude-cli/protocol.js";
@@ -748,6 +749,56 @@ export class FeishuConnector implements Connector {
 
         meta.setPermissionHandler((params: RequestPermissionParams): Promise<PermissionOutcome> => {
           const run = () => handlePermissionRequest(params);
+          const queued = permissionQueue.then(run, run);
+          permissionQueue = queued.then(() => undefined, () => undefined);
+          return queued;
+        });
+      }
+
+      // Register elicitation handler — AskUserQuestion arrives as a form
+      // elicitation (elicitation/create) instead of a permission request.
+      if (meta.setElicitationHandler) {
+        const handleElicitation = async (params: ElicitationCreateParams): Promise<ElicitationResult> => {
+          const elicQuestions = elicitationToQuestions(params);
+          if (!elicQuestions) {
+            slog.warn(`elicitation unsupported: mode=${params.mode}`);
+            return { action: "cancel" };
+          }
+
+          const savedStatus = session.getLastStatus();
+          let actionId = "";
+          let actionPromise: Promise<unknown> | null = null;
+          try {
+            const questions = elicQuestions.map((q) => ({ question: q.question.question, options: q.question.options }));
+            actionPromise = new Promise<unknown>((resolve, reject) => {
+              actionId = registerPendingAction(resolve, reject, questions, chatId);
+            });
+            const form = buildAskQuestionForm(actionId, { questions: elicQuestions.map((q) => q.question) });
+            session.updateStatus("Waiting for input...");
+            slog.info(`elicitation form: questions=${elicQuestions.length} actionId=${actionId}`);
+            await session.appendPermissionForm(form);
+            const result = await actionPromise;
+            const answers = normalizeAskAnswers(result);
+            const content = answersToElicitationContent(elicQuestions, answers);
+            slog.info(`elicitation answered: ${JSON.stringify(content)?.slice(0, 500)}`);
+            return { action: "accept", content };
+          } catch (err) {
+            if (actionId && hasPendingAction(actionId)) {
+              rejectPendingAction(actionId, String(err));
+              await actionPromise?.catch(() => {});
+            }
+            slog.info(`elicitation cancelled: reason=${String(err)}`);
+            return { action: "cancel" };
+          } finally {
+            if (actionId) {
+              await session.removePermissionForm(actionId).catch(() => {});
+            }
+            await session.updateStatus(savedStatus || "Running...");
+          }
+        };
+
+        meta.setElicitationHandler((params: ElicitationCreateParams): Promise<ElicitationResult> => {
+          const run = () => handleElicitation(params);
           const queued = permissionQueue.then(run, run);
           permissionQueue = queued.then(() => undefined, () => undefined);
           return queued;

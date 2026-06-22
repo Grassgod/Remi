@@ -22,6 +22,8 @@ import type {
   SessionUpdate,
   RequestPermissionParams,
   PermissionOutcome,
+  ElicitationCreateParams,
+  ElicitationResult,
   PromptResult,
   UsageUpdate,
   SessionModeState,
@@ -44,6 +46,8 @@ export interface AcpProviderOptions {
   apiKey?: string | null;
   /** Base URL override. */
   baseUrl?: string | null;
+  /** Codex Responses API base URL override. */
+  codexBaseUrl?: string | null;
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -55,6 +59,8 @@ const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
 
 interface PromptState {
   promptStartTime: number;
+  text: string;
+  thinking: string;
   usage: {
     inputTokens: number;
     outputTokens: number;
@@ -70,6 +76,8 @@ interface PromptState {
 function createPromptState(): PromptState {
   return {
     promptStartTime: Date.now(),
+    text: "",
+    thinking: "",
     usage: {
       inputTokens: 0,
       outputTokens: 0,
@@ -92,6 +100,7 @@ interface PoolEntry {
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
+type ElicitationHandler = (params: ElicitationCreateParams) => Promise<ElicitationResult>;
 
 export function resolveAcpPermissionMode(agentType: string, mode?: string | null): string | null {
   const normalized = typeof mode === "string" ? mode.trim() : "";
@@ -170,6 +179,56 @@ export function resolveAcpHealthCheckCommand(
   return { command, args: ["--version"] };
 }
 
+export function buildCodexAcpEnv(options: { baseUrl?: string | null }): Record<string, string> {
+  const baseUrl = options.baseUrl?.trim();
+  if (!baseUrl) return {};
+
+  const existingConfig = parseCodexConfigEnv(process.env.CODEX_CONFIG);
+  const modelProvider = typeof existingConfig.model_provider === "string" && existingConfig.model_provider.trim()
+    ? existingConfig.model_provider
+    : "OpenAI";
+  const existingProviders = isRecord(existingConfig.model_providers) ? existingConfig.model_providers : {};
+  const existingProvider = isRecord(existingProviders[modelProvider]) ? existingProviders[modelProvider] : {};
+  const nextConfig = {
+    ...existingConfig,
+    model_provider: modelProvider,
+    model_providers: {
+      ...existingProviders,
+      [modelProvider]: {
+        ...existingProvider,
+        name: typeof existingProvider.name === "string" ? existingProvider.name : modelProvider,
+        base_url: baseUrl,
+        wire_api: "responses",
+        requires_openai_auth: true,
+        supports_websockets: false,
+      },
+    },
+    features: {
+      ...(isRecord(existingConfig.features) ? existingConfig.features : {}),
+      responses_websockets_v2: false,
+    },
+  };
+
+  return {
+    CODEX_CONFIG: JSON.stringify(nextConfig),
+    MODEL_PROVIDER: modelProvider,
+  };
+}
+
+function parseCodexConfigEnv(value: string | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
 export class AcpProvider implements Provider {
   readonly name: string;
 
@@ -180,6 +239,8 @@ export class AcpProvider implements Provider {
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
   private _permissionHandlers = new Map<string, PermissionHandler>();
+  private _elicitationHandler: ElicitationHandler | null = null;
+  private _elicitationHandlers = new Map<string, ElicitationHandler>();
   private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
 
@@ -193,12 +254,21 @@ export class AcpProvider implements Provider {
     return this._adapter;
   }
 
-  /** Register external handler for permission requests (AskUserQuestion, ExitPlanMode, tool approval). */
+  /** Register external handler for permission requests (ExitPlanMode, tool approval). */
   setPermissionHandler(handler: PermissionHandler, chatId?: string | null): void {
     if (chatId) {
       this._permissionHandlers.set(chatId, handler);
     } else {
       this._permissionHandler = handler;
+    }
+  }
+
+  /** Register external handler for form elicitations (AskUserQuestion). */
+  setElicitationHandler(handler: ElicitationHandler, chatId?: string | null): void {
+    if (chatId) {
+      this._elicitationHandlers.set(chatId, handler);
+    } else {
+      this._elicitationHandler = handler;
     }
   }
 
@@ -250,6 +320,11 @@ export class AcpProvider implements Provider {
       const update = notification.update;
       if (update.sessionUpdate === "usage_update") {
         accumulateUsage(entry.promptState, update);
+      }
+      if (update.sessionUpdate === "agent_message_chunk") {
+        entry.promptState.text += contentText(update.content);
+      } else if (update.sessionUpdate === "agent_thought_chunk") {
+        entry.promptState.thinking += contentText(update.content);
       }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
@@ -354,6 +429,11 @@ export class AcpProvider implements Provider {
       env.ANTHROPIC_API_KEY = this._options.apiKey;
     }
     if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
+    if (this._adapter.agentType === "codex") {
+      Object.assign(env, buildCodexAcpEnv({
+        baseUrl: this._options.codexBaseUrl ?? this._options.baseUrl,
+      }));
+    }
 
     const sessionMeta = this._adapter.buildSessionMeta({
       model: this._options.model,
@@ -372,6 +452,7 @@ export class AcpProvider implements Provider {
       env,
       sessionMeta: sessionMeta ?? undefined,
       onPermissionRequest: (params) => this._handlePermission(params),
+      onElicitationRequest: (params) => this._handleElicitation(params),
       onSessionUpdate: () => {},
       log: (...args) => {
         if (process.env.REMI_DEBUG) console.error(...args);
@@ -381,9 +462,11 @@ export class AcpProvider implements Provider {
     await client.start();
     await client.initialize();
 
-    const mcpServers = configManager.hasCCSwitch
-      ? configManager.ccSwitch.getMcpServersForApp(this._adapter.agentType as any)
-      : [];
+    const mcpServers = this._adapter.agentType === "codex"
+      ? []
+      : configManager.hasCCSwitch
+        ? configManager.ccSwitch.getMcpServersForApp(this._adapter.agentType as any)
+        : [];
 
     let acpSessionId: string;
     let sessionModes: SessionModeState | undefined;
@@ -395,6 +478,9 @@ export class AcpProvider implements Provider {
       const result = await client.newSession({ cwd, mcpServers, _meta: sessionMeta });
       acpSessionId = result.sessionId;
       sessionModes = result.modes;
+    }
+    if (this._options.model) {
+      await this._setModel(client, acpSessionId, this._options.model);
     }
     const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes);
     if (effectiveMode) {
@@ -421,6 +507,14 @@ export class AcpProvider implements Provider {
     return mode;
   }
 
+  private async _setModel(client: AcpClient, sessionId: string, model: string): Promise<void> {
+    try {
+      await client.setModel(sessionId, model);
+    } catch (err) {
+      console.error(`[AcpProvider] set_model failed for ${model}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
     const chatId = this._sessionToChatId.get(params.sessionId);
     const handler = (chatId ? this._permissionHandlers.get(chatId) : undefined) ?? this._permissionHandler;
@@ -429,6 +523,16 @@ export class AcpProvider implements Provider {
     }
     console.error(`[AcpProvider] permission request cancelled: no handler for session ${params.sessionId}`);
     return { outcome: "cancelled" };
+  }
+
+  private async _handleElicitation(params: ElicitationCreateParams): Promise<ElicitationResult> {
+    const chatId = this._sessionToChatId.get(params.sessionId);
+    const handler = (chatId ? this._elicitationHandlers.get(chatId) : undefined) ?? this._elicitationHandler;
+    if (handler) {
+      return handler(params);
+    }
+    console.error(`[AcpProvider] elicitation cancelled: no handler for session ${params.sessionId}`);
+    return { action: "cancel" };
   }
 
   // ── Cleanup ────────────────────────────────────────────────────
@@ -444,11 +548,14 @@ export class AcpProvider implements Provider {
       if (this._activeStreaming.has(chatId)) continue;
       if (now - entry.lastUsed > IDLE_TIMEOUT_MS) {
         try {
-          await entry.client.closeSession(entry.acpSessionId);
+          if (this._adapter.agentType !== "codex") {
+            await entry.client.closeSession(entry.acpSessionId);
+          }
           await entry.client.stop();
         } catch {}
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
+        this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     }
@@ -462,20 +569,26 @@ export class AcpProvider implements Provider {
     if (chatId) {
       const entry = this._pool.get(chatId);
       if (entry) {
-        try { await entry.client.closeSession(entry.acpSessionId); } catch {}
+        if (this._adapter.agentType !== "codex") {
+          try { await entry.client.closeSession(entry.acpSessionId); } catch {}
+        }
         await entry.client.stop();
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
+        this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     } else {
       for (const [, entry] of this._pool) {
-        try { await entry.client.closeSession(entry.acpSessionId); } catch {}
+        if (this._adapter.agentType !== "codex") {
+          try { await entry.client.closeSession(entry.acpSessionId); } catch {}
+        }
         await entry.client.stop();
         this._sessionToChatId.delete(entry.acpSessionId);
       }
       this._pool.clear();
       this._permissionHandlers.clear();
+      this._elicitationHandlers.clear();
     }
   }
 
@@ -521,15 +634,30 @@ function accumulateUsage(state: PromptState, update: SessionUpdate): void {
   if (u.cost?.amount != null) state.usage.costUsd = u.cost.amount;
 }
 
+function contentText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : [content];
+  let text = "";
+  for (const block of blocks) {
+    if (block && typeof block === "object" && !Array.isArray(block)) {
+      const record = block as Record<string, unknown>;
+      if (record.type === "text" && typeof record.text === "string") {
+        text += record.text;
+      }
+    }
+  }
+  return text;
+}
+
 function buildAgentResponse(entry: PoolEntry, result: PromptResult): AgentResponse {
-  const { usage, promptStartTime, completedToolCount } = entry.promptState;
+  const { usage, promptStartTime, completedToolCount, text, thinking } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
 
   // Reset per-prompt state for next prompt
   entry.promptState = createPromptState();
 
   return createAgentResponse({
-    text: "",
+    text,
+    thinking: thinking || null,
     sessionId: entry.acpSessionId,
     model: usage.model,
     costUsd: usage.costUsd || null,

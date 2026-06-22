@@ -15,6 +15,10 @@ export interface ProviderConfig {
   fallback: string | null;
   allowedTools: string[];
   model: string | null;
+  /** Model override used only when switching to Codex ACP. */
+  codexModel: string | null;
+  /** Base URL override used only when switching to Codex ACP. */
+  codexBaseUrl: string | null;
   timeout: number;
   apiKey: string | null;
   baseUrl: string | null;
@@ -240,6 +244,8 @@ function defaultProviderConfig(): ProviderConfig {
     fallback: null,
     allowedTools: [],
     model: null,
+    codexModel: null,
+    codexBaseUrl: null,
     timeout: 300,
     apiKey: null,
     baseUrl: null,
@@ -302,8 +308,10 @@ export function defaultRemiConfig(): RemiConfig {
 export function loadConfig(configPath?: string | null): RemiConfig {
   let fileData: Record<string, unknown> = {};
 
-  if (configPath && existsSync(configPath)) {
-    fileData = parseToml(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+  if (configPath) {
+    if (existsSync(configPath)) {
+      fileData = parseToml(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    }
   } else {
     const candidates = [
       join(process.cwd(), CONFIG_FILENAME),
@@ -342,6 +350,8 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       fallback: env.REMI_FALLBACK ?? (providerData.fallback as string) ?? null,
       allowedTools: (providerData.allowed_tools as string[]) ?? [],
       model: env.REMI_MODEL ?? (providerData.model as string) ?? null,
+      codexModel: env.REMI_CODEX_MODEL ?? (providerData.codex_model as string) ?? null,
+      codexBaseUrl: env.REMI_CODEX_BASE_URL ?? (providerData.codex_base_url as string) ?? null,
       timeout: parseInt(env.REMI_TIMEOUT ?? String(providerData.timeout ?? 300), 10),
       apiKey: env.REMI_API_KEY ?? (providerData.api_key as string) ?? null,
       baseUrl: env.REMI_BASE_URL ?? (providerData.base_url as string) ?? null,
