@@ -1,6 +1,5 @@
-import type { Database } from "bun:sqlite";
 import { Cron } from "croner";
-import { getDb } from "../db/index.js";
+import { type SqlDatabase, openMultiremiDatabase } from "./sql-database.js";
 import { createId, nowIso } from "./ids.js";
 import type {
   AddSquadMemberInput,
@@ -309,15 +308,15 @@ export interface MultiremiAutopilotFailureThresholdCandidate {
 }
 
 export class MultiremiStore {
-  private db: Database;
+  private db: SqlDatabase;
   private taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
   private taskEventListeners = new Set<TaskEventListener>();
   private workspaceEventListeners = new Set<WorkspaceEventListener>();
   private analyticsEvents: MultiremiAnalyticsEvent[] = [];
   private metricCounters = new Map<string, MultiremiMetricCounter>();
 
-  constructor(db?: Database) {
-    this.db = db ?? getDb();
+  constructor(db?: SqlDatabase) {
+    this.db = db ?? openMultiremiDatabase();
     this.migrate();
   }
 

@@ -38,6 +38,12 @@ remi-jarvis-*.png
 .claude/settings.local.json
 .claude/worktrees/
 
+# Vendored upstream Multica monorepo (Go server, Next.js web, server-bun) at the
+# repo ROOT only (leading slash — must NOT match src/multiremi/, our backend).
+# Removed from git in the native-Bun cleanup; the Next.js frontend is run from a
+# local on-disk copy (restorable from commit e259da82) against our Bun backend.
+/multiremi/
+
 # ---------------------------------------------------------------------------
 # Remi runtime & secrets — never commit.
 # Remi 运行时数据与敏感信息,严禁入库。
