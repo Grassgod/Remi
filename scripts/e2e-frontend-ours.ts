@@ -3,7 +3,7 @@
  * Phase 2 e2e: the polished Next.js (Multica) frontend running against OUR Bun
  * backend (src/multiremi) on Postgres.
  *
- *   frontend (Next.js :3001, REMOTE_API_URL=http://127.0.0.1:6130)
+ *   frontend (Next.js :3000, REMOTE_API_URL=http://127.0.0.1:6130, workspace slug "remi")
  *        → our backend (src/multiremi, :6130, Postgres)
  *
  * Auth: the web app uses token mode when localStorage["multimira_token"] is set
@@ -57,7 +57,7 @@ async function main() {
   // cookie (it can't see localStorage), so set the session marker + workspace slug.
   await ctx.addCookies([
     { name: "multimira_logged_in", value: "1", url: FRONTEND },
-    { name: "last_workspace_slug", value: "local", url: FRONTEND },
+    { name: "last_workspace_slug", value: "remi", url: FRONTEND },
   ]);
   await ctx.addInitScript((t) => localStorage.setItem("multimira_token", t as string), token);
   const page = await ctx.newPage();
@@ -81,7 +81,7 @@ async function main() {
   }
 
   try {
-    await page.goto(`${FRONTEND}/local/issues`, { waitUntil: "networkidle", timeout: 40_000 });
+    await page.goto(`${FRONTEND}/remi/issues`, { waitUntil: "networkidle", timeout: 40_000 });
     await page.waitForTimeout(3000);
 
     const url = page.url();
