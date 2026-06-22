@@ -1,6 +1,6 @@
 import { useLocation } from "wouter";
 import {
-  LayoutDashboard, MessageSquare, KanbanSquare, Brain, BookOpen,
+  LayoutDashboard, MessageSquare, Brain, BookOpen,
   BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap, Bot, Shield, Plug,
   Database, Settings, Link2,
 } from "lucide-react";
@@ -13,7 +13,6 @@ const navItems = [
   ]},
   { group: "Workspace", items: [
     { path: "/conversations", label: "Conversations", icon: MessageSquare },
-    { path: "/missions", label: "Missions", icon: KanbanSquare },
     { path: "/memory", label: "Memory", icon: Brain },
     { path: "/wiki", label: "Wiki", icon: BookOpen },
   ]},

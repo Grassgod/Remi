@@ -2,8 +2,6 @@ import { Route, Switch, Router as WouterRouter } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { Dashboard } from "./pages/Dashboard";
 import { Conversations } from "./pages/Conversations";
-import { Missions } from "./pages/Missions";
-import { MissionDetail } from "./pages/MissionDetail";
 import { Memory } from "./pages/Memory";
 import { MemoryEntity } from "./pages/MemoryEntity";
 import { MemoryDaily } from "./pages/MemoryDaily";
@@ -16,7 +14,6 @@ import { Logs } from "./pages/Logs";
 import { Scheduler } from "./pages/Scheduler";
 import { Agents } from "./pages/Agents";
 import { Projects } from "./pages/Projects";
-import { ProjectConfig } from "./pages/ProjectConfig";
 import { BotMenu } from "./pages/BotMenu";
 import { Config } from "./pages/Config";
 import { Auth } from "./pages/Auth";
@@ -46,8 +43,6 @@ export function App() {
 
         {/* Workspace */}
         <Route path="/conversations" component={Conversations} />
-        <Route path="/missions/:id" component={MissionDetail} />
-        <Route path="/missions" component={Missions} />
         <Route path="/memory" component={Memory} />
         <Route path="/memory/entity/:type/:name" component={MemoryEntity} />
         <Route path="/memory/daily/:date" component={MemoryDaily} />
@@ -63,7 +58,6 @@ export function App() {
 
         {/* System */}
         <Route path="/agents" component={Agents} />
-        <Route path="/projects/:id/config" component={ProjectConfig} />
         <Route path="/projects" component={Projects} />
         <Route path="/bot-menu" component={BotMenu} />
 

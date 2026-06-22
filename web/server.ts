@@ -32,9 +32,6 @@ import { registerDbHandlers } from "./handlers/db.js";
 import { registerBotMenuHandlers } from "./handlers/bot-menu.js";
 import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
-// Dynamic import — mission module may not exist in worktree
-let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
-try { ({ registerMissionsHandlers } = require("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
@@ -43,6 +40,8 @@ import { registerCCSwitchHandlers } from "./handlers/cc-switch.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../src/project/store.js";
+import { loadConfig } from "../src/config.js";
+import { createFeishuClient } from "../src/connectors/feishu/client.js";
 
 // ── Exported start/stop ────────────────────────────────
 
@@ -90,7 +89,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerBotMenuHandlers(app, data);
   registerSymlinkHandlers(app, data);
   registerConversationsHandlers(app, data);
-  registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
@@ -115,15 +113,30 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     }
   });
 
-  // ── Image proxy (shared cache with Board server) ──
+  // ── Image proxy (downloads from Feishu directly, shared disk cache) ──
   const imageCacheDir = join(require("node:os").homedir(), ".remi", "lark_image");
   try { require("node:fs").mkdirSync(imageCacheDir, { recursive: true }); } catch {}
+
+  // Feishu client for direct image download (re-homed from Board server)
+  let _feishuClient: any;
+  const getFeishuClient = () => {
+    if (_feishuClient !== undefined) return _feishuClient;
+    try {
+      const cfg = loadConfig();
+      _feishuClient = cfg.feishu.appId
+        ? createFeishuClient({ appId: cfg.feishu.appId, appSecret: cfg.feishu.appSecret, domain: cfg.feishu.domain })
+        : null;
+    } catch {
+      _feishuClient = null;
+    }
+    return _feishuClient;
+  };
 
   app.get("/api/image/:imageKey", async (c) => {
     const imageKey = c.req.param("imageKey");
     if (!imageKey?.startsWith("img_")) return c.json({ error: "invalid key" }, 400);
 
-    const { existsSync, readFileSync } = require("node:fs");
+    const { existsSync, readFileSync, writeFileSync } = require("node:fs");
     const cachePath = join(imageCacheDir, imageKey);
 
     // Serve from shared disk cache
@@ -134,21 +147,24 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
       });
     }
 
-    // Proxy to Board server (which has feishuClient for downloads)
+    // Download from Feishu and cache
+    const feishuClient = getFeishuClient();
+    if (!feishuClient) return c.json({ error: "no feishu client" }, 503);
     try {
-      const boardPort = process.env.REMI_BOARD_PORT ?? "8090";
-      const msgId = c.req.query("msgId") ?? "";
-      const qs = msgId ? `?msgId=${encodeURIComponent(msgId)}` : "";
-      const resp = await fetch(`http://127.0.0.1:${boardPort}/api/image/${imageKey}${qs}`);
-      if (!resp.ok) return c.json({ error: "image not found" }, resp.status);
-      const buf = Buffer.from(await resp.arrayBuffer());
-      // Cache locally for next time
-      try { require("node:fs").writeFileSync(cachePath, buf); } catch {}
-      return new Response(buf, {
-        headers: { "Content-Type": resp.headers.get("Content-Type") ?? "image/png", "Cache-Control": "public, max-age=86400" },
+      const { downloadImageFeishu, downloadMessageResourceFeishu } = await import("../src/connectors/feishu/media.js");
+      let buffer: Buffer;
+      const msgId = c.req.query("msgId");
+      if (msgId) {
+        ({ buffer } = await downloadMessageResourceFeishu(feishuClient, msgId, imageKey, "image"));
+      } else {
+        ({ buffer } = await downloadImageFeishu(feishuClient, imageKey));
+      }
+      writeFileSync(cachePath, buffer);
+      return new Response(buffer, {
+        headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
       });
-    } catch {
-      return c.json({ error: "image proxy failed" }, 502);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502);
     }
   });
 
