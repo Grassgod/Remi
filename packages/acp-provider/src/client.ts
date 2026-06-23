@@ -21,6 +21,8 @@ import type {
   RequestPermissionParams,
   RequestPermissionResult,
   PermissionOutcome,
+  ElicitationCreateParams,
+  ElicitationResult,
   SetSessionModeParams,
   CancelParams,
   ResumeSessionParams,
@@ -44,6 +46,8 @@ export interface AcpClientOptions {
   env?: Record<string, string>;
   /** Handler for permission requests from the agent. */
   onPermissionRequest?: (params: RequestPermissionParams) => Promise<PermissionOutcome>;
+  /** Handler for form elicitation requests (e.g. AskUserQuestion) from the agent. */
+  onElicitationRequest?: (params: ElicitationCreateParams) => Promise<ElicitationResult>;
   /** Handler for session update notifications. */
   onSessionUpdate?: (notification: SessionNotification) => void;
   /** Logger. */
@@ -108,9 +112,41 @@ export class AcpClient {
       env,
     });
 
+    const proc = this._process;
+    proc.exited.then(
+      (code) => {
+        if (this._process === proc) this._handleUnexpectedDeath(`exit code ${code}`);
+      },
+      () => {},
+    );
+
     this._reader = (this._process.stdout as ReadableStream<Uint8Array>).getReader();
     this._startReadLoop();
     this._startStderrDrain();
+  }
+
+  /**
+   * The agent process died without stop() being called. Tear down transport
+   * state and reject all in-flight requests so callers fail fast instead of
+   * hanging forever (which would also keep the per-chat AsyncLock held).
+   */
+  private _handleUnexpectedDeath(reason: string): void {
+    if (!this._process) return; // graceful stop() already cleaned up
+    this._log("agent died:", reason);
+    slog.warn(`ACP agent died unexpectedly (${reason}); rejecting ${this._pending.size} in-flight request(s)`);
+
+    try { this._process.kill(); } catch {}
+    this._process = null;
+    this._reader = null;
+    this._readLoopRunning = false;
+    this._initialized = false;
+    this._serverSessionId = null;
+
+    const err = new Error(`ACP agent died unexpectedly (${reason})`);
+    for (const [, pending] of this._pending) {
+      pending.reject(err);
+    }
+    this._pending.clear();
   }
 
   async stop(): Promise<void> {
@@ -185,6 +221,7 @@ export class AcpClient {
           if (done) {
             this._log("stdout EOF");
             this._readLoopRunning = false;
+            this._handleUnexpectedDeath("stdout EOF");
             break;
           }
           this._buffer += this._decoder.decode(value, { stream: true });
@@ -293,6 +330,26 @@ export class AcpClient {
       return;
     }
 
+    if (msg.method === "elicitation/create") {
+      const params = msg.params as unknown as ElicitationCreateParams;
+      slog.info(`elicitation/create received: mode=${params.mode} sessionId=${params.sessionId} id=${msg.id}`);
+      const handler = this._options.onElicitationRequest;
+      if (handler) {
+        try {
+          const result = await handler(params);
+          slog.info(`elicitation/create resolved: action=${result.action}`);
+          this._respond(msg.id, result);
+        } catch (err) {
+          slog.info(`elicitation/create error: ${err}`);
+          this._respond(msg.id, { action: "cancel" });
+        }
+      } else {
+        slog.info("elicitation/create no handler");
+        this._respond(msg.id, { action: "cancel" });
+      }
+      return;
+    }
+
     if (msg.method === "fs/readTextFile" || msg.method === "fs/writeTextFile") {
       // Delegate file operations to local filesystem
       await this._handleFsRequest(msg);
@@ -337,6 +394,11 @@ export class AcpClient {
       clientCapabilities: {
         _meta: { terminal_output: true },
         fs: { readTextFile: true, writeTextFile: true },
+        // Form-elicitation support: the agent keeps AskUserQuestion enabled and
+        // sends it to us as `elicitation/create` instead of disabling the tool.
+        // NOTE: `form` must be an object — the agent's zod schema silently
+        // drops a boolean here.
+        elicitation: { form: {} },
       },
     };
 

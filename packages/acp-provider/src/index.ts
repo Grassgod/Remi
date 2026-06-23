@@ -58,6 +58,10 @@ export type {
   PermissionOption,
   PermissionOptionKind,
   PermissionOutcome,
+  ElicitationCreateParams,
+  ElicitationSchema,
+  ElicitationPropertySchema,
+  ElicitationResult,
   PlanUpdate,
   PlanEntry,
   UsageUpdate,
@@ -66,6 +70,10 @@ export type {
   SessionInfoUpdate,
   ContentBlock,
 } from "./protocol.js";
+
+// ── Elicitation (AskUserQuestion form conversion) ─────────────
+export { elicitationToQuestions, answersToElicitationContent } from "./elicitation.js";
+export type { ElicitationQuestion } from "./elicitation.js";
 
 // ── Adapters ──────────────────────────────────────────────────
 export { ClaudeAdapter, CodexAdapter, createAdapter } from "./adapters/index.js";

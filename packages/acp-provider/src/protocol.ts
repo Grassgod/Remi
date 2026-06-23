@@ -242,6 +242,43 @@ export type PermissionOutcome =
   | { outcome: "selected"; optionId: string; updatedInput?: Record<string, unknown> }
   | { outcome: "cancelled" };
 
+// ── Elicitation (unstable ACP extension) ────────────────────────
+// Agent → client request to collect structured user input. Claude ACP agents
+// (>= 0.44.0) route the built-in AskUserQuestion tool through this when the
+// client declares the `elicitation.form` capability.
+
+export interface ElicitationCreateParams {
+  mode: "form" | "url";
+  sessionId: string;
+  toolCallId?: string | null;
+  /** Human-readable message describing what input is needed. */
+  message: string;
+  /** JSON Schema describing the form fields (form mode). */
+  requestedSchema?: ElicitationSchema;
+  url?: string;
+  elicitationId?: string;
+}
+
+export interface ElicitationSchema {
+  type: "object";
+  properties: Record<string, ElicitationPropertySchema>;
+  required?: string[];
+}
+
+export interface ElicitationPropertySchema {
+  type?: string;
+  title?: string;
+  description?: string;
+  oneOf?: Array<{ const: string; title?: string }>;
+  enum?: string[];
+  items?: { anyOf?: Array<{ const: string; title?: string }>; enum?: string[] };
+}
+
+export type ElicitationResult =
+  | { action: "accept"; content?: Record<string, unknown> | null }
+  | { action: "decline" }
+  | { action: "cancel" };
+
 // ── Plan ────────────────────────────────────────────────────────
 
 export interface PlanUpdate {

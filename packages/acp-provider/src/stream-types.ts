@@ -1,4 +1,9 @@
-import type { RequestPermissionParams, PermissionOutcome } from "./protocol.js";
+import type {
+  RequestPermissionParams,
+  PermissionOutcome,
+  ElicitationCreateParams,
+  ElicitationResult,
+} from "./protocol.js";
 
 /** Metadata passed alongside an ACP stream to the connector's stream consumer. */
 export interface StreamMeta {
@@ -8,6 +13,7 @@ export interface StreamMeta {
   agentType?: string | null;
   mode?: string | null;
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
+  setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 }
 
 /** Logger interface for stream handlers (injected, no remi dep). */

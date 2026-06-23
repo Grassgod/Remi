@@ -10,10 +10,14 @@ import type {
   RequestPermissionParams,
   PermissionOutcome,
   PermissionOption,
+  ElicitationCreateParams,
+  ElicitationResult,
+  AskUserQuestionData,
   AgentAdapter,
   StreamMeta,
   StreamHandlerLog,
 } from "@remi/acp-provider";
+import { elicitationToQuestions, answersToElicitationContent } from "@remi/acp-provider";
 export type { StreamMeta, StreamHandlerLog } from "@remi/acp-provider";
 import type { FeishuStreamingSession } from "../streaming.js";
 import type { ToolEntry } from "../tool-formatters.js";
@@ -195,10 +199,11 @@ export async function handleAgentStream(
     }
   };
 
+  // Serialize permission + elicitation forms so only one card form is shown at a time.
+  let permissionQueue: Promise<void> = Promise.resolve();
+
   // Register permission handler
   if (meta.setPermissionHandler) {
-    let permissionQueue: Promise<void> = Promise.resolve();
-
     const handlePermissionRequest = async (params: RequestPermissionParams): Promise<PermissionOutcome> => {
       const askData = acpAdapter.extractAskUserQuestion(params.toolCall);
       const isExitPlan = acpAdapter.isExitPlanMode(params.toolCall);
@@ -275,6 +280,60 @@ export async function handleAgentStream(
 
     meta.setPermissionHandler((params: RequestPermissionParams): Promise<PermissionOutcome> => {
       const run = () => handlePermissionRequest(params);
+      const queued = permissionQueue.then(run, run);
+      permissionQueue = queued.then(() => undefined, () => undefined);
+      return queued;
+    });
+  }
+
+  // Register elicitation handler — Claude ACP (>= 0.44.0) delivers AskUserQuestion
+  // as a form elicitation. Reuse the same question-form UI as the permission path.
+  if (meta.setElicitationHandler) {
+    const handleElicitationRequest = async (params: ElicitationCreateParams): Promise<ElicitationResult> => {
+      const elicQuestions = elicitationToQuestions(params);
+      if (!elicQuestions) {
+        log.info(`elicitation declined: unsupported mode=${params.mode}`);
+        return { action: "decline" };
+      }
+      const askData: AskUserQuestionData = { questions: elicQuestions.map((q) => q.question) };
+
+      const savedStatus = session.getLastStatus();
+      let actionId = "";
+      let result: unknown;
+      let actionPromise: Promise<unknown> | null = null;
+
+      try {
+        actionPromise = new Promise<unknown>((resolve, reject) => {
+          const questions = elicQuestions.map((q) => ({ question: q.question.question, options: q.question.options }));
+          actionId = registerPendingAction(resolve, reject, questions, chatId);
+        });
+
+        const form = buildAskQuestionForm(actionId, askData);
+        session.updateStatus("Waiting for input...");
+        log.info(`elicitation request: fields=${elicQuestions.length} actionId=${actionId}`);
+        await session.appendPermissionForm(form);
+        result = await actionPromise;
+      } catch (err) {
+        if (actionId && hasPendingAction(actionId)) {
+          rejectPendingAction(actionId, String(err));
+          await actionPromise?.catch(() => {});
+        }
+        log.info(`elicitation cancelled: reason=${String(err)}`);
+        return { action: "decline" };
+      } finally {
+        if (actionId) {
+          await session.removePermissionForm(actionId).catch(() => {});
+        }
+        await session.updateStatus(savedStatus || "Running...");
+      }
+
+      const answers = normalizeAskAnswers(result);
+      const content = answersToElicitationContent(elicQuestions, answers);
+      return { action: "accept", content };
+    };
+
+    meta.setElicitationHandler((params: ElicitationCreateParams): Promise<ElicitationResult> => {
+      const run = () => handleElicitationRequest(params);
       const queued = permissionQueue.then(run, run);
       permissionQueue = queued.then(() => undefined, () => undefined);
       return queued;

@@ -279,6 +279,9 @@ export class Remi {
       const setPermHandler = typeof (provider as any).setPermissionHandler === "function"
         ? (handler: any) => (provider as any).setPermissionHandler(handler, sessionKey)
         : undefined;
+      const setElicHandler = typeof (provider as any).setElicitationHandler === "function"
+        ? (handler: any) => (provider as any).setElicitationHandler(handler, sessionKey)
+        : undefined;
       const agentType = typeof (provider as any).adapter?.agentType === "string"
         ? (provider as any).adapter.agentType
         : provider.name.startsWith("acp:")
@@ -294,6 +297,7 @@ export class Remi {
         agentType,
         mode: effectiveMode,
         setPermissionHandler: setPermHandler,
+        setElicitationHandler: setElicHandler,
       });
       rootSpan.end();
     } catch (e) {

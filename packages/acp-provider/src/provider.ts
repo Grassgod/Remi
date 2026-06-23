@@ -21,6 +21,8 @@ import type {
   SessionUpdate,
   RequestPermissionParams,
   PermissionOutcome,
+  ElicitationCreateParams,
+  ElicitationResult,
   PromptResult,
   UsageUpdate,
   SessionModeState,
@@ -95,6 +97,7 @@ interface PoolEntry {
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
+type ElicitationHandler = (params: ElicitationCreateParams) => Promise<ElicitationResult>;
 
 export function resolveAcpPermissionMode(agentType: string, mode?: string | null): string | null {
   const normalized = typeof mode === "string" ? mode.trim() : "";
@@ -195,6 +198,8 @@ export class AcpProvider implements Provider {
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
   private _permissionHandlers = new Map<string, PermissionHandler>();
+  private _elicitationHandler: ElicitationHandler | null = null;
+  private _elicitationHandlers = new Map<string, ElicitationHandler>();
   private _sessionToChatId = new Map<string, string>();
   private _lastResponse: AgentResponse | null = null;
 
@@ -214,6 +219,15 @@ export class AcpProvider implements Provider {
       this._permissionHandlers.set(chatId, handler);
     } else {
       this._permissionHandler = handler;
+    }
+  }
+
+  /** Register external handler for form elicitation requests (AskUserQuestion on Claude ACP). */
+  setElicitationHandler(handler: ElicitationHandler, chatId?: string | null): void {
+    if (chatId) {
+      this._elicitationHandlers.set(chatId, handler);
+    } else {
+      this._elicitationHandler = handler;
     }
   }
 
@@ -388,6 +402,7 @@ export class AcpProvider implements Provider {
       env,
       sessionMeta: sessionMeta ?? undefined,
       onPermissionRequest: (params) => this._handlePermission(params),
+      onElicitationRequest: (params) => this._handleElicitation(params),
       onSessionUpdate: () => {},
       log: (...args) => {
         if (process.env.REMI_DEBUG) console.error(...args);
@@ -445,6 +460,16 @@ export class AcpProvider implements Provider {
     return { outcome: "cancelled" };
   }
 
+  private async _handleElicitation(params: ElicitationCreateParams): Promise<ElicitationResult> {
+    const chatId = this._sessionToChatId.get(params.sessionId);
+    const handler = (chatId ? this._elicitationHandlers.get(chatId) : undefined) ?? this._elicitationHandler;
+    if (handler) {
+      return handler(params);
+    }
+    console.error(`[AcpProvider] elicitation request cancelled: no handler for session ${params.sessionId}`);
+    return { action: "cancel" };
+  }
+
   // ── Cleanup ────────────────────────────────────────────────────
 
   private _startCleanupTimer(): void {
@@ -463,6 +488,7 @@ export class AcpProvider implements Provider {
         } catch {}
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
+        this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     }
@@ -480,6 +506,7 @@ export class AcpProvider implements Provider {
         await entry.client.stop();
         this._sessionToChatId.delete(entry.acpSessionId);
         this._permissionHandlers.delete(chatId);
+        this._elicitationHandlers.delete(chatId);
         this._pool.delete(chatId);
       }
     } else {
@@ -490,6 +517,7 @@ export class AcpProvider implements Provider {
       }
       this._pool.clear();
       this._permissionHandlers.clear();
+      this._elicitationHandlers.clear();
     }
   }
 
