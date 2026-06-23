@@ -53,7 +53,6 @@ export class FeishuConnector implements Connector {
   private _channel: FeishuChannel;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
-  private _enqueueMission: ((data: import("../../queue/queues.js").MissionJobData) => Promise<void>) | null = null;
 
   constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
     this._config = config;
@@ -77,10 +76,6 @@ export class FeishuConnector implements Connector {
 
   setTokenProvider(provider: TokenProvider): void {
     this._channel.setTokenProvider(provider);
-  }
-
-  setQueueRef(fn: (data: import("../../queue/queues.js").MissionJobData) => Promise<void>): void {
-    this._enqueueMission = fn;
   }
 
   async start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void> {
@@ -136,20 +131,6 @@ export class FeishuConnector implements Connector {
       const sessionKey = this._resolveSessionKey(msg);
       await this._channel.abortSession(sessionKey);
       return;
-    }
-
-    // Mission auto-creation for new threads in mission-enabled groups
-    if (msg.chatType === "group" && this._enqueueMission && !msg.rootId) {
-      try {
-        const result = await this._resolveMissionForThread(msg, msg.messageId);
-        if (result?.isNew) {
-          await this._enqueueMission({ missionId: result.mission.id, step: "intake", userMessage: this._buildUserMessageWithMedia(msg) });
-          log.info(`New mission ${result.mission.id} created, intake enqueued (thread=${msg.messageId})`);
-          return;
-        }
-      } catch (err) {
-        log.warn(`resolveMissionForThread failed: ${err}`);
-      }
     }
 
     const _log = log.child({ traceId: msg.messageId });
@@ -252,7 +233,6 @@ export class FeishuConnector implements Connector {
       })();
 
       // Determine subtitle
-      const missionSuffix = incoming.metadata?.missionId ? ` · ${incoming.metadata.missionId}` : "";
       const agentLabel = meta.agentType === "codex" ? "Codex" : "Claude";
       const modeLabel = meta.mode && meta.mode !== "auto"
         ? ` ${meta.mode === "bypassPermissions" ? "Bypass" : meta.mode.charAt(0).toUpperCase() + meta.mode.slice(1)}`
@@ -264,7 +244,6 @@ export class FeishuConnector implements Connector {
         replyToMessageId,
         sessionId: meta.sessionId,
         displayName: meta.displayName ?? undefined,
-        nameSuffix: missionSuffix || undefined,
         subtitle,
         log: {
           info: (m) => slog.info(m),
@@ -296,59 +275,6 @@ export class FeishuConnector implements Connector {
     if (msg.rootId) return `${msg.chatId}:thread:${msg.rootId}`;
     if (msg.chatType === "group") return `${msg.chatId}:thread:${msg.messageId}`;
     return msg.chatId;
-  }
-
-  private async _resolveMissionForThread(
-    msg: ParsedFeishuMessage,
-    threadId: string,
-  ): Promise<{ mission: import("../../mission/model.js").Mission; isNew: boolean } | null> {
-    const { MissionStore } = await import("../../mission/store.js");
-    const { getDb } = await import("../../db/index.js");
-    const db = getDb();
-
-    const existing = db.query("SELECT id FROM missions WHERE chat_id = ? AND thread_id = ?").get(msg.chatId, threadId) as { id: string } | null;
-    if (existing) {
-      const store = new MissionStore();
-      const mission = store.getById(existing.id);
-      if (mission) return { mission, isNew: false };
-    }
-
-    const { GroupConfigStore } = await import("../../group/store.js");
-    const gcStore = new GroupConfigStore();
-    const gc = gcStore.getByChatId(msg.chatId);
-    if (!gc?.missionEnabled) return null;
-
-    const title = msg.rawContent.slice(0, 100) || `Topic ${threadId.slice(0, 8)}`;
-    const store = new MissionStore();
-    const mission = store.create({
-      title,
-      projectId: gc.projectId,
-      chatId: msg.chatId,
-      threadId,
-      createdBy: msg.senderOpenId,
-      createdByName: msg.senderName ?? undefined,
-    });
-    log.info(`Auto-created mission ${mission.id} for thread ${threadId} in group ${msg.chatId}`);
-    return { mission, isNew: true };
-  }
-
-  private _buildUserMessageWithMedia(msg: ParsedFeishuMessage): string {
-    let userMessage = msg.rawContent;
-    for (const m of msg.media) {
-      if (m.placeholder === "<media:image>" && m.imageKey) {
-        userMessage += `\n{"image_key":"${m.imageKey}","message_id":"${msg.messageId}"}`;
-      } else if (m.placeholder !== "<media:sticker>") {
-        try {
-          const dir = join(tmpdir(), "remi-media", msg.chatId.slice(0, 16));
-          mkdirSync(dir, { recursive: true });
-          const name = m.fileName ?? `${Date.now()}.bin`;
-          const filePath = join(dir, name);
-          writeFileSync(filePath, m.buffer);
-          userMessage += `\n[文件已保存: ${filePath}]`;
-        } catch { /* ignore */ }
-      }
-    }
-    return userMessage;
   }
 
   private _inferMediaType(placeholder: string): MediaAttachment["mediaType"] {

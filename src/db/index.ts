@@ -106,34 +106,6 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_conv_sender ON conversations(sender_id);
     CREATE INDEX IF NOT EXISTS idx_conv_status ON conversations(status) WHERE status != 'completed';
 
-    -- Mission Board
-    CREATE TABLE IF NOT EXISTS missions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL DEFAULT 'inbox',
-      project_id TEXT NOT NULL,
-      chat_id TEXT NOT NULL,
-      thread_id TEXT,
-      current_step TEXT DEFAULT 'intake',
-      contract TEXT,
-      mr_url TEXT,
-      mr_status TEXT,
-      output_dir TEXT,
-      created_by TEXT,
-      created_by_name TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      completed_at TEXT,
-      total_tokens INTEGER DEFAULT 0,
-      total_cost REAL DEFAULT 0,
-      total_duration INTEGER DEFAULT 0
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_missions_project ON missions(project_id);
-    CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status);
-    CREATE INDEX IF NOT EXISTS idx_missions_thread ON missions(thread_id);
-
     -- Projects (replaces toml-only storage)
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
@@ -157,7 +129,6 @@ export function getDb(): Database {
       project_id TEXT DEFAULT 'global',
       name TEXT DEFAULT '',
       monitor INTEGER DEFAULT 0,
-      mission_enabled INTEGER DEFAULT 0,
       reply_mode TEXT DEFAULT 'thread',
       system_prompt TEXT DEFAULT '',
       allowed_tools TEXT DEFAULT '[]',
@@ -168,19 +139,6 @@ export function getDb(): Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_gc_project ON group_configs(project_id);
-
-    CREATE TABLE IF NOT EXISTS skill_feedbacks (
-      id TEXT PRIMARY KEY,
-      mission_id TEXT NOT NULL,
-      step TEXT NOT NULL,
-      skill_name TEXT NOT NULL,
-      feedback_type TEXT NOT NULL,
-      detail TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_feedbacks_mission ON skill_feedbacks(mission_id);
-    CREATE INDEX IF NOT EXISTS idx_feedbacks_skill ON skill_feedbacks(skill_name);
 
     -- Session registry (replaces sessions.json)
     CREATE TABLE IF NOT EXISTS sessions (
@@ -247,28 +205,7 @@ export function getDb(): Database {
       if (!gcColNames.has("allowed_mcps")) db.exec("ALTER TABLE group_configs ADD COLUMN allowed_mcps TEXT DEFAULT '[]'");
       if (!gcColNames.has("cwd")) db.exec("ALTER TABLE group_configs ADD COLUMN cwd TEXT");
       if (!gcColNames.has("launch_command")) db.exec("ALTER TABLE group_configs ADD COLUMN launch_command TEXT");
-      if (!gcColNames.has("mission_enabled")) db.exec("ALTER TABLE group_configs ADD COLUMN mission_enabled INTEGER DEFAULT 0");
       if (!gcColNames.has("inject_chat_context")) db.exec("ALTER TABLE group_configs ADD COLUMN inject_chat_context INTEGER DEFAULT 0");
-    }
-  } catch {}
-
-  // Missions table migration — add sessions column
-  try {
-    const msnCols = db.query("PRAGMA table_info(missions)").all() as Array<{ name: string }>;
-    const msnColNames = new Set(msnCols.map((c) => c.name));
-    if (msnColNames.size > 0 && !msnColNames.has("sessions")) {
-      db.exec("ALTER TABLE missions ADD COLUMN sessions TEXT DEFAULT '{}'");
-    }
-  } catch {}
-
-  // Missions table migration — add released_at column
-  try {
-    const msnCols2 = db.query("PRAGMA table_info(missions)").all() as Array<{ name: string }>;
-    const msnColNames2 = new Set(msnCols2.map((c) => c.name));
-    if (msnColNames2.size > 0 && !msnColNames2.has("released_at")) {
-      db.exec("ALTER TABLE missions ADD COLUMN released_at TEXT");
-      // Backfill: mark all existing done missions as released
-      db.exec("UPDATE missions SET released_at = completed_at WHERE status = 'done' AND completed_at IS NOT NULL");
     }
   } catch {}
 

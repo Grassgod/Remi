@@ -5,9 +5,7 @@
 import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../config.js";
 import { Remi } from "../core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "../logger.js";
-import { MissionStore } from "../mission/store.js";
 // Board service has been merged into the main web service (web/server.ts).
-import { registerMissionActionHandler, sendToThread } from "@remi/feishu-channel";
 import { getDb } from "../db/index.js";
 import { startWebDashboard, stopWebDashboard } from "../../web/server.js";
 
@@ -49,45 +47,9 @@ export async function runServe(_args: string[]): Promise<void> {
   // Start BunQueue workers (conversation + memory + cron)
   await remi.queue.start();
 
-  // Wire mission enqueue to Feishu connector (for mission thread routing)
-  const feishuConnector = remi.getFeishuConnector();
-  if (feishuConnector) {
-    feishuConnector.setQueueRef((data) => remi.queue.enqueueMission(data));
-  }
-
   // Register cron schedulers from config (replaces CronTimer)
   const cronJobs = migrateToCronJobs(config);
   await remi.queue.setupSchedulers(cronJobs, remi);
-
-  // Board pages are served by the main web service (web/server.ts) now.
-  // We still register the mission approve/reject card-action handler here
-  // because that's a daemon-side concern (queue access required).
-  try {
-    const missionStore = new MissionStore();
-    registerMissionActionHandler((actionType, missionId) => {
-      const mission = missionStore.getById(missionId);
-      if (!mission) return;
-
-      if (actionType === "mission_approve") {
-        missionStore.updateStatus(missionId, "in_progress");
-        remi.queue.enqueueMission({ missionId, step: "rfc" }).catch((err) => {
-          log.error(`Failed to enqueue mission ${missionId}:`, err);
-        });
-        log.info(`Mission ${missionId} approved, pipeline started`);
-        if (mission.threadId) {
-          sendToThread(config.feishu, mission.chatId, mission.threadId, "**Mission 已审批通过** — 开始执行 RFC 阶段").catch(() => {});
-        }
-      } else if (actionType === "mission_reject") {
-        missionStore.updateStatus(missionId, "rejected");
-        log.info(`Mission ${missionId} rejected`);
-        if (mission.threadId) {
-          sendToThread(config.feishu, mission.chatId, mission.threadId, "**Mission 已驳回**").catch(() => {});
-        }
-      }
-    });
-  } catch (err) {
-    log.warn(`Mission action handler failed to register: ${(err as Error).message}`);
-  }
 
   // ── Start the unified Web Dashboard HTTP server in this same process ──
   try {

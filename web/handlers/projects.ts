@@ -70,8 +70,6 @@ export function registerProjectHandlers(app: Hono, _data: RemiData) {
     const defaultConfig = {
       notifications: {
         dailyChangelog: { enabled: true, targets: [] },
-        missionProgress: { enabled: true, targets: [] },
-        evalReport: { enabled: true, targets: [] },
       },
       pipeline: {
         releaseBranch: "",

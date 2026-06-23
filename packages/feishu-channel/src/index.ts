@@ -61,7 +61,6 @@ export {
   registerPendingAction,
   rejectAllPendingActions,
   rejectPendingActionsForChat,
-  registerMissionActionHandler,
   handleButtonClick,
   handleFormSubmission,
 } from "./card-actions.js";

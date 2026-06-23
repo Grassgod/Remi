@@ -260,25 +260,6 @@ export const getConversationMessages = (chatId: string, threadId?: string, sessi
 export const getChats = () =>
   request<import("./types").ChatInfo[]>("/api/v1/chats");
 
-// Missions
-export const getMissions = (projectId?: string, status?: string) => {
-  const params = new URLSearchParams();
-  if (projectId) params.set("projectId", projectId);
-  if (status) params.set("status", status);
-  const qs = params.toString();
-  return request<import("./types").MissionItem[]>(`/api/v1/missions${qs ? `?${qs}` : ""}`);
-};
-export const getMission = (id: string) =>
-  request<import("./types").MissionItem>(`/api/v1/missions/${id}`);
-export const getMissionDetail = (id: string) =>
-  request<import("./types").MissionDetailItem>(`/api/v1/missions/${id}`);
-export const updateMission = (id: string, patch: { status?: string; title?: string; description?: string }) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
-export const createMission = (data: { title: string; projectId: string; chatId: string; description?: string }) =>
-  request<import("./types").MissionItem>("/api/v1/missions", { method: "POST", body: JSON.stringify(data) });
-export const getMissionStats = (projectId: string) =>
-  request<import("./types").MissionStats>(`/api/v1/missions/stats?projectId=${encodeURIComponent(projectId)}`);
-
 // Wiki
 export const getWikiTree = () =>
   request<import("./types").WikiFileNode[]>("/api/v1/wiki/tree");
@@ -394,29 +375,6 @@ export const deleteGroup = (chatId: string) =>
 
 export const syncGroupNames = () =>
   request<{ ok: true; updated: number }>("/api/v1/groups/sync-names", {
-    method: "POST",
-  });
-
-// Missions — internal actions
-export const reEnqueueStep = (missionId: string, step: string) =>
-  request<{ ok: boolean }>("/api/internal/enqueue-intake", {
-    method: "POST",
-    body: JSON.stringify({ missionId, step }),
-  });
-
-export const requestChanges = (missionId: string, comments: string) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/request-changes`, {
-    method: "POST",
-    body: JSON.stringify({ comments }),
-  });
-
-export const createMissionMR = (missionId: string) =>
-  request<{ mrUrl: string }>(`/api/v1/missions/${missionId}/create-mr`, {
-    method: "POST",
-  });
-
-export const confirmMissionDone = (missionId: string) =>
-  request<{ ok: boolean }>(`/api/v1/missions/${missionId}/done`, {
     method: "POST",
   });
 

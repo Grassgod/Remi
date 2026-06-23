@@ -98,8 +98,6 @@ export interface NotificationConfig {
 export interface PipelineConfig {
   notifications: {
     dailyChangelog: NotificationConfig;
-    missionProgress: NotificationConfig;
-    evalReport: NotificationConfig;
   };
   pipeline: {
     releaseBranch: string;
@@ -114,8 +112,6 @@ export interface PipelineConfig {
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   notifications: {
     dailyChangelog: { enabled: true, targets: [] },
-    missionProgress: { enabled: true, targets: [] },
-    evalReport: { enabled: true, targets: [] },
   },
   pipeline: {
     releaseBranch: "",
@@ -155,7 +151,6 @@ export interface GroupConfig {
   projectId: string;
   name: string;
   monitor: boolean;
-  missionEnabled: boolean;
   replyMode: "thread" | "direct";
   systemPrompt: string;
   allowedTools: string[];
@@ -176,7 +171,6 @@ export interface GroupConfigInput {
   projectId?: string;
   name?: string;
   monitor?: boolean;
-  missionEnabled?: boolean;
   replyMode?: "thread" | "direct";
   systemPrompt?: string;
   allowedTools?: string[];
@@ -546,35 +540,6 @@ export interface StepItem {
   thinking?: string;  // merged thinking before tool (if type=tool)
 }
 
-// Missions
-export interface MissionItem {
-  id: string;
-  title: string;
-  description: string | null;
-  status: string;
-  projectId: string;
-  chatId: string;
-  threadId: string | null;
-  currentStep: string;
-  mrUrl: string | null;
-  mrStatus: string | null;
-  createdBy: string | null;
-  createdByName: string | null;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-  totalTokens: number;
-  totalCost: number;
-  totalDuration: number;
-}
-
-export interface MissionStats {
-  total: number;
-  byStatus: Record<string, number>;
-  totalCost: number;
-  totalTokens: number;
-}
-
 // Wiki
 export interface WikiFileNode {
   name: string;
@@ -653,29 +618,6 @@ export interface ChatInfo {
   conversationCount: number;
   messageCount: number;
   isP2P: boolean;
-}
-
-// ── Missions – Detail ──
-
-export interface ContractCase {
-  id: string;
-  description: string;
-  input: string;
-  expectedOutput: string;
-  type: "unit" | "integration" | "e2e";
-}
-
-export interface MissionDetailItem extends MissionItem {
-  outputDir: string | null;
-  contract: {
-    cases?: ContractCase[];
-    acceptanceCriteria: string[];
-    verificationResults?: {
-      caseResults: Array<{ caseId: string; passed: boolean; detail: string }>;
-      overallPassed: boolean;
-      verifiedAt: string;
-    };
-  } | null;
 }
 
 // ── Skills ──

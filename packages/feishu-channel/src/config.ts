@@ -53,7 +53,6 @@ export interface GroupPolicy {
     monitor?: boolean;
     allowedUserIds?: string[];
     botOpenId?: string;
-    missionEnabled?: boolean;
     projectId?: string | null;
   } | null;
 }

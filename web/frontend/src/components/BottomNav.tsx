@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import {
-  LayoutDashboard, MessageSquare, KanbanSquare, Brain,
+  LayoutDashboard, MessageSquare, Brain,
   BookOpen, BarChart3, Activity, FileText, Clock,
   FolderOpen, Menu, MoreHorizontal,
 } from "lucide-react";
@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils";
 const primaryTabs = [
   { path: "/", label: "Home", icon: LayoutDashboard },
   { path: "/conversations", label: "Chats", icon: MessageSquare },
-  { path: "/missions", label: "Missions", icon: KanbanSquare },
   { path: "/memory", label: "Memory", icon: Brain },
 ];
 

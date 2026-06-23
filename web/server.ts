@@ -35,9 +35,6 @@ import { registerDbHandlers } from "./handlers/db.js";
 import { registerBotMenuHandlers } from "./handlers/bot-menu.js";
 import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
-// Dynamic import — mission module may not exist in worktree
-let registerMissionsHandlers: ((app: any, data: any) => void) | null = null;
-try { ({ registerMissionsHandlers } = require("./handlers/missions.js")); } catch {}
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
@@ -114,7 +111,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerBotMenuHandlers(app, data);
   registerSymlinkHandlers(app, data);
   registerConversationsHandlers(app, data);
-  registerMissionsHandlers?.(app, data);
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
   registerAgentsHandlers(app, data);
@@ -237,16 +233,12 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
 
   // ── Static files (production only) ──
   // Only serve actual files from /assets and /fonts; everything else
-  // falls through to the SPA fallback below, which picks the right HTML
-  // based on path (Dashboard vs public Board/Home).
+  // falls through to the SPA fallback below, which serves the dashboard.
   if (!devMode) {
     app.use("/assets/*", serveStatic({ root: staticDir }));
     app.use("/fonts/*",  serveStatic({ root: staticDir }));
-    app.get("/*", (c) => {
-      const path = new URL(c.req.url).pathname;
-      const isDashboard = path === "/home" || path.startsWith("/home/");
-      const html = isDashboard ? "index.html" : "board.html";
-      return new Response(Bun.file(join(staticDir, html)));
+    app.get("/*", () => {
+      return new Response(Bun.file(join(staticDir, "index.html")));
     });
   }
 

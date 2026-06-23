@@ -127,7 +127,6 @@ export async function runProjectInit(
       chatId: chatId,
       projectId: projectId,
       monitor: true,           // project groups auto-reply by default
-      missionEnabled: true,    // enable mission pipeline for project groups
       replyMode: "thread",
     });
 

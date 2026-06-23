@@ -10,7 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from ".
 import { InitStepper } from "../components/ui/init-stepper";
 import {
   FolderOpen, Plus, Trash2, AlertTriangle, Check, X, Pencil, ChevronRight,
-  Folder, CornerLeftUp, Loader2, RotateCcw, ExternalLink, Settings,
+  Folder, CornerLeftUp, Loader2, RotateCcw, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
@@ -426,7 +426,6 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
   const [projectId, setProjectId] = useState(initial?.projectId ?? "global");
   const [name, setName] = useState(initial?.name ?? "");
   const [monitor, setMonitor] = useState(initial?.monitor ?? false);
-  const [missionEnabled, setMissionEnabled] = useState(initial?.missionEnabled ?? false);
   const [replyMode, setReplyMode] = useState<"thread" | "direct">(initial?.replyMode ?? "thread");
   const [provider, setProvider] = useState(initial?.provider ?? "");
   const [systemPrompt, setSystemPrompt] = useState(initial?.systemPrompt ?? "");
@@ -465,10 +464,6 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
         <label className="flex items-center gap-2 text-sm text-zinc-400">
           <input type="checkbox" checked={monitor} onChange={(e) => setMonitor(e.target.checked)} className="rounded" />
           Monitor (auto-reply)
-        </label>
-        <label className="flex items-center gap-2 text-sm text-zinc-400">
-          <input type="checkbox" checked={missionEnabled} onChange={(e) => setMissionEnabled(e.target.checked)} className="rounded" />
-          Mission Pipeline
         </label>
         <label className="flex items-center gap-2 text-sm text-zinc-400">
           <input type="checkbox" checked={injectChatContext} onChange={(e) => setInjectChatContext(e.target.checked)} className="rounded" />
@@ -545,7 +540,6 @@ function GroupForm({ initial, projects, onSave, onCancel }: {
           projectId,
           name,
           monitor,
-          missionEnabled: missionEnabled,
           replyMode,
           provider: provider || undefined,
           systemPrompt,
@@ -761,14 +755,6 @@ export function Projects() {
                             </Button>
                             <Button
                               variant="ghost" size="icon"
-                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                              onClick={() => { window.location.hash = `#/projects/${encodeURIComponent(p.id)}/config`; }}
-                              title="Pipeline settings"
-                            >
-                              <Settings className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost" size="icon"
                               className="h-7 w-7 text-muted-foreground hover:text-destructive"
                               onClick={() => setDeleteTarget(p.id)}
                             >
@@ -822,7 +808,6 @@ export function Projects() {
                 <TableHead>Project</TableHead>
                 <TableHead>CWD</TableHead>
                 <TableHead>Monitor</TableHead>
-                <TableHead>Mission</TableHead>
                 <TableHead>Reply Mode</TableHead>
                 <TableHead>Provider</TableHead>
                 <TableHead className="w-20">Actions</TableHead>
@@ -853,21 +838,6 @@ export function Projects() {
                     >
                       <span className={`block w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${
                         g.monitor ? "left-4" : "left-0.5"
-                      }`} />
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <button
-                      onClick={async () => {
-                        await updateGroup(g.chatId, { missionEnabled: !g.missionEnabled });
-                        fetchGroups();
-                      }}
-                      className={`w-8 h-4 rounded-full transition-colors relative ${
-                        g.missionEnabled ? "bg-emerald-500" : "bg-zinc-600"
-                      }`}
-                    >
-                      <span className={`block w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${
-                        g.missionEnabled ? "left-4" : "left-0.5"
                       }`} />
                     </button>
                   </TableCell>
