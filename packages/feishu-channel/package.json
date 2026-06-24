@@ -5,9 +5,7 @@
   "type": "module",
   "private": true,
   "exports": {
-    ".": "./src/index.ts",
-    "./protocol": "./src/protocol/acp.ts",
-    "./adapters": "./src/adapters/index.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
