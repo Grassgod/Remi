@@ -7,7 +7,7 @@ import type {
   ToolCallProgressUpdate,
   ToolCallMeta,
   NewSessionMeta,
-} from "@remi/acp-provider";
+} from "@shared/acp-protocol.js";
 import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
 
 export class ClaudeAdapter implements AgentAdapter {

@@ -7,7 +7,7 @@ import type {
   ToolCallUpdate,
   ToolCallProgressUpdate,
   NewSessionMeta,
-} from "@remi/acp-provider";
+} from "@shared/acp-protocol.js";
 
 export interface AgentAdapter {
   readonly agentType: string;

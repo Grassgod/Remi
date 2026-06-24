@@ -16,9 +16,9 @@ import type {
   AgentAdapter,
   StreamMeta,
   StreamHandlerLog,
-} from "@remi/acp-provider";
-import { elicitationToQuestions, answersToElicitationContent } from "@remi/acp-provider";
-export type { StreamMeta, StreamHandlerLog } from "@remi/acp-provider";
+} from "@shared/acp-protocol.js";
+import { elicitationToQuestions, answersToElicitationContent } from "@shared/acp-elicitation.js";
+export type { StreamMeta, StreamHandlerLog } from "@shared/acp-protocol.js";
 import type { FeishuStreamingSession } from "../streaming.js";
 import type { ToolEntry } from "../tool-formatters.js";
 import { formatToolInputSummary, shortPath } from "../tool-formatters.js";

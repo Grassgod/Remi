@@ -6,7 +6,7 @@ import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
 import type { AgentResponse, ProviderEvent } from "../../providers/base.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
-import type { MediaAttachment } from "@remi/acp-provider";
+import type { MediaAttachment } from "@shared/acp-protocol.js";
 import { createLogger } from "../../logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
