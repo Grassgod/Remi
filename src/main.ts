@@ -7,7 +7,7 @@
  */
 
 // Must be first import — swaps macOS system SQLite before any Database instance is created
-import "./db/sqlite-custom.js";
+import "./shared/db/sqlite-custom.js";
 
 import { dispatch } from "./cli/index.js";
 

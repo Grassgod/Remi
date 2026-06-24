@@ -7,10 +7,10 @@
 export const VERSION = "0.1.0";
 
 // Config
-export { loadConfig, type RemiConfig, type ProviderConfig } from "./config.js";
+export { loadConfig, type RemiConfig, type ProviderConfig } from "./shared/config.js";
 
 // Core
-export { Remi } from "./core.js";
+export { Remi } from "./remi/core.js";
 
 // Providers
 export {
@@ -19,7 +19,7 @@ export {
   type ToolDefinition,
   createAgentResponse,
 } from "./providers/base.js";
-export { AcpProvider } from "./providers/acp/index.js";
+export { AcpProvider } from "./acp/index.js";
 
 // Connectors
 export { type Connector, type IncomingMessage, type MessageHandler } from "./connectors/base.js";

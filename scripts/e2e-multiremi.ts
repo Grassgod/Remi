@@ -13,7 +13,7 @@
  *
  * Usage: bun run scripts/e2e-multiremi.ts [--provider=claude|codex] [--port=6191]
  */
-import "../src/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
+import "../src/shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
 import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
