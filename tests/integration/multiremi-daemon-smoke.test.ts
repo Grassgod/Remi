@@ -181,7 +181,7 @@ describe("Bun Multiremi daemon smoke", () => {
         cwd: workDir,
         chatId: task.id,
         allowedTools: ["Read"],
-        permissionMode: "default",
+        permissionMode: "bypassPermissions",
       });
       const messages = store.listTaskMessages(task.id);
       expect(messages.map((message) => ({
@@ -192,10 +192,10 @@ describe("Bun Multiremi daemon smoke", () => {
         input: message.input,
         output: message.output,
       }))).toEqual([
-        { seq: 1, type: "thought", tool: null, content: "Thinking", input: null, output: null },
-        { seq: 2, type: "tool", tool: "Read", content: null, input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
-        { seq: 3, type: "assistant", tool: null, content: "Smoke ", input: null, output: null },
-        { seq: 4, type: "assistant", tool: null, content: "completed", input: null, output: null },
+        { seq: 1, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
+        { seq: 2, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
+        { seq: 3, type: "text", tool: null, content: "Smoke ", input: null, output: null },
+        { seq: 4, type: "text", tool: null, content: "completed", input: null, output: null },
         {
           seq: 5,
           type: "usage",
@@ -217,10 +217,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(transcriptResponse.status).toBe(200);
       const transcriptBody = await transcriptResponse.json() as any[];
       expect(transcriptBody).toEqual([
-        { task_id: task.id, seq: 1, type: "thought", content: "Thinking" },
-        { task_id: task.id, seq: 2, type: "tool", tool: "Read", input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
-        { task_id: task.id, seq: 3, type: "assistant", content: "Smoke " },
-        { task_id: task.id, seq: 4, type: "assistant", content: "completed" },
+        { task_id: task.id, seq: 1, type: "thinking", content: "Thinking" },
+        { task_id: task.id, seq: 2, type: "tool_use", tool: "Read", input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
+        { task_id: task.id, seq: 3, type: "text", content: "Smoke " },
+        { task_id: task.id, seq: 4, type: "text", content: "completed" },
         {
           task_id: task.id,
           seq: 5,
