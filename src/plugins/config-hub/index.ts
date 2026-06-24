@@ -1,3 +1,2 @@
-export { ConfigHubPlugin, setConfigHubInstance, getConfigHub, ConfigHubService } from "./plugin.js";
-export type { AppType, McpConfig, Scope, EntryMap, Manifest } from "./types.js";
-export type { ToolAdapter } from "./adapters/base.js";
+// re-export shim — moved to src/daemon/agent-runtime/config-hub/ in D6.
+export * from "../../daemon/agent-runtime/config-hub/index.js";

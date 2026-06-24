@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parse as parseToml } from "smol-toml";
 import { readFileSync } from "node:fs";
-import { CodexAdapter } from "../../src/plugins/config-hub/adapters/codex.js";
-import type { EntryMap } from "../../src/plugins/config-hub/types.js";
+import { CodexAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/codex.js";
+import type { EntryMap } from "../../src/daemon/agent-runtime/config-hub/types.js";
 
 let dir: string;
 let file: string;

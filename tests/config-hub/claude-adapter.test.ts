@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ClaudeAdapter } from "../../src/plugins/config-hub/adapters/claude.js";
-import type { EntryMap } from "../../src/plugins/config-hub/types.js";
+import { ClaudeAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/claude.js";
+import type { EntryMap } from "../../src/daemon/agent-runtime/config-hub/types.js";
 
 let dir: string;
 let file: string;

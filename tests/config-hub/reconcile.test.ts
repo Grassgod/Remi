@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
-import { reconcileMcp, hashConfig } from "../../src/plugins/config-hub/reconcile.js";
-import type { EntryMap, Manifest } from "../../src/plugins/config-hub/types.js";
+import { reconcileMcp, hashConfig } from "../../src/daemon/agent-runtime/config-hub/reconcile.js";
+import type { EntryMap, Manifest } from "../../src/daemon/agent-runtime/config-hub/types.js";
 
 const X = { command: "server-x", args: ["--a"] };
 const X2 = { command: "server-x", args: ["--b"] }; // X modified

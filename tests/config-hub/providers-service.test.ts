@@ -3,8 +3,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
-import { openCCSwitchDb } from "../../src/plugins/config-hub/db/cc-switch-db.js";
-import { ProvidersService } from "../../src/plugins/config-hub/providers-service.js";
+import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { ProvidersService } from "../../src/daemon/agent-runtime/config-hub/providers-service.js";
 
 let dir: string;
 let db: Database;

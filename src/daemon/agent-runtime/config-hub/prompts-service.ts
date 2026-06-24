@@ -31,7 +31,7 @@ import { APP_TYPES } from "./types.js";
 import type { AdapterRegistry } from "./adapters/base.js";
 import type { SqliteManifestStore } from "./db/dao.js";
 import { writeFileAtomic, backupFile } from "./util.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("config-hub");
 const MARK_START = "<!-- hub:start -->";

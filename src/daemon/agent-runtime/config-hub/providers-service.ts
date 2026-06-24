@@ -11,7 +11,7 @@
 import type { Database } from "bun:sqlite";
 import type { AppType, ProviderSettings, ProviderApplyResult } from "./types.js";
 import type { AdapterRegistry } from "./adapters/base.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("config-hub");
 

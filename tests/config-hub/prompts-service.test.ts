@@ -3,19 +3,19 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
-import { ClaudeAdapter } from "../../src/plugins/config-hub/adapters/claude.js";
-import { CodexAdapter } from "../../src/plugins/config-hub/adapters/codex.js";
-import { GeminiAdapter } from "../../src/plugins/config-hub/adapters/gemini.js";
-import { AdapterRegistry } from "../../src/plugins/config-hub/adapters/base.js";
-import { SqliteManifestStore } from "../../src/plugins/config-hub/db/dao.js";
-import { migrateConfigHub } from "../../src/plugins/config-hub/db/main-tables.js";
-import { openCCSwitchDb } from "../../src/plugins/config-hub/db/cc-switch-db.js";
+import { ClaudeAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/claude.js";
+import { CodexAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/codex.js";
+import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/gemini.js";
+import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
+import { SqliteManifestStore } from "../../src/daemon/agent-runtime/config-hub/db/dao.js";
+import { migrateConfigHub } from "../../src/daemon/agent-runtime/config-hub/db/main-tables.js";
+import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
 import {
   PromptsService,
   extractBlock,
   upsertBlock,
   removeBlock,
-} from "../../src/plugins/config-hub/prompts-service.js";
+} from "../../src/daemon/agent-runtime/config-hub/prompts-service.js";
 
 describe("prompt block helpers (pure)", () => {
   it("extractBlock finds inner content", () => {

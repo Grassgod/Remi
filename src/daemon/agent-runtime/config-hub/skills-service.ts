@@ -21,7 +21,7 @@ import {
   hashDirectory,
   removeSkillLink,
 } from "./skills-sync.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("config-hub");
 

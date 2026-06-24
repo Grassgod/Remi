@@ -4,7 +4,7 @@
  * Claude/Codex/Gemini.
  */
 
-import { createLogger } from "../../logger.js";
+import { createLogger } from "@shared/logger.js";
 import type { AppType, McpConfig, Scope } from "./types.js";
 import { APP_TYPES } from "./types.js";
 import type { AdapterRegistry } from "./adapters/base.js";

@@ -3,13 +3,13 @@ import { mkdirSync, writeFileSync, existsSync, lstatSync, readFileSync, rmSync, 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
-import { ClaudeAdapter } from "../../src/plugins/config-hub/adapters/claude.js";
-import { CodexAdapter } from "../../src/plugins/config-hub/adapters/codex.js";
-import { GeminiAdapter } from "../../src/plugins/config-hub/adapters/gemini.js";
-import { AdapterRegistry } from "../../src/plugins/config-hub/adapters/base.js";
-import { SkillsDao } from "../../src/plugins/config-hub/db/dao.js";
-import { SkillsService } from "../../src/plugins/config-hub/skills-service.js";
-import { openCCSwitchDb } from "../../src/plugins/config-hub/db/cc-switch-db.js";
+import { ClaudeAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/claude.js";
+import { CodexAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/codex.js";
+import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/gemini.js";
+import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
+import { SkillsDao } from "../../src/daemon/agent-runtime/config-hub/db/dao.js";
+import { SkillsService } from "../../src/daemon/agent-runtime/config-hub/skills-service.js";
+import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
 
 let dir: string;
 let fakeHome: string;

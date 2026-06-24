@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { parse as parseToml } from "smol-toml";
-import { ClaudeAdapter } from "../../src/plugins/config-hub/adapters/claude.js";
-import { CodexAdapter } from "../../src/plugins/config-hub/adapters/codex.js";
-import { GeminiAdapter } from "../../src/plugins/config-hub/adapters/gemini.js";
-import { AdapterRegistry } from "../../src/plugins/config-hub/adapters/base.js";
-import { openCCSwitchDb } from "../../src/plugins/config-hub/db/cc-switch-db.js";
-import { ProvidersService } from "../../src/plugins/config-hub/providers-service.js";
+import { ClaudeAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/claude.js";
+import { CodexAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/codex.js";
+import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/gemini.js";
+import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
+import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { ProvidersService } from "../../src/daemon/agent-runtime/config-hub/providers-service.js";
 
 let dir: string;
 let home: string;
