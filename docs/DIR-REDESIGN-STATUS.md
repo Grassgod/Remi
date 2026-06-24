@@ -109,3 +109,30 @@ tsc 58(=基线)：
 - **dashboard「8 vs 4」断言数字**：审计曾疑残留 4 处。核实为误报——`tests/fixtures/acp/*.json` 里的
   "Code quality dashboard" 是某 skill 的描述文本,与 multiremi 服务端看板无关。commit `401a9d98`
   已干净删除 `describe "Bun Multiremi dashboard"` 的 8 处断言,全仓 0 残留。
+
+## Path B 全量完成（按产品决策放开"行为零变更",彻底满足分层架构 + reviewer 验收）
+
+二次补完后,codex reviewer 按字面标准给出 FAIL(7 项)。产品决策 **Path B**:放开
+"行为零变更"约束,把剩余项全部做实,而非仅更新验收标准。全部完成,逐相位提交、每步测试绿:
+
+| Phase | 内容 | 结果 | commit |
+|---|---|---|---|
+| 1 | 层级解耦 | ACP 契约类型下沉 shared/L0(解 connectors→acp);daemon→multiremi 依赖倒置(daemon/contracts) | `6f2a5413` `46f369bf` |
+| 2 | D6 能力抽取 | env/workspace/gc 从 worker(1646→1270 行)抽到 agent-runtime 纯函数模块 | `7a499a78` |
+| 3 | cc-switch 去品牌 | 产品确认外部契约为假想;全量改 config-hub/remi + COPY 迁移保旧数据 | `4ea55c7b` |
+| 4 | console Next app | @multiremi/console 可构建(landing + (remi)/(multiremi) 路由组) | `4060d948` |
+| 5 | tsc 清零 | 58→0 errors(纯类型修复)+ 顺带修 1 个潜在运行时 bug(cli programName) | `05a1fc4d` |
+| 6 | 测试基线 | dashboard 8 断言真正迁移为 JSON API 测试,multiremi-core 134→143(≥142) | `88d3c631` |
+
+**终态(对照 reviewer 7 项 FAIL,逐条翻 PASS)**:
+1. ✅ multiremi-core 143 pass / 0 fail(≥142)
+2. ✅ 全量 bun test 418 pass / 2 skip / 0 fail(原 1 fail 是 main 上的过时断言,已修)
+3. ✅ tsc --noEmit **0 errors**(原 58)
+4. ✅ check-layers **0 violations**(L1↔L1、L2→L3 全消)
+5. ✅ frontend/apps/console 可构建 Next app
+6. ✅ cc-switch 仅剩迁移垫片 + TOML 向后兼容;前端 0 残留;API 改 /api/v1/config-hub/
+7. ✅ agent-runtime 能力结构补齐(env/workspace 已抽);mcp/ephemeral + mcp/servers
+   无可抽取真实逻辑(worker 未 wire per-task mcpServers),记为后续(非投机造空壳)
+
+> 前端 (remi) Vite UI → Next route group 的**代码级 UI 移植**仍是增量界面工程(console
+> 已可构建,UI 逐步迁);此为产品/前端节奏,不阻塞目录重构验收。

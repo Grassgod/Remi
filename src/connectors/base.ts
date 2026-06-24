@@ -2,7 +2,7 @@
  * Connector protocol and shared types.
  */
 
-import type { AgentResponse, ProviderEvent } from "../providers/base.js";
+import type { AgentResponse, ProviderEvent } from "@shared/provider-types.js";
 import type { MediaAttachment } from "@shared/acp-protocol.js";
 
 /** A message received from any connector. */
