@@ -12,7 +12,7 @@ Remi is an extensible AI assistant runtime that connects modern LLM agents (Clau
 - **Multi-provider backends** — Claude Code CLI provider (uses your Claude subscription via long-running subprocess + JSONL streaming, no API key required) and an Aiden CLI provider, behind a 3-method `Provider` interface. Plug in any LLM by implementing `send`, `healthCheck`, and `name`.
 - **BunQueue task pipeline** — Durable queues for conversation persistence, memory extraction, scheduled missions, and cron jobs. One unified `[[cron.jobs]]` config drives heartbeats, daily compaction, skill reports, and one-shot agents.
 - **SvelteKit-style Web Dashboard** — A React + Vite + Tailwind dashboard (`web/frontend/`) backed by a Hono API (`web/server.ts`) for inspecting conversations, missions, memory entities, traces, and queue health.
-- **MCP server included** — A built-in Model Context Protocol server (`src/mcp/memory-server.ts`) exposes `recall`, `remember`, and `backlinks` so any MCP-compatible agent can read and write your memory graph.
+- **MCP server included** — A built-in Model Context Protocol server (`src/memory/mcp-server.ts`) exposes `recall`, `remember`, and `backlinks` so any MCP-compatible agent can read and write your memory graph.
 - **SQLite + sqlite-vec** — Conversations, sessions, and metrics live in SQLite. Vector search over memory uses `sqlite-vec` with pluggable embedding providers (Voyage, OpenAI-compatible).
 - **Remote agent system** — Spawn child agents (Claude Code subprocesses) with scoped context injection for long-running, isolated tasks (memory audits, daily briefings, retro reports).
 

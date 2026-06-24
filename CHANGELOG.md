@@ -29,7 +29,7 @@ First public open-source release. Remi 0.2.0 packages the Hub-and-Spoke runtime,
 - **Markdown-based memory store** (`src/memory/`) following CoALA-inspired layers (semantic, episodic, procedural, working).
 - Automatic `.versions/` backups on every write.
 - **Link graph** (`src/memory/link-graph.ts`) for `[[entity]]` cross-references and backlink queries.
-- **MCP server** (`src/mcp/memory-server.ts`) exposing `recall`, `remember`, and `backlinks` to any MCP-compatible agent.
+- **MCP server** (`src/memory/mcp-server.ts`) exposing `recall`, `remember`, and `backlinks` to any MCP-compatible agent.
 
 ### Queue and scheduler
 

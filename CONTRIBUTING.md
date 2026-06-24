@@ -183,7 +183,7 @@ Steps:
 
 ### Add a new MCP tool
 
-The MCP server lives in `src/mcp/memory-server.ts`. Add a new tool by registering it in the server's tool list and implementing the handler. Tools should be small, composable, and idempotent — the LLM may call them many times in a single turn.
+The MCP server lives in `src/memory/mcp-server.ts`. Add a new tool by registering it in the server's tool list and implementing the handler. Tools should be small, composable, and idempotent — the LLM may call them many times in a single turn.
 
 ## Filing issues
 

@@ -17,7 +17,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
-import { MemoryStore } from "../memory/store.js";
+import { MemoryStore } from "./store.js";
 
 // ── Constants ────────────────────────────────────────────────
 
