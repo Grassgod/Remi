@@ -193,23 +193,33 @@ export class MultiremiDaemon {
       this.ready = true;
 
       while (!this.stopped) {
-        const ack = await this.client.heartbeatRuntime(this.options.runtimeId);
-        const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId, ack);
-        if (this.stopped || this.claimsPaused) break;
-        if (skipClaim) {
-          if (this.options.once) return;
-          await sleep(this.options.pollIntervalMs);
-          continue;
-        }
+        try {
+          const ack = await this.client.heartbeatRuntime(this.options.runtimeId);
+          const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId, ack);
+          if (this.stopped || this.claimsPaused) break;
+          if (skipClaim) {
+            if (this.options.once) return;
+            await sleep(this.options.pollIntervalMs);
+            continue;
+          }
 
-        const task = await this.client.claimTask(this.options.runtimeId) as MultiremiTaskWithAgent | null;
-        if (!task) {
+          const task = await this.client.claimTask(this.options.runtimeId) as MultiremiTaskWithAgent | null;
+          if (!task) {
+            if (this.options.once) return;
+            await sleep(this.options.pollIntervalMs);
+            continue;
+          }
+          await this.handleTask(task);
           if (this.options.once) return;
+        } catch (err) {
+          // A transient server/network blip (e.g. the server restarting) must not
+          // kill the daemon — that takes every runtime offline until a human
+          // re-launches it. Log and retry on the next poll. `once` mode (tests,
+          // one-shot runs) still surfaces the error.
+          if (this.stopped || this.options.once) throw err;
+          log.warn(`daemon poll loop error, retrying in ${this.options.pollIntervalMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await sleep(this.options.pollIntervalMs);
-          continue;
         }
-        await this.handleTask(task);
-        if (this.options.once) return;
       }
     } finally {
       this.ready = false;
