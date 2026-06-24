@@ -1,0 +1,102 @@
+"use client";
+
+import { use, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { WorkspaceSlugProvider, paths } from "@multiremi/core/paths";
+import { workspaceBySlugOptions } from "@multiremi/core/workspace";
+import { setCurrentWorkspace } from "@multiremi/core/platform";
+import { useAuthStore } from "@multiremi/core/auth";
+import { NoAccessPage } from "@multiremi/views/workspace/no-access-page";
+import { WelcomeAfterOnboarding } from "@multiremi/views/workspace/welcome-after-onboarding";
+import { MultiremiIcon } from "@multiremi/ui/components/common/multimira-icon";
+import { useWorkspaceSeen } from "@multiremi/views/workspace/use-workspace-seen";
+
+export default function WorkspaceLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ workspaceSlug: string }>;
+}) {
+  const { workspaceSlug } = use(params);
+  const user = useAuthStore((s) => s.user);
+  const isAuthLoading = useAuthStore((s) => s.isLoading);
+  const router = useRouter();
+
+  // Workspace routes require auth. If user is unauthenticated (initial visit
+  // without a session, token expired, another tab logged out, etc.), bounce
+  // to /login. Without this, the layout renders null and the user sees a
+  // blank page stuck on /{slug}/...
+  useEffect(() => {
+    if (!isAuthLoading && !user) router.replace(paths.login());
+  }, [isAuthLoading, user, router]);
+
+  // Onboarding funnel disabled (self-host customization): users with
+  // onboarded_at NULL are allowed straight into the workspace. The old hard
+  // gate here used to bounce them to the /onboarding wizard; we no longer run
+  // that consumer flow, so access is gated on auth alone (effect above).
+
+  // Resolve workspace by slug from the React Query list cache.
+  // Enabled only when user is authenticated — otherwise the list query isn't seeded.
+  const { data: workspace, isFetched: listFetched } = useQuery({
+    ...workspaceBySlugOptions(workspaceSlug),
+    enabled: !!user,
+  });
+
+  // Render-phase sync: feed the URL slug into the platform singleton so
+  // the first child query's X-Workspace-Slug header is already correct.
+  // setCurrentWorkspace self-dedupes + runs rehydrate as a side effect;
+  // safe to call on every render.
+  if (workspace) {
+    setCurrentWorkspace(workspaceSlug, workspace.id);
+  }
+
+  // Cookie write (last_workspace_slug) — proxy reads it on next page load
+  // to redirect unauthenticated-URL hits to the user's last workspace.
+  useEffect(() => {
+    if (!workspace || typeof document === "undefined") return;
+    const oneYear = 60 * 60 * 24 * 365;
+    const secure = location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `last_workspace_slug=${encodeURIComponent(workspaceSlug)}; path=/; max-age=${oneYear}; SameSite=Lax${secure}`;
+  }, [workspace, workspaceSlug]);
+
+  // Remember whether this slug has resolved before. Used below to avoid
+  // flashing NoAccessPage during active workspace removal (delete, leave,
+  // or realtime eviction) — in those cases the caller is navigating away
+  // and we just need to hold null briefly.
+  const hasBeenSeen = useWorkspaceSeen(workspaceSlug, !!workspace);
+
+  const loadingIndicator = (
+    <div className="flex h-svh items-center justify-center">
+      <MultiremiIcon className="size-6 animate-pulse" />
+    </div>
+  );
+
+  if (isAuthLoading) return loadingIndicator;
+  // Don't render children until workspace is resolved. useWorkspaceId()
+  // throws when the list hasn't populated or the slug is unknown — gating
+  // here makes that invariant hold for every descendant.
+  if (!listFetched) return loadingIndicator;
+  if (!workspace) {
+    // If we've resolved this slug before in this session, it was just
+    // removed from our list (deleted/left/evicted). A navigate is almost
+    // certainly in flight — render null to avoid a NoAccessPage flash.
+    if (hasBeenSeen) return null;
+    // Otherwise: the URL points at a workspace the user never had access
+    // to. Show explicit feedback instead of silently redirecting. Doesn't
+    // distinguish 404 vs 403 to avoid letting attackers enumerate slugs.
+    return <NoAccessPage />;
+  }
+
+  return (
+    <WorkspaceSlugProvider slug={workspaceSlug}>
+      {children}
+      {/* Reads the welcome-store transient signal parked by
+       *  OnboardingFlow.handleRuntimeNext. Runtime path → loading veil →
+       *  blocking Modal with Helper + starter cards. Skip path → Modal
+       *  with two seeded issues. No signal → null. */}
+      <WelcomeAfterOnboarding />
+    </WorkspaceSlugProvider>
+  );
+}

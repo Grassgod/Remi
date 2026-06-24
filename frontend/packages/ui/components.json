@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "styles/tokens.css",
+    "baseColor": "zinc",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@multiremi/ui/components",
+    "ui": "@multiremi/ui/components/ui",
+    "hooks": "@multiremi/ui/hooks",
+    "lib": "@multiremi/ui/lib",
+    "utils": "@multiremi/ui/lib/utils"
+  }
+}
