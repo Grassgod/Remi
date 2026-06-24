@@ -231,7 +231,7 @@ export interface GoogleConfig {
   model: string;
 }
 
-export interface CCSwitchConfig {
+export interface ConfigHubConfig {
   enabled: boolean;
   configDir: string;
 }
@@ -270,8 +270,8 @@ export interface RemiConfig {
   embedding?: EmbeddingConfig;
   /** Google API config for Gemini image generation (optional). */
   google?: GoogleConfig;
-  /** cc-switch config for multi-tool configuration management. */
-  ccSwitch: CCSwitchConfig;
+  /** config-hub config for multi-tool configuration management. */
+  configHub: ConfigHubConfig;
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -336,7 +336,7 @@ export function defaultRemiConfig(): RemiConfig {
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
     auth: { adminEmails: [] },
-    ccSwitch: { enabled: false, configDir: join(homedir(), ".remi", "cc-switch") },
+    configHub: { enabled: false, configDir: join(homedir(), ".remi", "config-hub") },
     tracing: {
       enabled: true,
       logsDir: join(homedir(), ".remi", "logs"),
@@ -396,7 +396,7 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
 
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
-  const ccSwitchData = (fileData.cc_switch ?? {}) as Record<string, unknown>;
+  const configHubData = (fileData.cc_switch ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
 
@@ -508,9 +508,9 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       http: (proxyData.http as string) ?? "",
       noProxy: (proxyData.no_proxy as string) ?? "",
     },
-    ccSwitch: {
-      enabled: (ccSwitchData.enabled as boolean) ?? false,
-      configDir: (ccSwitchData.config_dir as string)?.replace(/^~/, homedir()) ?? join(homedir(), ".remi", "cc-switch"),
+    configHub: {
+      enabled: (configHubData.enabled as boolean) ?? false,
+      configDir: (configHubData.config_dir as string)?.replace(/^~/, homedir()) ?? join(homedir(), ".remi", "config-hub"),
     },
     botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData

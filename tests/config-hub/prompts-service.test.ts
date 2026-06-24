@@ -9,7 +9,7 @@ import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapter
 import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
 import { SqliteManifestStore } from "../../src/daemon/agent-runtime/config-hub/db/dao.js";
 import { migrateConfigHub } from "../../src/daemon/agent-runtime/config-hub/db/main-tables.js";
-import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { openConfigHubDb } from "../../src/daemon/agent-runtime/config-hub/db/config-hub-db.js";
 import {
   PromptsService,
   extractBlock,
@@ -68,7 +68,7 @@ beforeEach(() => {
   registry.register(new CodexAdapter(fakeHome));
   registry.register(new GeminiAdapter(fakeHome));
 
-  ccDb = openCCSwitchDb(join(dir, "cc-switch.db"));
+  ccDb = openConfigHubDb(join(dir, "cc-switch.db"));
   mainDb = new Database(join(dir, "main.db"));
   migrateConfigHub(mainDb);
   svc = new PromptsService(ccDb, registry, new SqliteManifestStore(mainDb));

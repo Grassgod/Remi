@@ -9,7 +9,7 @@ import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapter
 import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
 import { SkillsDao } from "../../src/daemon/agent-runtime/config-hub/db/dao.js";
 import { SkillsService } from "../../src/daemon/agent-runtime/config-hub/skills-service.js";
-import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { openConfigHubDb } from "../../src/daemon/agent-runtime/config-hub/db/config-hub-db.js";
 
 let dir: string;
 let fakeHome: string;
@@ -44,7 +44,7 @@ beforeEach(() => {
   registry.register(new CodexAdapter(fakeHome));
   registry.register(new GeminiAdapter(fakeHome));
 
-  ccDb = openCCSwitchDb(join(dir, "cc-switch.db"));
+  ccDb = openConfigHubDb(join(dir, "cc-switch.db"));
   svc = new SkillsService(new SkillsDao(ccDb), registry, ssotRoot);
 });
 afterEach(() => {

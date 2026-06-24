@@ -131,7 +131,7 @@ function makeConfig(tmpDir: string): RemiConfig {
     plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
     auth: { adminEmails: [] },
-    ccSwitch: { enabled: false, configDir: join(tmpDir, "cc-switch") },
+    configHub: { enabled: false, configDir: join(tmpDir, "config-hub") },
     tracing: {
       enabled: false,
       logsDir: join(tmpDir, "logs"),

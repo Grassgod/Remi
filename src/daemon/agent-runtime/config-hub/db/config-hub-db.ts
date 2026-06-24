@@ -79,11 +79,15 @@ CREATE TABLE IF NOT EXISTS providers (
   PRIMARY KEY (id, app_type)
 )`;
 
-export function defaultCCSwitchDbPath(home: string = homedir()): string {
+export function defaultConfigHubDbPath(home: string = homedir()): string {
+  // FROZEN external contract: ~/.cc-switch/cc-switch.db is shared with the
+  // cc-switch desktop app (v10 schema mirrored). The brand stays in this path
+  // on purpose — renaming it would empty existing installs and break desktop
+  // interop. Drop it only with product sign-off + a backward-compat migration.
   return join(home, ".cc-switch", "cc-switch.db");
 }
 
-export function openCCSwitchDb(path: string = defaultCCSwitchDbPath()): Database {
+export function openConfigHubDb(path: string = defaultConfigHubDbPath()): Database {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.run(MCP_SERVERS_DDL);

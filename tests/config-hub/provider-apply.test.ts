@@ -8,7 +8,7 @@ import { ClaudeAdapter } from "../../src/daemon/agent-runtime/config-hub/adapter
 import { CodexAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/codex.js";
 import { GeminiAdapter } from "../../src/daemon/agent-runtime/config-hub/adapters/gemini.js";
 import { AdapterRegistry } from "../../src/daemon/agent-runtime/config-hub/adapters/base.js";
-import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { openConfigHubDb } from "../../src/daemon/agent-runtime/config-hub/db/config-hub-db.js";
 import { ProvidersService } from "../../src/daemon/agent-runtime/config-hub/providers-service.js";
 
 let dir: string;
@@ -89,7 +89,7 @@ describe("GeminiAdapter.applyProvider", () => {
 describe("ProvidersService.switchTo → apply (integration)", () => {
   it("flips is_current and writes the chosen preset to claude settings.json", () => {
     const ccDb = new Database(join(dir, "cc.db"));
-    openCCSwitchDb(join(dir, "cc.db")).close(); // create tables
+    openConfigHubDb(join(dir, "cc.db")).close(); // create tables
     const db2 = new Database(join(dir, "cc.db"));
     const reg = new AdapterRegistry();
     reg.register(new ClaudeAdapter(home));

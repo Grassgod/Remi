@@ -18,7 +18,7 @@ import { AdapterRegistry, type ToolAdapter } from "./adapters/base.js";
 import { ClaudeAdapter } from "./adapters/claude.js";
 import { CodexAdapter } from "./adapters/codex.js";
 import { GeminiAdapter } from "./adapters/gemini.js";
-import { openCCSwitchDb, defaultCCSwitchDbPath, defaultSkillsSsotDir } from "./db/cc-switch-db.js";
+import { openConfigHubDb, defaultConfigHubDbPath, defaultSkillsSsotDir } from "./db/config-hub-db.js";
 import { migrateConfigHub } from "./db/main-tables.js";
 import { GlobalMcpDao, SqliteManifestStore, SkillsDao } from "./db/dao.js";
 import { ConfigHubService } from "./service.js";
@@ -63,7 +63,7 @@ export class ConfigHubPlugin {
    */
   migrate(mainDb: Database): void {
     migrateConfigHub(mainDb);
-    this._ccDb = openCCSwitchDb(this.opts.ccSwitchDbPath ?? defaultCCSwitchDbPath());
+    this._ccDb = openConfigHubDb(this.opts.ccSwitchDbPath ?? defaultConfigHubDbPath());
     const manifests = new SqliteManifestStore(mainDb);
     this._service = new ConfigHubService(new GlobalMcpDao(this._ccDb), manifests, this.registry);
     this._skills = new SkillsService(new SkillsDao(this._ccDb), this.registry, defaultSkillsSsotDir());

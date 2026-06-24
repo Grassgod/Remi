@@ -15,7 +15,7 @@ import type { AppType, Scope } from "./types.js";
 import { APP_TYPES } from "./types.js";
 import type { AdapterRegistry } from "./adapters/base.js";
 import type { SkillRow, SkillsDao } from "./db/dao.js";
-import { defaultSkillsSsotDir } from "./db/cc-switch-db.js";
+import { defaultSkillsSsotDir } from "./db/config-hub-db.js";
 import {
   ensureSkillLink,
   hashDirectory,

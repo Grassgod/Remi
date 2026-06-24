@@ -3,7 +3,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
-import { openCCSwitchDb } from "../../src/daemon/agent-runtime/config-hub/db/cc-switch-db.js";
+import { openConfigHubDb } from "../../src/daemon/agent-runtime/config-hub/db/config-hub-db.js";
 import { ProvidersService } from "../../src/daemon/agent-runtime/config-hub/providers-service.js";
 
 let dir: string;
@@ -13,7 +13,7 @@ let svc: ProvidersService;
 beforeEach(() => {
   dir = join(tmpdir(), `cfghub-providers-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
-  db = openCCSwitchDb(join(dir, "cc-switch.db"));
+  db = openConfigHubDb(join(dir, "cc-switch.db"));
   svc = new ProvidersService(db);
 });
 afterEach(() => {
