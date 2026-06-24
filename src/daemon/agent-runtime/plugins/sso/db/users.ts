@@ -7,7 +7,7 @@
 
 import { randomBytes } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { getDb } from "../../../db/index.js";
+import { getDb } from "@shared/db/index.js";
 
 export type UserRole = "admin" | "member";
 

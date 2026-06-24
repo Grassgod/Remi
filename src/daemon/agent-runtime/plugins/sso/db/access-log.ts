@@ -3,7 +3,7 @@
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDb } from "../../../db/index.js";
+import { getDb } from "@shared/db/index.js";
 
 export interface AccessLogEntry {
   id: number;

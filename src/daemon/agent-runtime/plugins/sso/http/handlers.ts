@@ -11,7 +11,7 @@
 
 import { networkInterfaces, hostname } from "node:os";
 import type { Hono } from "hono";
-import { createLogger } from "../../../logger.js";
+import { createLogger } from "@shared/logger.js";
 import { listProviders, getProvider } from "../db/providers.js";
 import { getSettings } from "../db/settings.js";
 import {

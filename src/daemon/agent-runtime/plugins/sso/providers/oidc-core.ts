@@ -12,7 +12,7 @@
  *   - logout URL
  */
 
-import { createLogger } from "../../../logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("oidc-core");
 const JWKS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;

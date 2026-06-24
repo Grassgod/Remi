@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseToml } from "smol-toml";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "@shared/logger.js";
 import { countProviders, createProvider, getProvider } from "./db/providers.js";
 import { countClusters, createCluster } from "./db/clusters.js";
 

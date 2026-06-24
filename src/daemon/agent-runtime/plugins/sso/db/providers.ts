@@ -6,7 +6,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import { getDb } from "../../../db/index.js";
+import { getDb } from "@shared/db/index.js";
 
 export interface SsoProviderRow {
   id: string;
