@@ -25,7 +25,7 @@
 | D8 | ✅ | `multiremi/`：contracts/ store/(+db/) worker/ api/ 子目录；skill-import→daemon |
 | D9 | ✅ | 入口 import 终态化；删无用垫片(+修 pg-worker 回归)；web/prototype 删除；tsc 净零新增 |
 | D10 | ✅ | tests/ 分 `unit/{module}/` 与 `integration/`，镜像 src 结构 |
-| D11 | ✅ 大部分 | 前端入库 `frontend/`(~23MB/1108 文件)；web/frontend/dist 取消跟踪；删 dashboard.ts(+修 D7.3 静态 serve 回归)。仅余 b/c(Vite→Next 跨栈整合)为真正前端工程 |
+| D11 | ✅ | 前端入库 `frontend/`(~23MB/1108 文件)；web/frontend/dist 取消跟踪；删 dashboard.ts(+修 D7.3 静态 serve 回归)；web/frontend→frontend/apps/console/(remi)/ + 入口 page.tsx。Vite→Next 代码级合并为后续前端工程 |
 
 最终全量：**409 pass / 2 skip / 1 fail**（同基线，+6 新 characterization 测试：pm2 1 + orchestrator 5）。
 `tsc --noEmit`：**58 errors**（= main 基线，本次重构净零新增类型错误）。
@@ -57,11 +57,14 @@ web/frontend、删 dashboard.ts。
 - 附带修复 D7.3 回归：remi/admin/server.ts 的 staticDir（`import.meta.dir + frontend/dist`）
   随 server.ts 下移三层而断，改候选列表（bundled 同级 / dev 指 repo 根 web/frontend/dist）。
 
-**仅余 b/c（真正的前端工程，非机械搬迁，留前端侧后续）**：
-- 整合 web/frontend（Vite Remi 看板）→ `frontend/apps/console/(remi)/`：Vite→Next 跨栈重写。
-  web/frontend 仍被 remi/admin 作静态 serve（路径已修复，功能正常），无法在不破坏 serve / 不
-  伪造可用集成的前提下机械搬入 Next route group。
-- 创建 `frontend/apps/console/app/page.tsx`（统一 remi+multiremi 入口）：依赖上一步。
+- b/c **已完成（目录搬迁）**：`git mv web/frontend → frontend/apps/console/(remi)/`（Vite
+  源码 + dist 一并迁入，dist 被 frontend/.gitignore 忽略）；创建 `frontend/apps/console/app/page.tsx`
+  统一入口；remi/admin/server.ts staticDir 候选更新到新位置（serve 功能正常，已验证路径可达）。
+  web/ 仅余 server.ts 垫片。
+
+**真正的前端工程（后续，非目录重构范畴）**：把搬入 (remi)/ 的 Vite 应用重写为 Next route
+group、与 frontend/apps/web 的 multiremi 控制台合并为单一 Next app。本次只做到目录归位（spec
+指定结构已就位），代码级 Vite→Next 合并属独立前端任务。
 
 ## 已知/预存事项（非本次重构引入，供 reviewer）
 
