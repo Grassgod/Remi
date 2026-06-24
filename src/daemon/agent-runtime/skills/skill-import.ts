@@ -1,16 +1,16 @@
 import type {
   CreateSkillInput,
   ImportSkillInput,
-  MultiremiSkillFile,
-  MultiremiSkillImportSource,
-} from "@multiremi/contracts/types.js";
+  SkillImportFile,
+  SkillImportSource,
+} from "@daemon/contracts/types.js";
 
 const MAX_IMPORT_FILE_SIZE = 1 << 20;
 const MAX_IMPORT_TOTAL_SIZE = 8 << 20;
 const MAX_IMPORT_FILE_COUNT = 128;
 
 type DetectedImportSource = {
-  source: MultiremiSkillImportSource;
+  source: SkillImportSource;
   normalizedUrl: string;
 };
 
@@ -18,12 +18,12 @@ type ImportedSkill = {
   name: string;
   description: string;
   content: string;
-  files: MultiremiSkillFile[];
+  files: SkillImportFile[];
   origin: Record<string, unknown>;
 };
 
 type ImportResult = {
-  source: MultiremiSkillImportSource;
+  source: SkillImportSource;
   sourceUrl: string;
   skillInput: CreateSkillInput;
 };

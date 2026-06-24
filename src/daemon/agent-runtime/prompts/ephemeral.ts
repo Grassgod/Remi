@@ -1,6 +1,6 @@
-import type { MultiremiTaskWithAgent } from "../../../multiremi/types.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
 
-export function buildTaskPrompt(task: MultiremiTaskWithAgent): string {
+export function buildTaskPrompt(task: AgentTask): string {
   const sections: string[] = [];
 
   sections.push("# Task");
@@ -79,7 +79,7 @@ export function buildTaskPrompt(task: MultiremiTaskWithAgent): string {
   return sections.join("\n");
 }
 
-function appendClaimContextSections(sections: string[], task: MultiremiTaskWithAgent): void {
+function appendClaimContextSections(sections: string[], task: AgentTask): void {
   const workspaceContext = stringField(task, "workspaceContext", "workspace_context");
   if (workspaceContext) {
     sections.push("");
@@ -137,7 +137,7 @@ function appendClaimContextSections(sections: string[], task: MultiremiTaskWithA
   }
 }
 
-function appendTriggerCommentSection(sections: string[], task: MultiremiTaskWithAgent): void {
+function appendTriggerCommentSection(sections: string[], task: AgentTask): void {
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (!triggerCommentId) return;
   const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
@@ -245,27 +245,27 @@ function formatChatAttachment(value: unknown): string {
   return `- ${[id, label].filter(Boolean).join(" - ") || JSON.stringify(value)}`;
 }
 
-function stringField(task: MultiremiTaskWithAgent, camel: keyof MultiremiTaskWithAgent, snake: keyof MultiremiTaskWithAgent): string | null {
+function stringField(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): string | null {
   const value = task[camel] ?? task[snake];
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function arrayField(task: MultiremiTaskWithAgent, camel: keyof MultiremiTaskWithAgent, snake: keyof MultiremiTaskWithAgent): unknown[] {
+function arrayField(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): unknown[] {
   const value = task[camel] ?? task[snake];
   return Array.isArray(value) ? value : [];
 }
 
-function unknownField(task: MultiremiTaskWithAgent, camel: keyof MultiremiTaskWithAgent, snake: keyof MultiremiTaskWithAgent): unknown | null {
+function unknownField(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): unknown | null {
   return task[camel] ?? task[snake] ?? null;
 }
 
-function numberField(task: MultiremiTaskWithAgent, camel: keyof MultiremiTaskWithAgent, snake: keyof MultiremiTaskWithAgent): number {
+function numberField(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): number {
   const value = task[camel] ?? task[snake];
   const number = Number(value ?? 0);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
-function formatProjectResource(resource: MultiremiTaskWithAgent["projectResources"][number]): string {
+function formatProjectResource(resource: AgentTask["projectResources"][number]): string {
   if (resource.resourceType === "github_repo") {
     const url = String(resource.resourceRef.url ?? "");
     const branch = String(resource.resourceRef.defaultBranchHint ?? resource.resourceRef.default_branch_hint ?? "");

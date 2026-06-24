@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { MultiremiRepoData } from "../../../multiremi/types.js";
+import type { RepoSpec } from "@daemon/contracts/types.js";
 
-export type { MultiremiRepoData } from "../../../multiremi/types.js";
+export type { RepoSpec } from "@daemon/contracts/types.js";
+// Back-compat alias for existing `MultiremiRepoData` importers (e.g. worker/daemon.ts).
+export type MultiremiRepoData = RepoSpec;
 
 export interface MultiremiWorktreeParams {
   workspaceId: string;

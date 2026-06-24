@@ -9,9 +9,9 @@
 
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
-import type { MultiremiTaskWithAgent } from "../../../multiremi/types.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
 
-export function writeTaskContext(workDir: string, task: MultiremiTaskWithAgent): void {
+export function writeTaskContext(workDir: string, task: AgentTask): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
   const payload = {
@@ -41,7 +41,7 @@ export function writeTaskContext(workDir: string, task: MultiremiTaskWithAgent):
   writeFileSync(join(dir, "task.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
 }
 
-export function writeTaskGcContext(workDir: string, task: MultiremiTaskWithAgent, options: { localDirectory?: boolean } = {}): void {
+export function writeTaskGcContext(workDir: string, task: AgentTask, options: { localDirectory?: boolean } = {}): void {
   const dir = join(workDir, ".multiremi");
   mkdirSync(dir, { recursive: true });
   const kind = task.chatSessionId
@@ -66,7 +66,7 @@ export function writeTaskGcContext(workDir: string, task: MultiremiTaskWithAgent
   writeFileSync(join(dir, "gc.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
 }
 
-export function writeProjectResourceContext(workDir: string, task: MultiremiTaskWithAgent): void {
+export function writeProjectResourceContext(workDir: string, task: AgentTask): void {
   if (!task.project && task.projectResources.length === 0) return;
   const dir = join(workDir, ".multiremi", "project");
   mkdirSync(dir, { recursive: true });
@@ -83,7 +83,7 @@ export function writeProjectResourceContext(workDir: string, task: MultiremiTask
   writeFileSync(join(dir, "resources.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
 }
 
-export function writeAgentSkillContext(workDir: string, task: MultiremiTaskWithAgent): void {
+export function writeAgentSkillContext(workDir: string, task: AgentTask): void {
   const skills = task.agent?.skills ?? [];
   if (!skills.length) return;
   const root = join(workDir, ".claude", "skills");
@@ -101,7 +101,7 @@ export function writeAgentSkillContext(workDir: string, task: MultiremiTaskWithA
   }
 }
 
-function renderSkillMarkdown(skill: NonNullable<MultiremiTaskWithAgent["agent"]>["skills"][number]): string {
+function renderSkillMarkdown(skill: NonNullable<AgentTask["agent"]>["skills"][number]): string {
   const content = skill.content ?? "";
   if (content.trimStart().startsWith("---")) return content;
   const frontmatter = [

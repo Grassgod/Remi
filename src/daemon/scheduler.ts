@@ -1,11 +1,13 @@
 import { Cron } from "croner";
 import { createLogger } from "../shared/logger.js";
-import {
-  MultiremiStore,
-  type MultiremiAutopilotFailureThresholdCandidate,
-  type MultiremiAutopilotFailureThresholdOptions,
-} from "../multiremi/store.js";
-import type { MultiremiAutopilot, MultiremiAutopilotRun, MultiremiAutopilotTrigger } from "../multiremi/types.js";
+import type {
+  AutopilotStore,
+  AutopilotFailureThresholdCandidate,
+  AutopilotFailureThresholdOptions,
+  Autopilot,
+  AutopilotRun,
+  AutopilotTrigger,
+} from "@daemon/contracts/types.js";
 
 const log = createLogger("multiremi-scheduler");
 const DEFAULT_FAILURE_MONITOR_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -20,7 +22,7 @@ interface ScheduledAutopilotJob {
 }
 
 export interface MultiremiSchedulerOptions {
-  store: MultiremiStore;
+  store: AutopilotStore;
   pollIntervalMs?: number;
   failureMonitorIntervalMs?: number;
   failureMonitorLookbackMs?: number;
@@ -30,7 +32,7 @@ export interface MultiremiSchedulerOptions {
 }
 
 export class MultiremiScheduler {
-  private store: MultiremiStore;
+  private store: AutopilotStore;
   private pollIntervalMs: number;
   private failureMonitorIntervalMs: number;
   private failureMonitorLookbackMs: number;
@@ -107,12 +109,12 @@ export class MultiremiScheduler {
     return [...this.jobs.keys()];
   }
 
-  trigger(autopilotId: string): MultiremiAutopilotRun | null {
+  trigger(autopilotId: string): AutopilotRun | null {
     return this.runScheduledAutopilot(autopilotId);
   }
 
-  tickDueTriggers(now: Date = new Date()): MultiremiAutopilotRun[] {
-    const runs: MultiremiAutopilotRun[] = [];
+  tickDueTriggers(now: Date = new Date()): AutopilotRun[] {
+    const runs: AutopilotRun[] = [];
     for (const trigger of this.store.claimDueScheduleTriggers(now)) {
       const run = this.runScheduleTrigger(trigger);
       if (run) runs.push(run);
@@ -121,8 +123,8 @@ export class MultiremiScheduler {
   }
 
   runFailureMonitorOnce(
-    options: MultiremiAutopilotFailureThresholdOptions = {},
-  ): MultiremiAutopilotFailureThresholdCandidate[] {
+    options: AutopilotFailureThresholdOptions = {},
+  ): AutopilotFailureThresholdCandidate[] {
     const paused = this.store.pauseAutopilotsExceedingFailureThreshold({
       lookbackMs: this.failureMonitorLookbackMs,
       minRuns: this.failureMonitorMinRuns,
@@ -151,7 +153,7 @@ export class MultiremiScheduler {
     this.failureMonitorStartupTimer.unref?.();
   }
 
-  private addJob(autopilot: MultiremiAutopilot): void {
+  private addJob(autopilot: Autopilot): void {
     const expression = autopilot.cronExpression;
     if (!expression) return;
     try {
@@ -169,7 +171,7 @@ export class MultiremiScheduler {
     }
   }
 
-  private runScheduledAutopilot(autopilotId: string): MultiremiAutopilotRun | null {
+  private runScheduledAutopilot(autopilotId: string): AutopilotRun | null {
     const autopilot = this.store.getAutopilot(autopilotId);
     if (!autopilot || !isSchedulable(autopilot)) return null;
     try {
@@ -186,7 +188,7 @@ export class MultiremiScheduler {
     }
   }
 
-  private runScheduleTrigger(trigger: MultiremiAutopilotTrigger): MultiremiAutopilotRun | null {
+  private runScheduleTrigger(trigger: AutopilotTrigger): AutopilotRun | null {
     try {
       return this.store.runAutopilot(trigger.autopilotId, {
         source: "schedule",
@@ -207,12 +209,12 @@ export class MultiremiScheduler {
   }
 }
 
-function isSchedulable(autopilot: MultiremiAutopilot): boolean {
+function isSchedulable(autopilot: Autopilot): boolean {
   return autopilot.status === "active"
     && autopilot.triggerKind === "schedule"
     && Boolean(autopilot.cronExpression?.trim());
 }
 
-function hasScheduleTrigger(store: MultiremiStore, autopilot: MultiremiAutopilot): boolean {
+function hasScheduleTrigger(store: AutopilotStore, autopilot: Autopilot): boolean {
   return store.listAutopilotTriggers(autopilot.id).some((trigger) => trigger.kind === "schedule" && Boolean(trigger.cronExpression?.trim()));
 }
