@@ -75,3 +75,6 @@ lark_image/
 # Personal soul prompt (use soul.md.example as template)
 soul.md
 !soul.md.example
+
+# Vite frontend build output (not tracked)
+web/frontend/dist/
