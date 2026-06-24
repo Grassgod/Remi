@@ -368,7 +368,7 @@ describe("Bun Multiremi daemon smoke", () => {
     let providerIndex = 0;
     const providerFactory: MultiremiDaemonProviderFactory = (options) => {
       const turn = providerIndex++;
-      providerCwds.push(options.cwd);
+      providerCwds.push(options.cwd!);
       const text = turn === 0 ? "First answer" : "Second answer";
       return {
         async *sendStream(message, options) {
@@ -394,7 +394,7 @@ describe("Bun Multiremi daemon smoke", () => {
       workspaceId: "local",
       once: true,
       daemonPort: 0,
-      repoCacheRoot: join(workDir, ".repo-cache"),
+      repoCacheRoot: join(workDir!, ".repo-cache"),
       providerFactory,
     }).start();
 
@@ -498,7 +498,7 @@ describe("Bun Multiremi daemon smoke", () => {
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: (options) => ({
           async *sendStream() {
-            providerCwd = options.cwd;
+            providerCwd = options.cwd!;
             yield {
               sessionUpdate: "agent_message_chunk",
               content: [{ type: "text", text: `cwd=${options.cwd}` }],

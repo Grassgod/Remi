@@ -178,7 +178,7 @@ describe("Multiremi CLI config", () => {
         { ...commonOptions, token: "mul_secret" },
         "multiremi",
         "systemd",
-        join(tmp, "home"),
+        join(tmp!, "home"),
         ["/usr/bin/bun", "/repo/src/main.ts"],
         "/usr/bin/bun",
       )).toThrow("does not write tokens");
