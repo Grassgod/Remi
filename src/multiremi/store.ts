@@ -2583,6 +2583,18 @@ export class MultiremiStore {
     return runtime;
   }
 
+  bindUnboundAgentsToRuntime(runtime: MultiremiRuntime): number {
+    const now = nowIso();
+    const result = this.db.run(
+      `UPDATE multiremi_agents SET runtime_id = ?, updated_at = ?
+       WHERE workspace_id = ? AND provider = ?
+         AND (runtime_id IS NULL OR runtime_id = '')
+         AND archived_at IS NULL`,
+      [runtime.id, now, runtime.workspaceId, runtime.provider],
+    );
+    return result.changes;
+  }
+
   getRuntime(id: string): MultiremiRuntime | null {
     const row = this.db.query("SELECT * FROM multiremi_runtimes WHERE id = ?").get(id) as Row | null;
     return row ? withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))) : null;

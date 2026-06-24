@@ -7839,6 +7839,7 @@ function registerDaemonRuntimes(
     }
     if (runtime.status === "offline") store.setRuntimeOffline(saved.id);
     mergeLegacyDaemonRuntimes(store, saved, provider, legacyDaemonIds);
+    store.bindUnboundAgentsToRuntime(saved);
     const current = store.getRuntime(saved.id) ?? saved;
     registered.push(daemonRuntimeResponse(current, {
       daemonId,
