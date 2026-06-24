@@ -28,7 +28,7 @@ export const REMI_BUILTIN_SKILL_SOURCES: BuiltinSkillSource[] = [
 export function buildRemiBuiltinSkillInputs(options: {
   workspaceId?: string | null;
   createdBy?: string | null;
-} = {}): Array<CreateSkillInput & { id: string }> {
+} = {}): Array<CreateSkillInput & { id: string; workspaceId: string; content: string; config: Record<string, unknown> }> {
   const workspaceId = options.workspaceId ?? "local";
   return REMI_BUILTIN_SKILL_SOURCES.map((source) => {
     const metadata = parseSkillFrontmatter(source.content);

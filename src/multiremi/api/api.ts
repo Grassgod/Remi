@@ -119,6 +119,15 @@ import type {
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
 
+// Declare the request-scoped context variables set via c.set()/read via c.get()
+// so Hono's typed context accepts these keys.
+declare module "hono" {
+  interface ContextVariableMap {
+    multiremiJwtUserId: string;
+    multiremiAccessToken: MultiremiAccessToken;
+  }
+}
+
 const log = createLogger("multiremi-api");
 const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
@@ -765,7 +774,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const result = safeAcceptInvitation(store, c.req.param("id"));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     const member = acceptedInvitationMemberToGoResponse(store, result);
-    if ("error" in member) return c.json({ error: member.error }, member.status);
+    if (isMemberResponseError(member)) return c.json({ error: member.error }, member.status);
     publishWorkspaceEvent(c, store, "member:added", result.workspaceId, {
       member,
       ...workspaceNamePayload(store, result.workspaceId),
@@ -1087,7 +1096,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/skills/builtin/seed", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; createdBy?: string | null; created_by?: string | null }>(c)
-      .catch(() => ({}));
+      .catch((): { workspaceId?: string | null; workspace_id?: string | null; createdBy?: string | null; created_by?: string | null } => ({}));
     const workspaceId = requestedSkillWorkspaceId(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
@@ -2743,13 +2752,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const tasks = store.listTasksForIssue(issue.id)
       .filter((task) => isActiveTaskStatus(task.status))
-      .map(taskCompatibilityResponse);
+      .map((task) => taskCompatibilityResponse(task));
     return c.json({ tasks });
   });
   app.get("/api/issues/:id/task-runs", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
-    return c.json(store.listTasksForIssue(issue.id).map(taskCompatibilityResponse));
+    return c.json(store.listTasksForIssue(issue.id).map((task) => taskCompatibilityResponse(task)));
   });
   app.get("/api/issues/:id/usage", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -4476,7 +4485,7 @@ function autopilotUpdateCompatibilityInput(
     const assigneeType = cleanString(input.assignee_type);
     if (assigneeType && !isAutopilotAssigneeType(assigneeType)) return { apiError: "assignee_type must be agent or squad", statusCode: 400 };
     if (!assigneeIdSent) return { apiError: "assignee_id is required when changing assignee_type", statusCode: 400 };
-    if (assigneeType) output.assigneeType = assigneeType;
+    if (assigneeType && isAutopilotAssigneeType(assigneeType)) output.assigneeType = assigneeType;
   }
   if (assigneeIdSent) {
     const assigneeId = cleanString(input.assignee_id);
@@ -4492,7 +4501,7 @@ function autopilotUpdateCompatibilityInput(
     if (executionMode && !isAutopilotExecutionMode(executionMode)) {
       return { apiError: "execution_mode must be create_issue or run_only", statusCode: 400 };
     }
-    if (executionMode) output.executionMode = executionMode;
+    if (executionMode && isAutopilotExecutionMode(executionMode)) output.executionMode = executionMode;
   }
   if (hasOwn(input, "issue_title_template")) {
     const issueTitleTemplate = input.issue_title_template ?? null;
@@ -4808,7 +4817,7 @@ function issueDetailAttachmentCompatibilityResponse(attachment: MultiremiAttachm
 }
 
 function issueSearchCompatibilityResponse(issue: MultiremiIssueSearchResult): Record<string, unknown> {
-  const response = {
+  const response: Record<string, unknown> = {
     ...issueCompatibilityResponse(issue),
     match_source: issue.matchSource,
   };
@@ -6346,7 +6355,7 @@ function isValidRuntimeUpdateReportStatus(status: unknown): status is "completed
 function daemonLocalSkillListReportBody(input: ReportRuntimeLocalSkillListInput): ReportRuntimeLocalSkillListInput {
   const skills = Array.isArray(input.skills)
     ? input.skills.map((skill) => {
-      const record = skill as Record<string, unknown>;
+      const record = skill as unknown as Record<string, unknown>;
       const sourcePath = String(record.source_path ?? "");
       const fileCount = Number(record.file_count ?? 0);
       return {
@@ -7555,6 +7564,14 @@ function acceptedInvitationMemberToGoResponse(
   return workspaceMemberToGoResponse(member, { includeUser: true });
 }
 
+// The success arm is a Record<string, unknown> (index signature), so `"error" in x`
+// cannot discriminate the error sentinel; check the literal status instead.
+function isMemberResponseError(
+  value: Record<string, unknown> | { error: string; status: 500 },
+): value is { error: string; status: 500 } {
+  return typeof value.error === "string" && value.status === 500;
+}
+
 function memberRemovedPayload(member: MultiremiWorkspaceMember): Record<string, unknown> {
   return {
     member_id: member.id,
@@ -8202,7 +8219,10 @@ function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: Multire
     failed_at: string | null;
     cancelled_at: string | null;
   } = {
-    ...task,
+    // These trigger compat snake-fields are typed `string | null` on MultiremiTask
+    // but are never set on stored tasks; they are assigned below from triggerMetadata
+    // as `string`. Omit them from the spread's type so the strict response type holds.
+    ...(task as Omit<MultiremiTask, "trigger_thread_id" | "trigger_comment_content" | "trigger_author_type" | "trigger_author_name" | "new_comment_count" | "new_comments_since">),
     result: taskResultWireValue(task),
     agent_id: task.agentId,
     runtime_id: task.runtimeId,

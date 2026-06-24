@@ -4238,9 +4238,11 @@ export class MultiremiStore {
       return { issue: this.getIssue(id)!, task: null };
     }
 
-    const resolvedAssignee = this.resolveAssigneeRef(requestedAssigneeType, requestedAssigneeId, current.workspaceId);
-    const assigneeType = resolvedAssignee?.assigneeType ?? null;
-    const assigneeId = resolvedAssignee?.assigneeId ?? null;
+    // requestedAssigneeId is non-null here (the early-return above handled the
+    // unassign case), so resolveAssigneeRef either returns a match or throws.
+    const resolvedAssignee = this.resolveAssigneeRef(requestedAssigneeType, requestedAssigneeId, current.workspaceId)!;
+    const assigneeType = resolvedAssignee.assigneeType;
+    const assigneeId = resolvedAssignee.assigneeId;
     this.validateIssueAssignee(assigneeType, assigneeId);
     const taskAgent = assigneeType === "member" ? null : this.resolveRunnableAgentForAssignee(assigneeType, assigneeId);
     if (assigneeType !== "member" && !taskAgent) {

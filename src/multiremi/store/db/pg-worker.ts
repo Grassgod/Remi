@@ -7,13 +7,16 @@
  * the async query and writes the JSON result into the shared data buffer, then
  * Atomics.notify wakes the main thread. See sql-database.ts (PostgresSyncDatabase).
  */
-declare const self: Worker;
+// In a Bun Worker, the global `self` is the Worker scope. tsc's default DOM lib
+// types `self` as `Window`, so reference it through a locally-typed alias rather
+// than redeclaring the global (which would conflict with the lib declaration).
+const workerSelf = self as unknown as Worker;
 
 let sql: any = null;
 const STATUS_DONE = 1;
 const STATUS_ERROR = 2;
 
-self.onmessage = async (event: MessageEvent) => {
+workerSelf.onmessage = async (event: MessageEvent) => {
   const { control, data, init, sql: query, params } = event.data as {
     control: SharedArrayBuffer;
     data: SharedArrayBuffer;

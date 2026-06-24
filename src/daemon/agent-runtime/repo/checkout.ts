@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -198,7 +198,7 @@ export function normalizeRepoList(rawRepos: unknown[]): MultiremiRepoData[] {
   return repos;
 }
 
-function safeReadDir(path: string): ReturnType<typeof readdirSync> {
+function safeReadDir(path: string): Dirent[] {
   try {
     return readdirSync(path, { withFileTypes: true });
   } catch {

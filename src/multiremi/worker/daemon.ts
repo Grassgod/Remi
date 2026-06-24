@@ -195,13 +195,15 @@ export class MultiremiDaemon {
     try {
       await this.registerCurrentRuntime();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
-      await this.client.recoverOrphans(this.options.runtimeId);
+      // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
+      // iteration because handleHeartbeatAck() may re-register and replace it.
+      await this.client.recoverOrphans(this.options.runtimeId!);
       this.ready = true;
 
       while (!this.stopped) {
         try {
-          const ack = await this.client.heartbeatRuntime(this.options.runtimeId);
-          const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId, ack);
+          const ack = await this.client.heartbeatRuntime(this.options.runtimeId!);
+          const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
           if (this.stopped || this.claimsPaused) break;
           if (skipClaim) {
             if (this.options.once) return;
@@ -209,7 +211,7 @@ export class MultiremiDaemon {
             continue;
           }
 
-          const task = await this.client.claimTask(this.options.runtimeId) as MultiremiTaskWithAgent | null;
+          const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
           if (!task) {
             if (this.options.once) return;
             await sleep(this.options.pollIntervalMs);
@@ -651,7 +653,8 @@ export class MultiremiDaemon {
       port: this.options.daemonPort,
       fetch: (request) => this.handleLocalDaemonRequest(request),
     });
-    this.repoServerPort = this.repoServer.port;
+    // TCP servers always expose a numeric port; default to 0 to satisfy the type.
+    this.repoServerPort = this.repoServer.port ?? 0;
     log.info(`Repo checkout server listening on 127.0.0.1:${this.repoServerPort}`);
   }
 

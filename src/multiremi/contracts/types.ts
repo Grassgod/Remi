@@ -1393,6 +1393,11 @@ export interface UpdateRuntimeInput {
   visibility?: MultiremiRuntimeVisibility | string;
   maxConcurrency?: number;
   max_concurrency?: number;
+  runtimeMode?: string | null;
+  runtime_mode?: string | null;
+  deviceInfo?: string | null;
+  device_info?: string | null;
+  metadata?: Record<string, unknown> | null;
   models?: MultiremiRuntimeModel[];
 }
 
@@ -1844,6 +1849,7 @@ export interface CreateChatSessionInput {
   agentId?: string;
   agent_id?: string;
   workspaceId?: string | null;
+  workspace_id?: string | null;
   creatorId?: string | null;
   creator_id?: string | null;
   title?: string | null;

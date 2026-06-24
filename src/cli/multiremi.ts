@@ -211,7 +211,7 @@ async function daemon(options: CliOptions, positional: string[], programName: st
   switch (action) {
     case "start":
       if (Boolean(options.foreground) || Boolean(options.once)) {
-        await runDaemonForeground(options);
+        await runDaemonForeground(options, programName);
       } else {
         await startDaemonBackground(options, programName);
       }
@@ -237,7 +237,7 @@ async function daemon(options: CliOptions, positional: string[], programName: st
   }
 }
 
-async function runDaemonForeground(options: CliOptions): Promise<void> {
+async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
   const config = loadMultiremiConfig();
   const serverUrl = stringOpt(options.server, undefined)
     ?? stringOpt(options["server-url"], undefined)
@@ -249,7 +249,9 @@ async function runDaemonForeground(options: CliOptions): Promise<void> {
   if (explicitProvider && !isSupportedDaemonProvider(explicitProvider)) {
     throw new Error(`Unsupported Multiremi runtime provider: ${explicitProvider}. Supported providers: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
   }
-  const providers = await resolveHealthyDaemonProviders(explicitProvider);
+  const requestedProvider: SupportedDaemonProvider | null =
+    explicitProvider && isSupportedDaemonProvider(explicitProvider) ? explicitProvider : null;
+  const providers = await resolveHealthyDaemonProviders(requestedProvider);
   if (providers.length === 0) {
     throw new Error(`No healthy Multiremi runtime provider found. Install and authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
   }
@@ -1065,7 +1067,8 @@ interface CliAttachmentFile {
   path: string;
   filename: string;
   contentType: string;
-  data: Uint8Array;
+  // Backed by a plain ArrayBuffer (not SharedArrayBuffer) so it is a valid BlobPart.
+  data: Uint8Array<ArrayBuffer>;
 }
 
 interface MultiremiApiConnection {
