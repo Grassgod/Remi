@@ -2659,8 +2659,23 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
     try {
       const issue = store.createIssue(withIssueCreateRequestContext(c, body));
-      const response = issueCompatibilityResponse(issue);
+      let response = issueCompatibilityResponse(issue);
       publishIssueCreated(c, store, issue, response);
+      // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
+      // dispatches a task, unless it's in backlog (a parking lot for pre-assignment).
+      // If no runnable agent is available the assignment stands without a task, matching
+      // the Go server's "not ready → skip" behavior.
+      if (issue.assigneeType && issue.assigneeId && issue.status !== "backlog") {
+        try {
+          const assigned = store.assignIssue(issue.id, {
+            assigneeType: issue.assigneeType,
+            assigneeId: issue.assigneeId,
+          });
+          response = issueCompatibilityResponse(assigned.issue);
+        } catch (err) {
+          log.warn(`assign-on-create dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       return c.json(response, 201);
     } catch (err) {
       const response = issueErrorResponse(c, err);
