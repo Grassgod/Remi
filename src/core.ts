@@ -19,6 +19,7 @@ import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "./connectors/base.js";
+import { AsyncLock, resolveSessionKey } from "./daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "./providers/base.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "./providers/acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "./providers/acp/index.js";
@@ -48,35 +49,7 @@ import {
 
 const log = createLogger("core");
 
-/** Simple promise-based mutex for per-lane serialization. */
-class AsyncLock {
-  private _queue: Array<() => void> = [];
-  private _locked = false;
-
-  /** True when no one holds or waits for the lock. */
-  get isIdle(): boolean {
-    return !this._locked && this._queue.length === 0;
-  }
-
-  async acquire(): Promise<void> {
-    if (!this._locked) {
-      this._locked = true;
-      return;
-    }
-    return new Promise<void>((resolve) => {
-      this._queue.push(resolve);
-    });
-  }
-
-  release(): void {
-    if (this._queue.length > 0) {
-      const next = this._queue.shift()!;
-      next();
-    } else {
-      this._locked = false;
-    }
-  }
-}
+// AsyncLock + resolveSessionKey extracted to daemon/orchestrator.ts in D6.
 
 // System prompt now lives in ~/.remi/soul.md (symlinked to ~/.claude/CLAUDE.md)
 // Claude CLI loads it automatically — no need to inject via --append-system-prompt
@@ -182,19 +155,7 @@ export class Remi {
    * P2P messages use plain `chatId` for continuous conversation.
    */
   _resolveSessionKey(msg: IncomingMessage): string {
-    const rootId = msg.metadata?.rootId as string | undefined;
-    if (rootId) {
-      return `${msg.chatId}:thread:${rootId}`;
-    }
-    // Group messages without rootId: each @mention starts a new session
-    // using messageId as thread key (Remi replies in thread, so subsequent
-    // messages will have rootId = this messageId, matching this key)
-    const chatType = msg.metadata?.chatType as string | undefined;
-    const messageId = msg.metadata?.messageId as string | undefined;
-    if (chatType === "group" && messageId) {
-      return `${msg.chatId}:thread:${messageId}`;
-    }
-    return msg.chatId;
+    return resolveSessionKey(msg);
   }
 
   // ── Group config resolution ──────────────────────────────
