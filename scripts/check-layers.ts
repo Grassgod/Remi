@@ -43,6 +43,22 @@ const LAYER: Record<string, number> = {
 /** Loose entry files under src/ that may import anything (treated as L4). */
 const ENTRY_FILES = new Set(["main.ts", "multiremi-main.ts", "index.ts"]);
 
+/**
+ * Per-path layer overrides — files whose layer differs from their top-level dir.
+ *
+ * queue/index.ts (RemiQueueManager) and queue/handlers/** are Remi *orchestration*
+ * (they `import { Remi }` from core.ts and reach into remi.* product internals),
+ * not L1 queue infrastructure. The L1-clean part of the block is queue/queues.ts
+ * (name constants + job-data types, zero deps). Per DIR-REDESIGN D6 these files
+ * relocate into daemon/orchestrator; classifying them as L2 here reflects the
+ * target architecture so D4's "L1 blocks are independent" check is meaningful.
+ * Longest matching prefix wins.
+ */
+const PATH_LAYER_OVERRIDE: Array<{ prefix: string; layer: number }> = [
+  { prefix: "queue/index.ts", layer: 2 },
+  { prefix: "queue/handlers/", layer: 2 },
+];
+
 /** Alias prefix → module. Longest prefix wins, so order does not matter here. */
 const ALIAS_MODULE: Record<string, string> = {
   "@shared/": "shared",
@@ -97,6 +113,16 @@ function layerOf(mod: string): number | undefined {
   return undefined; // legacy / unclassified
 }
 
+/** Source-file layer: per-path override (longest prefix) takes precedence over the module layer. */
+function sourceLayerOf(relPathFromSrc: string, mod: string): number | undefined {
+  let best: { prefix: string; layer: number } | null = null;
+  for (const o of PATH_LAYER_OVERRIDE) {
+    if (relPathFromSrc.startsWith(o.prefix) && (!best || o.prefix.length > best.prefix.length)) best = o;
+  }
+  if (best) return best.layer;
+  return layerOf(mod);
+}
+
 /** Extract import/export-from specifiers from source text. */
 function extractSpecifiers(text: string): string[] {
   const specs: string[] = [];
@@ -136,7 +162,7 @@ const violations: Violation[] = [];
 for (const file of files) {
   const relFromSrc = relative(SRC, file);
   const srcModule = moduleOf(relFromSrc);
-  const srcLayer = layerOf(srcModule);
+  const srcLayer = sourceLayerOf(relFromSrc, srcModule);
   if (srcLayer === undefined) continue; // legacy source — not yet enforced
 
   const text = readFileSync(file, "utf-8");
