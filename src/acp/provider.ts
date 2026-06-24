@@ -128,7 +128,7 @@ export function resolveAcpExecutableForAgent(agentType: string, executable: stri
       join(remiHome, "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
       join(homedir(), ".remi", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
       join(import.meta.dir, "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
-      join(import.meta.dir, "..", "..", "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
+      join(import.meta.dir, "..", "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
     ];
     for (const candidate of candidates) {
       if (existsSync(candidate)) return candidate;
