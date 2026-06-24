@@ -162,8 +162,8 @@ remi/
 ├── packages/
 │   └── plugin-sdk/                      # 唯一保留的 package：外部插件 SDK 契约
 │
-├── agents/                              # 顶层：agent 工作目录
-├── pipeline/skills/                     # 顶层：skill 定义 SSOT
+├── agents/                              # 旧模式残留：迁移到 multiremi agent 配置后删除
+├── pipeline/skills/                     # 顶层：skill 定义 SSOT（迁移到 multiremi 后可删）
 │
 ├── tests/
 │   ├── unit/                            # 按模块镜像 src
