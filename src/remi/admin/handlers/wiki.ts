@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { ProjectStore } from "../../src/project/store.js";
+import { ProjectStore } from "../../../project/store.js";
 
 /** Get alias→cwd map from DB projects table. */
 function getProjectMap(): Record<string, string> {

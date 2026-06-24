@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { loadConfig, findConfigPath } from "../../src/config.js";
+import { loadConfig, findConfigPath } from "../../../config.js";
 import { MenuSyncer } from "@remi/feishu-channel";
 
 export function registerBotMenuHandlers(app: Hono, data: RemiData) {

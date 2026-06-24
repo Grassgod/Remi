@@ -4,9 +4,9 @@
 
 import type { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { ProjectStore } from "../../src/project/store.js";
-import type { ProjectInitInput } from "../../src/project/model.js";
-import { runProjectInit, retryProjectInit, subscribe } from "../../src/project/init.js";
+import { ProjectStore } from "../../../project/store.js";
+import type { ProjectInitInput } from "../../../project/model.js";
+import { runProjectInit, retryProjectInit, subscribe } from "../../../project/init.js";
 
 export function registerProjectInitHandlers(app: Hono) {
   const store = new ProjectStore();

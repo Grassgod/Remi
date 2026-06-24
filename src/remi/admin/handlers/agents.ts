@@ -104,7 +104,7 @@ export function registerAgentsHandlers(app: Hono, data: RemiData) {
   app.delete("/api/v1/agents/:name", (c) => {
     const name = decodeURIComponent(c.req.param("name"));
     try {
-      const { AGENTS } = require("../../src/agents/registry.js");
+      const { AGENTS } = require("../../../agents/registry.js");
       if (AGENTS && Object.prototype.hasOwnProperty.call(AGENTS, name)) {
         return c.json({ error: `'${name}' is in the runtime registry; remove from src/agents/registry.ts first` }, 409);
       }
