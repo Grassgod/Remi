@@ -19,7 +19,17 @@
       "@remi/acp-provider": ["./packages/acp-provider/src/index.ts"],
       "@remi/acp-provider/*": ["./packages/acp-provider/src/*"],
       "@remi/plugin-sdk": ["./packages/plugin-sdk/src/index.ts"],
-      "@remi/plugin-sdk/*": ["./packages/plugin-sdk/src/*"]
+      "@remi/plugin-sdk/*": ["./packages/plugin-sdk/src/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@acp/*": ["./src/acp/*"],
+      "@memory/*": ["./src/memory/*"],
+      "@queue/*": ["./src/queue/*"],
+      "@agents/*": ["./src/agents/*"],
+      "@connectors/*": ["./src/connectors/*"],
+      "@auth/*": ["./src/auth/*"],
+      "@daemon/*": ["./src/daemon/*"],
+      "@remi/*": ["./src/remi/*"],
+      "@multiremi/*": ["./src/multiremi/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
