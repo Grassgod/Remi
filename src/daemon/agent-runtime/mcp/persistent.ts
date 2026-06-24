@@ -5,10 +5,10 @@
  */
 
 import { createLogger } from "@shared/logger.js";
-import type { AppType, McpConfig, Scope } from "./types.js";
-import { APP_TYPES } from "./types.js";
-import type { AdapterRegistry } from "./adapters/base.js";
-import { GlobalMcpDao, SqliteManifestStore, type McpRow } from "./db/dao.js";
+import type { AppType, McpConfig, Scope } from "../config-hub/types.js";
+import { APP_TYPES } from "../config-hub/types.js";
+import type { AdapterRegistry } from "../config-hub/adapters/base.js";
+import { GlobalMcpDao, SqliteManifestStore, type McpRow } from "../config-hub/db/dao.js";
 import { syncMcp, type SyncOutcome } from "./sync.js";
 
 const log = createLogger("config-hub");

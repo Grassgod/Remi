@@ -5,9 +5,9 @@
  */
 
 import type { Hono } from "hono";
-import type { ConfigHubService } from "./service.js";
-import type { SkillsService } from "./skills-service.js";
-import type { PromptsService } from "./prompts-service.js";
+import type { ConfigHubService } from "../mcp/persistent.js";
+import type { SkillsService } from "../skills/persistent.js";
+import type { PromptsService } from "../prompts/persistent.js";
 import type { ProvidersService } from "./providers-service.js";
 import type { AppType } from "./types.js";
 import { APP_TYPES } from "./types.js";

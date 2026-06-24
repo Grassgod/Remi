@@ -8,7 +8,7 @@
  * No I/O — fully unit-testable. See ReconcileResult for the decision table.
  */
 
-import type { EntryMap, Manifest, McpConfig, ReconcileResult } from "./types.js";
+import type { EntryMap, Manifest, McpConfig, ReconcileResult } from "../config-hub/types.js";
 
 /** Deterministic JSON (sorted keys) — used as the manifest hash so equality is exact. */
 export function canonical(value: unknown): string {

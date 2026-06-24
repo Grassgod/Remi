@@ -8,7 +8,7 @@ import { CodexAdapter } from "../../../../src/daemon/agent-runtime/config-hub/ad
 import { GeminiAdapter } from "../../../../src/daemon/agent-runtime/config-hub/adapters/gemini.js";
 import { AdapterRegistry } from "../../../../src/daemon/agent-runtime/config-hub/adapters/base.js";
 import { SkillsDao } from "../../../../src/daemon/agent-runtime/config-hub/db/dao.js";
-import { SkillsService } from "../../../../src/daemon/agent-runtime/config-hub/skills-service.js";
+import { SkillsService } from "../../../../src/daemon/agent-runtime/skills/persistent.js";
 import { openConfigHubDb } from "../../../../src/daemon/agent-runtime/config-hub/db/config-hub-db.js";
 
 let dir: string;

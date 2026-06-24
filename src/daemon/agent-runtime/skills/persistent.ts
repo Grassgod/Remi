@@ -11,16 +11,16 @@
 
 import { existsSync, cpSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import type { AppType, Scope } from "./types.js";
-import { APP_TYPES } from "./types.js";
-import type { AdapterRegistry } from "./adapters/base.js";
-import type { SkillRow, SkillsDao } from "./db/dao.js";
-import { defaultSkillsSsotDir } from "./db/config-hub-db.js";
+import type { AppType, Scope } from "../config-hub/types.js";
+import { APP_TYPES } from "../config-hub/types.js";
+import type { AdapterRegistry } from "../config-hub/adapters/base.js";
+import type { SkillRow, SkillsDao } from "../config-hub/db/dao.js";
+import { defaultSkillsSsotDir } from "../config-hub/db/config-hub-db.js";
 import {
   ensureSkillLink,
   hashDirectory,
   removeSkillLink,
-} from "./skills-sync.js";
+} from "./sync.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("config-hub");

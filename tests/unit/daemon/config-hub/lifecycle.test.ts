@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ClaudeAdapter } from "../../../../src/daemon/agent-runtime/config-hub/adapters/claude.js";
-import { syncMcp, scopeKey, type ManifestStore } from "../../../../src/daemon/agent-runtime/config-hub/sync.js";
+import { syncMcp, scopeKey, type ManifestStore } from "../../../../src/daemon/agent-runtime/mcp/sync.js";
 import type { AppType, EntryMap, Manifest, Scope } from "../../../../src/daemon/agent-runtime/config-hub/types.js";
 
 class MemManifests implements ManifestStore {

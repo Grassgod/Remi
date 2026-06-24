@@ -26,11 +26,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import type { AppType } from "./types.js";
-import { APP_TYPES } from "./types.js";
-import type { AdapterRegistry } from "./adapters/base.js";
-import type { SqliteManifestStore } from "./db/dao.js";
-import { writeFileAtomic, backupFile } from "./util.js";
+import type { AppType } from "../config-hub/types.js";
+import { APP_TYPES } from "../config-hub/types.js";
+import type { AdapterRegistry } from "../config-hub/adapters/base.js";
+import type { SqliteManifestStore } from "../config-hub/db/dao.js";
+import { writeFileAtomic, backupFile } from "../config-hub/util.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("config-hub");

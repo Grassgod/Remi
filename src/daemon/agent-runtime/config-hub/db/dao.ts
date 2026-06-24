@@ -11,7 +11,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { AppType, EntryMap, Manifest, McpConfig } from "../types.js";
-import type { ManifestStore } from "../sync.js";
+import type { ManifestStore } from "../../mcp/sync.js";
 
 export interface McpRow {
   id: string;

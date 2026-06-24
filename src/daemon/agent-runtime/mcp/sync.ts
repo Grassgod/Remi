@@ -11,10 +11,10 @@
  */
 
 import { resolve } from "node:path";
-import type { AppType, EntryMap, Manifest, Scope } from "./types.js";
-import type { ToolAdapter } from "./adapters/base.js";
+import type { AppType, EntryMap, Manifest, Scope } from "../config-hub/types.js";
+import type { ToolAdapter } from "../config-hub/adapters/base.js";
 import { reconcileMcp } from "./reconcile.js";
-import { backupFile } from "./util.js";
+import { backupFile } from "../config-hub/util.js";
 
 export interface ManifestStore {
   get(app: AppType, scopeKey: string): Manifest;

@@ -15,7 +15,7 @@ import {
   extractBlock,
   upsertBlock,
   removeBlock,
-} from "../../../../src/daemon/agent-runtime/config-hub/prompts-service.js";
+} from "../../../../src/daemon/agent-runtime/prompts/persistent.js";
 
 describe("prompt block helpers (pure)", () => {
   it("extractBlock finds inner content", () => {

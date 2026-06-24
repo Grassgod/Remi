@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { reconcileMcp, hashConfig } from "../../../../src/daemon/agent-runtime/config-hub/reconcile.js";
+import { reconcileMcp, hashConfig } from "../../../../src/daemon/agent-runtime/mcp/reconcile.js";
 import type { EntryMap, Manifest } from "../../../../src/daemon/agent-runtime/config-hub/types.js";
 
 const X = { command: "server-x", args: ["--a"] };

@@ -21,9 +21,9 @@ import { GeminiAdapter } from "./adapters/gemini.js";
 import { openConfigHubDb, defaultConfigHubDbPath, defaultSkillsSsotDir } from "./db/config-hub-db.js";
 import { migrateConfigHub } from "./db/main-tables.js";
 import { GlobalMcpDao, SqliteManifestStore, SkillsDao } from "./db/dao.js";
-import { ConfigHubService } from "./service.js";
-import { SkillsService } from "./skills-service.js";
-import { PromptsService } from "./prompts-service.js";
+import { ConfigHubService } from "../mcp/persistent.js";
+import { SkillsService } from "../skills/persistent.js";
+import { PromptsService } from "../prompts/persistent.js";
 import { ProvidersService } from "./providers-service.js";
 import { registerHttp } from "./http.js";
 
@@ -107,4 +107,4 @@ export function getConfigHub(): ConfigHubPlugin | null {
   return _instance;
 }
 
-export { ConfigHubService } from "./service.js";
+export { ConfigHubService } from "../mcp/persistent.js";
