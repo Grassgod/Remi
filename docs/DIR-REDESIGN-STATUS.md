@@ -25,7 +25,7 @@
 | D8 | ✅ | `multiremi/`：contracts/ store/(+db/) worker/ api/ 子目录；skill-import→daemon |
 | D9 | ✅ | 入口 import 终态化；删无用垫片(+修 pg-worker 回归)；web/prototype 删除；tsc 净零新增 |
 | D10 | ✅ | tests/ 分 `unit/{module}/` 与 `integration/`，镜像 src 结构 |
-| D11 | ✅ **核心** | gitignored /multiremi/ 前端(~23MB/1108 源文件，排除 node_modules 等)入库为 `frontend/`；web/frontend/dist 取消跟踪。余项见下(行为变更/跨栈，留前端侧后续) |
+| D11 | ✅ 大部分 | 前端入库 `frontend/`(~23MB/1108 文件)；web/frontend/dist 取消跟踪；删 dashboard.ts(+修 D7.3 静态 serve 回归)。仅余 b/c(Vite→Next 跨栈整合)为真正前端工程 |
 
 最终全量：**409 pass / 2 skip / 1 fail**（同基线，+6 新 characterization 测试：pm2 1 + orchestrator 5）。
 `tsc --noEmit`：**58 errors**（= main 基线，本次重构净零新增类型错误）。
@@ -50,13 +50,18 @@ web/frontend、删 dashboard.ts。
 等构建产物）提升为受跟踪的 `frontend/`，其自带 .gitignore 一并带入。web/frontend/dist 取消跟踪。
 本提交在独立分支、未推送，`git revert`/`git reset` 可一键还原。
 
-**余项（行为变更/跨栈，留前端侧后续，不混入后端重构）**：
-- 整合 web/frontend（Vite Remi 看板）→ `frontend/apps/console/(remi)/`：Vite→Next 跨栈整合，
-  非机械搬迁，属前端工程任务。
-- 创建 `frontend/apps/console/app/page.tsx`：依赖上一步。
-- 删除 `src/multiremi/dashboard.ts`：**行为变更**（移除服务端 HTML 看板路由 + api.ts 对应路由 +
-  迁/删 8 处测试断言）。dashboard.ts 当前仍在用，须待前端替代品对接后再删，与 behavior-zero
-  后端重构分离。
+**已完成**：
+- 删除 `src/multiremi/dashboard.ts`（5132 行服务端 HTML 看板，由入库的 frontend/apps/web 取代）：
+  移除 api/api.ts import + "/" HTML 路由（改轻量 JSON status）+ 8 处测试断言；全仓 0 残留。
+  全量从 409→401 pass（−8 dashboard 测试），tsc 仍 58。
+- 附带修复 D7.3 回归：remi/admin/server.ts 的 staticDir（`import.meta.dir + frontend/dist`）
+  随 server.ts 下移三层而断，改候选列表（bundled 同级 / dev 指 repo 根 web/frontend/dist）。
+
+**仅余 b/c（真正的前端工程，非机械搬迁，留前端侧后续）**：
+- 整合 web/frontend（Vite Remi 看板）→ `frontend/apps/console/(remi)/`：Vite→Next 跨栈重写。
+  web/frontend 仍被 remi/admin 作静态 serve（路径已修复，功能正常），无法在不破坏 serve / 不
+  伪造可用集成的前提下机械搬入 Next route group。
+- 创建 `frontend/apps/console/app/page.tsx`（统一 remi+multiremi 入口）：依赖上一步。
 
 ## 已知/预存事项（非本次重构引入，供 reviewer）
 
