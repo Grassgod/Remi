@@ -76,7 +76,7 @@ export function Mcp() {
     setLoading(true);
     setError(null);
     try {
-      const res = await request<McpListResponse>("/api/v1/cc-switch/mcp");
+      const res = await request<McpListResponse>("/api/v1/config-hub/mcp");
       setServers(res.servers);
       setAvailable(res.available);
     } catch (e: any) {
@@ -89,7 +89,7 @@ export function Mcp() {
 
   const handleToggle = async (id: string, app: string, currentValue: boolean) => {
     try {
-      await request(`/api/v1/cc-switch/mcp/${encodeURIComponent(id)}/toggle`, {
+      await request(`/api/v1/config-hub/mcp/${encodeURIComponent(id)}/toggle`, {
         method: "PUT",
         body: JSON.stringify({ app, enabled: !currentValue }),
       });
@@ -103,7 +103,7 @@ export function Mcp() {
 
   const handleDelete = async (id: string) => {
     try {
-      await request(`/api/v1/cc-switch/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await request(`/api/v1/config-hub/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
       setServers(prev => prev.filter(s => s.id !== id));
       setDeleteConfirm(null);
     } catch (e: any) {
@@ -146,7 +146,7 @@ export function Mcp() {
         body.command = addForm.url; // stored in JSON for now
         body.transport = addForm.transport;
       }
-      await request("/api/v1/cc-switch/mcp", { method: "POST", body: JSON.stringify(body) });
+      await request("/api/v1/config-hub/mcp", { method: "POST", body: JSON.stringify(body) });
       setAddOpen(false);
       setAddForm({
         id: "", name: "", transport: "stdio", command: "", args: "", url: "", env: "",
@@ -164,7 +164,7 @@ export function Mcp() {
         <Card className="flex h-64 items-center justify-center">
           <div className="text-center text-sm text-muted-foreground">
             <AlertCircle className="mx-auto mb-2 h-5 w-5" />
-            cc-switch is not installed. MCP management unavailable.
+            config-hub is not available. MCP management unavailable.
           </div>
         </Card>
       </Layout>
@@ -172,7 +172,7 @@ export function Mcp() {
   }
 
   return (
-    <Layout title="MCP Servers" subtitle="CC-SWITCH">
+    <Layout title="MCP Servers" subtitle="CONFIG-HUB">
       <div className="flex flex-col gap-3 h-[calc(100vh-8rem)]">
         <PageHeader
           icon={Server}

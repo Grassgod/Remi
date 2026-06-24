@@ -1,9 +1,9 @@
 /**
- * Tables owned by config-hub but living in Remi's main DB (NOT cc-switch.db):
- *  - `config_hub_project_mcp`: per-project MCP overrides (cc-switch is global-only)
+ * Tables owned by config-hub but living in Remi's main DB (NOT config-hub.db):
+ *  - `config_hub_project_mcp`: per-project MCP overrides (config-hub.db is global-only)
  *  - `config_hub_manifest`:    last-written hash per (tool, scope, server name)
  *
- * Kept separate so cc-switch.db stays pure for desktop-app data sharing.
+ * Kept separate so config-hub.db holds only global cross-tool config.
  */
 
 import type { Database } from "bun:sqlite";

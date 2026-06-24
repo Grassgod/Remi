@@ -1,7 +1,6 @@
 /**
  * Skills sync: keep each tool's skills dir as a symlink (fallback copy) to the
- * SSOT directory at ~/.cc-switch/skills/<directory>/. Mirrors cc-switch
- * desktop's mechanism (skill.rs sync_to_app_dir).
+ * SSOT directory at ~/.remi/skills/<directory>/.
  *
  * Safety: we ONLY remove a target that's either nonexistent, a symlink, or
  * dangling. Never delete a real user directory of the same name — that would

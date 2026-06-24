@@ -55,7 +55,7 @@ export function Prompts() {
     setLoading(true);
     setError(null);
     try {
-      const res = await request<PromptsListResponse>("/api/v1/cc-switch/prompts");
+      const res = await request<PromptsListResponse>("/api/v1/config-hub/prompts");
       setPrompts(res.prompts ?? []);
     } catch (e: any) {
       setError(e.message);
@@ -73,7 +73,7 @@ export function Prompts() {
   const handleToggle = async (id: string, current: boolean) => {
     try {
       const res = await request<SyncResponse>(
-        `/api/v1/cc-switch/prompts/${encodeURIComponent(id)}/toggle`,
+        `/api/v1/config-hub/prompts/${encodeURIComponent(id)}/toggle`,
         { method: "PUT", body: JSON.stringify({ enabled: !current }) },
       );
       setConflicts(collectConflicts(res.sync));
@@ -85,7 +85,7 @@ export function Prompts() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await request<SyncResponse>(`/api/v1/cc-switch/prompts/${encodeURIComponent(id)}`, {
+      const res = await request<SyncResponse>(`/api/v1/config-hub/prompts/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       setConflicts(collectConflicts(res.sync));
@@ -117,7 +117,7 @@ export function Prompts() {
       return;
     }
     try {
-      const res = await request<SyncResponse>("/api/v1/cc-switch/prompts", {
+      const res = await request<SyncResponse>("/api/v1/config-hub/prompts", {
         method: "POST",
         body: JSON.stringify({
           id: form.id,
@@ -137,7 +137,7 @@ export function Prompts() {
 
   const handleSync = async () => {
     try {
-      const res = await request<SyncResponse>(`/api/v1/cc-switch/prompts/sync`, { method: "POST" });
+      const res = await request<SyncResponse>(`/api/v1/config-hub/prompts/sync`, { method: "POST" });
       setConflicts(collectConflicts(res.sync));
       fetchPrompts();
     } catch (e: any) {

@@ -347,7 +347,7 @@ handlers.set("cli-ingest", async (remi) => {
   );
 });
 
-/** Resolve skill path: cwd → cc-switch managed → legacy → pipeline built-in */
+/** Resolve skill path: cwd → config-hub managed → legacy → pipeline built-in */
 function resolveSkillPath(skillName: string, cwd?: string): string {
   if (cwd) {
     const p = join(cwd, ".claude", "skills", skillName, "SKILL.md");

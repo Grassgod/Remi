@@ -1,8 +1,7 @@
 /**
  * ConfigManager — symlink-based config management (CLAUDE.md → soul.md,
  * projects/). Cross-tool MCP/Skills/Prompts sync now lives in the
- * `config-hub` plugin (src/plugins/config-hub), so the cc-switch CLI shell-out
- * is gone from here.
+ * `config-hub` plugin (src/plugins/config-hub), handled natively in-process.
  */
 
 import {

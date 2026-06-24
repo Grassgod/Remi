@@ -1,12 +1,11 @@
 /**
  * Typed DB access for config-hub:
- *  - GlobalMcpDao   → cc-switch.db `mcp_servers` (the desktop-shareable layer)
+ *  - GlobalMcpDao   → config-hub.db `mcp_servers` (global cross-tool layer)
  *  - ProjectMcpDao  → Remi main DB `config_hub_project_mcp` (Remi-only project overlay)
  *  - SqliteManifestStore → Remi main DB `config_hub_manifest` (implements ManifestStore)
  *
- * Phase 1 keeps the per-tool enabled flags surfaced as separate fields rather
- * than a generic apps map, so the SQL stays simple and matches cc-switch's
- * column layout 1:1.
+ * Per-tool enabled flags are surfaced as separate fields rather than a generic
+ * apps map, so the SQL stays simple and maps 1:1 onto the table columns.
  */
 
 import type { Database } from "bun:sqlite";

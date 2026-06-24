@@ -34,7 +34,7 @@ export function writeFileAtomic(path: string, content: string): void {
 /** Snapshot a file into a central backup dir before a destructive write. No-op if absent. */
 export function backupFile(path: string): void {
   if (!existsSync(path)) return;
-  const dir = join(homedir(), ".cc-switch", "backups");
+  const dir = join(homedir(), ".remi", "config-hub", "backups");
   mkdirSync(dir, { recursive: true });
   const safe = path.replace(/[/\\]/g, "_").replace(/^_+/, "");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");

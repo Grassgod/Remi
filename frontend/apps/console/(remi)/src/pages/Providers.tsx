@@ -69,7 +69,7 @@ export function Providers() {
     setLoading(true);
     setError(null);
     try {
-      const res = await request<ProvidersListResponse>("/api/v1/cc-switch/providers");
+      const res = await request<ProvidersListResponse>("/api/v1/config-hub/providers");
       setProviders(res.providers ?? []);
     } catch (e: any) {
       setError(e.message);
@@ -85,7 +85,7 @@ export function Providers() {
     setError(null);
     setApplied(null);
     try {
-      const res = await request<ProviderSwitchResponse>(`/api/v1/cc-switch/providers/${encodeURIComponent(p.id)}/switch`, {
+      const res = await request<ProviderSwitchResponse>(`/api/v1/config-hub/providers/${encodeURIComponent(p.id)}/switch`, {
         method: "PUT",
         body: JSON.stringify({ app: p.appType }),
       });
@@ -105,7 +105,7 @@ export function Providers() {
   const handleDelete = async (p: Provider) => {
     try {
       await request(
-        `/api/v1/cc-switch/providers/${encodeURIComponent(p.id)}?app=${encodeURIComponent(p.appType)}`,
+        `/api/v1/config-hub/providers/${encodeURIComponent(p.id)}?app=${encodeURIComponent(p.appType)}`,
         { method: "DELETE" },
       );
       setDeleteConfirm(null);
@@ -129,7 +129,7 @@ export function Providers() {
       return;
     }
     try {
-      await request("/api/v1/cc-switch/providers", {
+      await request("/api/v1/config-hub/providers", {
         method: "POST",
         body: JSON.stringify({
           id: form.id,

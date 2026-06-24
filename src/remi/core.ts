@@ -967,7 +967,7 @@ export class Remi {
       });
     }
 
-    // 4. ConfigManager — symlinks + cc-switch sync
+    // 4. ConfigManager — symlinks + config-hub sync
     const { configManager } = require("../infra/config-manager");
     remi._configManager = configManager;
     configManager.ensureAllProjects();

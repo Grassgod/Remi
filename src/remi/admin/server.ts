@@ -39,7 +39,7 @@ import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
-import { ConfigHubPlugin, setConfigHubInstance } from "../../plugins/config-hub/index.js";
+import { ConfigHubPlugin, setConfigHubInstance, migrateCcSwitchToRemi } from "../../plugins/config-hub/index.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../../project/store.js";
@@ -76,6 +76,8 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   sso.seed();
 
   // ── config-hub plugin: cross-tool MCP/Skills/Prompts management ──
+  // One-time COPY of legacy ~/.cc-switch data into ~/.remi before opening the DB.
+  migrateCcSwitchToRemi();
   const hub = new ConfigHubPlugin();
   hub.migrate(getDb());
   setConfigHubInstance(hub);

@@ -32,7 +32,7 @@ function makeFakeSkillSource(name: string, files: Record<string, string>): strin
 beforeEach(() => {
   dir = join(tmpdir(), `cfghub-skills-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   fakeHome = join(dir, "home");
-  ssotRoot = join(fakeHome, ".cc-switch", "skills");
+  ssotRoot = join(fakeHome, ".remi", "skills");
   mkdirSync(fakeHome, { recursive: true });
   // Mark all three tools "present" so the service writes to their dirs.
   mkdirSync(join(fakeHome, ".claude"), { recursive: true });
@@ -44,7 +44,7 @@ beforeEach(() => {
   registry.register(new CodexAdapter(fakeHome));
   registry.register(new GeminiAdapter(fakeHome));
 
-  ccDb = openConfigHubDb(join(dir, "cc-switch.db"));
+  ccDb = openConfigHubDb(join(dir, "config-hub.db"));
   svc = new SkillsService(new SkillsDao(ccDb), registry, ssotRoot);
 });
 afterEach(() => {

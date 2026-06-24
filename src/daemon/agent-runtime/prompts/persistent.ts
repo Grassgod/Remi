@@ -18,9 +18,9 @@
  *   marker missing          → re-insert the block at the file's end
  *   no enabled prompt       → remove block from files (keep user prose)
  *
- * Schema-compat note: cc-switch v10's `prompts` table is keyed by (id, app_type).
- * We preserve that layout by storing 3 rows per logical prompt with identical
- * content; the single-canonical invariant is enforced at this service layer.
+ * Schema note: the `prompts` table is keyed by (id, app_type). We store 3 rows
+ * per logical prompt with identical content; the single-canonical invariant is
+ * enforced at this service layer.
  */
 
 import { existsSync, readFileSync } from "node:fs";

@@ -2,7 +2,7 @@
  * ProvidersService — provider preset management with apply-to-auth.
  *
  * Stores provider configurations (API key / endpoint / model presets) per tool
- * in cc-switch v10's `providers` table, and — when a preset is switched to
+ * in config-hub.db's `providers` table, and — when a preset is switched to
  * "current" — applies it to that tool's native auth/config files via the
  * tool adapter's applyProvider() (Claude→settings.json env, Codex→config.toml
  * + auth.json, Gemini→.env). Read-merge-atomic-write, foreign content preserved.

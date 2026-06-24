@@ -14,7 +14,7 @@ export const APP_TYPES: readonly AppType[] = ["claude", "codex", "gemini"] as co
 export type Scope = { kind: "global" } | { kind: "project"; projectDir: string };
 
 /**
- * Normalized, tool-agnostic MCP server config (what lands in cc-switch.db's
+ * Normalized, tool-agnostic MCP server config (what lands in config-hub.db's
  * `server_config` JSON). Adapters map this to/from native formats.
  */
 export interface McpConfig {
@@ -39,7 +39,7 @@ export type EntryMap = Record<string, McpConfig>;
 export type Manifest = Record<string, string>;
 
 /**
- * Normalized provider preset (what's stored in cc-switch.db `providers.settings_config`).
+ * Normalized provider preset (what's stored in config-hub.db `providers.settings_config`).
  * Each adapter maps it onto that tool's native auth/config files.
  */
 export interface ProviderSettings {

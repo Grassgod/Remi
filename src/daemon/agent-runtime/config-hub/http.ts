@@ -1,5 +1,5 @@
 /**
- * HTTP routes for /api/v1/cc-switch/* — drop-in for the old direct-SQLite
+ * HTTP routes for /api/v1/config-hub/* — drop-in for the old direct-SQLite
  * handlers. Same paths/shapes the frontend already calls (Mcp.tsx, Skills.tsx)
  * plus new routes for Prompts and Providers.
  */
@@ -24,7 +24,7 @@ export function registerHttp(
   providers: ProvidersService,
 ): void {
   // ── MCP: list ─────────────────────────────────────────────
-  app.get("/api/v1/cc-switch/mcp", (c) => {
+  app.get("/api/v1/config-hub/mcp", (c) => {
     try {
       const rows = mcp.listGlobalMcp();
       const servers = rows.map((r) => ({
@@ -49,7 +49,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/mcp", async (c) => {
+  app.post("/api/v1/config-hub/mcp", async (c) => {
     const body = (await c.req.json()) as any;
     if (!body.id || !body.name) return c.json({ error: "id, name required" }, 400);
     try {
@@ -66,7 +66,7 @@ export function registerHttp(
     }
   });
 
-  app.put("/api/v1/cc-switch/mcp/:id/toggle", async (c) => {
+  app.put("/api/v1/config-hub/mcp/:id/toggle", async (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const { app: appType, enabled } = (await c.req.json()) as { app: AppType; enabled: boolean };
     if (!appOk(appType)) return c.json({ error: `invalid app: ${appType}` }, 400);
@@ -78,7 +78,7 @@ export function registerHttp(
     }
   });
 
-  app.delete("/api/v1/cc-switch/mcp/:id", (c) => {
+  app.delete("/api/v1/config-hub/mcp/:id", (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     try {
       const report = mcp.deleteGlobalMcp(id);
@@ -88,7 +88,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/sync", (c) => {
+  app.post("/api/v1/config-hub/sync", (c) => {
     try {
       return c.json({ ok: true, sync: mcp.syncGlobal() });
     } catch (e: any) {
@@ -97,7 +97,7 @@ export function registerHttp(
   });
 
   // ── Skills ────────────────────────────────────────────────
-  app.get("/api/v1/cc-switch/skills", (c) => {
+  app.get("/api/v1/config-hub/skills", (c) => {
     try {
       const rows = skills.list();
       return c.json({
@@ -115,7 +115,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/skills", async (c) => {
+  app.post("/api/v1/config-hub/skills", async (c) => {
     const body = (await c.req.json()) as { id?: string; name?: string; description?: string; sourceDir: string };
     if (!body.sourceDir) return c.json({ error: "sourceDir required" }, 400);
     try {
@@ -126,7 +126,7 @@ export function registerHttp(
     }
   });
 
-  app.put("/api/v1/cc-switch/skills/:id/toggle", async (c) => {
+  app.put("/api/v1/config-hub/skills/:id/toggle", async (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const { app: appType, enabled } = (await c.req.json()) as { app: AppType; enabled: boolean };
     if (!appOk(appType)) return c.json({ error: `invalid app: ${appType}` }, 400);
@@ -137,7 +137,7 @@ export function registerHttp(
     }
   });
 
-  app.delete("/api/v1/cc-switch/skills/:id", (c) => {
+  app.delete("/api/v1/config-hub/skills/:id", (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     try {
       return c.json({ ok: true, sync: skills.uninstall(id) });
@@ -147,7 +147,7 @@ export function registerHttp(
   });
 
   // ── Prompts ───────────────────────────────────────────────
-  app.get("/api/v1/cc-switch/prompts", (c) => {
+  app.get("/api/v1/config-hub/prompts", (c) => {
     try {
       return c.json({ available: true, prompts: prompts.list() });
     } catch (e: any) {
@@ -155,7 +155,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/prompts", async (c) => {
+  app.post("/api/v1/config-hub/prompts", async (c) => {
     const body = (await c.req.json()) as any;
     if (!body.id || !body.name || typeof body.content !== "string") {
       return c.json({ error: "id, name, content required" }, 400);
@@ -174,7 +174,7 @@ export function registerHttp(
     }
   });
 
-  app.put("/api/v1/cc-switch/prompts/:id/toggle", async (c) => {
+  app.put("/api/v1/config-hub/prompts/:id/toggle", async (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const { enabled } = (await c.req.json()) as { enabled: boolean };
     try {
@@ -184,7 +184,7 @@ export function registerHttp(
     }
   });
 
-  app.delete("/api/v1/cc-switch/prompts/:id", (c) => {
+  app.delete("/api/v1/config-hub/prompts/:id", (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     try {
       return c.json({ ok: true, sync: prompts.delete(id) });
@@ -193,7 +193,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/prompts/sync", (c) => {
+  app.post("/api/v1/config-hub/prompts/sync", (c) => {
     try {
       return c.json({ ok: true, sync: prompts.syncAll() });
     } catch (e: any) {
@@ -202,7 +202,7 @@ export function registerHttp(
   });
 
   // ── Providers ─────────────────────────────────────────────
-  app.get("/api/v1/cc-switch/providers", (c) => {
+  app.get("/api/v1/config-hub/providers", (c) => {
     const appQ = c.req.query("app");
     const app: AppType | undefined = appQ && appOk(appQ) ? appQ : undefined;
     try {
@@ -212,7 +212,7 @@ export function registerHttp(
     }
   });
 
-  app.post("/api/v1/cc-switch/providers", async (c) => {
+  app.post("/api/v1/config-hub/providers", async (c) => {
     const body = (await c.req.json()) as any;
     if (!body.id || !body.appType || !body.name) return c.json({ error: "id, appType, name required" }, 400);
     if (!appOk(body.appType)) return c.json({ error: `invalid appType: ${body.appType}` }, 400);
@@ -230,7 +230,7 @@ export function registerHttp(
     }
   });
 
-  app.put("/api/v1/cc-switch/providers/:id/switch", async (c) => {
+  app.put("/api/v1/config-hub/providers/:id/switch", async (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const { app: appType } = (await c.req.json()) as { app: AppType };
     if (!appOk(appType)) return c.json({ error: `invalid app: ${appType}` }, 400);
@@ -242,7 +242,7 @@ export function registerHttp(
     }
   });
 
-  app.delete("/api/v1/cc-switch/providers/:id", (c) => {
+  app.delete("/api/v1/config-hub/providers/:id", (c) => {
     const id = decodeURIComponent(c.req.param("id"));
     const appQ = c.req.query("app");
     if (!appQ || !appOk(appQ)) return c.json({ error: `app query param required` }, 400);
@@ -255,7 +255,7 @@ export function registerHttp(
   });
 
   // ── Status ────────────────────────────────────────────────
-  app.get("/api/v1/cc-switch/status", (c) => {
+  app.get("/api/v1/config-hub/status", (c) => {
     try {
       return c.json({
         available: true,

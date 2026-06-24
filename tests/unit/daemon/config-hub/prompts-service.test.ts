@@ -68,7 +68,7 @@ beforeEach(() => {
   registry.register(new CodexAdapter(fakeHome));
   registry.register(new GeminiAdapter(fakeHome));
 
-  ccDb = openConfigHubDb(join(dir, "cc-switch.db"));
+  ccDb = openConfigHubDb(join(dir, "config-hub.db"));
   mainDb = new Database(join(dir, "main.db"));
   migrateConfigHub(mainDb);
   svc = new PromptsService(ccDb, registry, new SqliteManifestStore(mainDb));

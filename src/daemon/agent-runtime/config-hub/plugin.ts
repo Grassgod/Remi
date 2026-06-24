@@ -5,8 +5,8 @@
  *
  * Lifecycle:
  *   const hub = new ConfigHubPlugin();
- *   hub.migrate(getDb());     // creates Remi-side tables + opens cc-switch.db
- *   hub.registerHttp(app);    // mounts /api/v1/cc-switch/*
+ *   hub.migrate(getDb());     // creates Remi-side tables + opens config-hub.db
+ *   hub.registerHttp(app);    // mounts /api/v1/config-hub/*
  *
  * To extend with another tool later:
  *   hub.registry.register(new MyToolAdapter());
@@ -28,8 +28,8 @@ import { ProvidersService } from "./providers-service.js";
 import { registerHttp } from "./http.js";
 
 export interface ConfigHubOptions {
-  /** Override path to the shared cc-switch.db (defaults to ~/.cc-switch/cc-switch.db). */
-  ccSwitchDbPath?: string;
+  /** Override path to the config-hub DB (defaults to ~/.remi/config-hub.db). */
+  configHubDbPath?: string;
   /** Skip auto-registering claude/codex/gemini adapters. */
   registerBuiltins?: boolean;
 }
@@ -58,12 +58,11 @@ export class ConfigHubPlugin {
 
   /**
    * Create / open both DB layers. `mainDb` is Remi's main SQLite (where project
-   * overlay + manifest live); the global cc-switch.db is opened separately so
-   * it stays shareable with the official desktop app.
+   * overlay + manifest live); the global config-hub.db is opened separately.
    */
   migrate(mainDb: Database): void {
     migrateConfigHub(mainDb);
-    this._ccDb = openConfigHubDb(this.opts.ccSwitchDbPath ?? defaultConfigHubDbPath());
+    this._ccDb = openConfigHubDb(this.opts.configHubDbPath ?? defaultConfigHubDbPath());
     const manifests = new SqliteManifestStore(mainDb);
     this._service = new ConfigHubService(new GlobalMcpDao(this._ccDb), manifests, this.registry);
     this._skills = new SkillsService(new SkillsDao(this._ccDb), this.registry, defaultSkillsSsotDir());

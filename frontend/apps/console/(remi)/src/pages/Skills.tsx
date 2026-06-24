@@ -44,14 +44,14 @@ export function Skills() {
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
   const [ccSkills, setCcSkills] = useState<CCSwitchSkill[]>([]);
 
-  // Install / Uninstall (cc-switch managed skills)
+  // Install / Uninstall (config-hub managed skills)
   const [installOpen, setInstallOpen] = useState(false);
   const [installForm, setInstallForm] = useState({ sourceDir: "", name: "", description: "" });
   const [installError, setInstallError] = useState<string | null>(null);
   const [uninstallConfirm, setUninstallConfirm] = useState<CCSwitchSkill | null>(null);
 
   const reloadCcSkills = () => {
-    return request("/api/v1/cc-switch/skills")
+    return request("/api/v1/config-hub/skills")
       .then((res: any) => { if (res.skills) setCcSkills(res.skills); })
       .catch(() => {});
   };
@@ -62,7 +62,7 @@ export function Skills() {
     setInstallError(null);
     if (!installForm.sourceDir) { setInstallError("Source directory is required"); return; }
     try {
-      await request("/api/v1/cc-switch/skills", {
+      await request("/api/v1/config-hub/skills", {
         method: "POST",
         body: JSON.stringify({
           sourceDir: installForm.sourceDir,
@@ -80,7 +80,7 @@ export function Skills() {
 
   const handleUninstall = async (skill: CCSwitchSkill) => {
     try {
-      await request(`/api/v1/cc-switch/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
+      await request(`/api/v1/config-hub/skills/${encodeURIComponent(skill.id)}`, { method: "DELETE" });
       setUninstallConfirm(null);
       await reloadCcSkills();
     } catch {}
@@ -92,7 +92,7 @@ export function Skills() {
     const ccId = ccSkills.find(s => s.name === skillName)?.id;
     if (!ccId) return;
     try {
-      await api.request(`/api/v1/cc-switch/skills/${encodeURIComponent(ccId)}/toggle`, {
+      await api.request(`/api/v1/config-hub/skills/${encodeURIComponent(ccId)}/toggle`, {
         method: "PUT",
         body: JSON.stringify({ app, enabled: !current }),
       });
@@ -214,7 +214,7 @@ export function Skills() {
         <div className="flex items-center gap-1.5">
           {ccSkills.length > 0 && (
             <Badge variant="outline" className="h-6 text-[10px]">
-              {ccSkills.length} cc-switch managed
+              {ccSkills.length} config-hub managed
             </Badge>
           )}
           <Button size="sm" onClick={() => setInstallOpen(true)} className="h-7 text-xs">
@@ -223,7 +223,7 @@ export function Skills() {
         </div>
       </div>
 
-      {/* cc-switch managed list with uninstall */}
+      {/* config-hub managed list with uninstall */}
       {ccSkills.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-1.5">
           {ccSkills.map(s => (
@@ -343,7 +343,7 @@ export function Skills() {
                     {currentSkill.description && (
                       <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{currentSkill.description}</p>
                     )}
-                    {/* cc-switch per-app toggles */}
+                    {/* config-hub per-app toggles */}
                     {ccSkillMap.has(currentSkill.name) && (
                       <div className="mt-2 flex items-center gap-3 border-t border-border/50 pt-2">
                         {Object.entries(APP_LABELS).map(([app, label]) => {
@@ -461,7 +461,7 @@ export function Skills() {
               className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm outline-none focus:border-input"
             />
             <p className="text-[11px] text-muted-foreground">
-              Copies the directory into <code className="rounded bg-muted/40 px-1">~/.cc-switch/skills/</code> as the
+              Copies the directory into <code className="rounded bg-muted/40 px-1">~/.remi/skills/</code> as the
               SSOT, then symlinks into each enabled tool's skills folder on toggle.
             </p>
           </div>

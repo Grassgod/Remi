@@ -396,7 +396,8 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
 
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
-  const configHubData = (fileData.cc_switch ?? {}) as Record<string, unknown>;
+  // Prefer [config_hub]; fall back to legacy [cc_switch] so old remi.toml still works.
+  const configHubData = (fileData.config_hub ?? fileData.cc_switch ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
 

@@ -13,7 +13,7 @@ let svc: ProvidersService;
 beforeEach(() => {
   dir = join(tmpdir(), `cfghub-providers-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(dir, { recursive: true });
-  db = openConfigHubDb(join(dir, "cc-switch.db"));
+  db = openConfigHubDb(join(dir, "config-hub.db"));
   svc = new ProvidersService(db);
 });
 afterEach(() => {

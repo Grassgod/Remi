@@ -1,9 +1,9 @@
 /**
- * Owns the connection to `~/.cc-switch/cc-switch.db` — the shared global DB,
- * laid out per cc-switch v10 schema for forward compat with the desktop app.
+ * Owns the connection to `~/.remi/config-hub.db` — Remi's config-hub persistent
+ * store for global cross-tool config (MCP servers, skills, providers, prompts).
  *
- * Phase 1 creates only `mcp_servers` (matching cc-switch's DDL exactly). Other
- * v10 tables (skills, providers, prompts, etc.) get added by later phases.
+ * Tables: `mcp_servers`, `skills`, `providers`, `prompts`. Column/table names are
+ * the internal schema and stay stable across releases.
  */
 
 import { Database } from "bun:sqlite";
@@ -80,11 +80,9 @@ CREATE TABLE IF NOT EXISTS providers (
 )`;
 
 export function defaultConfigHubDbPath(home: string = homedir()): string {
-  // FROZEN external contract: ~/.cc-switch/cc-switch.db is shared with the
-  // cc-switch desktop app (v10 schema mirrored). The brand stays in this path
-  // on purpose — renaming it would empty existing installs and break desktop
-  // interop. Drop it only with product sign-off + a backward-compat migration.
-  return join(home, ".cc-switch", "cc-switch.db");
+  // Remi config-hub persistent store. Data from older installs under
+  // ~/.cc-switch is copied here on first run (see migration.ts).
+  return join(home, ".remi", "config-hub.db");
 }
 
 export function openConfigHubDb(path: string = defaultConfigHubDbPath()): Database {
@@ -97,7 +95,7 @@ export function openConfigHubDb(path: string = defaultConfigHubDbPath()): Databa
   return db;
 }
 
-/** SSOT root for installed skills (mirrors cc-switch desktop). */
+/** SSOT root for installed skills (Remi config-hub persistent store). */
 export function defaultSkillsSsotDir(home: string = homedir()): string {
-  return join(home, ".cc-switch", "skills");
+  return join(home, ".remi", "skills");
 }

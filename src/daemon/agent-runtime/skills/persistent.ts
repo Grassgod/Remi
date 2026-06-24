@@ -1,6 +1,6 @@
 /**
  * SkillsService — orchestrates the Skills lifecycle:
- *   install(srcDir) → copy into SSOT(~/.cc-switch/skills/<dir>), record row, hash
+ *   install(srcDir) → copy into SSOT(~/.remi/skills/<dir>), record row, hash
  *   enable/disable(id, app)  → symlink/unlink each enabled tool's skills dir
  *   uninstall(id)           → unlink everywhere + wipe SSOT + row
  *
