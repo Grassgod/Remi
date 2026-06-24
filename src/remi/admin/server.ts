@@ -59,11 +59,11 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   const authToken = opts.authToken ?? "";
   const devMode = opts.devMode ?? false;
   // Serve the Vite admin dashboard build. Bundled: dist sits next to the server;
-  // dev from src/remi/admin/: it's the repo-root web/frontend/dist (server.ts moved
-  // three levels deeper in D7, so the import.meta.dir-relative path is recalibrated).
+  // dev from src/remi/admin/: it's the relocated frontend/apps/console/(remi)/dist
+  // (moved out of the old top-level web/frontend in D11).
   const staticDir = [
     join(import.meta.dir, "frontend", "dist"),
-    join(import.meta.dir, "..", "..", "..", "web", "frontend", "dist"),
+    join(import.meta.dir, "..", "..", "..", "frontend", "apps", "console", "(remi)", "dist"),
   ].find(existsSync) ?? join(import.meta.dir, "frontend", "dist");
 
   const data = new RemiData();
