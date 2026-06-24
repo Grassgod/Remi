@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMultiremiProviders } from "../../../src/cli/multiremi.js";
 import { createMultiremiApp, startMultiremiServer } from "../../../src/multiremi/api.js";
-import { renderMultiremiDashboardHtml } from "../../../src/multiremi/dashboard.js";
 import { writeAgentSkillContext, writeProjectResourceContext } from "../../../src/multiremi/daemon.js";
 import { MultiremiDaemonClient } from "../../../src/multiremi/client.js";
 import { buildTaskPrompt } from "../../../src/multiremi/prompt.js";
@@ -3655,90 +3654,6 @@ describe("Bun Multiremi CLI", () => {
       pathEnv,
       canExecute: (path) => path === "/mock/bin/gemini",
     })).toEqual([]);
-  });
-});
-
-describe("Bun Multiremi dashboard", () => {
-  it("renders a real usage page instead of the placeholder", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain('id="usagePage"');
-    expect(html).toContain('id="usageSummaryGrid"');
-    expect(html).toContain("function renderUsage()");
-    expect(html).toContain("function renderRuntimeModels(runtime)");
-    expect(html).toContain("/api/dashboard/usage/daily");
-  });
-
-  it("renders a real skills page with agent skill controls", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain('id="skillsPage"');
-    expect(html).toContain('id="skillsGrid"');
-    expect(html).toContain("function renderSkills()");
-    expect(html).toContain("/api/multiremi/skills");
-    expect(html).toContain("/api/multiremi/skills/import");
-    expect(html).toContain("entitySourceUrl");
-    expect(html).toContain("updateSelectedAgentSkills");
-  });
-
-  it("renders a real settings page with token controls", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain('id="settingsPage"');
-    expect(html).toContain('id="tokenList"');
-    expect(html).toContain("function renderSettings()");
-    expect(html).toContain("/api/multiremi/tokens");
-    expect(html).toContain("function revokeToken");
-    expect(html).toContain("function renderNotificationPreferences");
-    expect(html).toContain("/api/multiremi/notification-preferences");
-    expect(html).toContain("function renderGitHubSettings");
-    expect(html).toContain("/api/multiremi/github/settings");
-    expect(html).toContain("updateGitHubSettings");
-  });
-
-  it("renders GitHub pull requests in issue and task detail", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain("function renderGitHubPullRequests");
-    expect(html).toContain("function githubPullRequestStatus");
-    expect(html).toContain("/api/multiremi/github/pull-requests?issueId=");
-    expect(html).toContain("Pull requests");
-  });
-
-  it("renders a real my issues page with member filtering", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain('id="myIssuesPage"');
-    expect(html).toContain('id="myIssueList"');
-    expect(html).toContain("function renderMyIssues()");
-    expect(html).toContain("function visibleMyIssues()");
-    expect(html).toContain("myIssueMemberId");
-  });
-
-  it("renders autopilot detail controls and run history", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain("function openAutopilot");
-    expect(html).toContain("function renderAutopilotDrawer");
-    expect(html).toContain("function renderAutopilotRuns");
-    expect(html).toContain("function renderWebhookDeliveries");
-    expect(html).toContain("replayWebhookDelivery");
-    expect(html).toContain("/api/multiremi/autopilots/");
-    expect(html).toContain("updateSelectedAutopilot");
-  });
-
-  it("renders a workspace members page with edit controls", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain('id="membersPage"');
-    expect(html).toContain('id="membersGrid"');
-    expect(html).toContain("function renderMembers()");
-    expect(html).toContain("function renderMemberDrawer");
-    expect(html).toContain("/api/multiremi/members/");
-    expect(html).toContain("updateSelectedMember");
-  });
-
-  it("renders Add computer through the native Multiremi install endpoint", () => {
-    const html = renderMultiremiDashboardHtml();
-    expect(html).toContain("Add computer");
-    expect(html).toContain("openDaemonInstall");
-    expect(html).toContain("/api/multiremi/install/daemon");
-    expect(html).not.toContain("multimira");
-    expect(html).not.toContain("install-remi.sh");
-    expect(/\bremi setup\b/.test(html)).toBe(false);
   });
 });
 

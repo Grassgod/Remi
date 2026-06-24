@@ -8,7 +8,6 @@ import { basename, dirname, extname, join } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
 import { buildRemiBuiltinSkillInputs, seedRemiBuiltinSkills } from "@multiremi/builtin-skills.js";
-import { renderMultiremiDashboardHtml } from "@multiremi/dashboard.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
@@ -251,7 +250,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const app = new Hono();
 
   app.use("*", cors());
-  app.get("/", (c) => c.html(renderMultiremiDashboardHtml()));
+  // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.
+  app.get("/", (c) => c.json({ service: "multiremi-api", ui: "frontend/apps/web" }));
   app.get("/favicon.ico", (c) => c.body(null, 204));
 
   if (authToken) {

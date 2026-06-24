@@ -58,7 +58,13 @@ export interface WebDashboardOptions {
 export function createApp(opts: { authToken?: string; devMode?: boolean } = {}): Hono {
   const authToken = opts.authToken ?? "";
   const devMode = opts.devMode ?? false;
-  const staticDir = join(import.meta.dir, "frontend", "dist");
+  // Serve the Vite admin dashboard build. Bundled: dist sits next to the server;
+  // dev from src/remi/admin/: it's the repo-root web/frontend/dist (server.ts moved
+  // three levels deeper in D7, so the import.meta.dir-relative path is recalibrated).
+  const staticDir = [
+    join(import.meta.dir, "frontend", "dist"),
+    join(import.meta.dir, "..", "..", "..", "web", "frontend", "dist"),
+  ].find(existsSync) ?? join(import.meta.dir, "frontend", "dist");
 
   const data = new RemiData();
   const app = new Hono();
