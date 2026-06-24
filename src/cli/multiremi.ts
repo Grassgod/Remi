@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "../multiremi/index.js";
 import { AcpProvider } from "../providers/acp/index.js";
 import { setLogLevel } from "../logger.js";
@@ -1783,7 +1783,7 @@ function runServiceCommands(commands: string[][]): void {
 }
 
 function currentProcessLauncher(argv: string[], execPath: string): { command: string; argsPrefix: string[] } {
-  const executable = basename(execPath).toLowerCase();
+  const executable = basename(execPath, extname(execPath)).toLowerCase();
   const script = argv[1];
   if ((executable === "bun" || executable.startsWith("bun-")) && script) {
     return { command: execPath, argsPrefix: [script] };
