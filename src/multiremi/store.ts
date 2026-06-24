@@ -7837,8 +7837,8 @@ export class MultiremiStore {
       const promoteSession = status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "");
       this.db.run(
         `UPDATE multiremi_chat_sessions
-         SET session_id = CASE WHEN ? THEN COALESCE(?, session_id) ELSE session_id END,
-             work_dir = CASE WHEN ? THEN COALESCE(?, work_dir) ELSE work_dir END,
+         SET session_id = CASE WHEN ? = 1 THEN COALESCE(?, session_id) ELSE session_id END,
+             work_dir = CASE WHEN ? = 1 THEN COALESCE(?, work_dir) ELSE work_dir END,
              latest_task_id = ?,
              unread_since = COALESCE(unread_since, ?),
              updated_at = ?
