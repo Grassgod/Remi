@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "../logger.js";
-import { AcpProvider, type AcpProviderOptions } from "../providers/acp/index.js";
+import { AcpProvider, resolveAcpPermissionMode, type AcpProviderOptions } from "../providers/acp/index.js";
+import type { PermissionOutcome, RequestPermissionParams } from "../providers/acp/protocol.js";
 import type { AgentResponse, Provider, ProviderEvent } from "../providers/base.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
 import { buildTaskPrompt } from "./prompt.js";
@@ -72,6 +73,7 @@ export interface MultiremiDaemonGcSummary {
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
+  setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
 };
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
@@ -578,6 +580,16 @@ export class MultiremiDaemon {
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
+    // Autonomous daemon runs have no human to approve tool use. Auto-approve every
+    // permission request; otherwise ACP responds "cancelled" (no handler) and the
+    // agent's tools abort. permissionMode below also lets Claude skip asking entirely.
+    provider.setPermissionHandler?.((params) => {
+      const allow = params.options.find((o) => o.kind === "allow_always")
+        ?? params.options.find((o) => o.kind === "allow_once");
+      return Promise.resolve(
+        allow ? { outcome: "selected", optionId: allow.optionId } : { outcome: "cancelled" },
+      );
+    });
 
     let output = "";
     let seq = 1;
@@ -591,7 +603,7 @@ export class MultiremiDaemon {
         sessionId: task.sessionId,
         chatId: task.id,
         allowedTools: agent.allowedTools,
-        permissionMode: agent.provider === "claude" ? "default" : undefined,
+        permissionMode: resolveAcpPermissionMode(agent.provider),
         signal,
       })) {
         const message = eventToTaskMessage(event, seq++);
@@ -1306,14 +1318,14 @@ function eventToTaskMessage(event: ProviderEvent, seq: number): TaskMessageInput
     if (!content) return null;
     return {
       seq,
-      type: raw.sessionUpdate === "agent_thought_chunk" ? "thought" : "assistant",
+      type: raw.sessionUpdate === "agent_thought_chunk" ? "thinking" : "text",
       content,
     };
   }
   if (raw.sessionUpdate === "tool_call" || raw.sessionUpdate === "tool_call_update") {
     return {
       seq,
-      type: "tool",
+      type: raw.sessionUpdate === "tool_call_update" ? "tool_result" : "tool_use",
       tool: raw.title ?? raw.kind ?? raw.toolCallId ?? null,
       input: raw.rawInput ? parseMaybeJson(raw.rawInput) : undefined,
       output: raw.rawOutput ? JSON.stringify(raw.rawOutput) : extractText(raw.content),
