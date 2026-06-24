@@ -21,6 +21,12 @@ export interface AgentTaskAgent {
   model: string | null;
   instructions: string;
   skills: AgentTaskSkill[];
+
+  // Spawn-context fields (workspace/ephemeral.ts cwd, env/injector.ts).
+  cwd: string | null;
+  executable: string | null;
+  allowedTools: string[];
+  customEnv: Record<string, string>;
 }
 
 /** Skill materialized into the task workdir. */
@@ -92,6 +98,12 @@ export interface AgentTask {
   project: AgentTaskProject | null;
   projectResources: AgentTaskProjectResource[];
   repos: AgentTaskRepo[];
+
+  // Workspace + spawn-context fields (workspace/persistent.ts, env/injector.ts).
+  workDir: string | null;
+  runtimeId: string | null;
+  authToken?: string | null;
+  auth_token?: string | null;
 
   // Claim-context fields (read via stringField/arrayField/unknownField).
   workspaceContext?: string | null;

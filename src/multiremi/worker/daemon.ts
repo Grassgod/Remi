@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
@@ -18,6 +18,14 @@ import {
   writeAgentSkillContext,
   normalizeSkillFilePath,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { buildTaskEnv, cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
+import {
+  LocalDirectoryError,
+  LocalPathLocker,
+  resolveTaskWorkDir,
+  type ResolvedTaskWorkDir,
+} from "@daemon/agent-runtime/workspace/ephemeral.js";
+import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiRepoData,
@@ -33,6 +41,9 @@ import type {
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
 export { writeTaskContext, writeTaskGcContext, writeProjectResourceContext, writeAgentSkillContext };
+// Re-export the workspace GC entry point (moved to daemon/agent-runtime/workspace
+// in D6) so existing `from "../multiremi/daemon.js"` imports keep resolving.
+export { runWorkspaceGcOnce, type MultiremiDaemonGcSummary };
 
 const log = createLogger("multiremi-daemon");
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
@@ -70,18 +81,6 @@ interface RunSummary {
   usage: TaskUsageEntry[];
 }
 
-interface ResolvedTaskWorkDir {
-  workDir: string;
-  localDirectory: boolean;
-  release?: () => void;
-}
-
-export interface MultiremiDaemonGcSummary {
-  cleaned: number;
-  orphaned: number;
-  skipped: number;
-}
-
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
@@ -89,10 +88,6 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
 export type MultiremiDaemonUpdateRunner = (targetVersion: string) => string | Promise<string>;
-
-class LocalDirectoryError extends Error {
-  failureReason = "local_directory_error";
-}
 
 export class MultiremiRuntimeReregisterGate {
   private nextAttemptByWorkspace = new Map<string, number>();
@@ -529,27 +524,17 @@ export class MultiremiDaemon {
   }
 
   private async resolveTaskWorkDir(task: MultiremiTaskWithAgent, signal: AbortSignal): Promise<ResolvedTaskWorkDir> {
-    const assignment = findLocalDirectoryAssignment(task, this.localDirectoryDaemonIds(task));
-    if (!assignment) {
-      return {
-        workDir: resolveWorkDir(task, this.options.workspacesRoot),
-        localDirectory: false,
-      };
-    }
-    validateLocalDirectoryPath(assignment.absPath);
-    const release = await this.localPathLocks.acquire(assignment.realPath, task.id, async (holder) => {
-      const reason = holder
-        ? `local_directory ${assignment.absPath} (held by task ${shortTaskId(holder)})`
-        : `local_directory ${assignment.absPath}`;
-      await this.client.markTaskWaitingLocalDirectory(task.id, reason).catch((err) => {
-        log.warn(`Failed to mark task ${task.id} waiting_local_directory: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    }, signal);
-    return {
-      workDir: assignment.absPath,
-      localDirectory: true,
-      release,
-    };
+    return resolveTaskWorkDir(task, {
+      daemonIds: this.localDirectoryDaemonIds(task),
+      workspacesRoot: this.options.workspacesRoot,
+      locker: this.localPathLocks,
+      signal,
+      onWaitLocalDirectory: async (taskId, reason) => {
+        await this.client.markTaskWaitingLocalDirectory(taskId, reason).catch((err) => {
+          log.warn(`Failed to mark task ${taskId} waiting_local_directory: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      },
+    });
   }
 
   private localDirectoryDaemonIds(task: MultiremiTaskWithAgent): string[] {
@@ -581,22 +566,17 @@ export class MultiremiDaemon {
     }
     await this.client.pinTaskSession(task.id, task.sessionId, workDir);
 
-    const taskAuthToken = task.authToken ?? task.auth_token ?? this.options.token;
     const provider = this.providerFactory({
       agentType: agent.provider,
       executable: agent.executable ?? undefined,
       model: agent.model,
       allowedTools: agent.allowedTools,
       cwd: workDir,
-      env: {
-        ...agent.customEnv,
-        MULTIREMI_DAEMON_PORT: String(this.repoServerPort),
-        MULTIREMI_WORKSPACE_ID: task.workspaceId,
-        MULTIREMI_AGENT_NAME: agent.name,
-        MULTIREMI_TASK_ID: task.id,
-        MULTIREMI_SERVER_URL: this.options.serverUrl,
-        ...(taskAuthToken ? { MULTIREMI_TOKEN: taskAuthToken } : {}),
-      },
+      env: buildTaskEnv(task, {
+        daemonPort: this.repoServerPort,
+        serverUrl: this.options.serverUrl,
+        fallbackToken: this.options.token,
+      }),
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -842,347 +822,6 @@ function booleanEnv(value: string | undefined, fallback: boolean): boolean {
   return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
 }
 
-interface LocalDirectoryAssignment {
-  absPath: string;
-  realPath: string;
-}
-
-interface LocalPathLockEntry {
-  holderId: string | null;
-  queue: LocalPathLockWaiter[];
-}
-
-interface LocalPathLockWaiter {
-  taskId: string;
-  resolve: (release: () => void) => void;
-  reject: (err: Error) => void;
-  signal: AbortSignal;
-  abort: () => void;
-}
-
-class LocalPathLocker {
-  private entries = new Map<string, LocalPathLockEntry>();
-
-  async acquire(
-    realPath: string,
-    taskId: string,
-    onWait: (holderId: string | null) => Promise<void> | void,
-    signal: AbortSignal,
-  ): Promise<() => void> {
-    if (!realPath) throw new LocalDirectoryError("local_directory: realpath required for lock");
-    if (!taskId) throw new LocalDirectoryError("local_directory: task id required for lock");
-    if (signal.aborted) throw new LocalDirectoryError("local_directory: wait cancelled");
-    const entry = this.entries.get(realPath) ?? { holderId: null, queue: [] };
-    this.entries.set(realPath, entry);
-    if (!entry.holderId) {
-      entry.holderId = taskId;
-      return this.releaser(realPath, entry, taskId);
-    }
-
-    await onWait(entry.holderId);
-    return new Promise<() => void>((resolve, reject) => {
-      const waiter: LocalPathLockWaiter = {
-        taskId,
-        resolve,
-        reject,
-        signal,
-        abort: () => {
-          const index = entry.queue.indexOf(waiter);
-          if (index >= 0) entry.queue.splice(index, 1);
-          reject(new LocalDirectoryError("local_directory: wait cancelled"));
-        },
-      };
-      signal.addEventListener("abort", waiter.abort, { once: true });
-      entry.queue.push(waiter);
-    });
-  }
-
-  private releaser(realPath: string, entry: LocalPathLockEntry, taskId: string): () => void {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      if (entry.holderId !== taskId) return;
-      while (entry.queue.length) {
-        const next = entry.queue.shift()!;
-        next.signal.removeEventListener("abort", next.abort);
-        if (next.signal.aborted) continue;
-        entry.holderId = next.taskId;
-        next.resolve(this.releaser(realPath, entry, next.taskId));
-        return;
-      }
-      entry.holderId = null;
-    };
-  }
-}
-
-function findLocalDirectoryAssignment(task: MultiremiTaskWithAgent, daemonIds: string[]): LocalDirectoryAssignment | null {
-  const ids = new Set(daemonIds.map((id) => id.trim()).filter(Boolean));
-  if (!ids.size) return null;
-  let assignment: LocalDirectoryAssignment | null = null;
-  for (const resource of task.projectResources) {
-    if (resource.resourceType !== "local_directory") continue;
-    const ref = resource.resourceRef ?? {};
-    const daemonId = stringField(ref.daemonId ?? ref.daemon_id);
-    if (!daemonId) throw new LocalDirectoryError("local_directory: resource_ref missing daemon_id");
-    if (!ids.has(daemonId)) continue;
-    if (assignment) {
-      throw new LocalDirectoryError("local_directory: project has multiple local_directory resources for this daemon");
-    }
-    const absPath = normalizeLocalDirectoryPath(ref.localPath ?? ref.local_path);
-    assignment = { absPath, realPath: resolveLocalRealPath(absPath) };
-  }
-  return assignment;
-}
-
-function normalizeLocalDirectoryPath(value: unknown): string {
-  const path = stringField(value);
-  if (!path) throw new LocalDirectoryError("local_directory: local_path is empty");
-  if (!isAbsoluteLocalPath(path)) throw new LocalDirectoryError(`local_directory: local_path must be absolute, got ${JSON.stringify(path)}`);
-  return resolve(path);
-}
-
-function validateLocalDirectoryPath(path: string): void {
-  if (isBlacklistedLocalDirectory(path)) {
-    throw new LocalDirectoryError(`local_directory: path is a protected system root (${JSON.stringify(path)})`);
-  }
-  let stats: ReturnType<typeof statSync>;
-  try {
-    stats = statSync(path);
-  } catch {
-    throw new LocalDirectoryError(`local_directory: path does not exist: ${JSON.stringify(path)}`);
-  }
-  if (!stats.isDirectory()) throw new LocalDirectoryError(`local_directory: path is not a directory: ${JSON.stringify(path)}`);
-  const realPath = resolveLocalRealPath(path);
-  if (isBlacklistedLocalDirectory(realPath)) {
-    throw new LocalDirectoryError(`local_directory: path resolves to a protected system root (${JSON.stringify(realPath)})`);
-  }
-  try {
-    readdirSync(path);
-    const probe = join(path, `.multiremi-rwcheck-${process.pid}-${Date.now()}`);
-    writeFileSync(probe, "");
-    unlinkSync(probe);
-  } catch (err) {
-    throw new LocalDirectoryError(`local_directory: path is not readable and writable: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-function resolveLocalRealPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-}
-
-function isAbsoluteLocalPath(path: string): boolean {
-  return isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
-}
-
-function isBlacklistedLocalDirectory(path: string): boolean {
-  const normalized = resolve(path);
-  if (normalized === homedir()) return true;
-  return ["/", "/Users", "/Users/Shared", "/home", "/root", "/var", "/etc", "/tmp", "/usr", "/opt"].includes(normalized);
-}
-
-function shortTaskId(taskId: string): string {
-  return taskId.length <= 8 ? taskId : taskId.slice(0, 8);
-}
-
-type MultiremiGcKind = "issue" | "chat" | "autopilot_run" | "quick_create";
-type MultiremiGcDecision = "clean" | "orphan" | "skip";
-
-interface MultiremiGcMeta {
-  version?: number;
-  kind?: MultiremiGcKind;
-  workspace_id?: string | null;
-  task_id?: string | null;
-  issue_id?: string | null;
-  chat_session_id?: string | null;
-  autopilot_run_id?: string | null;
-  completed_at?: string | null;
-  created_at?: string | null;
-  local_directory?: boolean;
-}
-
-interface RunWorkspaceGcOnceOptions {
-  root: string;
-  ttlMs: number;
-  orphanTtlMs: number;
-  client: Pick<
-    MultiremiDaemonClient,
-    "getIssueGcCheck" | "getChatSessionGcCheck" | "getAutopilotRunGcCheck" | "getTaskGcCheck"
-  >;
-  now?: number;
-}
-
-export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Promise<MultiremiDaemonGcSummary> {
-  const summary: MultiremiDaemonGcSummary = { cleaned: 0, orphaned: 0, skipped: 0 };
-  const root = resolve(options.root);
-  if (!isDirectory(root)) return summary;
-
-  const workspaces = safeReadDir(root) ?? [];
-  for (const workspace of workspaces) {
-    if (!workspace.isDirectory() || workspace.name === ".repos") continue;
-    const workspaceDir = join(root, workspace.name);
-    const tasks = safeReadDir(workspaceDir) ?? [];
-    for (const task of tasks) {
-      if (!task.isDirectory()) continue;
-      const taskDir = join(workspaceDir, task.name);
-      const decision = await getWorkspaceGcDecision(taskDir, options);
-      if (decision === "skip") {
-        summary.skipped++;
-        continue;
-      }
-      removeGcWorkDir(root, taskDir);
-      if (decision === "orphan") summary.orphaned++;
-      else summary.cleaned++;
-    }
-  }
-
-  return summary;
-}
-
-async function getWorkspaceGcDecision(taskDir: string, options: RunWorkspaceGcOnceOptions): Promise<MultiremiGcDecision> {
-  const now = options.now ?? Date.now();
-  const meta = readGcMeta(taskDir);
-  if (!meta) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-  if (meta.local_directory) return "skip";
-
-  if (meta.kind === "issue") return getIssueGcDecision(meta, taskDir, options, now);
-  if (meta.kind === "chat") return getChatGcDecision(meta, taskDir, options, now);
-  if (meta.kind === "autopilot_run") return getAutopilotRunGcDecision(meta, taskDir, options, now);
-  return getTaskGcDecision(meta, taskDir, options, now);
-}
-
-async function getIssueGcDecision(
-  meta: MultiremiGcMeta,
-  taskDir: string,
-  options: RunWorkspaceGcOnceOptions,
-  now: number,
-): Promise<MultiremiGcDecision> {
-  const issueId = stringField(meta.issue_id);
-  if (!issueId) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-  try {
-    const status = await options.client.getIssueGcCheck(issueId);
-    if (isTerminalIssueStatus(status.status) && isOlderThan(status.updated_at, options.ttlMs, now)) return "clean";
-    return "skip";
-  } catch (err) {
-    if (isNotFoundError(err)) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-    throw err;
-  }
-}
-
-async function getChatGcDecision(
-  meta: MultiremiGcMeta,
-  taskDir: string,
-  options: RunWorkspaceGcOnceOptions,
-  now: number,
-): Promise<MultiremiGcDecision> {
-  const sessionId = stringField(meta.chat_session_id);
-  if (!sessionId) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-  try {
-    const status = await options.client.getChatSessionGcCheck(sessionId);
-    if (status.status === "archived" && isOlderThan(status.updated_at, options.ttlMs, now)) return "clean";
-    return "skip";
-  } catch (err) {
-    if (isNotFoundError(err)) return "clean";
-    throw err;
-  }
-}
-
-async function getAutopilotRunGcDecision(
-  meta: MultiremiGcMeta,
-  taskDir: string,
-  options: RunWorkspaceGcOnceOptions,
-  now: number,
-): Promise<MultiremiGcDecision> {
-  const runId = stringField(meta.autopilot_run_id);
-  if (!runId) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-  try {
-    const status = await options.client.getAutopilotRunGcCheck(runId);
-    if (isTerminalAutopilotRunStatus(status.status) && isOlderThan(status.completed_at, options.ttlMs, now)) {
-      return "clean";
-    }
-    return "skip";
-  } catch (err) {
-    if (isNotFoundError(err)) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-    throw err;
-  }
-}
-
-async function getTaskGcDecision(
-  meta: MultiremiGcMeta,
-  taskDir: string,
-  options: RunWorkspaceGcOnceOptions,
-  now: number,
-): Promise<MultiremiGcDecision> {
-  const taskId = stringField(meta.task_id);
-  if (!taskId) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-  try {
-    const status = await options.client.getTaskGcCheck(taskId);
-    if (isTerminalTaskStatus(status.status)) return "clean";
-    return "skip";
-  } catch (err) {
-    if (isNotFoundError(err)) return staleDirDecision(taskDir, options.orphanTtlMs, now);
-    throw err;
-  }
-}
-
-function staleDirDecision(taskDir: string, ttlMs: number, now: number): MultiremiGcDecision {
-  const stat = safeStat(taskDir);
-  if (!stat) return "skip";
-  return now - stat.mtimeMs > ttlMs ? "orphan" : "skip";
-}
-
-function readGcMeta(taskDir: string): MultiremiGcMeta | null {
-  try {
-    const parsed = JSON.parse(readFileSync(join(taskDir, ".multiremi", "gc.json"), "utf8")) as unknown;
-    return parsed && typeof parsed === "object" ? parsed as MultiremiGcMeta : null;
-  } catch {
-    return null;
-  }
-}
-
-function removeGcWorkDir(root: string, taskDir: string): void {
-  const rootPath = resolve(root);
-  const dirPath = resolve(taskDir);
-  const rel = slashPath(relative(rootPath, dirPath));
-  if (!rel || rel === "." || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
-    throw new Error(`refusing to GC path outside workspace root: ${taskDir}`);
-  }
-  rmSync(dirPath, { recursive: true, force: true });
-}
-
-function safeStat(path: string): ReturnType<typeof statSync> | null {
-  try {
-    return statSync(path);
-  } catch {
-    return null;
-  }
-}
-
-function isOlderThan(value: string | null | undefined, ttlMs: number, now: number): boolean {
-  const time = value ? Date.parse(value) : NaN;
-  return Number.isFinite(time) && now - time > ttlMs;
-}
-
-function isTerminalIssueStatus(status: string): boolean {
-  return ["done", "completed", "closed", "cancelled"].includes(status);
-}
-
-function isTerminalAutopilotRunStatus(status: string): boolean {
-  return ["issue_created", "completed", "failed", "skipped"].includes(status);
-}
-
-function isTerminalTaskStatus(status: string): boolean {
-  return ["completed", "failed", "cancelled"].includes(status);
-}
-
-function isNotFoundError(err: unknown): boolean {
-  return err instanceof Error && /\b404\b/.test(err.message);
-}
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -1198,12 +837,6 @@ function formatDuration(ms: number): string {
   if (hours > 0) return `${hours}h${minutes}m${seconds}s`;
   if (minutes > 0) return `${minutes}m${seconds}s`;
   return `${seconds}s`;
-}
-
-function resolveWorkDir(task: MultiremiTaskWithAgent, workspacesRoot = join(homedir(), ".remi", "multiremi", "workspaces")): string {
-  if (task.workDir) return task.workDir;
-  if (task.agent?.cwd) return task.agent.cwd;
-  return join(workspacesRoot, task.workspaceId, task.id);
 }
 
 function eventToTaskMessage(event: ProviderEvent, seq: number): TaskMessageInput | null {
@@ -1557,14 +1190,6 @@ async function runDefaultMultiremiUpdate(targetVersion: string): Promise<string>
   const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
   if (exitCode !== 0) throw new Error(output || `multiremi update failed with exit code ${exitCode}`);
   return output || `Updated to ${version}`;
-}
-
-function cleanProcessEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined) next[key] = value;
-  }
-  return next;
 }
 
 async function streamText(stream: ReadableStream<Uint8Array> | null): Promise<string> {
