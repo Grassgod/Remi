@@ -6,11 +6,27 @@
 
 按 `docs/DIR-REDESIGN.md` §7 的 D0→D11 序列,逐步执行纯目录/层级重构。**行为零变更**——只搬家、改 import 路径、留 re-export 垫片。
 
+## 工作区约定
+
+**在 worktree 中工作,不要直接改 main。**
+
+```bash
+git worktree add .claude/worktrees/dir-redesign -b refactor/dir-redesign
+cd .claude/worktrees/dir-redesign
+```
+
+- **分支**: `refactor/dir-redesign`（从当前 main HEAD 创建）
+- **worktree 路径**: `.claude/worktrees/dir-redesign`
+- 每步 D0–D11 各一个 commit 在此分支上
+- 全部完成后,由人决定是 PR 回 main 还是 squash merge
+- Codex reviewer 会读这个 worktree 来审查
+
 ## 执行前必读
 
 1. 完整阅读 `docs/DIR-REDESIGN.md`（v4 最终版）——这是你的唯一规范。
-2. 运行 `bun test tests/multiremi-core.test.ts` 记录基线（应为 142 pass / 0 fail）。
-3. 运行 `bun test` 记录全量基线。
+2. 创建 worktree 并切到该目录。
+3. 运行 `bun test tests/multiremi-core.test.ts` 记录基线（应为 142 pass / 0 fail）。
+4. 运行 `bun test` 记录全量基线。
 
 ## 每一步的执行模式
 
