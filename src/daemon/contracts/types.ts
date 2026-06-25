@@ -27,6 +27,11 @@ export interface AgentTaskAgent {
   executable: string | null;
   allowedTools: string[];
   customEnv: Record<string, string>;
+
+  // Ephemeral per-task MCP servers (mcp/ephemeral.ts). Standard .mcp.json shape
+  // (`{ mcpServers: {...} }`); parsed defensively. Optional + unknown so the
+  // concrete MultiremiAgent stays structurally assignable.
+  mcpConfig?: unknown | null;
 }
 
 /** Skill materialized into the task workdir. */

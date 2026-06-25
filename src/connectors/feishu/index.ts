@@ -4,9 +4,9 @@
 
 import type { FeishuConfig } from "../../config.js";
 import { GroupConfigStore } from "../../group/store.js";
-import type { AgentResponse, ProviderEvent } from "@shared/provider-types.js";
+import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
-import type { MediaAttachment } from "@shared/acp-protocol.js";
+import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import { createLogger } from "../../logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";

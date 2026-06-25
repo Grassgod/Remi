@@ -8,7 +8,7 @@ import type {
   ToolCallProgressUpdate,
   ToolCallMeta,
   NewSessionMeta,
-} from "@shared/acp-protocol.js";
+} from "@shared/contracts/acp-protocol.js";
 import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
 
 export class CodexAdapter implements AgentAdapter {

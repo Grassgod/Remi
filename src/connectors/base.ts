@@ -2,8 +2,8 @@
  * Connector protocol and shared types.
  */
 
-import type { AgentResponse, ProviderEvent } from "@shared/provider-types.js";
-import type { MediaAttachment } from "@shared/acp-protocol.js";
+import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
+import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 
 /** A message received from any connector. */
 export interface IncomingMessage {

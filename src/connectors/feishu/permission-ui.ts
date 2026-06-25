@@ -7,7 +7,7 @@
  * - ExitPlanMode: plan content + feedback input + Approve/Deny buttons
  */
 
-import type { PermissionOption } from "@shared/acp-protocol.js";
+import type { PermissionOption } from "@shared/contracts/acp-protocol.js";
 
 export interface AskUserQuestion {
   question: string;

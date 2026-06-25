@@ -19,6 +19,7 @@ import {
   normalizeSkillFilePath,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { buildTaskEnv, cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
+import { buildTaskMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
 import {
   LocalDirectoryError,
   LocalPathLocker,
@@ -579,6 +580,9 @@ export class MultiremiDaemon {
         serverUrl: this.options.serverUrl,
         fallbackToken: this.options.token,
       }),
+      // Inject the agent's MCP servers into the ACP session/new request. Tasks
+      // without mcpConfig yield [] → zero behavior change for existing runs.
+      getMcpServers: () => buildTaskMcpServers(task),
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);

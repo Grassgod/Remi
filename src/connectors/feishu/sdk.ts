@@ -27,11 +27,11 @@ export type { FeishuDomain, FeishuProbeResult } from "./types.js";
 // ── Streaming ─────────────────────────────────────────────────
 export { FeishuStreamingSession, buildFinalCard } from "./streaming.js";
 export type { StreamingCloseOptions, TokenProvider } from "./streaming.js";
-export type { StreamMeta, StreamHandlerLog } from "@shared/acp-protocol.js";
+export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
 
 // ── Adapters ──────────────────────────────────────────────────
 export { createAdapter, ClaudeAdapter, CodexAdapter } from "./adapters/index.js";
-export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/acp-protocol.js";
+export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/contracts/acp-protocol.js";
 
 // ── ACP Protocol types ────────────────────────────────────────
 export type {
@@ -44,7 +44,7 @@ export type {
   ContentBlock,
   PlanUpdate,
   UsageUpdate,
-} from "@shared/acp-protocol.js";
+} from "@shared/contracts/acp-protocol.js";
 
 // ── Low-level client (for remi's thin adapter) ───────────────
 export { createFeishuClient } from "./client.js";

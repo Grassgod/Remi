@@ -13,15 +13,15 @@ import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";
 import { FeishuStreamingSession, buildFinalCard, type TokenProvider } from "./streaming.js";
 import { handleAgentStream } from "./adapters/stream-handler.js";
 import { createAdapter } from "./adapters/index.js";
-import type { StreamMeta, StreamHandlerLog } from "@shared/acp-protocol.js";
-import type { AgentAdapter } from "@shared/acp-protocol.js";
-import type { SessionUpdate } from "@shared/acp-protocol.js";
+import type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
+import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
+import type { SessionUpdate } from "@shared/contracts/acp-protocol.js";
 import { rejectAllPendingActions, rejectPendingActionsForChat } from "./card-actions.js";
 import { addReactionFeishu, removeReactionFeishu } from "./reactions.js";
 
 export type { ParsedFeishuMessage } from "./receive.js";
 export type { FeishuStreamingSession, TokenProvider } from "./streaming.js";
-export type { StreamMeta } from "@shared/acp-protocol.js";
+export type { StreamMeta } from "@shared/contracts/acp-protocol.js";
 
 const log = createLogger("feishu-channel");
 
