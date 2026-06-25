@@ -1,21 +1,29 @@
-import Link from "next/link";
+"use client";
+
+import dynamic from "next/dynamic";
 
 /**
- * Remi 后台 (admin) — route group `(remi)` scaffold.
+ * Remi 后台 (admin) — route group `(remi)`.
  *
- * Scaffold only. The full admin UI is the Vite app co-located at
- * `apps/console/(remi)/` (a nested, non-workspace dir). Porting it into this
- * Next route group is the remaining Vite→Next integration tracked in
- * docs/DIR-REDESIGN-STATUS.md.
+ * Renders the REAL admin UI: the legacy Vite SPA (dashboard shell + all admin
+ * views — conversations, memory, skills, MCP, providers, analytics, traces,
+ * logs, scheduler, agents, projects, config, database, …) mounted as a
+ * client-only island. The SPA source lives under `app/(remi)/_app/` and is
+ * routed internally by wouter hash-routing (e.g. `/admin#/conversations`).
+ *
+ * This is the Vite→Next first cut: the full real app renders inside the single
+ * console Next app. See _app/README for what's wholesale-mounted vs. the
+ * incremental file-by-file Next port that remains.
  */
-export default function RemiAdmin() {
-  return (
-    <main style={{ maxWidth: 640, margin: "0 auto", padding: "4rem 1.5rem" }}>
-      <h1>Remi 后台</h1>
-      <p>Admin area (scaffold). The Vite admin UI lives in apps/console/(remi)/.</p>
-      <p>
-        <Link href="/">← Back to console</Link>
-      </p>
-    </main>
-  );
+const RemiAdminApp = dynamic(() => import("../_app/RemiAdminApp"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-svh items-center justify-center text-sm text-muted-foreground">
+      Loading Remi admin…
+    </div>
+  ),
+});
+
+export default function RemiAdminPage() {
+  return <RemiAdminApp />;
 }

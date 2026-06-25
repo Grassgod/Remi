@@ -1,0 +1,173 @@
+/*
+ * Remi admin (后台) theme bridge — Tailwind v4.
+ *
+ * The legacy admin SPA was authored for Tailwind v3 (JS config + custom
+ * `--token` colors). The console runs Tailwind v4 (CSS-first). This file
+ * re-declares the admin's design tokens as a v4 `@theme` so the SPA's utility
+ * classes (`bg-card`, `text-muted-foreground`, `text-success`, `border-border`,
+ * …) generate, and scans the staged admin source so v4 sees every classname.
+ *
+ * Tokens copied verbatim from the SPA's src/styles/index.css. Scoped under
+ * `.remi-admin-root` so it cannot leak into the Multiremi board styling.
+ */
+
+@import "tailwindcss";
+
+/* Scan the staged admin source so Tailwind v4 generates the utilities it uses. */
+@source "./src/**/*.{ts,tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--admin-background);
+  --color-foreground: var(--admin-foreground);
+  --color-card: var(--admin-card);
+  --color-card-foreground: var(--admin-card-foreground);
+  --color-popover: var(--admin-popover);
+  --color-popover-foreground: var(--admin-popover-foreground);
+  --color-muted: var(--admin-muted);
+  --color-muted-foreground: var(--admin-muted-foreground);
+  --color-accent: var(--admin-accent);
+  --color-accent-foreground: var(--admin-accent-foreground);
+  --color-border: var(--admin-border);
+  --color-input: var(--admin-input);
+  --color-ring: var(--admin-ring);
+  --color-primary: var(--admin-primary);
+  --color-primary-foreground: var(--admin-primary-foreground);
+  --color-secondary: var(--admin-secondary);
+  --color-secondary-foreground: var(--admin-secondary-foreground);
+  --color-destructive: var(--admin-destructive);
+  --color-success: var(--admin-success);
+  --color-warning: var(--admin-warning);
+  --color-sidebar: var(--admin-sidebar);
+  --color-sidebar-foreground: var(--admin-sidebar-foreground);
+  --color-sidebar-accent: var(--admin-sidebar-accent);
+  --color-sidebar-accent-foreground: var(--admin-sidebar-accent-foreground);
+  --color-sidebar-border: var(--admin-sidebar-border);
+  --color-chart-1: var(--admin-chart-1);
+  --color-chart-2: var(--admin-chart-2);
+  --color-chart-3: var(--admin-chart-3);
+  --color-chart-4: var(--admin-chart-4);
+  --color-chart-5: var(--admin-chart-5);
+  --radius: 0.625rem;
+}
+
+.remi-admin-root {
+  --admin-background: oklch(0.985 0.005 285);
+  --admin-foreground: oklch(0.145 0 0);
+  --admin-card: oklch(1 0.003 285);
+  --admin-card-foreground: oklch(0.145 0 0);
+  --admin-popover: oklch(1 0.003 285);
+  --admin-popover-foreground: oklch(0.145 0 0);
+  --admin-muted: oklch(0.97 0.003 285);
+  --admin-muted-foreground: oklch(0.556 0 0);
+  --admin-accent: oklch(0.94 0.003 285);
+  --admin-accent-foreground: oklch(0.205 0 0);
+  --admin-border: oklch(0.922 0.003 285);
+  --admin-input: oklch(0.88 0.003 285);
+  --admin-ring: transparent;
+  --admin-primary: oklch(0.205 0 0);
+  --admin-primary-foreground: oklch(0.985 0 0);
+  --admin-secondary: oklch(0.945 0.003 285);
+  --admin-secondary-foreground: oklch(0.205 0 0);
+  --admin-destructive: oklch(0.577 0.245 27.325);
+  --admin-success: oklch(0.65 0.18 145);
+  --admin-warning: oklch(0.75 0.15 85);
+  --admin-sidebar: oklch(0.965 0.003 285);
+  --admin-sidebar-foreground: oklch(0.145 0 0);
+  --admin-sidebar-accent: oklch(0.925 0.003 285);
+  --admin-sidebar-accent-foreground: oklch(0.205 0 0);
+  --admin-sidebar-border: oklch(0.922 0.003 285);
+  --admin-chart-1: oklch(0.65 0.18 250);
+  --admin-chart-2: oklch(0.65 0.18 145);
+  --admin-chart-3: oklch(0.7 0.15 55);
+  --admin-chart-4: oklch(0.65 0.15 300);
+  --admin-chart-5: oklch(0.65 0.2 25);
+
+  --sidebar-width: 220px;
+  --header-height: 52px;
+  --bottom-nav-height: 60px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  color: var(--admin-foreground);
+  background: var(--admin-background);
+}
+
+:is(.dark) .remi-admin-root {
+  --admin-background: oklch(0.14 0.004 285);
+  --admin-foreground: oklch(0.98 0 0);
+  --admin-card: oklch(0.18 0.004 285);
+  --admin-card-foreground: oklch(0.98 0 0);
+  --admin-popover: oklch(0.18 0.004 285);
+  --admin-popover-foreground: oklch(0.98 0 0);
+  --admin-muted: oklch(0.22 0.004 285);
+  --admin-muted-foreground: oklch(0.6 0 0);
+  --admin-accent: oklch(0.26 0.004 285);
+  --admin-accent-foreground: oklch(0.98 0 0);
+  --admin-border: oklch(1 0 0 / 10%);
+  --admin-input: oklch(1 0 0 / 15%);
+  --admin-ring: transparent;
+  --admin-primary: oklch(0.98 0 0);
+  --admin-primary-foreground: oklch(0.205 0 0);
+  --admin-secondary: oklch(0.26 0.004 285);
+  --admin-secondary-foreground: oklch(0.98 0 0);
+  --admin-destructive: oklch(0.65 0.2 25);
+  --admin-success: oklch(0.65 0.18 145);
+  --admin-warning: oklch(0.75 0.15 85);
+  --admin-sidebar: oklch(0.16 0.004 285);
+  --admin-sidebar-foreground: oklch(0.98 0 0);
+  --admin-sidebar-accent: oklch(0.22 0.004 285);
+  --admin-sidebar-accent-foreground: oklch(0.98 0 0);
+  --admin-sidebar-border: oklch(1 0 0 / 10%);
+  --admin-chart-1: oklch(0.7 0.18 250);
+  --admin-chart-2: oklch(0.7 0.18 145);
+  --admin-chart-3: oklch(0.75 0.15 55);
+  --admin-chart-4: oklch(0.7 0.15 300);
+  --admin-chart-5: oklch(0.7 0.2 25);
+}
+
+/* ─── Custom classes & keyframes from the SPA's index.css ─── */
+.remi-admin-root .mission-card {
+  border: 1px solid var(--admin-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.remi-admin-root .mission-card:hover { filter: brightness(0.97); }
+:is(.dark) .remi-admin-root .mission-card { border: none; box-shadow: none; }
+:is(.dark) .remi-admin-root .mission-card:hover { filter: brightness(1.12); }
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sheet-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.remi-admin-root .entity-badge-person       { border: 1px solid oklch(0.7 0.15 250 / 30%); color: oklch(0.7 0.15 250); background: oklch(0.7 0.15 250 / 6%); }
+.remi-admin-root .entity-badge-project      { border: 1px solid oklch(0.65 0.18 145 / 30%); color: oklch(0.65 0.18 145); background: oklch(0.65 0.18 145 / 6%); }
+.remi-admin-root .entity-badge-service      { border: 1px solid oklch(0.65 0.15 300 / 30%); color: oklch(0.65 0.15 300); background: oklch(0.65 0.15 300 / 6%); }
+.remi-admin-root .entity-badge-platform     { border: 1px solid oklch(0.55 0.2 260 / 30%); color: oklch(0.55 0.2 260); background: oklch(0.55 0.2 260 / 6%); }
+.remi-admin-root .entity-badge-organization { border: 1px solid oklch(0.75 0.15 85 / 30%); color: oklch(0.75 0.15 85); background: oklch(0.75 0.15 85 / 6%); }
+.remi-admin-root .entity-badge-decision     { border: 1px solid oklch(0.65 0.2 25 / 30%); color: oklch(0.65 0.2 25); background: oklch(0.65 0.2 25 / 6%); }
+.remi-admin-root .entity-badge-software     { border: 1px solid oklch(0.6 0.18 180 / 30%); color: oklch(0.6 0.18 180); background: oklch(0.6 0.18 180 / 6%); }
+
+@media (max-width: 768px) {
+  .remi-admin-root .desktop-only { display: none !important; }
+  .remi-admin-root .mobile-only { display: block !important; }
+  .remi-admin-root .main-content {
+    padding: 12px !important;
+    padding-bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 12px) !important;
+  }
+}
+@media (min-width: 769px) {
+  .remi-admin-root .mobile-only { display: none !important; }
+  .remi-admin-root .desktop-only { display: flex !important; }
+}
+@media (max-width: 639px) {
+  .remi-admin-root .donut-legend { gap: 4px 10px !important; }
+}
