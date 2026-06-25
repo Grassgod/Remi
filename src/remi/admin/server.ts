@@ -57,13 +57,7 @@ export interface WebDashboardOptions {
 export function createApp(opts: { authToken?: string; devMode?: boolean } = {}): Hono {
   const authToken = opts.authToken ?? "";
   const devMode = opts.devMode ?? false;
-  // Serve the Vite admin dashboard build. Bundled: dist sits next to the server;
-  // dev from src/remi/admin/: it's the relocated frontend/apps/console/(remi)/dist
-  // (moved out of the old top-level web/frontend in D11).
-  const staticDir = [
-    join(import.meta.dir, "frontend", "dist"),
-    join(import.meta.dir, "..", "..", "..", "frontend", "apps", "console", "(remi)", "dist"),
-  ].find(existsSync) ?? join(import.meta.dir, "frontend", "dist");
+  // Frontend is now a separate Next.js app (frontend/apps/console), not served here.
 
   const data = new RemiData();
   const app = new Hono();
@@ -237,15 +231,10 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     return new Response(Bun.file(requested));
   });
 
-  // ── Static files (production only) ──
-  // Only serve actual files from /assets and /fonts; everything else
-  // falls through to the SPA fallback below, which serves the dashboard.
+  // ── Catch-all: the frontend is now a separate Next.js app (frontend/apps/console).
+  // This backend only serves API routes; unknown paths get a JSON pointer.
   if (!devMode) {
-    app.use("/assets/*", serveStatic({ root: staticDir }));
-    app.use("/fonts/*",  serveStatic({ root: staticDir }));
-    app.get("/*", () => {
-      return new Response(Bun.file(join(staticDir, "index.html")));
-    });
+    app.all("/*", (c) => c.json({ service: "remi-api", ui: "frontend/apps/console" }));
   }
 
   // Dev mode fallback
