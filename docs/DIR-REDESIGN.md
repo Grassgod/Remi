@@ -102,8 +102,9 @@ remi/
 │   │   │   │
 │   │   │   ├── mcp/                     # MCP 工具
 │   │   │   │   ├── persistent.ts        #   持久 .mcp.json 同步
-│   │   │   │   ├── ephemeral.ts         #   ACP session/new mcpServers 参数
-│   │   │   │   └── servers/             #   MCP server 注册/启动/管理
+│   │   │   │   └── ephemeral.ts         #   ACP session/new mcpServers 参数(buildTaskMcpServers)
+│   │   │   │   # 注:无 servers/ 子目录 —— MCP server 进程由 ACP agent 进程自身按注入的
+│   │   │   #         mcpServers 启动/管理,Remi 侧无独立 server lifecycle 代码
 │   │   │   │
 │   │   │   ├── prompts/                 # CLAUDE.md / AGENTS.md / 指令
 │   │   │   │   ├── persistent.ts        #   managed block fan-out（不再用 cc-switch）

@@ -119,7 +119,22 @@ describe("SourceBackfillModal", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("opens for an onboarded user with empty source and fires the shown event", async () => {
+  // ---------------------------------------------------------------------------
+  // PARKED: source-backfill survey disabled for self-host.
+  //
+  // The "where did you hear about us" survey is intentionally disabled in this
+  // self-host build — `@multiremi/core/onboarding` `needsSourceBackfill()` hard
+  // -returns false on every path (see its header comment), so the modal never
+  // opens. The behavioural tests below all wait for the modal to open and
+  // therefore cannot pass while the survey is off.
+  //
+  // They are kept (not deleted) so the coverage is preserved verbatim: if the
+  // survey is ever re-enabled (un-disable needs-backfill.ts), un-skip these and
+  // they exercise the open/select/submit/skip semantics again. The "does not
+  // open" cases (no user, source already set, legacy string, dismiss cap) stay
+  // active above — they assert the closed state, which holds regardless.
+  // ---------------------------------------------------------------------------
+  it.skip("opens for an onboarded user with empty source and fires the shown event", async () => {
     setUser({
       id: "u1",
       onboarded_at: "2026-01-01T00:00:00Z",
@@ -134,7 +149,8 @@ describe("SourceBackfillModal", () => {
     expect(mockCaptureEvent).toHaveBeenCalledWith("source_backfill_shown");
   });
 
-  it("Submit PATCHes the merged questionnaire preserving role / use_case", async () => {
+  // PARKED (survey disabled, see note above).
+  it.skip("Submit PATCHes the merged questionnaire preserving role / use_case", async () => {
     setUser({
       id: "u1",
       onboarded_at: "2026-01-01T00:00:00Z",
@@ -167,7 +183,8 @@ describe("SourceBackfillModal", () => {
     );
   });
 
-  it("Skip PATCHes source_skipped=true preserving role / use_case", async () => {
+  // PARKED (survey disabled, see note above).
+  it.skip("Skip PATCHes source_skipped=true preserving role / use_case", async () => {
     setUser({
       id: "u1",
       onboarded_at: "2026-01-01T00:00:00Z",
@@ -206,7 +223,8 @@ describe("SourceBackfillModal", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders the GitHub channel rebased from origin/main", async () => {
+  // PARKED (survey disabled, see note above).
+  it.skip("renders the GitHub channel rebased from origin/main", async () => {
     setUser({
       id: "u1",
       onboarded_at: "2026-01-01T00:00:00Z",
@@ -216,7 +234,8 @@ describe("SourceBackfillModal", () => {
     expect(await screen.findByText("GitHub")).toBeInTheDocument();
   });
 
-  it("picking a second option replaces the first (single-select primary source)", async () => {
+  // PARKED (survey disabled, see note above).
+  it.skip("picking a second option replaces the first (single-select primary source)", async () => {
     // The modal is now a single-select radio. Industry default for
     // HDYHAU is to capture the primary acquisition source, so picking
     // a second option must replace the first — never accumulate.
@@ -253,7 +272,8 @@ describe("SourceBackfillModal", () => {
     expect(sent.source).not.toContain("friends_colleagues");
   });
 
-  it("defers the entrance by ~700ms when the user has not opted into reduced motion", async () => {
+  // PARKED (survey disabled, see note above).
+  it.skip("defers the entrance by ~700ms when the user has not opted into reduced motion", async () => {
     mockPrefersReducedMotion(false);
     vi.useFakeTimers();
     try {

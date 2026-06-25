@@ -53,8 +53,10 @@ remi-jarvis-*.png
 remi.toml
 !remi.toml.example
 
-# Auth tokens
-auth/
+# Auth tokens — Remi runtime auth dir at repo ROOT only (leading slash).
+# Must NOT recursively match frontend/src source dirs named auth/ (e.g.
+# frontend/packages/views/auth, src/auth) — those are tracked source.
+/auth/
 *.tokens.json
 
 # SQLite databases
