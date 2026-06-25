@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { migrateCcSwitchToRemi } from "../../../../src/daemon/agent-runtime/config-hub/migration.js";
+import { migrateLegacyConfigStore } from "../../../../src/daemon/agent-runtime/config-hub/migration.js";
 
 let home: string;
 
@@ -29,17 +29,17 @@ function seedOldSkills(): void {
   writeFileSync(join(oldSkills(home), "demo", "SKILL.md"), "# demo");
 }
 
-describe("migrateCcSwitchToRemi", () => {
+describe("migrateLegacyConfigStore", () => {
   it("copies the DB when old exists and new is absent", () => {
     seedOldDb("PAYLOAD");
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(existsSync(newDb(home))).toBe(true);
     expect(readFileSync(newDb(home), "utf8")).toBe("PAYLOAD");
   });
 
   it("copies the skills tree when old exists and new is absent", () => {
     seedOldSkills();
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(existsSync(join(newSkills(home), "demo", "SKILL.md"))).toBe(true);
     expect(readFileSync(join(newSkills(home), "demo", "SKILL.md"), "utf8")).toBe("# demo");
   });
@@ -48,7 +48,7 @@ describe("migrateCcSwitchToRemi", () => {
     seedOldDb("OLD");
     mkdirSync(join(home, ".remi"), { recursive: true });
     writeFileSync(newDb(home), "NEW");
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(readFileSync(newDb(home), "utf8")).toBe("NEW");
   });
 
@@ -56,7 +56,7 @@ describe("migrateCcSwitchToRemi", () => {
     seedOldSkills();
     mkdirSync(newSkills(home), { recursive: true });
     writeFileSync(join(newSkills(home), "marker.txt"), "KEEP");
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     // existing new dir is preserved untouched; old "demo" is not copied in
     expect(readFileSync(join(newSkills(home), "marker.txt"), "utf8")).toBe("KEEP");
     expect(existsSync(join(newSkills(home), "demo"))).toBe(false);
@@ -65,7 +65,7 @@ describe("migrateCcSwitchToRemi", () => {
   it("never deletes the old paths", () => {
     seedOldDb("OLD");
     seedOldSkills();
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(existsSync(oldDb(home))).toBe(true);
     expect(existsSync(join(oldSkills(home), "demo", "SKILL.md"))).toBe(true);
   });
@@ -73,16 +73,16 @@ describe("migrateCcSwitchToRemi", () => {
   it("is idempotent (second run is a no-op)", () => {
     seedOldDb("PAYLOAD");
     seedOldSkills();
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     // mutate the new DB to prove the second run does not re-copy over it
     writeFileSync(newDb(home), "MODIFIED");
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(readFileSync(newDb(home), "utf8")).toBe("MODIFIED");
     expect(existsSync(join(newSkills(home), "demo", "SKILL.md"))).toBe(true);
   });
 
   it("is a no-op when nothing to migrate", () => {
-    migrateCcSwitchToRemi(home);
+    migrateLegacyConfigStore(home);
     expect(existsSync(newDb(home))).toBe(false);
     expect(existsSync(newSkills(home))).toBe(false);
   });

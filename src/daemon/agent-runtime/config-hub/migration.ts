@@ -23,7 +23,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export function migrateCcSwitchToRemi(home: string = homedir()): void {
+export function migrateLegacyConfigStore(home: string = homedir()): void {
   const oldDb = join(home, ".cc-switch", "cc-switch.db");
   const newDb = join(home, ".remi", "config-hub.db");
   if (existsSync(oldDb) && !existsSync(newDb)) {
