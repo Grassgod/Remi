@@ -3,7 +3,7 @@
  * Remi Build Pipeline
  *
  * 1. bun build → single bundle
- * 2. Package skills + agents + bin + config
+ * 2. Package skills + bin + config
  * 3. Create tar.gz release archive
  *
  * Usage: bun run scripts/build.ts
@@ -77,13 +77,6 @@ for (const skill of coreSkills) {
   } else {
     console.log(`  skill not found: ${src}`);
   }
-}
-
-const agentsSrc = join(ROOT, "agents");
-const agentsDst = join(BUILD_DIR, "agents");
-if (existsSync(agentsSrc)) {
-  cpSync(agentsSrc, agentsDst, { recursive: true });
-  console.log("  agents/ copied");
 }
 
 // Step 4: Create tar.gz

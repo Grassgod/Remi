@@ -3,16 +3,15 @@
  * Layer dependency checker for the block architecture (see docs/DIR-REDESIGN.md §3).
  *
  *   L0  shared         ← imports nobody
- *   L1  acp memory queue agents connectors auth  ← only L0; L1 blocks have zero cross-deps
+ *   L1  acp memory queue connectors auth  ← only L0; L1 blocks have zero cross-deps
  *   L2  daemon         ← L0 + L1
  *   L3  remi multiremi ← L0 + L1 + L2; remi and multiremi do not import each other
  *   L4  cli (entry)    ← anything
  *
- * Only files that already live in a *classified* module are enforced. Legacy
- * directories that have not been moved yet (providers/, conversation/, db/,
- * logger.ts, ...) are exempt both as source and as target, so the checker stays
- * quiet for unmoved code and tightens automatically as each D-step lands files
- * in their final home.
+ * Every src/ module now lives in a classified layer — the directory restructure
+ * is complete and no legacy/unmoved dirs or re-export shims remain. Any module
+ * NOT in the LAYER map is treated as external/unclassified and exempt (source and
+ * target), so a newly-added unclassified dir stays quiet until it is classified.
  *
  * Usage:
  *   bun run scripts/check-layers.ts          # WARN only, always exit 0
