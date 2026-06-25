@@ -265,12 +265,14 @@ L4  cli frontend   ← import 任何层
 - **shared/db/**: SQLite（remi + daemon 本地状态用）
 - **multiremi/store/db/**: PostgreSQL（中心化平台,多 daemon 并发访问）
 - daemon 不直连 PG,通过 HTTP 调 multiremi API
-- 不再使用 cc-switch 品牌/DB名/路径
+- 不再使用 cc-switch 品牌/DB名/路径（runtime 用 `~/.remi/config-hub.db` + `~/.remi/skills`;legacy `~/.cc-switch` 仅由一次性 COPY 迁移只读访问）
 
 ## 6. 前端
 
 - `frontend/` 自包含 pnpm+turbo 工作区
 - 一个 Next app(`apps/console`),入口页 → (remi) + (multiremi) 两个 route group
+  - **(multiremi)**: 完整迁自 apps/web(Next→Next),复用 @multiremi/core|ui|views,真实看板/issue/agent/runtime/settings 等
+  - **(remi)**: 真实 admin SPA 挂为 client island(/admin,23 视图),Tailwind v3→v4 桥接;增量:各视图转 Next 原生段(见 app/(remi)/_app/README.md)
 - 两后端只吐 JSON
 - `packages/ui` 共享设计系统
 
@@ -299,6 +301,6 @@ L4  cli frontend   ← import 任何层
 4. sqlite-custom 首加载顺序不可破
 5. core.ts 拆分(D6)先写 characterization 测试
 6. L1 积木块之间零依赖
-7. 不再出现 cc-switch 命名
+7. 不再出现 cc-switch 命名（运行时路径/DB名/API前缀已改 ~/.remi + /api/v1/config-hub；**例外**：一次性 COPY 迁移 `config-hub/migration.ts` 只读 legacy `~/.cc-switch` + TOML `[cc_switch]` 向后兼容回退,保现有用户数据,产品已批准）
 8. PG 相关代码只在 multiremi/store/db/ 内,不进 shared
 9. packages/acp-provider 和 feishu-channel 合并进 src 后保持 re-export 兼容直到所有 import 迁完

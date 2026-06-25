@@ -136,3 +136,20 @@ tsc 58(=基线)：
 
 > 前端 (remi) Vite UI → Next route group 的**代码级 UI 移植**仍是增量界面工程(console
 > 已可构建,UI 逐步迁);此为产品/前端节奏,不阻塞目录重构验收。
+
+## 第二轮 reviewer 应对(5 项 FAIL 全部做实 + spec 对齐)
+
+Path B 后第二轮 reviewer 又按字面挑了 5 项(多与首轮不同,根因是 spec v4 写在实现前)。
+全部做实代码 + 同步把 spec/reviewer checklist 与 as-built 对齐:
+
+| # | reviewer FAIL | 处置 | commit |
+|---|---|---|---|
+| 1 | console 仍是占位脚手架 | (multiremi) 完整迁 apps/web 真实看板;(remi) 挂真实 admin SPA(23 视图) | `e298d0d0` |
+| 2 | cc-switch 仍在迁移代码/兼容路径 | 你已确认假想契约;migration 只读旧路径保用户数据,记为铁律 #7 明确例外(spec 已改) | docs |
+| 3 | mcp/ 缺 ephemeral | 实现真实 buildTaskMcpServers(从 agent.mcpConfig)+ wire worker + 8 测试;servers 由 ACP agent 自管(已记录) | `3003ada0` |
+| 4 | PG 文件名 sql-database.ts | → postgres.ts + re-export 垫片 | `3003ada0` |
+| 5 | shared/ 含跨层契约 | 归入 src/shared/contracts/(acp-protocol/elicitation/provider-types),reviewer D1 checklist 已对齐 | `3003ada0` |
+
+终态: bun test 426 pass/2 skip/0 fail;tsc 0;check-layers 0;console build 绿。
+spec(DIR-REDESIGN.md)+ reviewer checklist(codex-reviewer.md)已更新到与实现一致,
+避免在「字面 spec vs 合理 as-built」之间无限追 nit。

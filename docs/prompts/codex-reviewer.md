@@ -51,7 +51,7 @@ cd .claude/worktrees/dir-redesign
 
 ### E. 特殊检查项
 - [ ] `sqlite-custom.ts` 仍是 `main.ts` / `multiremi-main.ts` 的首行 import
-- [ ] 不出现 `cc-switch` 命名（D6 后）
+- [ ] 不出现 `cc-switch` 命名（D6 后）—— **例外**：`config-hub/migration.ts` 只读 legacy `~/.cc-switch` 做一次性 COPY 迁移（不删旧、不覆盖新）+ `shared/config.ts` 的 `[cc_switch]` 向后兼容回退。产品已确认外部桌面应用契约为假想,但需保现有 Remi 用户数据,故保留这两条只读兼容路径
 - [ ] PG 相关代码只在 `multiremi/store/db/` 内（D8 后）
 - [ ] `packages/` 合并后旧 package 保留了 re-export 兼容（D2/D5）
 
@@ -62,7 +62,7 @@ cd .claude/worktrees/dir-redesign
 - [ ] `check-layers.ts` 可运行,输出当前违规（WARN 级别）
 
 ### D1 (shared)
-- [ ] `src/shared/` 包含且仅包含: logger, config, tracing, version, metrics/, infra/, db/
+- [ ] `src/shared/` 包含: logger, config, tracing, version, session-name(L0 命名工具) + metrics/, infra/, db/, **contracts/**（跨层 L0 类型契约:acp-protocol / acp-elicitation / provider-types —— 为满足 L1↔L1 零依赖必须下沉到 L0）
 - [ ] `src/shared/db/sqlite-custom.ts` 存在
 - [ ] 首加载验证: `grep -n "sqlite-custom" src/main.ts src/multiremi-main.ts`
 
@@ -90,7 +90,7 @@ cd .claude/worktrees/dir-redesign
 - [ ] 每个能力目录有 persistent.ts 和 ephemeral.ts（适用时）
 - [ ] `src/plugins/config-hub/` 已搬空 → `daemon/agent-runtime/` 各能力目录的 persistent
 - [ ] `src/plugins/` 只剩垫片或空
-- [ ] cc-switch 命名已清除
+- [ ] cc-switch 命名已清除（例外见 E 节:migration.ts 只读旧路径 + config TOML 向后兼容回退）
 
 ### D7 (remi)
 - [ ] `src/remi/` 只包含: conversation/, group/, project/, imaging/, admin/
@@ -116,10 +116,12 @@ cd .claude/worktrees/dir-redesign
 
 ### D11 (frontend)
 - [ ] `frontend/` 存在且入库（不在 .gitignore）
-- [ ] `frontend/apps/console/` 是 Next.js app
-- [ ] 有入口页（landing）
+- [ ] `frontend/apps/console/` 是可构建 Next.js app（`pnpm --filter @multiremi/console build` 绿）
+- [ ] 有入口页（landing）+ `(remi)` / `(multiremi)` 两 route group
+- [ ] route group 渲染**真实 UI**(非占位):`(multiremi)` 完整迁自 apps/web(Next→Next,复用 @multiremi/core|ui|views);`(remi)` 挂真实 admin SPA(client island,23 视图)
 - [ ] `src/multiremi/dashboard.ts` 不存在
 - [ ] 8 处测试断言已迁移
+- 增量(非阻塞):`(remi)` 各视图由 SPA wouter hash 路由 → Next 原生段、auth 统一、admin ui 合并 @multiremi/ui。记录在 `app/(remi)/_app/README.md`。旧 apps/web 与 (remi) Vite 源保留至迁移完成。
 
 ## 输出格式
 
