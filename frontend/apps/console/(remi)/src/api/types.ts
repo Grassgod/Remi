@@ -646,41 +646,6 @@ export interface SkillFileNode {
   children?: SkillFileNode[];
 }
 
-// ── Agents ──
-
-export interface AgentInfo {
-  name: string;
-  cwd: string;
-  model: string;
-  trigger: string;
-  cron?: string;
-  debounce_ms?: number;
-  timeoutMs: number;
-  mcp: boolean;
-  description: string;
-  permissions: { mcpTools: string[]; cliTools: string[] };
-  skills: string[];
-  lastRun: AgentRunEntry | null;
-  runsToday: number;
-  successRate7d: number;
-}
-
-export interface AgentDetail {
-  claudeMd: string;
-  settingsJson: string;
-  skills: Array<{ name: string; content: string }>;
-}
-
-export interface AgentRunEntry {
-  ts: string;
-  agent: string;
-  model: string;
-  exit: number;
-  duration_ms: number;
-  stdout_len: number;
-  stderr_len: number;
-}
-
 // ── MCP ──
 
 export interface McpScope {

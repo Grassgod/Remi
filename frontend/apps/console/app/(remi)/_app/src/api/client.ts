@@ -304,29 +304,6 @@ export const getSkillsBasePath = (scope?: string) =>
 export const getSkillTree = (name: string, scope?: string) =>
   request<import("./types").SkillFileNode[]>(_appendScope(`/api/v1/skills/${encodeURIComponent(name)}/tree`, scope));
 
-// Agents
-export const getAgents = () =>
-  request<import("./types").AgentInfo[]>("/api/v1/agents");
-export const getAgentDetail = (name: string) =>
-  request<import("./types").AgentDetail>(`/api/v1/agents/${encodeURIComponent(name)}`);
-export const getAgentRuns = (name: string, limit = 50) =>
-  request<import("./types").AgentRunEntry[]>(`/api/v1/agents/${encodeURIComponent(name)}/runs?limit=${limit}`);
-export const updateAgentClaudeMd = (name: string, content: string) =>
-  request(`/api/v1/agents/${encodeURIComponent(name)}/claude-md`, {
-    method: "PUT", body: JSON.stringify({ content }),
-  });
-export const updateAgentSettings = (name: string, content: string) =>
-  request(`/api/v1/agents/${encodeURIComponent(name)}/settings`, {
-    method: "PUT", body: JSON.stringify({ content }),
-  });
-export const updateAgentSkill = (name: string, skillName: string, content: string) =>
-  request(`/api/v1/agents/${encodeURIComponent(name)}/skills/${encodeURIComponent(skillName)}`, {
-    method: "PUT", body: JSON.stringify({ content }),
-  });
-export const getAgentSkillTree = (agentName: string, skillName: string) =>
-  request<import("./types").SkillFileNode[]>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/tree`);
-export const getAgentSkillFile = (agentName: string, skillName: string, path = "SKILL.md") =>
-  request<{ content: string }>(`/api/v1/agents/${encodeURIComponent(agentName)}/skills/${encodeURIComponent(skillName)}/file?path=${encodeURIComponent(path)}`);
 // MCP
 export const getMcpScopes = () =>
   request<import("./types").McpScope[]>("/api/v1/mcp/scopes");

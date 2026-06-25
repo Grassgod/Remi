@@ -1,7 +1,7 @@
 import { useLocation } from "wouter";
 import {
   LayoutDashboard, MessageSquare, Brain, BookOpen,
-  BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap, Bot, Shield, Plug,
+  BarChart3, Activity, FileText, Clock, FolderOpen, Menu, Zap, Shield, Plug,
   Database, Settings, Link2, Boxes,
 } from "lucide-react";
 import { cn } from "~remiadmin/lib/utils";
@@ -17,7 +17,6 @@ const navItems = [
     { path: "/wiki", label: "Wiki", icon: BookOpen },
   ]},
   { group: "AI Engine", items: [
-    { path: "/agents", label: "Agents", icon: Bot },
     { path: "/skills", label: "Skills", icon: Zap },
     { path: "/mcp", label: "MCP", icon: Plug },
     { path: "/prompts", label: "Prompts", icon: FileText },
