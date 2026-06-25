@@ -3,11 +3,11 @@
  * Remi Web Dashboard — Hono-based API + static file server
  *
  * Can run standalone:
- *   bun run web/server.ts              # Production (serves API + built frontend)
- *   bun run web/server.ts --dev        # Dev mode (API only, frontend via Vite)
+ *   bun run src/remi/admin/server.ts          # Production (serves API + built frontend)
+ *   bun run src/remi/admin/server.ts --dev    # Dev mode (API only, frontend via Vite)
  *
  * Or imported by daemon:
- *   import { startWebDashboard, stopWebDashboard } from "./web/server.js";
+ *   import { startWebDashboard, stopWebDashboard } from "./server.js";
  */
 
 import { join, resolve as resolvePath, sep as pathSep } from "node:path";
@@ -21,9 +21,9 @@ import { RemiData } from "./remi-data.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
 import { registerAuthHandlers } from "./handlers/auth.js";
-import { SsoPlugin } from "../../plugins/sso/index.js";
-import { getDb } from "../../db/index.js";
-import { loadConfig } from "../../config.js";
+import { SsoPlugin } from "../../daemon/agent-runtime/plugins/sso/index.js";
+import { getDb } from "../../shared/db/index.js";
+import { loadConfig } from "../../shared/config.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
 import { registerAnalyticsHandlers } from "./handlers/analytics.js";
@@ -38,11 +38,11 @@ import { registerConversationsHandlers } from "./handlers/conversations.js";
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
-import { ConfigHubPlugin, setConfigHubInstance, migrateLegacyConfigStore } from "../../plugins/config-hub/index.js";
+import { ConfigHubPlugin, setConfigHubInstance, migrateLegacyConfigStore } from "../../daemon/agent-runtime/config-hub/index.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
-import { ProjectStore } from "../../project/store.js";
-import { PluginRegistry } from "../../plugins/registry.js";
+import { ProjectStore } from "../project/store.js";
+import { PluginRegistry } from "../../daemon/agent-runtime/plugins/registry.js";
 
 // ── Exported start/stop ────────────────────────────────
 

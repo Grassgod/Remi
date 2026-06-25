@@ -53,7 +53,7 @@ try {
       const toml = readFileSync(tomlPath, "utf-8");
       const apiKeyMatch = toml.match(/\[embedding\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
       if (apiKeyMatch?.[1]) {
-        const { VectorStore } = require("../db/vector-store.js");
+        const { VectorStore } = require("../shared/db/vector-store.js");
         vectorStore = new VectorStore({
           provider: "voyage",
           apiKey: apiKeyMatch[1],

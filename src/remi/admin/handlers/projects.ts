@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { ProjectStore } from "../../../project/store.js";
-import { GroupConfigStore } from "../../../group/store.js";
+import { ProjectStore } from "../../project/store.js";
+import { GroupConfigStore } from "../../group/store.js";
 import { execSync } from "node:child_process";
 
 export function registerProjectHandlers(app: Hono, _data: RemiData) {

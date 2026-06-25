@@ -84,7 +84,7 @@ case "$HTTP_CODE" in
         ;;
     502)
         warn "HTTP 502 — nginx running, but Remi (:${REMI_PORT}) not responding"
-        warn "  start Remi:  bun run web/server.ts"
+        warn "  start Remi:  bun run src/remi/admin/server.ts"
         ;;
     000)
         die "HTTP 000 — nginx didn't respond. Check: systemctl status nginx"

@@ -6,7 +6,7 @@
  */
 
 import type { MemoryStore } from "./store.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("maintenance");
 

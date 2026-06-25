@@ -11,14 +11,14 @@ import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../../metrics/collector.js";
-import { type TraceData, type SpanData, rowToTraceData } from "../../tracing.js";
-import { extractToolCalls, type ToolCallData } from "../../conversation/tool-calls.js";
-import { stripContextTags } from "../../conversation/parser.js";
-import { getDb } from "../../db/index.js";
-import { readLogEntries, type LogEntry } from "../../logger.js";
+import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../../shared/metrics/collector.js";
+import { type TraceData, type SpanData, rowToTraceData } from "../../shared/tracing.js";
+import { extractToolCalls, type ToolCallData } from "../conversation/tool-calls.js";
+import { stripContextTags } from "../conversation/parser.js";
+import { getDb } from "../../shared/db/index.js";
+import { readLogEntries, type LogEntry } from "../../shared/logger.js";
 import { MemoryStore, type RecallDebugResult } from "../../memory/store.js";
-import { ProjectStore } from "../../project/store.js";
+import { ProjectStore } from "../project/store.js";
 import { Cron } from "croner";
 
 // ── Types ──────────────────────────────────────────────
@@ -449,7 +449,7 @@ export class RemiData {
         const config = this._readRawConfig();
         const apiKey = (config?.embedding as Record<string, unknown>)?.api_key as string | undefined;
         if (apiKey) {
-          const { VectorStore } = require("../../db/vector-store.js");
+          const { VectorStore } = require("../../shared/db/vector-store.js");
           vectorStore = new VectorStore({ provider: "voyage", apiKey });
         }
       } catch { /* VectorStore unavailable */ }
@@ -1497,7 +1497,7 @@ export class RemiData {
     if (scope === "pipeline") return join(__dirname, "..", "pipeline", "skills");
     if (scope.startsWith("project:")) {
       const projectId = scope.slice("project:".length);
-      const { ProjectStore } = require("../../project/store.js");
+      const { ProjectStore } = require("../project/store.js");
       const pStore = new ProjectStore();
       const projects = pStore.list();
       const proj = projects.find((p: any) => p.id === projectId);
@@ -1534,7 +1534,7 @@ export class RemiData {
     }
 
     // Project scopes
-    const { ProjectStore } = require("../../project/store.js");
+    const { ProjectStore } = require("../project/store.js");
     const pStore = new ProjectStore();
     for (const p of pStore.list()) {
       if (!p.cwd) continue;
@@ -1730,7 +1730,7 @@ export class RemiData {
     });
 
     // Project scopes
-    const { ProjectStore } = require("../../project/store.js");
+    const { ProjectStore } = require("../project/store.js");
     const pStore = new ProjectStore();
     const dbProjects: Record<string, string> = {};
     for (const p of pStore.list()) { if (p.cwd) dbProjects[p.id] = p.cwd; }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadConfig } from "../../../src/config.js";
+import { loadConfig } from "../../../src/shared/config.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);

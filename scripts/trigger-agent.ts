@@ -7,7 +7,7 @@
  * Example: bun run scripts/trigger-agent.ts wiki-curate
  */
 
-import { loadConfig } from "../src/config.js";
+import { loadConfig } from "../src/shared/config.js";
 
 const agentName = process.argv[2];
 if (!agentName) {

@@ -36,9 +36,9 @@ export interface StreamMeta {
   /** Permission / approval mode, e.g. "auto", "plan", "bypassPermissions". */
   mode?: string | null;
   /** Register a handler for permission requests (tool approval, AskUserQuestion, ExitPlanMode). */
-  setPermissionHandler?: (handler: (params: import("../providers/acp/protocol.js").RequestPermissionParams) => Promise<import("../providers/acp/protocol.js").PermissionOutcome>) => void;
+  setPermissionHandler?: (handler: (params: import("@shared/contracts/acp-protocol.js").RequestPermissionParams) => Promise<import("@shared/contracts/acp-protocol.js").PermissionOutcome>) => void;
   /** Register a handler for form elicitation requests (AskUserQuestion on Claude ACP >= 0.44.0). */
-  setElicitationHandler?: (handler: (params: import("../providers/acp/protocol.js").ElicitationCreateParams) => Promise<import("../providers/acp/protocol.js").ElicitationResult>) => void;
+  setElicitationHandler?: (handler: (params: import("@shared/contracts/acp-protocol.js").ElicitationCreateParams) => Promise<import("@shared/contracts/acp-protocol.js").ElicitationResult>) => void;
 }
 
 export type StreamingHandler = (

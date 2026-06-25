@@ -35,7 +35,7 @@ domain = "feishu"
 # ── Services managed by PM2 ─────────────────────────────
 # [[services]]
 # name = "remi-web"
-# script = "web/server.ts"
+# script = "src/remi/admin/server.ts"
 # interpreter = "bun"
 # cwd = "/path/to/remi"
 # port = 6120

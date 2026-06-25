@@ -17,7 +17,7 @@ import "../src/shared/db/sqlite-custom.js"; // must be first: swaps sqlite befor
 import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { setDbPath } from "../src/db/index.js";
+import { setDbPath } from "../src/shared/db/index.js";
 import { startMultiremiServer } from "../src/multiremi/api.js";
 import { MultiremiStore } from "../src/multiremi/store.js";
 import { MultiremiDaemon } from "../src/multiremi/daemon.js";

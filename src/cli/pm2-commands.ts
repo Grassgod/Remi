@@ -5,9 +5,9 @@
  */
 
 import { execSync } from "node:child_process";
-import { loadConfig } from "../config.js";
-import { pm2Start, pm2Stop } from "../pm2.js";
-import { VERSION } from "../version.js";
+import { loadConfig } from "../shared/config.js";
+import { pm2Start, pm2Stop } from "../daemon/pm2.js";
+import { VERSION } from "../shared/version.js";
 
 export async function runStart(_args: string[]): Promise<void> {
   const config = loadConfig();

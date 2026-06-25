@@ -1,5 +1,5 @@
 /**
- * @remi/feishu-channel — Feishu/Lark channel SDK for Remi.
+ * Feishu/Lark channel SDK for Remi (src/connectors/feishu).
  *
  * Public API surface:
  *   createLarkChannel(config) → FeishuChannel

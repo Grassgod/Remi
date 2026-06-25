@@ -13,7 +13,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, cpSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { VERSION } from "../version.js";
+import { VERSION } from "../shared/version.js";
 import * as ui from "./ui.js";
 
 const REMI_HOME = process.env.REMI_HOME ?? join(homedir(), ".remi");

@@ -1,5 +1,5 @@
 /**
- * @remi/acp-provider — ACP (Agent Client Protocol) provider package.
+ * ACP (Agent Client Protocol) module — provider + client + adapters.
  *
  * Public API:
  *   AcpProvider          — the provider class

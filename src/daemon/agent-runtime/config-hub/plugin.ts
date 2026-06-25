@@ -1,6 +1,6 @@
 /**
  * ConfigHubPlugin — internal Remi plugin (SsoPlugin-style: static, in-tree,
- * manually wired in web/server.ts). Owns the cross-tool config DB stack and a
+ * manually wired in src/remi/admin/server.ts). Owns the cross-tool config DB stack and a
  * registry of per-tool adapters analogous to SSO's provider registry.
  *
  * Lifecycle:

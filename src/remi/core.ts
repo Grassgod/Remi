@@ -14,29 +14,29 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import type { RemiConfig } from "../config.js";
+import type { RemiConfig } from "../shared/config.js";
 import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "../connectors/base.js";
 import { AsyncLock, resolveSessionKey } from "../daemon/orchestrator.js";
-import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "../providers/base.js";
-import type { ToolCallUpdate, ToolCallProgressUpdate } from "../providers/acp/protocol.js";
-import { AcpProvider, resolveAcpPermissionMode } from "../providers/acp/index.js";
+import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
+import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
 import { FeishuConnector } from "../connectors/feishu/index.js";
-import { flushDedupCacheSync, MenuSyncer } from "@remi/feishu-channel";
+import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "../auth/index.js";
 import type { TokenSyncRule } from "../auth/token-sync.js";
-import { PluginRegistry } from "../plugins/registry.js";
+import { PluginRegistry } from "../daemon/agent-runtime/plugins/registry.js";
 import { MemoryStore } from "../memory/store.js";
 import { RemiQueueManager } from "../queue/index.js";
-import { MetricsCollector } from "../metrics/collector.js";
-import { insertConversationProcessing, completeConversation, failConversation, getDb } from "../db/index.js";
-import * as sessDb from "../db/sessions.js";
-import { createLogger, flushLogs } from "../logger.js";
-import { TraceCollector, type TraceContext, type Span } from "../tracing.js";
-import { writeEcosystem, runBuildsSync, getEcosystemPath } from "../pm2.js";
+import { MetricsCollector } from "../shared/metrics/collector.js";
+import { insertConversationProcessing, completeConversation, failConversation, getDb } from "../shared/db/index.js";
+import * as sessDb from "../shared/db/sessions.js";
+import { createLogger, flushLogs } from "../shared/logger.js";
+import { TraceCollector, type TraceContext, type Span } from "../shared/tracing.js";
+import { writeEcosystem, runBuildsSync, getEcosystemPath } from "../daemon/pm2.js";
 import {
   availableSwitchModes,
   buildSwitchTarget,
@@ -45,7 +45,7 @@ import {
   parseSwitchArgs,
   providerLabel,
   resolveSwitchProviderAlias,
-} from "../switch-mode.js";
+} from "../acp/switch-mode.js";
 
 const log = createLogger("core");
 
@@ -72,10 +72,10 @@ export class Remi {
   constructor(config: RemiConfig) {
     this.config = config;
     // Initialize VectorStore if embedding config is available
-    let vectorStore: InstanceType<typeof import("../db/vector-store.js").VectorStore> | null = null;
+    let vectorStore: InstanceType<typeof import("../shared/db/vector-store.js").VectorStore> | null = null;
     if (config.embedding?.apiKey) {
       try {
-        const { VectorStore } = require("../db/vector-store.js");
+        const { VectorStore } = require("../shared/db/vector-store.js");
         vectorStore = new VectorStore(config.embedding);
       } catch { /* vector search unavailable */ }
     }
@@ -277,7 +277,7 @@ export class Remi {
     }
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("../logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("../shared/logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
     const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
     let resultResponse: AgentResponse | null = null;
@@ -937,7 +937,12 @@ export class Remi {
     // 3. Feishu connector
     if (hasFeishuCreds) {
       const feishuConfig = { ...config.feishu };
-      const feishu = new FeishuConnector(feishuConfig);
+      // Inject the group-policy lookup so the connector (L1) never imports the
+      // remi-product GroupConfigStore (L3) itself.
+      const gcStore = new GroupConfigStore();
+      const feishu = new FeishuConnector(feishuConfig, {
+        getByChatId: (chatId) => gcStore.getByChatId(chatId),
+      });
       feishu.setTokenProvider(() => authStore.getToken("feishu", "tenant"));
       // Wire /esc abort: (1) signal abort to unblock readline, (2) kill CLI process
       feishu.setAbortHandler(async (chatId: string) => {
@@ -962,7 +967,7 @@ export class Remi {
     }
 
     // 4. ConfigManager — symlinks + config-hub sync
-    const { configManager } = require("../infra/config-manager");
+    const { configManager } = require("../shared/infra/config-manager");
     remi._configManager = configManager;
     configManager.ensureAllProjects();
     configManager.ensureGlobals();
@@ -988,7 +993,7 @@ export class Remi {
       cwd: homedir(),
       executable: agentCfg.executable,
       getMcpServers: () => {
-        const { getConfigHub } = require("../plugins/config-hub");
+        const { getConfigHub } = require("../daemon/agent-runtime/config-hub/index");
         const hub = getConfigHub();
         return hub ? hub.service.getMcpServersForApp(type) : [];
       },

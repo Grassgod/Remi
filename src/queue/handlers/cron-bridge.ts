@@ -7,9 +7,9 @@
 
 import type { Job } from "bunqueue/client";
 import type { CronJobData } from "../queues.js";
-import type { Remi } from "../../core.js";
+import type { Remi } from "../../remi/core.js";
 import type { Connector } from "../../connectors/base.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "../../shared/logger.js";
 import {
   existsSync,
   readFileSync,
@@ -77,7 +77,7 @@ handlers.set("builtin:pulse", async (remi, config) => {
     `If nothing clears the bar, reply with EXACTLY "${sentinel}" and nothing else.`;
 
   const provider = remi["_providers"].values().next().value as
-    | import("../../providers/base.js").Provider
+    | import("@shared/contracts/provider-types.js").Provider
     | undefined;
   if (!provider) {
     log.warn(`[${tag}] no provider available, skipping`);

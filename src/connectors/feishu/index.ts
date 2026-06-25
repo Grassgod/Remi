@@ -1,13 +1,13 @@
 /**
- * FeishuConnector — thin adapter that bridges @remi/feishu-channel to the Remi Connector interface.
+ * FeishuConnector — thin adapter that bridges the Feishu channel SDK (./sdk.js) to the Remi Connector interface.
  */
 
-import type { FeishuConfig } from "../../config.js";
-import { GroupConfigStore } from "../../group/store.js";
+import type { FeishuConfig } from "../../shared/config.js";
+import type { GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "../../shared/logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -21,13 +21,13 @@ import {
   type ParsedFeishuMessage,
   type TokenProvider,
   type StreamMeta,
-} from "@remi/feishu-channel";
-import { createFeishuClient } from "@remi/feishu-channel";
-import { createAdapter } from "@remi/feishu-channel";
+} from "./sdk.js";
+import { createFeishuClient } from "./sdk.js";
+import { createAdapter } from "./sdk.js";
 
 const log = createLogger("feishu");
 
-export { approvePlanOption, rejectPermissionOption, isPlanApproval } from "@remi/feishu-channel";
+export { approvePlanOption, rejectPermissionOption, isPlanApproval } from "./sdk.js";
 
 // ── Plan reading helper ───────────────────────────────────────
 
@@ -51,10 +51,14 @@ export class FeishuConnector implements Connector {
   readonly name = "feishu";
   private _config: FeishuConfig & { domain?: string; connectionMode?: string };
   private _channel: FeishuChannel;
+  private _groupPolicy: GroupPolicy;
   private _handler: MessageHandler | null = null;
   private _streamHandler: StreamingHandler | null = null;
 
-  constructor(config: FeishuConfig & { domain?: string; connectionMode?: string }) {
+  constructor(
+    config: FeishuConfig & { domain?: string; connectionMode?: string },
+    groupPolicy?: GroupPolicy,
+  ) {
     this._config = config;
     this._channel = createLarkChannel({
       appId: config.appId,
@@ -63,11 +67,10 @@ export class FeishuConnector implements Connector {
       connectionMode: config.connectionMode as any,
     });
 
-    // Inject group policy
-    const gcStore = new GroupConfigStore();
-    this._channel.setGroupPolicy({
-      getByChatId: (chatId) => gcStore.getByChatId(chatId),
-    });
+    // Group policy is injected by the constructing layer (remi/core) so the
+    // connector never reaches up into the remi product for its store.
+    this._groupPolicy = groupPolicy ?? { getByChatId: () => null };
+    this._channel.setGroupPolicy(this._groupPolicy);
   }
 
   setAbortHandler(handler: (sessionKey: string) => Promise<void>): void {
@@ -192,9 +195,7 @@ export class FeishuConnector implements Connector {
       const cancelled = this._channel.cancelPendingInteractions(msg.chatId);
       if (cancelled > 0) _log.info(`Cancelled ${cancelled} pending action(s) for session "${sessionKey}"`);
 
-      const { GroupConfigStore } = await import("../../group/store.js");
-      const gcStore = new GroupConfigStore();
-      const groupConfig = gcStore.getByChatId(msg.chatId);
+      const groupConfig = this._groupPolicy.getByChatId(msg.chatId);
       const replyInThread = msg.chatType === "p2p" ? false : (groupConfig ? groupConfig.replyMode === "thread" : true);
       const replyToId = replyInThread ? msg.messageId : undefined;
 
@@ -239,7 +240,7 @@ export class FeishuConnector implements Connector {
         : "";
       const subtitle = `${agentLabel}${modeLabel}`;
 
-      await this._channel.handleStream(chatId, sessionKey, stream as AsyncIterable<import("@remi/feishu-channel").SessionUpdate>, meta as StreamMeta, {
+      await this._channel.handleStream(chatId, sessionKey, stream as AsyncIterable<import("./sdk.js").SessionUpdate>, meta as StreamMeta, {
         adapter: acpAdapter,
         replyToMessageId,
         sessionId: meta.sessionId,

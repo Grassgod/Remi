@@ -112,7 +112,7 @@ domain = "feishu"   # or "lark"
 
 # [[services]]            # Optional: PM2-managed services
 # name = "remi-web"
-# script = "web/server.ts"
+# script = "src/remi/admin/server.ts"
 # interpreter = "bun"
 # cwd = "/path/to/remi"
 # port = 6120

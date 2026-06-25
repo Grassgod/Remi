@@ -39,10 +39,10 @@ trigger_user_ids = []
 # ---------------------------------------------------------------------------
 [[services]]
 name = "remi-web"
-script = "web/server.ts"
+script = "src/remi/admin/server.ts"
 interpreter = "bun"
 cwd = "."
-build = "cd web/frontend && bun run build"
+build = "cd frontend && bun run build"
 port = 6120
 
 # ---------------------------------------------------------------------------

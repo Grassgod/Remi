@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import type { AuthAdapter, TokenEntry, TokenStatus } from "./types.js";
 import { TokenPersistence } from "./persistence.js";
 import { TokenSyncEngine, type TokenSyncRule } from "./token-sync.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("1passport");
 

@@ -5,7 +5,7 @@ import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
 import { AcpProvider, resolveAcpPermissionMode, type AcpProviderOptions } from "@acp/index.js";
 import type { PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
-import type { AgentResponse, Provider, ProviderEvent } from "../../providers/base.js";
+import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { MultiremiRepoCache, normalizeRepoList } from "@multiremi/repo-cache.js";

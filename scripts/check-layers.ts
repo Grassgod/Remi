@@ -45,17 +45,19 @@ const ENTRY_FILES = new Set(["main.ts", "multiremi-main.ts", "index.ts"]);
 /**
  * Per-path layer overrides — files whose layer differs from their top-level dir.
  *
- * queue/index.ts (RemiQueueManager) and queue/handlers/** are Remi *orchestration*
- * (they `import { Remi }` from core.ts and reach into remi.* product internals),
- * not L1 queue infrastructure. The L1-clean part of the block is queue/queues.ts
- * (name constants + job-data types, zero deps). Per DIR-REDESIGN D6 these files
- * relocate into daemon/orchestrator; classifying them as L2 here reflects the
- * target architecture so D4's "L1 blocks are independent" check is meaningful.
- * Longest matching prefix wins.
+ * queue/index.ts (RemiQueueManager) and queue/handlers/** are Remi-product
+ * *orchestration*: they wire the Remi product's cron queues and `import type
+ * { Remi }` from remi/core.ts to dispatch jobs against product internals. They
+ * are not generic L1 queue infrastructure — that is queue/queues.ts (name
+ * constants + job-data types, zero deps), which stays L1. Classifying these two
+ * at L3 makes their dependency on Remi a within-layer (downward) edge rather
+ * than an upward violation, and keeps D4's "L1 blocks are independent" check
+ * meaningful for the genuinely-infra part of the block. Longest matching prefix
+ * wins.
  */
 const PATH_LAYER_OVERRIDE: Array<{ prefix: string; layer: number }> = [
-  { prefix: "queue/index.ts", layer: 2 },
-  { prefix: "queue/handlers/", layer: 2 },
+  { prefix: "queue/index.ts", layer: 3 },
+  { prefix: "queue/handlers/", layer: 3 },
 ];
 
 /** Alias prefix → module. Longest prefix wins, so order does not matter here. */
@@ -68,15 +70,16 @@ const ALIAS_MODULE: Record<string, string> = {
   "@auth/": "auth",
   "@daemon/": "daemon",
   "@multiremi/": "multiremi",
-  // package-scoped aliases (still live during the transition)
-  "@remi/acp-provider": "acp",
-  "@remi/feishu-channel": "connectors",
+  // package-scoped alias (the one remaining workspace package)
   "@remi/plugin-sdk": "__external__",
-  // bare product alias — must be matched AFTER the package-scoped ones above
+  // bare product alias — must be matched AFTER the package-scoped one above
   "@remi/": "remi",
 };
 
 const L1_BLOCKS = new Set(["acp", "memory", "queue", "connectors", "auth"]);
+
+/** The two L3 product roots that must not import each other. */
+const L3_PRODUCTS = new Set(["remi", "multiremi"]);
 
 interface Violation {
   file: string;
@@ -175,7 +178,10 @@ for (const file of files) {
       violations.push({ file: relFromSrc, spec, srcModule, tgtModule, reason: `L${srcLayer} → L${tgtLayer} (imports upward)` });
     } else if (srcLayer === 1 && tgtLayer === 1 && L1_BLOCKS.has(srcModule) && L1_BLOCKS.has(tgtModule)) {
       violations.push({ file: relFromSrc, spec, srcModule, tgtModule, reason: "L1 cross-dependency (blocks must be independent)" });
-    } else if (srcLayer === 3 && tgtLayer === 3) {
+    } else if (srcLayer === 3 && tgtLayer === 3 && L3_PRODUCTS.has(srcModule) && L3_PRODUCTS.has(tgtModule)) {
+      // Only the two product roots must stay mutually independent. An L3-classified
+      // orchestration file (e.g. queue/index.ts via PATH_LAYER_OVERRIDE) importing
+      // its own product (remi) is a within-layer downward edge, not a cross-product one.
       violations.push({ file: relFromSrc, spec, srcModule, tgtModule, reason: "L3 cross-dependency (remi ↔ multiremi)" });
     }
   }

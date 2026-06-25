@@ -2,12 +2,12 @@
  * `remi serve` — Production daemon mode (PM2 subprocess).
  */
 
-import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../config.js";
-import { Remi } from "../core.js";
-import { setLogLevel, createLogger, initLogPersistence } from "../logger.js";
-// Board service has been merged into the main web service (web/server.ts).
-import { getDb } from "../db/index.js";
-import { startWebDashboard, stopWebDashboard } from "../../web/server.js";
+import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../shared/config.js";
+import { Remi } from "../remi/core.js";
+import { setLogLevel, createLogger, initLogPersistence } from "../shared/logger.js";
+// Board service has been merged into the main web service (src/remi/admin/server.ts).
+import { getDb } from "../shared/db/index.js";
+import { startWebDashboard, stopWebDashboard } from "../remi/admin/server.js";
 
 const log = createLogger("serve");
 

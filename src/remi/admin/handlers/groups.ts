@@ -1,9 +1,9 @@
 import type { Hono } from "hono";
-import { GroupConfigStore } from "../../../group/store.js";
-import { getChatName, transferChatOwner, updateChat } from "@remi/feishu-channel";
+import { GroupConfigStore } from "../../group/store.js";
+import { getChatName, transferChatOwner, updateChat } from "../../../connectors/feishu/sdk.js";
 import { invalidateGroupNameCache } from "./conversations.js";
-import { createLogger } from "../../../logger.js";
-import { loadConfig } from "../../../config.js";
+import { createLogger } from "../../../shared/logger.js";
+import { loadConfig } from "../../../shared/config.js";
 
 const log = createLogger("groups");
 

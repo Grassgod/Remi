@@ -5,7 +5,7 @@
 
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { getDb, kvSet, kvDelete } from "../../../db/index.js";
+import { getDb, kvSet, kvDelete } from "../../../shared/db/index.js";
 
 export function registerDbHandlers(app: Hono, _data: RemiData) {
   // GET /api/v1/db/stats — Enhanced overview stats

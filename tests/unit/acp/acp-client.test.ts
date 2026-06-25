@@ -3,8 +3,8 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AcpClient } from "@remi/acp-provider";
-import type { ElicitationCreateParams } from "@remi/acp-provider";
+import { AcpClient } from "../../../src/acp/index.js";
+import type { ElicitationCreateParams } from "../../../src/acp/index.js";
 
 function fakeAgent(script: string, ext = "sh"): string {
   const dir = mkdtempSync(join(tmpdir(), "acp-client-test-"));

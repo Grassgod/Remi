@@ -11,7 +11,7 @@ import { dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { AuthAdapter, TokenEntry } from "./types.js";
 import type { PersistedTokens } from "./persistence.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("1passport:sync");
 

@@ -23,9 +23,9 @@ import {
 import { join, dirname, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
-import type { VectorStore } from "../db/vector-store.js";
+import type { VectorStore } from "../shared/db/vector-store.js";
 import { LinkGraph, type Backlink, safeReadFile, entityNameFromPath } from "./link-graph.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("memory");
 

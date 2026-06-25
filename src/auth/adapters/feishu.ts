@@ -7,7 +7,7 @@
  */
 
 import type { AuthAdapter, TokenEntry, TokenStatus } from "../types.js";
-import { createLogger } from "../../logger.js";
+import { createLogger } from "../../shared/logger.js";
 
 const log = createLogger("1passport");
 

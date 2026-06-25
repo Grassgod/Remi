@@ -9,7 +9,7 @@ import {
   AcpProvider,
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
-} from "@remi/acp-provider";
+} from "../src/acp/index.js";
 import { startMultiremiServer } from "../src/multiremi/api.js";
 import { MultiremiDaemon } from "../src/multiremi/daemon.js";
 import { MultiremiStore } from "../src/multiremi/store.js";

@@ -5,9 +5,9 @@
 import { Queue, Worker } from "bunqueue/client";
 import { QUEUES, type CronJobData } from "./queues.js";
 import { handleCronJob } from "./handlers/cron-bridge.js";
-import type { Remi } from "../core.js";
-import type { CronJobConfig } from "../config.js";
-import { createLogger } from "../logger.js";
+import type { Remi } from "../remi/core.js";
+import type { CronJobConfig } from "../shared/config.js";
+import { createLogger } from "../shared/logger.js";
 
 const log = createLogger("queue");
 
@@ -36,7 +36,10 @@ export class RemiQueueManager {
     await this.cronQueue.add("cron", data, {
       attempts: 2,
       backoff: { type: "fixed", delay: 30_000 },
-      removeOnComplete: { age: 86400 },
+      // Remove completed cron jobs. bunqueue@2.8.23 narrowed removeOnComplete to
+      // boolean (age-based retention was silently ignored, see bunqueue#90), so
+      // age-based GC is not available on the pinned version.
+      removeOnComplete: true,
     });
   }
 
@@ -89,7 +92,8 @@ export class RemiQueueManager {
               opts: {
                 attempts: 2,
                 backoff: { type: "exponential", delay: 30_000 },
-                removeOnComplete: { age: 86400 },
+                // boolean only on bunqueue@2.8.23 (age-based GC unsupported, see bunqueue#90)
+                removeOnComplete: true,
               },
             },
           );

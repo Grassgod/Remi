@@ -1,9 +1,9 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { getDb } from "../../../db/index.js";
-import { GroupConfigStore } from "../../../group/store.js";
-import { buildChatMessages, stripContextTags, findSessionJsonl, parseSessionPairs } from "../../../conversation/parser.js";
-import type { MetaRow } from "../../../conversation/parser.js";
+import { getDb } from "../../../shared/db/index.js";
+import { GroupConfigStore } from "../../group/store.js";
+import { buildChatMessages, stripContextTags, findSessionJsonl, parseSessionPairs } from "../../conversation/parser.js";
+import type { MetaRow } from "../../conversation/parser.js";
 
 // ── Handler Registration ──────────────────────────────
 

@@ -1,4 +1,4 @@
-import { AcpProvider } from "../../src/providers/acp/provider.js";
+import { AcpProvider } from "../../src/acp/index.js";
 
 async function main() {
   console.log("=== ACP E2E Smoke Test ===\n");

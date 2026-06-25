@@ -46,6 +46,14 @@ export interface Provider {
   healthCheck(): Promise<boolean>;
 }
 
+/** Custom tool that the agent can call, handled within Remi. */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  handler: (...args: unknown[]) => string | Promise<string>;
+}
+
 export function createAgentResponse(partial: Partial<AgentResponse> & { text: string }): AgentResponse {
   return {
     thinking: null,

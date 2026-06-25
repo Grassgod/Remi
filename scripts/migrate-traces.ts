@@ -8,7 +8,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { getDb } from "../src/db/index.js";
+import { getDb } from "../src/shared/db/index.js";
 
 const TRACES_DIR = join(homedir(), ".remi", "traces");
 const DRY_RUN = process.argv.includes("--dry-run");
