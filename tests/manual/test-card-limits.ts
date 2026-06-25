@@ -6,14 +6,14 @@
  * 2. Whether delete element API works
  * 3. Whether a div with icon+text counts as 1 or 3 elements
  *
- * Usage: bun run scripts/test-card-limits.ts
+ * Usage: bun run tests/manual/test-card-limits.ts
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
-import { buildStepDiv } from "../src/connectors/feishu/tool-formatters.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
+import { buildStepDiv } from "../../src/connectors/feishu/tool-formatters.js";
 
 function loadConfig() {
   const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];

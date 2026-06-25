@@ -8,9 +8,9 @@
  * - 权限请求/classifier decision_reason
  *
  * Usage:
- *   bun run scripts/diagnose-auto-mode.ts
- *   bun run scripts/diagnose-auto-mode.ts "列出当前目录文件"
- *   bun run scripts/diagnose-auto-mode.ts --cwd /some/path "prompt here"
+ *   bun run tests/manual/diagnose-auto-mode.ts
+ *   bun run tests/manual/diagnose-auto-mode.ts "列出当前目录文件"
+ *   bun run tests/manual/diagnose-auto-mode.ts --cwd /some/path "prompt here"
  */
 
 import { appendFileSync, writeFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";

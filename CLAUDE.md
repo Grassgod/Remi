@@ -43,7 +43,7 @@ Connector → IncomingMessage → Remi → Provider.send() → AgentResponse →
 
 - **先有证据再修复**：遇到生产问题时，不要基于推测直接改代码。先加诊断日志定位根因，确认后再修复。
 - **不要用 REMI_DEBUG**：该环境变量会导致崩溃，不要建议启用。
-- **重放测试**：`bun run scripts/replay-fixture.ts <name>` 可以重放 ACP fixture 到真实飞书卡片，用于验证渲染逻辑。`bun run tests/replay-coverage.ts` 跑覆盖率。
+- **重放测试**：`bun run tests/manual/replay-fixture.ts <name>` 可以重放 ACP fixture 到真实飞书卡片，用于验证渲染逻辑。`bun run tests/replay-coverage.ts` 跑覆盖率。
 
 ## Conventions
 

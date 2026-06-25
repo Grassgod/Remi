@@ -33,8 +33,8 @@
     "test": "bun test",
     "build": "bun run scripts/build.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
-    "smoke:multiremi:acp": "bun run scripts/smoke-multiremi-acp.ts",
-    "e2e:multiremi": "bun run scripts/e2e-multiremi.ts"
+    "smoke:multiremi:acp": "bun run tests/integration/smoke-multiremi-acp.ts",
+    "e2e:multiremi": "bun run tests/integration/e2e-multiremi.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",

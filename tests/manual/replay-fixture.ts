@@ -2,29 +2,29 @@
  * Replay an ACP fixture recording through the Feishu streaming card pipeline.
  *
  * Usage:
- *   bun run scripts/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]
+ *   bun run tests/manual/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]
  *
  * Examples:
- *   bun run scripts/replay-fixture.ts bash-exec
- *   bun run scripts/replay-fixture.ts agent-bash --speed 2
- *   bun run scripts/replay-fixture.ts read-tool --speed instant
- *   bun run scripts/replay-fixture.ts agent-bash --chat oc_xxx
+ *   bun run tests/manual/replay-fixture.ts bash-exec
+ *   bun run tests/manual/replay-fixture.ts agent-bash --speed 2
+ *   bun run tests/manual/replay-fixture.ts read-tool --speed instant
+ *   bun run tests/manual/replay-fixture.ts agent-bash --chat oc_xxx
  */
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
-import { createAdapter } from "../src/acp/index.js";
-import { formatToolInputSummary } from "../src/connectors/feishu/tool-formatters.js";
-import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../src/connectors/feishu/permission-ui.js";
-import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../src/acp/protocol.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
+import { createAdapter } from "../../src/acp/index.js";
+import { formatToolInputSummary } from "../../src/connectors/feishu/tool-formatters.js";
+import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../../src/connectors/feishu/permission-ui.js";
+import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../../src/acp/protocol.js";
 
 // ── Parse args ──────────────────────────────────────────────
 
 const args = process.argv.slice(2);
 if (args.length === 0 || args[0] === "--help") {
-  console.log(`Usage: bun run scripts/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]`);
+  console.log(`Usage: bun run tests/manual/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]`);
   console.log(`  --speed: 0.5, 1 (default), 2, 5, instant`);
   console.log(`  --chat: target chat_id (default: from trigger_user_ids in config)`);
   process.exit(0);
@@ -231,7 +231,10 @@ async function main() {
       const showDuration = speed === Infinity ? 3000 : Math.round(8000 / speed);
 
       if (permType === "tool_approval") {
-        const form = buildToolApprovalForm(actionId, perm.toolName ?? "Bash", perm.inputSummary ?? "`$ echo test`");
+        const form = buildToolApprovalForm(actionId, perm.toolName ?? "Bash", perm.inputSummary ?? "`$ echo test`", [
+          { kind: "allow_once", name: "Allow", optionId: "allow_once" },
+          { kind: "reject_once", name: "Reject", optionId: "reject_once" },
+        ]);
         await session.updateStatus(`Waiting for ${perm.toolName ?? "Bash"} approval...`);
         await session.appendPermissionForm(form);
         console.log(`  🔒 permission: tool approval (${perm.toolName ?? "Bash"}) — showing ${showDuration}ms`);

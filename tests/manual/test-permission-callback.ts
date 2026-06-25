@@ -5,16 +5,16 @@
  * waits for you to actually click, then shows what was received.
  *
  * NOTE: pm2 remi should be stopped first to avoid WebSocket conflict.
- * Usage: pm2 stop remi && bun run scripts/test-permission-callback.ts
+ * Usage: pm2 stop remi && bun run tests/manual/test-permission-callback.ts
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
-import { registerPendingAction } from "../src/connectors/feishu/card-actions.js";
-import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../src/connectors/feishu/permission-ui.js";
-import { startWebSocketListener } from "../src/connectors/feishu/receive.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
+import { registerPendingAction } from "../../src/connectors/feishu/card-actions.js";
+import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../../src/connectors/feishu/permission-ui.js";
+import { startWebSocketListener } from "../../src/connectors/feishu/receive.js";
 
 function loadConfig() {
   const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];
@@ -46,12 +46,12 @@ async function main() {
 
   // Start WebSocket listener to receive card action callbacks
   console.log("Starting WebSocket listener...");
-  const wsHandle = await startWebSocketListener(client, {
+  const wsHandle = await startWebSocketListener({
     appId: config.appId,
     appSecret: config.appSecret,
     verificationToken: config.verificationToken,
     encryptKey: config.encryptKey,
-  }, () => {});
+  }, async () => {});
   console.log("WebSocket connected\n");
 
   const session = new FeishuStreamingSession(client, creds);
@@ -65,7 +65,10 @@ async function main() {
   console.log("═══ Test 1: Tool Approval ═══");
   console.log("  Appending tool approval form...");
   const tool = waitForAction(undefined, config.chatId);
-  const toolForm = buildToolApprovalForm(tool.actionId, "Bash", "`$ rm -rf node_modules && bun install`");
+  const toolForm = buildToolApprovalForm(tool.actionId, "Bash", "`$ rm -rf node_modules && bun install`", [
+    { kind: "allow_once", name: "Allow", optionId: "allow_once" },
+    { kind: "reject_once", name: "Reject", optionId: "reject_once" },
+  ]);
   await session.appendPermissionForm(toolForm);
   await session.updateStatus("Waiting for tool approval...");
 

@@ -11,16 +11,16 @@
  *   - the page renders, seeded data appears, a UI write round-trips, and there
  *     are zero uncaught JS errors / failed API requests
  *
- * Usage: bun run scripts/e2e-multiremi.ts [--provider=claude|codex] [--port=6191]
+ * Usage: bun run tests/integration/e2e-multiremi.ts [--provider=claude|codex] [--port=6191]
  */
-import "../src/shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
+import "../../src/shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
 import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { setDbPath } from "../src/shared/db/index.js";
-import { startMultiremiServer } from "../src/multiremi/api.js";
-import { MultiremiStore } from "../src/multiremi/store.js";
-import { MultiremiDaemon } from "../src/multiremi/daemon.js";
+import { setDbPath } from "../../src/shared/db/index.js";
+import { startMultiremiServer } from "../../src/multiremi/api.js";
+import { MultiremiStore } from "../../src/multiremi/store.js";
+import { MultiremiDaemon } from "../../src/multiremi/daemon.js";
 import { chromium } from "playwright-core";
 
 const args = new Map<string, string>();

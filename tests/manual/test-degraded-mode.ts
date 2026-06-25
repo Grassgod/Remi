@@ -5,13 +5,13 @@
  * Phase 2 (30s-3m): Force degraded mode — continue adding steps/content via im.message.patch
  * Phase 3: Close with final card
  *
- * Usage: bun run scripts/test-degraded-mode.ts
+ * Usage: bun run tests/manual/test-degraded-mode.ts
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../src/connectors/feishu/streaming.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
 
 function loadConfig() {
   const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];

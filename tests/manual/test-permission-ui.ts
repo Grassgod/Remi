@@ -1,11 +1,11 @@
 /**
  * Send 3 static cards showing permission UI designs v5.
- * Usage: bun run scripts/test-permission-ui.ts
+ * Usage: bun run tests/manual/test-permission-ui.ts
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
 
 function loadConfig() {
   const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];

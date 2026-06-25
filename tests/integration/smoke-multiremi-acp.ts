@@ -9,10 +9,10 @@ import {
   AcpProvider,
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
-} from "../src/acp/index.js";
-import { startMultiremiServer } from "../src/multiremi/api.js";
-import { MultiremiDaemon } from "../src/multiremi/daemon.js";
-import { MultiremiStore } from "../src/multiremi/store.js";
+} from "../../src/acp/index.js";
+import { startMultiremiServer } from "../../src/multiremi/api.js";
+import { MultiremiDaemon } from "../../src/multiremi/daemon.js";
+import { MultiremiStore } from "../../src/multiremi/store.js";
 
 type SmokeProvider = "claude" | "codex";
 type SmokeStatus = "passed" | "failed" | "unavailable" | "available";
@@ -291,7 +291,7 @@ function defaultExecutable(provider: SmokeProvider): string {
 }
 
 function printHelp(): void {
-  console.log(`Usage: bun run scripts/smoke-multiremi-acp.ts [--provider=all|claude|codex] [--allow-unavailable] [--check-only]
+  console.log(`Usage: bun run tests/integration/smoke-multiremi-acp.ts [--provider=all|claude|codex] [--allow-unavailable] [--check-only]
 
 Runs a real ACP-backed Multiremi daemon smoke against a local in-memory server.
 The smoke uses a daemon token, creates one agent/task, runs the daemon once, and

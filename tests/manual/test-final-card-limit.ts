@@ -6,9 +6,9 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createFeishuClient } from "../src/connectors/feishu/client.js";
-import { FeishuStreamingSession, buildFinalCard } from "../src/connectors/feishu/streaming.js";
-import type { ToolEntry } from "../src/connectors/feishu/tool-formatters.js";
+import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { FeishuStreamingSession, buildFinalCard } from "../../src/connectors/feishu/streaming.js";
+import type { ToolEntry } from "../../src/connectors/feishu/tool-formatters.js";
 
 function loadConfig() {
   const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];
