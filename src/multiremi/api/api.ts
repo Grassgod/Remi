@@ -7,7 +7,6 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
-import { buildRemiBuiltinSkillInputs, seedRemiBuiltinSkills } from "@multiremi/builtin-skills.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
@@ -1082,29 +1081,6 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const includeFiles = c.req.query("includeFiles") === "true";
     const skills = store.listSkills(workspaceId, { includeFiles });
     return c.json({ skills: includeFiles ? skills : skills.map(skillSummary), total: skills.length });
-  });
-  app.get("/api/multiremi/skills/builtin", (c) => {
-    const workspaceId = requestedSkillWorkspaceId(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
-    if (denied) return denied;
-    const skills = buildRemiBuiltinSkillInputs({ workspaceId }).map((skill) => skillSummary({
-      ...skill,
-      content: skill.content ?? "",
-      archivedAt: null,
-    }));
-    return c.json({ skills, total: skills.length });
-  });
-  app.post("/api/multiremi/skills/builtin/seed", async (c) => {
-    const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; createdBy?: string | null; created_by?: string | null }>(c)
-      .catch((): { workspaceId?: string | null; workspace_id?: string | null; createdBy?: string | null; created_by?: string | null } => ({}));
-    const workspaceId = requestedSkillWorkspaceId(c, body);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
-    if (denied) return denied;
-    const skills = seedRemiBuiltinSkills(store, {
-      workspaceId,
-      createdBy: body.createdBy ?? body.created_by ?? null,
-    });
-    return c.json({ skills: skills.map(skillSummary), total: skills.length });
   });
   app.post("/api/multiremi/skills", async (c) => {
     const body = await readJsonStrict<CreateSkillInput>(c);

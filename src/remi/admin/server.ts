@@ -37,7 +37,6 @@ import { registerSymlinkHandlers } from "./handlers/symlinks.js";
 import { registerConversationsHandlers } from "./handlers/conversations.js";
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
-import { registerAgentsHandlers } from "./handlers/agents.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
 import { ConfigHubPlugin, setConfigHubInstance, migrateLegacyConfigStore } from "../../plugins/config-hub/index.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
@@ -121,7 +120,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerConversationsHandlers(app, data);
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
-  registerAgentsHandlers(app, data);
   registerMcpHandlers(app, data);
   hub.registerHttp(app);
   registerProjectInitHandlers(app);

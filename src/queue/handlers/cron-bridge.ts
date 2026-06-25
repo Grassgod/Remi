@@ -16,11 +16,8 @@ import {
   writeFileSync,
   mkdirSync,
   appendFileSync,
-  readdirSync,
-  statSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
 
 const log = createLogger("cron:handler");
@@ -48,67 +45,7 @@ handlers.set("builtin:heartbeat", async (remi) => {
   catch (e) { log.debug("Usage quota fetch failed:", e); }
 });
 
-// builtin:compaction — removed: merged into agent:memory-audit (Phase 1 SUPPLEMENT + Phase 6-8)
-// builtin:cleanup   — removed: merged into agent:memory-audit (Phase 8 CLEANUP)
 // builtin:cli-metrics — removed: metrics now recorded in real-time via core.ts
-
-// ── Agent handlers ────────────────────────────────────────────
-
-/**
- * Push an agent's "--- 汇报 ---" narrative section to configured push targets.
- * Reuses the connector's own reply() pipeline — for Feishu this goes through
- * buildFinalCard → sendCardFeishu, giving us the same card identity, stats
- * footer, and collapsible thinking section that Remi uses for normal replies.
- *
- * Targets come from handler_config.pushTargets (preferred) or nested
- * handler_config.delivery.pushTargets. Connector name defaults to "feishu".
- */
-async function pushAgentReport(
-  remi: Remi,
-  config: Record<string, any> | undefined,
-  result: { stdout: string; exitCode: number; durationMs?: number },
-  titlePrefix: string,
-  tag: string,
-): Promise<void> {
-  if (result.exitCode !== 0 || !result.stdout.includes("--- 汇报 ---")) return;
-  const [logLines, reportTail] = result.stdout.split("--- 汇报 ---", 2);
-  const report = reportTail?.trim();
-  if (!report) return;
-
-  const delivery = (config?.delivery as Record<string, any> | undefined) ?? {};
-  const pushTargets: string[] =
-    (config?.pushTargets as string[]) ?? (delivery.pushTargets as string[]) ?? [];
-  const connectorName: string =
-    (config?.connectorName as string) ?? (delivery.connectorName as string) ?? "feishu";
-  if (pushTargets.length === 0) {
-    log.debug(`[${tag}] No pushTargets configured, skipping push`);
-    return;
-  }
-
-  const connectors = remi["_connectors"] as Connector[];
-  const connector = connectors.find((c) => c.name === connectorName);
-  if (!connector) {
-    log.warn(`[${tag}] Connector "${connectorName}" not found, skipping push`);
-    return;
-  }
-
-  // Construct an AgentResponse so connector.reply() gives us the full card
-  // treatment (stats footer, thinking/steps section).
-  const response = {
-    text: `${titlePrefix}\n\n${report}`,
-    thinking: logLines?.trim() || null,
-    durationMs: result.durationMs ?? null,
-  };
-
-  for (const target of pushTargets) {
-    try {
-      await connector.reply(target, response);
-      log.info(`[${tag}] Report pushed to ${target}`);
-    } catch (e) {
-      log.warn(`[${tag}] Failed to push to ${target}: ${e}`);
-    }
-  }
-}
 
 /**
  * builtin:pulse — proactive "is anything worth interrupting?" briefing.
@@ -162,7 +99,7 @@ handlers.set("builtin:pulse", async (remi, config) => {
     return;
   }
 
-  // Deliver — same target/connector resolution as pushAgentReport.
+  // Deliver — resolve push targets + connector from handler config.
   const delivery = (config?.delivery as Record<string, any> | undefined) ?? {};
   const pushTargets: string[] =
     (config?.pushTargets as string[]) ?? (delivery.pushTargets as string[]) ?? [];
@@ -189,165 +126,7 @@ handlers.set("builtin:pulse", async (remi, config) => {
   }
 });
 
-handlers.set("agent:wiki-curate", async (remi, config) => {
-  const { AgentRunner } = await import("../../agents/index.js");
-  const runner = new AgentRunner();
-  const prompt = `执行今日 Wiki 维护。扫描所有项目的 memory 和 wiki 目录，综合记忆碎片生成/更新 Wiki L0/L1/L2。`;
-  const result = await runner.run("wiki-curate", prompt);
-  await pushAgentReport(remi, config, result, "📚 Wiki 维护日报", "agent:wiki-curate");
-});
-
-handlers.set("agent:memory-audit", async (remi, config) => {
-  const { AgentRunner } = await import("../../agents/index.js");
-  const runner = new AgentRunner();
-  const prompt = `执行今日统一记忆维护（9 阶段）：
-1. SUPPLEMENT — 读取昨日 daily notes，提取 memory-extract 遗漏的新事实写入实体（不写 MEMORY.md）
-2. MERGE — 去重实体观察
-3. DELETE — 删除过期事实（先备份到 .versions/）
-4. FILL_SUMMARY — 补充缺失的 summary
-5. UPDATE_IMPORTANCE — 更新实体重要性评分
-6. COMPRESS — 压缩 8-30 天日志为周报，归档 >30 天周报
-7. PRUNE_INDEX — 确保 MEMORY.md 不超过 200 行，归档旧 "## From" 段落到 compaction-archive/
-8. CLEANUP — 清理 >30 天 dailies 和 >50 条 versions
-9. REPORT — 汇总昨日所有 agent 运行日志`;
-  const result = await runner.run("memory-audit", prompt);
-  await pushAgentReport(remi, config, result, "📋 记忆维护日报", "agent:memory-audit");
-});
-
-/**
- * cli-ingest — Harvest Claude Code CLI conversations (~/.claude/projects/*)
- * and feed them into memory-extract for projects that Remi already knows.
- *
- * Opt-in rule: only process JSONLs whose cwd has a bootstrapped
- * `~/.remi/projects/{hash}/` directory. Projects Remi hasn't been
- * introduced to are ignored entirely for privacy.
- *
- * Per-JSONL cursor (last_pair_count) tracks how much we've already
- * processed so each new round is ingested exactly once.
- */
-handlers.set("cli-ingest", async (remi) => {
-  const { getDb } = await import("../../db/index.js");
-  const { parseSessionPairs } = await import("../../conversation/parser.js");
-  const db = getDb();
-
-  db.exec(`CREATE TABLE IF NOT EXISTS cli_ingest_cursor (
-    jsonl_path TEXT PRIMARY KEY,
-    last_pair_count INTEGER NOT NULL DEFAULT 0,
-    last_ingested_at TEXT NOT NULL
-  )`);
-
-  const projectsDir = join(homedir(), ".claude", "projects");
-  if (!existsSync(projectsDir)) {
-    log.debug("[cli-ingest] ~/.claude/projects not found, skipping");
-    return;
-  }
-
-  // Only consider JSONLs modified in the last 3 hours — keeps scan fast
-  const cutoffMs = Date.now() - 3 * 3600 * 1000;
-  let ingested = 0;
-  let skippedNoOptIn = 0;
-  let skippedInactive = 0;
-
-  // Use plain readdir + statSync: ~/.claude/projects/ entries are often
-  // symlinks into ~/.remi/projects/, which Dirent.isDirectory() would skip.
-  for (const name of readdirSync(projectsDir)) {
-    const projDir = join(projectsDir, name);
-    let projStat;
-    try { projStat = statSync(projDir); } catch { continue; }
-    if (!projStat.isDirectory()) continue;
-
-    for (const file of readdirSync(projDir)) {
-      if (!file.endsWith(".jsonl")) continue;
-      const jsonlPath = join(projDir, file);
-
-      let stat;
-      try { stat = statSync(jsonlPath); } catch { continue; }
-      if (!stat.isFile()) continue;
-      if (stat.mtimeMs < cutoffMs) { skippedInactive++; continue; }
-
-      // Extract cwd — scan first ~20 lines (line 1 is often file-history-snapshot,
-      // cwd lives on the first user/assistant message line).
-      let cwd: string | undefined;
-      try {
-        const head = readFileSync(jsonlPath, { encoding: "utf-8", flag: "r" }).slice(0, 16384);
-        const lines = head.split("\n", 20);
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const obj = JSON.parse(line);
-            if (typeof obj.cwd === "string" && obj.cwd) { cwd = obj.cwd; break; }
-          } catch { /* skip malformed line */ }
-        }
-      } catch { continue; }
-      if (!cwd) continue;
-
-      // Skip agent cwds — these are Remi's own background-agent runs
-      // (memory-extract, memory-audit, wiki-curate). Ingesting them would
-      // create a feedback loop: agent run → JSONL → cli-ingest → agent run.
-      if (/\/agents\/[^/]+\/?$/.test(cwd)) { skippedNoOptIn++; continue; }
-
-      // Opt-in: Remi must already know this project
-      const projectHash = cwd.replace(/\//g, "-");
-      const remiProjectDir = join(homedir(), ".remi", "projects", projectHash);
-      if (!existsSync(remiProjectDir)) { skippedNoOptIn++; continue; }
-
-      const sessionId = basename(file, ".jsonl");
-      let pairs;
-      try {
-        pairs = parseSessionPairs(jsonlPath, sessionId);
-      } catch (e) {
-        log.warn(`[cli-ingest] parse failed for ${sessionId}: ${e}`);
-        continue;
-      }
-
-      const cursor = db
-        .query<{ last_pair_count: number }, [string]>(
-          "SELECT last_pair_count FROM cli_ingest_cursor WHERE jsonl_path = ?",
-        )
-        .get(jsonlPath);
-      const lastCount = cursor?.last_pair_count ?? 0;
-      if (pairs.length <= lastCount) continue;
-
-      const newPairs = pairs.slice(lastCount);
-      const parts: string[] = [];
-      for (const p of newPairs) {
-        if (p.userText) parts.push(`User: ${p.userText.slice(0, 500)}`);
-        if (p.remiText) parts.push(`Remi: ${p.remiText.slice(0, 500)}`);
-      }
-      const aggregatedText = parts.join("\n\n").slice(0, 8000);
-      if (!aggregatedText) continue;
-
-      const contentHash = createHash("sha256")
-        .update(`${jsonlPath}:${lastCount}:${pairs.length}`)
-        .digest("hex")
-        .slice(0, 16);
-
-      await remi.queue.enqueueMemory({
-        sessionKey: `cli-ingest:${sessionId}`,
-        aggregatedText,
-        contentHash,
-        roundCount: newPairs.length,
-        timestamp: new Date().toISOString(),
-        cwd,
-      });
-
-      db.query(
-        "INSERT OR REPLACE INTO cli_ingest_cursor(jsonl_path, last_pair_count, last_ingested_at) VALUES (?, ?, ?)",
-      ).run(jsonlPath, pairs.length, new Date().toISOString());
-
-      ingested++;
-      log.info(
-        `[cli-ingest] ${sessionId}: +${newPairs.length} pairs (cwd=${cwd}, total=${pairs.length})`,
-      );
-    }
-  }
-
-  log.info(
-    `[cli-ingest] done — ingested=${ingested}, skipped_no_optin=${skippedNoOptIn}, skipped_inactive=${skippedInactive}`,
-  );
-});
-
-/** Resolve skill path: cwd → config-hub managed → legacy → pipeline built-in */
+/** Resolve skill path: cwd → config-hub managed → legacy */
 function resolveSkillPath(skillName: string, cwd?: string): string {
   if (cwd) {
     const p = join(cwd, ".claude", "skills", skillName, "SKILL.md");
@@ -357,9 +136,7 @@ function resolveSkillPath(skillName: string, cwd?: string): string {
   if (existsSync(ccManaged)) return ccManaged;
   const legacy = join(homedir(), ".remi", ".claude", "skills", skillName, "SKILL.md");
   if (existsSync(legacy)) return legacy;
-  const builtIn = join(import.meta.dir, "../../../pipeline/skills", skillName, "SKILL.md");
-  if (existsSync(builtIn)) return builtIn;
-  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.claude, ~/.remi, pipeline/)`);
+  throw new Error(`Skill file not found: ${skillName} (searched cwd=${cwd ?? "none"}, ~/.claude, ~/.remi)`);
 }
 
 handlers.set("skill:run", async (remi, config) => {
@@ -553,6 +330,3 @@ function appendRunLog(jobId: string, handler: string, status: "ok" | "error", du
 function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-
-// Helper functions processEntityLine, updateRollingSummary, compressWeeklyLogs, archiveOldLogs
-// removed — these responsibilities are now handled by agent:memory-audit phases

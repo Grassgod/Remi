@@ -82,7 +82,7 @@ export class Remi {
     this.memory = new MemoryStore(config.memoryDir, vectorStore);
     this.metrics = new MetricsCollector(dirname(config.memoryDir));
     this.traceCollector = new TraceCollector();
-    this.queue = new RemiQueueManager(this.memory);
+    this.queue = new RemiQueueManager();
     this._migrateSessionsJson();
   }
 
@@ -593,12 +593,6 @@ export class Remi {
             spans,
           });
         }
-
-        // Trigger memory extraction check via BunQueue (fire-and-forget)
-        this.queue.enqueueConversation({
-          sessionKey,
-          chatId: msg.chatId,
-        }).catch((e) => log.warn("enqueue conversation trigger failed:", e));
       } catch (e) {
         _log.warn("insert conversation failed:", e);
       }

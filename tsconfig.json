@@ -24,7 +24,6 @@
       "@acp/*": ["./src/acp/*"],
       "@memory/*": ["./src/memory/*"],
       "@queue/*": ["./src/queue/*"],
-      "@agents/*": ["./src/agents/*"],
       "@connectors/*": ["./src/connectors/*"],
       "@auth/*": ["./src/auth/*"],
       "@daemon/*": ["./src/daemon/*"],

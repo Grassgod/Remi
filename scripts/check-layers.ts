@@ -31,7 +31,6 @@ const LAYER: Record<string, number> = {
   acp: 1,
   memory: 1,
   queue: 1,
-  agents: 1,
   connectors: 1,
   auth: 1,
   daemon: 2,
@@ -65,7 +64,6 @@ const ALIAS_MODULE: Record<string, string> = {
   "@acp/": "acp",
   "@memory/": "memory",
   "@queue/": "queue",
-  "@agents/": "agents",
   "@connectors/": "connectors",
   "@auth/": "auth",
   "@daemon/": "daemon",
@@ -78,7 +76,7 @@ const ALIAS_MODULE: Record<string, string> = {
   "@remi/": "remi",
 };
 
-const L1_BLOCKS = new Set(["acp", "memory", "queue", "agents", "connectors", "auth"]);
+const L1_BLOCKS = new Set(["acp", "memory", "queue", "connectors", "auth"]);
 
 interface Violation {
   file: string;

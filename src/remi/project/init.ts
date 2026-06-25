@@ -5,9 +5,6 @@
 import {
   existsSync,
   mkdirSync,
-  copyFileSync,
-  readdirSync,
-  chmodSync,
   lstatSync,
   readlinkSync,
   readFileSync,
@@ -174,35 +171,6 @@ export async function runProjectInit(
   });
   if (!step2) return;
 
-  // [DISABLED] Pipeline skills now referenced directly from /pipeline/skills/ (single source of truth).
-  // Copy logic kept for reference — re-enable when per-project customization is needed.
-  // try {
-  //   const cwd = store.getById(projectId)?.cwd;
-  //   if (cwd) {
-  //     const srcSkillsDir = join(import.meta.dir, "../../pipeline/skills");
-  //     const destSkillsDir = join(cwd, ".claude", "skills");
-  //
-  //     if (existsSync(srcSkillsDir)) {
-  //       for (const stepDir of readdirSync(srcSkillsDir)) {
-  //         const srcDir = join(srcSkillsDir, stepDir);
-  //         const destDir = join(destSkillsDir, stepDir);
-  //         const srcSkill = join(srcDir, "SKILL.md");
-  //         if (existsSync(srcSkill)) {
-  //           mkdirSync(destDir, { recursive: true });
-  //           copyFileSync(srcSkill, join(destDir, "SKILL.md"));
-  //         }
-  //         const srcScript = join(srcDir, "mission-advance");
-  //         if (existsSync(srcScript)) {
-  //           copyFileSync(srcScript, join(destDir, "mission-advance"));
-  //           try { chmodSync(join(destDir, "mission-advance"), 0o755); } catch {}
-  //         }
-  //       }
-  //     }
-  //   }
-  // } catch (err) {
-  //   log.warn(`Failed to copy pipeline skills: ${err}`);
-  // }
-
   // Step 3: Link project CLAUDE.md to Remi wiki README (single source of truth at ~/.remi/)
   const step3 = await runStep(store, projectId, "link_claude_md", async () => {
     const cwd = store.getById(projectId)?.cwd;
@@ -272,7 +240,7 @@ function linkProjectClaudeMd(cwd: string, alias: string): string {
   if (!existsSync(wikiReadme)) {
     writeFileSync(
       wikiReadme,
-      `# ${alias}\n\n(Remi-managed README. Edit via wiki-curate or directly at ~/.remi/wiki/projects/${alias}/README.md)\n`,
+      `# ${alias}\n\n(Remi-managed README. Edit directly at ~/.remi/wiki/projects/${alias}/README.md)\n`,
       "utf-8",
     );
   }
