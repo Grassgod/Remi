@@ -73,6 +73,14 @@ export interface EphemeralDaemonOptions {
 
 export type RuntimeContext = PersistentContext | EphemeralContext;
 
+// ── Capability block ─────────────────────────────────────
+
+export interface CapabilityBlock {
+  name: string;
+  persistent?(ctx: PersistentContext): Partial<AgentSessionConfig>;
+  ephemeral?(ctx: EphemeralContext): Partial<AgentSessionConfig>;
+}
+
 // ── AgentSession result ──────────────────────────────────
 
 export interface AgentRunResult {
