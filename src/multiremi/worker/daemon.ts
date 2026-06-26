@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
-import { AcpProvider, resolveAcpPermissionMode, type AcpProviderOptions } from "@acp/index.js";
+import { AcpProvider, type AcpProviderOptions } from "@acp/index.js";
 import type { PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
@@ -18,8 +18,10 @@ import {
   writeAgentSkillContext,
   normalizeSkillFilePath,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
-import { buildTaskEnv, cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
-import { buildTaskMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
+import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
+import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
+import { AgentSession } from "@daemon/agent-runtime/session.js";
+import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
 import {
   LocalDirectoryError,
   LocalPathLocker,
@@ -569,27 +571,34 @@ export class MultiremiDaemon {
     }
     await this.client.pinTaskSession(task.id, task.sessionId, workDir);
 
-    const provider = this.providerFactory({
-      agentType: agent.provider,
-      executable: agent.executable ?? undefined,
-      model: agent.model,
-      allowedTools: agent.allowedTools,
-      cwd: workDir,
-      env: buildTaskEnv(task, {
+    // Assemble config via AgentRuntime
+    const runtime = new AgentRuntime();
+    const ctx: EphemeralContext = {
+      kind: "ephemeral",
+      task,
+      daemonOptions: {
         daemonPort: this.repoServerPort,
         serverUrl: this.options.serverUrl,
         fallbackToken: this.options.token,
-      }),
-      // Inject the agent's MCP servers into the ACP session/new request. Tasks
-      // without mcpConfig yield [] → zero behavior change for existing runs.
-      getMcpServers: () => buildTaskMcpServers(task),
+        workspacesRoot: this.options.workspacesRoot,
+      },
+      workDir,
+      signal,
+    };
+    const config = runtime.assemble(ctx);
+
+    const provider = this.providerFactory({
+      agentType: config.agentType,
+      executable: config.executable,
+      model: config.model,
+      allowedTools: config.allowedTools,
+      cwd: config.cwd,
+      env: config.env,
+      getMcpServers: () => config.mcpServers,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    // Autonomous daemon runs have no human to approve tool use. Auto-approve every
-    // permission request; otherwise ACP responds "cancelled" (no handler) and the
-    // agent's tools abort. permissionMode below also lets Claude skip asking entirely.
     provider.setPermissionHandler?.((params) => {
       const allow = params.options.find((o) => o.kind === "allow_always")
         ?? params.options.find((o) => o.kind === "allow_once");
@@ -604,15 +613,9 @@ export class MultiremiDaemon {
     let usage: TaskUsageEntry[] = [];
 
     try {
+      const session = new AgentSession(provider as any, config);
       const prompt = buildTaskPrompt(task);
-      for await (const event of provider.sendStream(prompt, {
-        cwd: workDir,
-        sessionId: task.sessionId,
-        chatId: task.id,
-        allowedTools: agent.allowedTools,
-        permissionMode: resolveAcpPermissionMode(agent.provider),
-        signal,
-      })) {
+      for await (const event of session.run(prompt)) {
         const message = eventToTaskMessage(event, seq++);
         if (message) {
           if (message.type === "assistant" && message.content) output += message.content;

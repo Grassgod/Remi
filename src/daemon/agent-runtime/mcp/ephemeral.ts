@@ -17,11 +17,9 @@
  * NOTE on server lifecycle / `mcp/servers/`: there is no Remi-owned MCP server
  * process registration or lifecycle code. MCP server *processes* are spawned
  * and owned by the ACP agent process itself (it reads the injected mcpServers
- * and launches them). Persistent `.mcp.json` sync for interactive Remi agents
- * lives in `daemon/agent-runtime/config-hub`. This module only translates a
- * task's stored config into the per-session injection shape; it does not start,
- * stop, or supervise any process. There is therefore no `mcp/servers/`
- * directory.
+ * and launches them). This module only translates a task's stored config into
+ * the per-session injection shape; it does not start, stop, or supervise any
+ * process.
  */
 
 import type { AgentTask } from "@daemon/contracts/types.js";

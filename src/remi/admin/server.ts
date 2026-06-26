@@ -38,7 +38,6 @@ import { registerConversationsHandlers } from "./handlers/conversations.js";
 import { registerWikiHandlers } from "./handlers/wiki.js";
 import { registerSkillsHandlers } from "./handlers/skills.js";
 import { registerMcpHandlers } from "./handlers/mcp.js";
-import { ConfigHubPlugin, setConfigHubInstance, migrateLegacyConfigStore } from "../../daemon/agent-runtime/config-hub/index.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../project/store.js";
@@ -68,13 +67,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   sso.migrate(getDb());
   sso.seed();
 
-  // ── config-hub plugin: cross-tool MCP/Skills/Prompts management ──
-  // One-time COPY of legacy ~/.cc-switch data into ~/.remi before opening the DB.
-  migrateLegacyConfigStore();
-  const hub = new ConfigHubPlugin();
-  hub.migrate(getDb());
-  setConfigHubInstance(hub);
-
   // Global middleware
   if (devMode) {
     app.use("/api/*", cors());
@@ -91,7 +83,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   });
 
   // ── Plugins (web surface): DB migrate/seed, middleware, and routes ──
-  // Built-in SSO/config-hub stay wired explicitly above (middleware ordering).
   // Plugin middleware mounts here (before route handlers) so it applies to them.
   new PluginRegistry().load(remiConfig).dispatchWeb(app, { db: getDb(), config: remiConfig });
 
@@ -115,7 +106,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerWikiHandlers(app, data);
   registerSkillsHandlers(app, data);
   registerMcpHandlers(app, data);
-  hub.registerHttp(app);
   registerProjectInitHandlers(app);
 
   // ── Filesystem browse (for directory picker) ──

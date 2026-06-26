@@ -1,7 +1,6 @@
 /**
  * ConfigManager — symlink-based config management (CLAUDE.md → soul.md,
- * projects/). Cross-tool MCP/Skills/Prompts sync now lives in the
- * `config-hub` plugin (src/plugins/config-hub), handled natively in-process.
+ * projects/).
  */
 
 import {
@@ -206,7 +205,6 @@ export class ConfigManager {
   async syncAll(): Promise<void> {
     this.ensureGlobals();
     this.ensureProjectsRoot();
-    // Cross-tool config sync now happens in the config-hub plugin.
   }
 
   // ── Private helpers ──────────────────────────────────────────

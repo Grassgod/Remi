@@ -127,11 +127,11 @@ function makeConfig(tmpDir: string): RemiConfig {
     cronJobs: [],
     services: [],
     botMenu: {},
+    mcp: [],
     proxy: { http: "", noProxy: "" },
     plugins: { dir: join(tmpDir, "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
     auth: { adminEmails: [] },
-    configHub: { enabled: false, configDir: join(tmpDir, "config-hub") },
     tracing: {
       enabled: false,
       logsDir: join(tmpDir, "logs"),

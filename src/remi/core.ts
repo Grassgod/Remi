@@ -23,6 +23,7 @@ import { AsyncLock, resolveSessionKey } from "../daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
+import { AgentRuntime } from "../daemon/agent-runtime/runtime.js";
 import { FeishuConnector } from "../connectors/feishu/index.js";
 import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
 
@@ -67,6 +68,7 @@ export class Remi {
   private _connectors: Connector[] = [];
   private _laneLocks = new Map<string, AsyncLock>();
   private _activeAborts = new Map<string, AbortController>();
+  private _runtime = new AgentRuntime();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
 
   constructor(config: RemiConfig) {
@@ -301,43 +303,40 @@ export class Remi {
 
     const sessionKey = this._resolveSessionKey(msg);
     const groupConfig = this._getGroupConfig(msg.chatId);
-    // CWD priority: group-level override > project cwd > session > message metadata
-    const cwd = groupConfig?.cwd || groupConfig?.projectCwd || sessDb.getSession(sessionKey)?.cwd || (msg.metadata?.cwd as string) || undefined;
-
     const sessRow = sessDb.getSession(sessionKey);
     const existingSessionId = sessRow?.session_id || undefined;
     _log.info(`session lookup: key="${sessionKey}" → ${existingSessionId ? `resume="${existingSessionId.slice(0, 12)}..."` : "new session"}${groupConfig ? ` [group: ${groupConfig.projectId}]` : ""}`);
-    const msgTraceId = (msg.metadata?.messageId as string) ?? undefined;
 
     // AbortController for /esc — allows immediate readline interruption
     const abortController = new AbortController();
     this._activeAborts.set(sessionKey, abortController);
 
-    // Inject chat metadata for groups with injectChatContext enabled
-    const chatMeta = groupConfig?.injectChatContext
-      ? `\n[chat_context] chatId=${msg.chatId} sender=${msg.sender} senderOpenId=${msg.metadata?.senderOpenId ?? "unknown"}`
-      : "";
-    const memoryContext = this.memory.readMemory().trim();
-    const promptParts = [
-      memoryContext ? `# Memory\n${memoryContext}` : "",
-      groupConfig?.systemPrompt ?? "",
-      chatMeta,
-    ].filter(Boolean);
-    const effectiveSystemPrompt = promptParts.length ? promptParts.join("\n\n") : undefined;
+    // Assemble config via AgentRuntime
+    const runtimeCtx: import("../daemon/agent-runtime/types.js").PersistentContext = {
+      kind: "persistent",
+      message: msg,
+      config: this.config,
+      groupConfig,
+      memory: this.memory,
+      sessionRow: sessRow,
+      sessionKey,
+    };
+    const sessionConfig = this._runtime.assemble(runtimeCtx);
 
     const streamOptions = {
-      systemPrompt: effectiveSystemPrompt,
-      context: memoryContext || undefined,
-      chatId: this._resolveSessionKey(msg),
-      sessionId: existingSessionId,
-      cwd: cwd ?? undefined,
-      media: msg.media,
-      allowedTools: groupConfig?.allowedTools?.length ? groupConfig.allowedTools : undefined,
-      addDirs: groupConfig?.addDirs?.length ? groupConfig.addDirs : undefined,
-      permissionMode: sessRow?.mode ?? undefined,
-      traceId: msgTraceId,
+      systemPrompt: sessionConfig.systemPrompt,
+      context: sessionConfig.context,
+      chatId: sessionConfig.chatId,
+      sessionId: sessionConfig.sessionId,
+      cwd: sessionConfig.cwd,
+      media: sessionConfig.media,
+      allowedTools: sessionConfig.allowedTools,
+      addDirs: sessionConfig.addDirs,
+      permissionMode: sessionConfig.permissionMode,
+      traceId: sessionConfig.traceId,
       signal: abortController.signal,
     };
+    const cwd = sessionConfig.cwd;
 
     // Provider selection:
     // 1. Group → GroupConfig.provider (DB)
@@ -372,11 +371,13 @@ export class Remi {
       for await (const event of provider.sendStream(msg.text, streamOptions)) {
         _log.debug(`received event: ${event.sessionUpdate}`);
         if (event.sessionUpdate === "agent_message_chunk") {
-          for (const block of event.content) {
+          const blocks = Array.isArray(event.content) ? event.content : [event.content];
+          for (const block of blocks) {
             if (block.type === "text") streamedText += block.text;
           }
         } else if (event.sessionUpdate === "agent_thought_chunk") {
-          for (const block of event.content) {
+          const blocks = Array.isArray(event.content) ? event.content : [event.content];
+          for (const block of blocks) {
             if (block.type === "text") streamedThinking += block.text;
           }
         }
@@ -966,7 +967,7 @@ export class Remi {
       });
     }
 
-    // 4. ConfigManager — symlinks + config-hub sync
+    // 4. ConfigManager — symlinks
     const { configManager } = require("../shared/infra/config-manager");
     remi._configManager = configManager;
     configManager.ensureAllProjects();
@@ -992,11 +993,9 @@ export class Remi {
       allowedTools: agentCfg.allowedTools,
       cwd: homedir(),
       executable: agentCfg.executable,
-      getMcpServers: () => {
-        const { getConfigHub } = require("../daemon/agent-runtime/config-hub/index");
-        const hub = getConfigHub();
-        return hub ? hub.service.getMcpServersForApp(type) : [];
-      },
+      getMcpServers: () => config.mcp
+        .filter((e) => !e.agents || e.agents.includes(type))
+        .map((e) => ({ name: e.name, command: e.command, args: e.args, env: e.env })),
     });
   }
 

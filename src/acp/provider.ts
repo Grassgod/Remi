@@ -45,7 +45,7 @@ export interface AcpProviderOptions {
   allowedTools?: string[];
   /** Working directory. */
   cwd?: string;
-  /** Inject MCP servers at construction time (e.g. from config-hub). */
+  /** Inject MCP servers at construction time (e.g. from remi.toml). */
   getMcpServers?: () => Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>;
   /** Extra environment variables for the spawned ACP process. */
   env?: Record<string, string>;

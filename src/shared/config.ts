@@ -231,9 +231,12 @@ export interface GoogleConfig {
   model: string;
 }
 
-export interface ConfigHubConfig {
-  enabled: boolean;
-  configDir: string;
+export interface McpServerEntry {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  agents?: string[];
 }
 
 export interface TracingConfig {
@@ -270,8 +273,8 @@ export interface RemiConfig {
   embedding?: EmbeddingConfig;
   /** Google API config for Gemini image generation (optional). */
   google?: GoogleConfig;
-  /** config-hub config for multi-tool configuration management. */
-  configHub: ConfigHubConfig;
+  /** MCP servers to inject into ACP sessions. */
+  mcp: McpServerEntry[];
   tracing: TracingConfig;
   memoryDir: string;
   pidFile: string;
@@ -336,7 +339,7 @@ export function defaultRemiConfig(): RemiConfig {
     plugins: { dir: join(homedir(), ".remi", "plugins"), enabled: [], allowExternal: true },
     pluginConfigs: {},
     auth: { adminEmails: [] },
-    configHub: { enabled: false, configDir: join(homedir(), ".remi", "config-hub") },
+    mcp: [],
     tracing: {
       enabled: true,
       logsDir: join(homedir(), ".remi", "logs"),
@@ -395,9 +398,10 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
 
+  const mcpData = (fileData.mcp ?? {}) as Record<string, unknown>;
+  const mcpServersData = (mcpData.servers ?? []) as Array<Record<string, unknown>>;
+
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
-  // Prefer [config_hub]; fall back to legacy [cc_switch] so old remi.toml still works.
-  const configHubData = (fileData.config_hub ?? fileData.cc_switch ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
 
@@ -505,13 +509,16 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       port: (s.port as number) ?? null,
       enabled: (s.enabled as boolean) ?? true,
     })),
+    mcp: mcpServersData.map((s) => ({
+      name: (s.name as string) ?? "",
+      command: (s.command as string) ?? "",
+      args: (s.args as string[]) ?? undefined,
+      env: (s.env as Record<string, string>) ?? undefined,
+      agents: (s.agents as string[]) ?? undefined,
+    })),
     proxy: {
       http: (proxyData.http as string) ?? "",
       noProxy: (proxyData.no_proxy as string) ?? "",
-    },
-    configHub: {
-      enabled: (configHubData.enabled as boolean) ?? false,
-      configDir: (configHubData.config_dir as string)?.replace(/^~/, homedir()) ?? join(homedir(), ".remi", "config-hub"),
     },
     botMenu: parseBotMenuConfig(botMenuData),
     embedding: embeddingData

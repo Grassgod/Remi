@@ -126,7 +126,7 @@ handlers.set("builtin:pulse", async (remi, config) => {
   }
 });
 
-/** Resolve skill path: cwd → config-hub managed → legacy */
+/** Resolve skill path: cwd → legacy */
 function resolveSkillPath(skillName: string, cwd?: string): string {
   if (cwd) {
     const p = join(cwd, ".claude", "skills", skillName, "SKILL.md");
