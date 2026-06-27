@@ -1,5 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
+import { ConfigStore } from "../../../shared/db/config-store.js";
+import { getDb } from "../../../shared/db/index.js";
 
 export function registerConfigHandlers(app: Hono, data: RemiData) {
   app.get("/api/v1/config", (c) => {
@@ -13,18 +15,19 @@ export function registerConfigHandlers(app: Hono, data: RemiData) {
     return c.json({ ok: true });
   });
 
-  // Raw TOML endpoints
-  app.get("/api/v1/config/raw", (c) => {
-    const result = data.readConfigRaw();
-    if (!result) return c.json({ error: "config file not found" }, 404);
-    return c.json(result);
+  app.get("/api/v1/config/:section", (c) => {
+    const section = c.req.param("section");
+    const store = new ConfigStore(getDb());
+    const value = store.getSection(section);
+    if (value === undefined) return c.json({ error: "section not found" }, 404);
+    return c.json(value);
   });
 
-  app.put("/api/v1/config/raw", async (c) => {
-    const { text } = await c.req.json();
-    if (typeof text !== "string") return c.json({ error: "text field required" }, 400);
-    const result = data.updateConfigRaw(text);
-    if ("error" in result) return c.json(result, 422);
-    return c.json(result);
+  app.put("/api/v1/config/:section", async (c) => {
+    const section = c.req.param("section");
+    const body = await c.req.json();
+    const store = new ConfigStore(getDb());
+    store.setSection(section, body);
+    return c.json({ ok: true });
   });
 }

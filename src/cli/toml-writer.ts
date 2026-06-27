@@ -7,13 +7,21 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { ConfigStore } from "../shared/db/config-store.js";
+import { getDb } from "../shared/db/index.js";
 
 const CONFIG_PATH = join(homedir(), ".remi", "remi.toml");
 
-/** Ensure ~/.remi/ exists and remi.toml is present (from template if needed). */
+/** Ensure ~/.remi/ directory exists. Creates remi.toml from template if neither DB nor TOML exists. */
 export function ensureConfigFile(templateContent: string): string {
   const dir = dirname(CONFIG_PATH);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  // Skip TOML creation if DB already has config
+  try {
+    const store = new ConfigStore(getDb());
+    if (!store.isEmpty()) return CONFIG_PATH;
+  } catch { /* DB not available */ }
 
   if (!existsSync(CONFIG_PATH)) {
     writeFileSync(CONFIG_PATH, templateContent, "utf-8");
@@ -41,23 +49,27 @@ export function readConfig(): string {
  *   app_id = "cli_abc123"
  */
 export function setConfigValue(section: string, key: string, value: string): void {
+  // Write to DB (primary store)
+  try {
+    const store = new ConfigStore(getDb());
+    const existing = (store.getSection(section) ?? {}) as Record<string, unknown>;
+    existing[key] = value;
+    store.setSection(section, existing);
+  } catch { /* DB not available during initial setup — TOML fallback below */ }
+
+  // Also write to TOML (for backwards compatibility during migration)
   let raw = readConfig();
 
   const sectionHeader = `[${section}]`;
   const keyLine = `${key} = "${escapeToml(value)}"`;
   const keyPattern = new RegExp(`^(\\s*)${escapeRegex(key)}\\s*=\\s*"[^"]*"`, "m");
 
-  // Find the section
   const sectionIdx = raw.indexOf(sectionHeader);
 
   if (sectionIdx === -1) {
-    // Section doesn't exist — append it
     raw = raw.trimEnd() + `\n\n${sectionHeader}\n${keyLine}\n`;
   } else {
-    // Section exists — find the key within it
     const afterSection = raw.slice(sectionIdx + sectionHeader.length);
-
-    // Find the end of this section (next section header or EOF)
     const nextSectionMatch = afterSection.match(/\n\[(?!\[)/);
     const sectionEnd = nextSectionMatch
       ? sectionIdx + sectionHeader.length + (nextSectionMatch.index ?? afterSection.length)
@@ -66,11 +78,9 @@ export function setConfigValue(section: string, key: string, value: string): voi
     const sectionContent = raw.slice(sectionIdx, sectionEnd);
 
     if (keyPattern.test(sectionContent)) {
-      // Key exists — replace it
       const newSection = sectionContent.replace(keyPattern, keyLine);
       raw = raw.slice(0, sectionIdx) + newSection + raw.slice(sectionEnd);
     } else {
-      // Key doesn't exist — append after section header
       const insertPos = sectionIdx + sectionHeader.length;
       raw = raw.slice(0, insertPos) + `\n${keyLine}` + raw.slice(insertPos);
     }
@@ -89,10 +99,17 @@ export function setConfigSection(section: string, values: Record<string, string>
 }
 
 /**
- * Read a single value from a TOML section.
- * Returns undefined if not found.
+ * Read a single value from config. Checks DB first, falls back to TOML.
  */
 export function getConfigValue(section: string, key: string): string | undefined {
+  // Try DB first
+  try {
+    const store = new ConfigStore(getDb());
+    const data = store.getSection(section) as Record<string, unknown> | undefined;
+    if (data && key in data) return String(data[key]);
+  } catch { /* DB not available */ }
+
+  // Fallback to TOML
   const raw = readConfig();
   const sectionHeader = `[${section}]`;
   const sectionIdx = raw.indexOf(sectionHeader);

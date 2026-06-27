@@ -2,13 +2,18 @@
  * Configuration loading from environment variables and remi.toml.
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 
-const DEFAULT_MEMORY_DIR = join(homedir(), ".remi", "memory");
+const REMI_HOME = join(homedir(), ".remi");
 const CONFIG_FILENAME = "remi.toml";
+
+export const MEMORY_DIR = join(REMI_HOME, "memory");
+export const SESSIONS_FILE = join(REMI_HOME, "sessions.json");
+export const PID_FILE = join(REMI_HOME, "remi.pid");
+export const QUEUE_DIR = join(REMI_HOME, "queue");
 
 /** Per-agent ACP configuration. */
 export interface AcpAgentConfig {
@@ -60,31 +65,6 @@ export interface FeishuConfig {
   userAccessToken: string;
   /** User open_ids that trigger bot replies when @mentioned in allowed groups. */
   triggerUserIds: string[];
-}
-
-export interface ScheduledSkillConfig {
-  /** Skill name — maps to .claude/skills/{name}/SKILL.md under Remi data dir. */
-  name: string;
-  enabled: boolean;
-  /** Hour to generate the report (0-23). */
-  generateHour: number;
-  /** Hour to push the report (0-23). */
-  pushHour: number;
-  /** Minute within pushHour to push. */
-  pushMinute: number;
-  /** Chat IDs to push the report to. */
-  pushTargets: string[];
-  /** Connector name to use for pushing (default: "feishu"). */
-  connectorName: string;
-  /** Directory to store generated report files. */
-  outputDir: string;
-  /** Max content length before truncation on push (default: 4000). */
-  maxPushLength: number;
-}
-
-export interface SchedulerConfig {
-  memoryCompactCron: string;
-  heartbeatInterval: number;
 }
 
 /**
@@ -257,11 +237,7 @@ export interface RemiConfig {
   auth: AuthConfig;
   /** Token sync rules for distributing tokens to external tools. */
   tokenSync: TokenSyncRuleConfig[];
-  /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
-  scheduler: SchedulerConfig;
-  /** @deprecated Use `cronJobs` instead. Kept for migration compatibility. */
-  scheduledSkills: ScheduledSkillConfig[];
-  /** Unified cron jobs — the new scheduler config. */
+  /** Unified cron jobs. */
   cronJobs: CronJobConfig[];
   /** Registered services managed by PM2. */
   services: ServiceConfig[];
@@ -276,12 +252,7 @@ export interface RemiConfig {
   /** MCP servers to inject into ACP sessions. */
   mcp: McpServerEntry[];
   tracing: TracingConfig;
-  memoryDir: string;
-  pidFile: string;
   logLevel: string;
-  contextWarnThreshold: number;
-  queueDir: string;
-  sessionsFile: string;
 }
 
 function defaultAgentConfig(): AcpAgentConfig {
@@ -318,20 +289,11 @@ function defaultFeishuConfig(): FeishuConfig {
   };
 }
 
-function defaultSchedulerConfig(): SchedulerConfig {
-  return {
-    memoryCompactCron: "0 3 * * *",
-    heartbeatInterval: 300,
-  };
-}
-
 export function defaultRemiConfig(): RemiConfig {
   return {
     provider: defaultProviderConfig(),
     feishu: defaultFeishuConfig(),
     tokenSync: [],
-    scheduler: defaultSchedulerConfig(),
-    scheduledSkills: [],
     cronJobs: [],
     services: [],
     botMenu: {},
@@ -342,24 +304,41 @@ export function defaultRemiConfig(): RemiConfig {
     mcp: [],
     tracing: {
       enabled: true,
-      logsDir: join(homedir(), ".remi", "logs"),
-      tracesDir: join(homedir(), ".remi", "traces"),
+      logsDir: join(REMI_HOME, "logs"),
+      tracesDir: join(REMI_HOME, "traces"),
       retentionDays: 60,
     },
-    memoryDir: DEFAULT_MEMORY_DIR,
-    pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: "INFO",
-    contextWarnThreshold: 6000,
-    queueDir: join(homedir(), ".remi", "queue"),
-    sessionsFile: join(homedir(), ".remi", "sessions.json"),
   };
 }
 
 /**
- * Load configuration from environment variables and optional remi.toml.
- * Priority: environment variables > remi.toml > defaults.
+ * Load configuration. Priority: ConfigStore (SQLite) > remi.toml > defaults.
+ * Environment variable overrides are applied by ConfigStore.load().
+ *
+ * The configPath parameter forces TOML loading (used by migration and tests).
  */
 export function loadConfig(configPath?: string | null): RemiConfig {
+  // Try ConfigStore (DB) first — the primary path after migration
+  if (!configPath) {
+    try {
+      const { ConfigStore } = require("./db/config-store.js");
+      const { getDb } = require("./db/index.js");
+      const store = new ConfigStore(getDb());
+      if (!store.isEmpty()) {
+        return store.load();
+      }
+    } catch { /* DB not available — fall through to TOML */ }
+  }
+
+  // Fallback: parse remi.toml (pre-migration or explicit path)
+  return loadConfigFromToml(configPath);
+}
+
+/**
+ * Parse config from remi.toml. Used for TOML→DB migration and as fallback.
+ */
+export function loadConfigFromToml(configPath?: string | null): RemiConfig {
   let fileData: Record<string, unknown> = {};
 
   if (configPath && existsSync(configPath)) {
@@ -380,7 +359,6 @@ export function loadConfig(configPath?: string | null): RemiConfig {
   const providerData = (fileData.provider ?? {}) as Record<string, unknown>;
   const feishuData = (fileData.feishu ?? {}) as Record<string, unknown>;
   const pluginsData = (fileData.plugins ?? {}) as Record<string, unknown>;
-  // [plugin.<id>] sub-tables → keep only object values (skip scalar misconfig).
   const rawPluginData = (fileData.plugin ?? {}) as Record<string, unknown>;
   const pluginConfigsData: Record<string, Record<string, unknown>> = {};
   for (const [k, v] of Object.entries(rawPluginData)) {
@@ -389,22 +367,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
     }
   }
   const authData = (fileData.auth ?? {}) as Record<string, unknown>;
-  // Note: legacy [sso] and [[clusters]] in remi.toml are read by SSO plugin's
-  // seed routine (one-time migration to DB), not parsed here anymore.
   const tokenSyncData = (fileData.token_sync ?? []) as Array<Record<string, unknown>>;
-  const schedulerData = (fileData.scheduler ?? {}) as Record<string, unknown>;
-  const scheduledSkillsData = (fileData.scheduled_skills ?? []) as Array<Record<string, unknown>>;
   const cronData = (fileData.cron ?? {}) as Record<string, unknown>;
   const cronJobsData = (cronData.jobs ?? []) as Array<Record<string, unknown>>;
   const servicesData = (fileData.services ?? []) as Array<Record<string, unknown>>;
-
   const mcpData = (fileData.mcp ?? {}) as Record<string, unknown>;
   const mcpServersData = (mcpData.servers ?? []) as Array<Record<string, unknown>>;
-
   const proxyData = (fileData.proxy ?? {}) as Record<string, unknown>;
   const embeddingData = fileData.embedding as Record<string, unknown> | undefined;
   const googleData = fileData.google as Record<string, unknown> | undefined;
-
   const botMenuData = (fileData.bot_menu ?? {}) as Record<string, unknown>;
 
   const env = process.env;
@@ -468,24 +439,6 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       key: (r.key as string) ?? undefined,
       extraKeys: (r.extra_keys as Record<string, string>) ?? undefined,
     })),
-    scheduler: {
-      memoryCompactCron: (schedulerData.memory_compact_cron as string) ?? "0 3 * * *",
-      heartbeatInterval: parseInt(
-        env.REMI_HEARTBEAT ?? String(schedulerData.heartbeat_interval ?? 300),
-        10,
-      ),
-    },
-    scheduledSkills: scheduledSkillsData.map((s) => ({
-      name: (s.name as string) ?? "",
-      enabled: (s.enabled as boolean) ?? true,
-      generateHour: parseInt(String(s.generate_hour ?? 6), 10),
-      pushHour: parseInt(String(s.push_hour ?? 9), 10),
-      pushMinute: parseInt(String(s.push_minute ?? 0), 10),
-      pushTargets: (s.push_targets as string[]) ?? [],
-      connectorName: (s.connector_name as string) ?? "feishu",
-      outputDir: (s.output_dir as string) ?? join(homedir(), ".remi", "skill-reports", (s.name as string) ?? "unknown"),
-      maxPushLength: parseInt(String(s.max_push_length ?? 4000), 10),
-    })),
     cronJobs: cronJobsData.map((j) => ({
       id: (j.id as string) ?? "",
       name: (j.name as string) ?? undefined,
@@ -539,124 +492,15 @@ export function loadConfig(configPath?: string | null): RemiConfig {
       const t = (fileData.tracing ?? {}) as Record<string, unknown>;
       return {
         enabled: (t.enabled as boolean) ?? true,
-        logsDir: (t.logs_dir as string) ?? join(homedir(), ".remi", "logs"),
-        tracesDir: (t.traces_dir as string) ?? join(homedir(), ".remi", "traces"),
+        logsDir: (t.logs_dir as string) ?? join(REMI_HOME, "logs"),
+        tracesDir: (t.traces_dir as string) ?? join(REMI_HOME, "traces"),
         retentionDays: parseInt(String(t.retention_days ?? 60), 10),
       };
     })(),
-    memoryDir: env.REMI_MEMORY_DIR ?? DEFAULT_MEMORY_DIR,
-    pidFile: join(homedir(), ".remi", "remi.pid"),
     logLevel: env.REMI_LOG_LEVEL ?? (fileData.log_level as string) ?? "INFO",
-    contextWarnThreshold: 6000,
-    queueDir: join(homedir(), ".remi", "queue"),
-    sessionsFile: join(homedir(), ".remi", "sessions.json"),
   };
 }
 
-/**
- * Get the effective cron jobs list.
- * If `config.cronJobs` is populated (new format), use it directly.
- * Otherwise, fall back to legacy migration from [scheduler] + [[scheduled_skills]].
- */
-export function migrateToCronJobs(config: RemiConfig): CronJobConfig[] {
-  if (config.cronJobs.length > 0) {
-    return config.cronJobs;
-  }
-
-  // Legacy fallback — auto-migrate from old format
-  return _legacyToCronJobs(config);
-}
-
-function _legacyToCronJobs(config: RemiConfig): CronJobConfig[] {
-  const jobs: CronJobConfig[] = [];
-  const compactHour = parseCronHourFromExpr(config.scheduler.memoryCompactCron);
-
-  jobs.push(
-    { id: "builtin:heartbeat", name: "Heartbeat", handler: "builtin:heartbeat", every: `${config.scheduler.heartbeatInterval}s` },
-    { id: "builtin:compaction", name: "Memory Compaction", handler: "builtin:compaction", cron: config.scheduler.memoryCompactCron },
-    { id: "builtin:cleanup", name: "Cleanup", handler: "builtin:cleanup", cron: `1 ${compactHour} * * *` },
-  );
-
-  for (const skill of config.scheduledSkills) {
-    if (!skill.name) continue;
-    jobs.push({
-      id: `skill:${skill.name}:gen`, name: `${skill.name} (generate)`,
-      handler: "skill:gen", enabled: skill.enabled,
-      cron: `0 ${skill.generateHour} * * *`,
-      handlerConfig: { skillName: skill.name, outputDir: skill.outputDir },
-    });
-    jobs.push({
-      id: `skill:${skill.name}:push`, name: `${skill.name} (push)`,
-      handler: "skill:push", enabled: skill.enabled,
-      cron: `${skill.pushMinute} ${skill.pushHour} * * *`,
-      handlerConfig: {
-        skillName: skill.name, outputDir: skill.outputDir,
-        connectorName: skill.connectorName, pushTargets: skill.pushTargets,
-        maxPushLength: skill.maxPushLength,
-      },
-    });
-  }
-
-  return jobs;
-}
-
-/**
- * Write-through migration: rewrite remi.toml from old format to new [[cron.jobs]].
- *
- * - Detects if old [scheduler] or [[scheduled_skills]] sections exist
- * - Converts them to [[cron.jobs]]
- * - Removes old sections from the file
- * - Backs up the original as remi.toml.bak
- *
- * Returns true if migration was performed, false if already migrated or no file found.
- */
-export function migrateConfigFile(configPath?: string): boolean {
-  const filePath = configPath ?? findConfigPath();
-  if (!filePath) return false;
-
-  const raw = readFileSync(filePath, "utf-8");
-
-  // Check if already migrated: has [[cron.jobs]] and no [scheduler] or [[scheduled_skills]]
-  const hasCronJobs = /^\[\[cron\.jobs\]\]/m.test(raw);
-  const hasScheduler = /^\[scheduler\]/m.test(raw);
-  const hasScheduledSkills = /^\[\[scheduled_skills\]\]/m.test(raw);
-
-  if (hasCronJobs && !hasScheduler && !hasScheduledSkills) {
-    return false; // Already migrated
-  }
-
-  if (!hasScheduler && !hasScheduledSkills) {
-    return false; // Nothing to migrate
-  }
-
-  // Parse the old config to get migration data
-  const config = loadConfig(filePath);
-  const cronJobs = _legacyToCronJobs(config);
-
-  // Backup original
-  const bakPath = filePath + ".bak";
-  copyFileSync(filePath, bakPath);
-
-  // Remove old sections from raw text and append new [[cron.jobs]]
-  let newRaw = raw;
-
-  // Remove [scheduler] section (header + all subsequent lines until next section header)
-  newRaw = newRaw.replace(/^\[scheduler\]\r?\n(?:(?!\[)[^\r\n]*\r?\n?)*/gm, "");
-
-  // Remove all [[scheduled_skills]] blocks (header + all subsequent lines until next section header)
-  newRaw = newRaw.replace(/^\[\[scheduled_skills\]\]\r?\n(?:(?!\[)[^\r\n]*\r?\n?)*/gm, "");
-
-  // Clean up excessive blank lines
-  newRaw = newRaw.replace(/\n{3,}/g, "\n\n").trimEnd();
-
-  // Build [[cron.jobs]] TOML text
-  const cronText = buildCronJobsToml(cronJobs);
-
-  newRaw += "\n\n# ── Cron Jobs (migrated from [scheduler] + [[scheduled_skills]]) ──\n\n" + cronText;
-
-  writeFileSync(filePath, newRaw, "utf-8");
-  return true;
-}
 
 /**
  * Locate the remi.toml config file.
@@ -670,53 +514,6 @@ export function findConfigPath(): string | null {
     if (existsSync(c)) return c;
   }
   return null;
-}
-
-/**
- * Build TOML text for [[cron.jobs]] entries.
- */
-function buildCronJobsToml(jobs: CronJobConfig[]): string {
-  const lines: string[] = [];
-
-  for (const job of jobs) {
-    lines.push("[[cron.jobs]]");
-    lines.push(`id = ${tomlStr(job.id)}`);
-    if (job.name) lines.push(`name = ${tomlStr(job.name)}`);
-    lines.push(`handler = ${tomlStr(job.handler)}`);
-    if (job.enabled === false) lines.push(`enabled = false`);
-    if (job.cron) lines.push(`cron = ${tomlStr(job.cron)}`);
-    if (job.tz) lines.push(`tz = ${tomlStr(job.tz)}`);
-    if (job.every) lines.push(`every = ${tomlStr(String(job.every))}`);
-    if (job.at) lines.push(`at = ${tomlStr(job.at)}`);
-    if (job.timeoutMs) lines.push(`timeout_ms = ${job.timeoutMs}`);
-    if (job.deleteAfterRun) lines.push(`delete_after_run = true`);
-
-    // handler_config as a sub-table
-    if (job.handlerConfig && Object.keys(job.handlerConfig).length > 0) {
-      lines.push("");
-      lines.push("[cron.jobs.handler_config]");
-      for (const [k, v] of Object.entries(job.handlerConfig)) {
-        const key = k; // Keep camelCase keys as-is to match handler expectations
-        if (typeof v === "string") {
-          lines.push(`${key} = ${tomlStr(v)}`);
-        } else if (typeof v === "number") {
-          lines.push(`${key} = ${v}`);
-        } else if (typeof v === "boolean") {
-          lines.push(`${key} = ${v}`);
-        } else if (Array.isArray(v)) {
-          lines.push(`${key} = [${v.map((s) => tomlStr(String(s))).join(", ")}]`);
-        }
-      }
-    }
-
-    lines.push("");
-  }
-
-  return lines.join("\n");
-}
-
-function tomlStr(s: string): string {
-  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 // ── Bot Menu TOML parsing ────────────────────────────────────
@@ -767,11 +564,3 @@ function parseBotMenuConfig(data: Record<string, unknown>): BotMenuConfig {
   return { default: defaultItems, users };
 }
 
-function parseCronHourFromExpr(cronExpr: string): number {
-  const parts = cronExpr.split(" ");
-  if (parts.length >= 2) {
-    const hour = parseInt(parts[1], 10);
-    if (!isNaN(hour)) return hour;
-  }
-  return 3;
-}

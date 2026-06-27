@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import type { RemiConfig } from "../shared/config.js";
+import { MEMORY_DIR, SESSIONS_FILE } from "../shared/config.js";
 import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
@@ -81,8 +82,8 @@ export class Remi {
         vectorStore = new VectorStore(config.embedding);
       } catch { /* vector search unavailable */ }
     }
-    this.memory = new MemoryStore(config.memoryDir, vectorStore);
-    this.metrics = new MetricsCollector(dirname(config.memoryDir));
+    this.memory = new MemoryStore(MEMORY_DIR, vectorStore);
+    this.metrics = new MetricsCollector(dirname(MEMORY_DIR));
     this.traceCollector = new TraceCollector();
     this.queue = new RemiQueueManager();
     this._migrateSessionsJson();
@@ -866,21 +867,8 @@ export class Remi {
 
   // ── Report detail on demand ─────────────────────────────
 
-  private _tryReportDetail(text: string): AgentResponse | null {
-    const trimmed = text.trim();
-    if (!trimmed.includes("详细报告") && !trimmed.includes("完整报告")) return null;
-
-    const today = new Date().toISOString().slice(0, 10);
-
-    for (const skill of this.config.scheduledSkills) {
-      if (!skill.enabled) continue;
-      const reportPath = join(skill.outputDir, `${today}.md`);
-      if (existsSync(reportPath)) {
-        return { text: readFileSync(reportPath, "utf-8").trim() };
-      }
-    }
-
-    return { text: `今天（${today}）还没有生成报告，请稍后再试。` };
+  private _tryReportDetail(_text: string): AgentResponse | null {
+    return null;
   }
 
   // ── Static factory ─────────────────────────────────────────
@@ -1102,8 +1090,8 @@ export class Remi {
   /** One-time migration from sessions.json to SQLite. */
   private _migrateSessionsJson(): void {
     try {
-      if (!existsSync(this.config.sessionsFile)) return;
-      const raw = readFileSync(this.config.sessionsFile, "utf-8");
+      if (!existsSync(SESSIONS_FILE)) return;
+      const raw = readFileSync(SESSIONS_FILE, "utf-8");
       const data = JSON.parse(raw) as sessDb.LegacySessionData;
       if (!data.entries || !Array.isArray(data.entries) || data.entries.length === 0) return;
 
@@ -1112,7 +1100,7 @@ export class Remi {
 
       // Rename old file as backup (presence of .migrated = migration done)
       const { renameSync } = require("node:fs");
-      renameSync(this.config.sessionsFile, this.config.sessionsFile + ".migrated");
+      renameSync(SESSIONS_FILE, SESSIONS_FILE + ".migrated");
       log.info(`Renamed sessions.json → sessions.json.migrated`);
     } catch (e) {
       log.warn("Failed to migrate sessions.json:", e);

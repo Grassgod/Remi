@@ -2,25 +2,35 @@
  * `remi serve` — Production daemon mode (PM2 subprocess).
  */
 
-import { loadConfig, migrateConfigFile, migrateToCronJobs } from "../shared/config.js";
+import { loadConfigFromToml, findConfigPath } from "../shared/config.js";
+import { ConfigStore } from "../shared/db/config-store.js";
 import { Remi } from "../remi/core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "../shared/logger.js";
 // Board service has been merged into the main web service (src/remi/admin/server.ts).
 import { getDb } from "../shared/db/index.js";
 import { startWebDashboard, stopWebDashboard } from "../remi/admin/server.js";
+import { renameSync } from "node:fs";
 
 const log = createLogger("serve");
 
 export async function runServe(_args: string[]): Promise<void> {
-  let config = loadConfig();
+  const store = new ConfigStore(getDb());
+  let config;
+
+  if (store.isEmpty() && findConfigPath()) {
+    // First boot with existing TOML — migrate to DB
+    config = loadConfigFromToml();
+    store.save(config);
+    const tomlPath = findConfigPath()!;
+    renameSync(tomlPath, tomlPath + ".migrated");
+    log.info(`Config migrated: ${tomlPath} → SQLite (original renamed .migrated)`);
+  } else if (!store.isEmpty()) {
+    config = store.load();
+  } else {
+    config = store.load();
+  }
   setLogLevel(config.logLevel);
   if (config.tracing.enabled) initLogPersistence(config.tracing.logsDir);
-
-  // One-time migration: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]
-  if (migrateConfigFile()) {
-    log.info("Config migrated: [scheduler] + [[scheduled_skills]] → [[cron.jobs]]");
-    config = loadConfig();
-  }
 
   const remi = Remi.boot(config);
 
@@ -47,9 +57,8 @@ export async function runServe(_args: string[]): Promise<void> {
   // Start BunQueue workers (conversation + memory + cron)
   await remi.queue.start();
 
-  // Register cron schedulers from config (replaces CronTimer)
-  const cronJobs = migrateToCronJobs(config);
-  await remi.queue.setupSchedulers(cronJobs, remi);
+  // Register cron schedulers from config
+  await remi.queue.setupSchedulers(config.cronJobs, remi);
 
   // ── Start the unified Web Dashboard HTTP server in this same process ──
   try {

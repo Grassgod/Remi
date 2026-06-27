@@ -10,7 +10,7 @@ import { execSync } from "node:child_process";
 import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
-import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { ConfigStore } from "../../shared/db/config-store.js";
 import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../../shared/metrics/collector.js";
 import { type TraceData, type SpanData, rowToTraceData } from "../../shared/tracing.js";
 import { extractToolCalls, type ToolCallData } from "../conversation/tool-calls.js";
@@ -446,8 +446,8 @@ export class RemiData {
     if (!this._memoryStore) {
       let vectorStore = null;
       try {
-        const config = this._readRawConfig();
-        const apiKey = (config?.embedding as Record<string, unknown>)?.api_key as string | undefined;
+        const config = this._getConfigStore().load();
+        const apiKey = config.embedding?.apiKey;
         if (apiKey) {
           const { VectorStore } = require("../../shared/db/vector-store.js");
           vectorStore = new VectorStore({ provider: "voyage", apiKey });
@@ -483,29 +483,22 @@ export class RemiData {
   // ── Token Sync Rules ─────────────────────────────────
 
   readSyncRules(): Array<{ name: string; source: string; target: string; format: string; key?: string; extraKeys?: Record<string, string> }> {
-    const config = this._readRawConfig();
-    const rules = (config.token_sync ?? []) as Array<Record<string, any>>;
-    return rules.map(r => ({
+    const config = this._getConfigStore().load();
+    return config.tokenSync.map(r => ({
       name: r.name ?? "",
       source: r.source ?? "",
       target: r.target ?? "",
       format: r.format ?? "mirror",
       ...(r.key ? { key: r.key } : {}),
-      ...(r.extra_keys ? { extraKeys: r.extra_keys } : {}),
+      ...(r.extraKeys ? { extraKeys: r.extraKeys } : {}),
     }));
   }
 
   saveSyncRules(rules: Array<{ name: string; source: string; target: string; format: string; key?: string; extraKeys?: Record<string, string> }>): boolean {
-    const config = this._readRawConfig();
-    config.token_sync = rules.map(r => ({
-      name: r.name,
-      source: r.source,
-      target: r.target,
-      format: r.format,
-      ...(r.key ? { key: r.key } : {}),
-      ...(r.extraKeys ? { extra_keys: r.extraKeys } : {}),
-    }));
-    return this._writeRawConfig(config);
+    try {
+      this._getConfigStore().setSection("tokenSync", rules);
+      return true;
+    } catch { return false; }
   }
 
   /** Preview source token + synced target file for a sync rule */
@@ -569,142 +562,46 @@ export class RemiData {
     }
   }
 
-  // ── Config ─────────────────────────────────────────
+  // ── Config (backed by SQLite via ConfigStore) ──────
+
+  private _configStore: ConfigStore | null = null;
+
+  private _getConfigStore(): ConfigStore {
+    if (!this._configStore) {
+      this._configStore = new ConfigStore(getDb());
+    }
+    return this._configStore;
+  }
 
   readConfig(): Record<string, any> {
-    // Search: ./remi.toml then ~/.remi/remi.toml
-    const paths = [
-      join(process.cwd(), "remi.toml"),
-      join(this.root, "remi.toml"),
-    ];
-
-    for (const p of paths) {
-      if (existsSync(p)) {
-        try {
-          const raw = readFileSync(p, "utf-8");
-          const config = parseToml(raw) as Record<string, any>;
-          // Redact secrets
-          if (config.feishu) {
-            if (config.feishu.app_secret) config.feishu.app_secret = "***";
-            if (config.feishu.encrypt_key) config.feishu.encrypt_key = "***";
-            if (config.feishu.verification_token) config.feishu.verification_token = "***";
-            if (config.feishu.user_access_token) config.feishu.user_access_token = "***";
-          }
-          return { ...config, _path: p };
-        } catch {
-          return {};
-        }
-      }
+    const config = this._getConfigStore().load() as Record<string, any>;
+    // Redact secrets
+    if (config.feishu) {
+      const redacted = { ...config.feishu };
+      if (redacted.appSecret) redacted.appSecret = "***";
+      if (redacted.encryptKey) redacted.encryptKey = "***";
+      if (redacted.verificationToken) redacted.verificationToken = "***";
+      if (redacted.userAccessToken) redacted.userAccessToken = "***";
+      config.feishu = redacted;
     }
-    return {};
+    return config;
   }
 
   updateConfig(patch: Record<string, any>): boolean {
-    const p = join(this.root, "remi.toml");
-    if (!existsSync(p)) return false;
-
     try {
-      const raw = readFileSync(p, "utf-8");
-      const config = parseToml(raw) as Record<string, any>;
-
-      // Deep merge patch into config (one level deep)
-      for (const [key, val] of Object.entries(patch)) {
-        if (typeof val === "object" && val !== null && !Array.isArray(val)) {
-          config[key] = { ...(config[key] as any ?? {}), ...val };
+      const store = this._getConfigStore();
+      for (const [section, value] of Object.entries(patch)) {
+        if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+          const existing = (store.getSection(section) ?? {}) as Record<string, unknown>;
+          store.setSection(section, { ...existing, ...value });
         } else {
-          config[key] = val;
+          store.setSection(section, value);
         }
       }
-
-      writeFileSync(p, stringifyToml(config), "utf-8");
       return true;
     } catch {
       return false;
     }
-  }
-
-  /** Read raw TOML text with secrets redacted */
-  readConfigRaw(): { text: string; path: string } | null {
-    const paths = [
-      join(process.cwd(), "remi.toml"),
-      join(this.root, "remi.toml"),
-    ];
-
-    for (const p of paths) {
-      if (existsSync(p)) {
-        try {
-          let text = readFileSync(p, "utf-8");
-          // Redact secrets in raw text
-          text = text.replace(
-            /^(\s*(?:app_secret|encrypt_key|verification_token|user_access_token)\s*=\s*)"[^"]*"/gm,
-            '$1"***"',
-          );
-          return { text, path: p };
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  }
-
-  /** Write raw TOML text, restoring redacted secrets from original file */
-  updateConfigRaw(newText: string): { ok: true } | { error: string; line?: number } {
-    // Validate TOML syntax
-    let newConfig: Record<string, any>;
-    try {
-      newConfig = parseToml(newText) as Record<string, any>;
-    } catch (e: any) {
-      const lineMatch = e.message?.match(/line (\d+)/i);
-      return { error: e.message ?? "Invalid TOML", line: lineMatch ? Number(lineMatch[1]) : undefined };
-    }
-
-    const p = join(this.root, "remi.toml");
-
-    // Restore redacted secrets from original file
-    if (existsSync(p)) {
-      try {
-        const original = parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
-        const secretKeys = ["app_secret", "encrypt_key", "verification_token", "user_access_token"];
-        if (original.feishu && newConfig.feishu) {
-          for (const key of secretKeys) {
-            if (newConfig.feishu[key] === "***" && original.feishu[key]) {
-              newConfig.feishu[key] = original.feishu[key];
-            }
-          }
-        }
-      } catch { /* ignore, proceed with what we have */ }
-    }
-
-    try {
-      writeFileSync(p, stringifyToml(newConfig), "utf-8");
-      return { ok: true };
-    } catch (e: any) {
-      return { error: e.message ?? "Failed to write config" };
-    }
-  }
-
-  private _readRawConfig(): Record<string, any> {
-    const paths = [
-      join(process.cwd(), "remi.toml"),
-      join(this.root, "remi.toml"),
-    ];
-    for (const p of paths) {
-      if (existsSync(p)) {
-        try {
-          return parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
-        } catch { return {}; }
-      }
-    }
-    return {};
-  }
-
-  private _writeRawConfig(config: Record<string, any>): boolean {
-    const p = join(this.root, "remi.toml");
-    try {
-      writeFileSync(p, stringifyToml(config), "utf-8");
-      return true;
-    } catch { return false; }
   }
 
   // ── Daemon (PM2-based detection) ──────────────────
@@ -1370,36 +1267,27 @@ export class RemiData {
     return { kind: "unknown" };
   }
 
-  // ── Scheduler (reads cron config from remi.toml) ─────
+  // ── Scheduler (reads cron config from DB) ─────
 
   private _loadCronJobs(): Array<{
     id: string; name?: string; handler: string; enabled: boolean;
     cron?: string; every?: string | number; at?: string;
     handlerConfig?: Record<string, any>;
   }> {
-    const paths = [
-      join(process.cwd(), "remi.toml"),
-      join(this.root, "remi.toml"),
-    ];
-    for (const p of paths) {
-      if (!existsSync(p)) continue;
-      try {
-        const config = parseToml(readFileSync(p, "utf-8")) as Record<string, any>;
-        const cronSection = config.cron as { jobs?: any[] } | undefined;
-        if (!cronSection?.jobs) return [];
-        return cronSection.jobs.map((j: any) => ({
-          id: j.id ?? "unknown",
-          name: j.name,
-          handler: j.handler ?? j.id,
-          enabled: j.enabled !== false,
-          cron: j.cron,
-          every: j.every,
-          at: j.at,
-          handlerConfig: j.handler_config ?? j.handlerConfig,
-        }));
-      } catch { return []; }
-    }
-    return [];
+    try {
+      const jobs = this._getConfigStore().getSection("cronJobs") as any[] | undefined;
+      if (!jobs || !Array.isArray(jobs)) return [];
+      return jobs.map((j: any) => ({
+        id: j.id ?? "unknown",
+        name: j.name,
+        handler: j.handler ?? j.id,
+        enabled: j.enabled !== false,
+        cron: j.cron,
+        every: j.every,
+        at: j.at,
+        handlerConfig: j.handlerConfig ?? j.handler_config,
+      }));
+    } catch { return []; }
   }
 
   getSchedulerStatus() {

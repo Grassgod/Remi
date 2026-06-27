@@ -156,6 +156,15 @@ export function getDb(): Database {
     -- (SSO plugin tables — users, user_sessions, sso_providers, sso_settings,
     --  clusters — are defined inside src/plugins/sso/db/migrations.ts and
     --  installed by SsoPlugin.migrate() at startup.)
+
+    -- Config store (replaces remi.toml)
+    CREATE TABLE IF NOT EXISTS remi_config (
+      section    TEXT NOT NULL,
+      key        TEXT NOT NULL DEFAULT '',
+      value      TEXT NOT NULL,
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (section, key)
+    );
   `);
 
   // vec_items: sqlite-vec virtual table (1024-dim for voyage-3.5-lite)

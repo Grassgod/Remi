@@ -1,27 +1,26 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { loadConfig, findConfigPath } from "../../../shared/config.js";
+import { ConfigStore } from "../../../shared/db/config-store.js";
+import { getDb } from "../../../shared/db/index.js";
 import { MenuSyncer } from "../../../connectors/feishu/sdk.js";
 
 export function registerBotMenuHandlers(app: Hono, data: RemiData) {
-  // GET — read current bot_menu config from remi.toml
   app.get("/api/v1/bot-menu", (c) => {
-    const config = data.readConfig();
-    return c.json(config.bot_menu ?? { default: [], users: [] });
+    const store = new ConfigStore(getDb());
+    const botMenu = store.getSection("botMenu") ?? { default: [], users: [] };
+    return c.json(botMenu);
   });
 
-  // PUT — update bot_menu config in remi.toml
   app.put("/api/v1/bot-menu", async (c) => {
     const body = await c.req.json();
-    const ok = data.updateConfig({ bot_menu: body });
-    if (!ok) return c.json({ error: "failed to update config" }, 500);
+    const store = new ConfigStore(getDb());
+    store.setSection("botMenu", body);
     return c.json({ ok: true });
   });
 
-  // POST — sync current config to Feishu API
-  // Reuses loadConfig() for parsing, same path as core.ts startup sync
   app.post("/api/v1/bot-menu/sync", async (c) => {
-    const config = loadConfig(findConfigPath());
+    const store = new ConfigStore(getDb());
+    const config = store.load();
 
     if (!config.feishu.appId || !config.feishu.appSecret) {
       return c.json({ error: "feishu credentials not configured" }, 400);

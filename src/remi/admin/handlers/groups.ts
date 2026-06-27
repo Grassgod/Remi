@@ -3,13 +3,14 @@ import { GroupConfigStore } from "../../group/store.js";
 import { getChatName, transferChatOwner, updateChat } from "../../../connectors/feishu/sdk.js";
 import { invalidateGroupNameCache } from "./conversations.js";
 import { createLogger } from "../../../shared/logger.js";
-import { loadConfig } from "../../../shared/config.js";
+import { ConfigStore } from "../../../shared/db/config-store.js";
+import { getDb } from "../../../shared/db/index.js";
 
 const log = createLogger("groups");
 
 export function registerGroupHandlers(app: Hono) {
   const store = new GroupConfigStore();
-  const feishuConfig = loadConfig().feishu;
+  const feishuConfig = new ConfigStore(getDb()).load().feishu;
 
   // List all group configs
   app.get("/api/v1/groups", (c) => {

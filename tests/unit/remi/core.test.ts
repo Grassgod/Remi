@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RemiConfig } from "../../../src/shared/config.js";
+import { SESSIONS_FILE } from "../../../src/shared/config.js";
 import type { IncomingMessage } from "../../../src/connectors/base.js";
 import type { AgentResponse, Provider, ProviderEvent } from "../../../src/shared/contracts/provider-types.js";
 import { createAgentResponse } from "../../../src/shared/contracts/provider-types.js";
@@ -119,11 +120,6 @@ function makeConfig(tmpDir: string): RemiConfig {
       triggerUserIds: [],
     },
     tokenSync: [],
-    scheduler: {
-      memoryCompactCron: "0 3 * * *",
-      heartbeatInterval: 300,
-    },
-    scheduledSkills: [],
     cronJobs: [],
     services: [],
     botMenu: {},
@@ -138,12 +134,7 @@ function makeConfig(tmpDir: string): RemiConfig {
       tracesDir: join(tmpDir, "traces"),
       retentionDays: 7,
     },
-    memoryDir: join(tmpDir, "memory"),
-    pidFile: join(tmpDir, "remi.pid"),
     logLevel: "INFO",
-    contextWarnThreshold: 6000,
-    queueDir: join(tmpDir, "queue"),
-    sessionsFile: join(tmpDir, "sessions.json"),
   };
 }
 
@@ -452,7 +443,7 @@ describe("RemiCore", () => {
       entries: [["restored-chat", "sess-restored"]],
       savedAt: Date.now(),
     };
-    writeFileSync(config.sessionsFile, JSON.stringify(sessData), "utf-8");
+    writeFileSync(SESSIONS_FILE, JSON.stringify(sessData), "utf-8");
 
     const remi = new Remi(config);
     const row = sessDb.getSession("restored-chat");
@@ -461,8 +452,8 @@ describe("RemiCore", () => {
     expect(row!.display_name).toContain("Remi·");
 
     // Original file renamed
-    expect(existsSync(config.sessionsFile)).toBe(false);
-    expect(existsSync(config.sessionsFile + ".migrated")).toBe(true);
+    expect(existsSync(SESSIONS_FILE)).toBe(false);
+    expect(existsSync(SESSIONS_FILE + ".migrated")).toBe(true);
   });
 
   it("/clear clears session_id but keeps display_name", async () => {

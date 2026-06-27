@@ -40,7 +40,7 @@ describe("Config", () => {
     const config = loadConfig(join(tmpDir, "nonexistent.toml"));
     expect(config.provider.default).toBe("claude");
     expect(config.provider.claude.timeout).toBe(300);
-    expect(config.memoryDir).toContain("memory");
+    expect(config.provider.claude.allowedTools).toEqual([]);
   });
 
   it("respects env overrides", () => {

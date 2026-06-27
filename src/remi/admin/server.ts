@@ -21,9 +21,8 @@ import { RemiData } from "./remi-data.js";
 import { registerStatusHandlers } from "./handlers/status.js";
 import { registerMemoryHandlers } from "./handlers/memory.js";
 import { registerAuthHandlers } from "./handlers/auth.js";
-import { SsoPlugin } from "../../daemon/agent-runtime/plugins/sso/index.js";
 import { getDb } from "../../shared/db/index.js";
-import { loadConfig } from "../../shared/config.js";
+import { ConfigStore } from "../../shared/db/config-store.js";
 import { registerConfigHandlers } from "./handlers/config.js";
 import { registerProjectHandlers } from "./handlers/projects.js";
 import { registerAnalyticsHandlers } from "./handlers/analytics.js";
@@ -61,19 +60,12 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   const data = new RemiData();
   const app = new Hono();
 
-  // ── SSO plugin: install DB tables, seed from toml, register routes ──
-  const remiConfig = loadConfig();
-  const sso = new SsoPlugin({ adminEmails: remiConfig.auth.adminEmails });
-  sso.migrate(getDb());
-  sso.seed();
+  const remiConfig = new ConfigStore(getDb()).load();
 
   // Global middleware
   if (devMode) {
     app.use("/api/*", cors());
   }
-  // SSO middleware first (gates non-public paths if SSO active);
-  // then legacy bearer-token middleware (still supported for /api/* if used).
-  app.use("/api/*", sso.middleware());
   app.use("/api/*", authMiddleware(authToken));
 
   // Global error handler
@@ -90,7 +82,6 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
   registerStatusHandlers(app, data);
   registerMemoryHandlers(app, data);
   registerAuthHandlers(app, data);
-  sso.registerHttp(app);
   registerConfigHandlers(app, data);
   registerProjectHandlers(app, data);
   registerGroupHandlers(app);
