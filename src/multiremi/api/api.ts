@@ -338,6 +338,31 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
+  app.get("/auth/lark/url", (c) => {
+    const cfg = loadLarkSsoConfig();
+    if (!cfg) return c.json({ error: "Feishu SSO is not configured" }, 503);
+    const redirectUri = c.req.query("redirect_uri");
+    if (!redirectUri) return c.json({ error: "redirect_uri is required" }, 400);
+    const state = c.req.query("state") ?? "login";
+    return c.json({ url: buildLarkAuthorizeUrl(cfg, redirectUri, state) });
+  });
+  app.post("/auth/lark/callback", async (c) => {
+    const cfg = loadLarkSsoConfig();
+    if (!cfg) return c.json({ error: "Feishu SSO is not configured" }, 503);
+    const body = await readJson<{ code?: string; redirect_uri?: string }>(c);
+    const code = String(body.code ?? "").trim();
+    const redirectUri = String(body.redirect_uri ?? "").trim();
+    if (!code) return c.json({ error: "code is required" }, 400);
+    if (!redirectUri) return c.json({ error: "redirect_uri is required" }, 400);
+    try {
+      const userAccessToken = await larkExchangeCode(cfg, code, redirectUri);
+      const profile = await larkFetchUserInfo(cfg, userAccessToken);
+      const email = profile.email ?? `${profile.openId ?? "feishu-user"}@feishu.local`;
+      return c.json(await localAuthResponse(store, email, profile.name));
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : "Feishu login failed" }, 401);
+    }
+  });
   app.get("/health/realtime", (c) => c.json({
     connections: realtimeState.connections,
     enabled: realtimeState.enabled,
@@ -7776,11 +7801,15 @@ function registerDaemonRuntimes(
     settings: Record<string, unknown>;
   }
   | { error: string; status: 400 | 404 | 500 } {
-  const workspaceId = String(body.workspace_id ?? "").trim();
+  // Older self-host clients (e.g. the v0.2.0 `remi` release) omit workspace_id
+  // in the register body and relied on the server deriving it. This is a
+  // single-workspace local deployment, so default to "local" — matching the
+  // `?? "local"` fallback used throughout the rest of the daemon path
+  // (daemonRegisterOwnerContext, heartbeat, denyDaemonTokenWorkspace).
+  const workspaceId = String(body.workspace_id ?? "").trim() || "local";
   const daemonId = String(body.daemon_id ?? "").trim();
   const runtimes = body.runtimes ?? [];
   if (!daemonId) return { error: "daemon_id is required", status: 400 };
-  if (!workspaceId) return { error: "workspace_id is required", status: 400 };
   if (runtimes.length === 0) return { error: "at least one runtime is required", status: 400 };
 
   const deviceName = String(body.device_name ?? "").trim();
@@ -8072,6 +8101,81 @@ async function localAuthResponse(store: MultiremiStore, email: string, name?: st
     access_token: token.token,
     token_type: "bearer",
     user,
+  };
+}
+
+// ── Feishu (Lark) SSO ──────────────────────────────────────────────
+// Credentials come from env (MULTIREMI_LARK_APP_ID / _APP_SECRET / _DOMAIN).
+// Reuses the same authen/v1 + authen/v2 OAuth flow as src/auth/oauth-cli.ts.
+interface LarkSsoConfig {
+  appId: string;
+  appSecret: string;
+  apiBase: string;
+}
+
+function loadLarkSsoConfig(): LarkSsoConfig | null {
+  const appId = process.env.MULTIREMI_LARK_APP_ID?.trim();
+  const appSecret = process.env.MULTIREMI_LARK_APP_SECRET?.trim();
+  if (!appId || !appSecret) return null;
+  const domain = process.env.MULTIREMI_LARK_DOMAIN?.trim();
+  const apiBase =
+    domain === "lark" || domain === "larksuite"
+      ? "https://open.larksuite.com/open-apis"
+      : domain && domain.startsWith("http")
+        ? `${domain.replace(/\/+$/, "")}/open-apis`
+        : "https://open.feishu.cn/open-apis";
+  return { appId, appSecret, apiBase };
+}
+
+function buildLarkAuthorizeUrl(cfg: LarkSsoConfig, redirectUri: string, state: string): string {
+  const params = new URLSearchParams({
+    client_id: cfg.appId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    state,
+  });
+  return `${cfg.apiBase}/authen/v1/authorize?${params.toString()}`;
+}
+
+async function larkExchangeCode(cfg: LarkSsoConfig, code: string, redirectUri: string): Promise<string> {
+  const resp = await fetch(`${cfg.apiBase}/authen/v2/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: cfg.appId,
+      client_secret: cfg.appSecret,
+      redirect_uri: redirectUri,
+    }),
+  });
+  const result = (await resp.json()) as {
+    code?: number;
+    error?: string;
+    error_description?: string;
+    access_token?: string;
+  };
+  if (result.error) throw new Error(`Feishu token exchange failed: ${result.error_description ?? result.error}`);
+  if (result.code && result.code !== 0) throw new Error(`Feishu token exchange failed: code ${result.code}`);
+  if (!result.access_token) throw new Error("Feishu token exchange failed: no access_token returned");
+  return result.access_token;
+}
+
+async function larkFetchUserInfo(cfg: LarkSsoConfig, userAccessToken: string): Promise<{ name: string; email: string | null; openId: string | null }> {
+  const resp = await fetch(`${cfg.apiBase}/authen/v1/user_info`, {
+    headers: { Authorization: `Bearer ${userAccessToken}` },
+  });
+  const result = (await resp.json()) as {
+    code?: number;
+    msg?: string;
+    data?: { name?: string; email?: string; enterprise_email?: string; open_id?: string };
+  };
+  if (result.code && result.code !== 0) throw new Error(`Feishu user_info failed: ${result.msg ?? result.code}`);
+  const data = result.data ?? {};
+  return {
+    name: data.name?.trim() || "Feishu User",
+    email: (data.enterprise_email || data.email || "").trim() || null,
+    openId: data.open_id ?? null,
   };
 }
 
