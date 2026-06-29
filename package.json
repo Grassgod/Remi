@@ -30,11 +30,17 @@
   "scripts": {
     "start": "bun run src/main.ts serve",
     "serve": "bun run src/main.ts serve",
-    "test": "bun test",
     "build": "bun run scripts/build.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
+    "test": "bun test",
+    "test:frontend": "cd frontend && pnpm test",
     "smoke:multiremi:acp": "bun run tests/integration/smoke-multiremi-acp.ts",
-    "e2e:multiremi": "bun run tests/integration/e2e-multiremi.ts"
+    "e2e:multiremi": "bun run tests/integration/e2e-multiremi.ts",
+    "e2e:frontend": "bun run tests/integration/e2e-frontend-ours.ts",
+    "e2e:acp": "bun run tests/integration/acp-e2e.ts",
+    "e2e:acp:full": "bun run tests/integration/acp-e2e-full.ts",
+    "probe:feishu": "bun run tests/integration/feishu-streaming-probe.ts",
+    "replay:coverage": "bun run tests/integration/replay-coverage.ts"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
