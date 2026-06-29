@@ -44,13 +44,13 @@ function daemonCommands(
   const normalizedWorkspaceId = workspaceId?.trim() || WORKSPACE_ID_PLACEHOLDER;
   const setupToken = token?.trim() || "<YOUR_TOKEN>";
   const setupBase =
-    `remi multiremi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
+    `multiremi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
 
   return {
     setupCmd: `${setupBase} --token ${setupToken} --start`,
     tokenCmd: `${setupBase}
-remi multiremi login --token ${setupToken}
-remi multiremi daemon start`,
+multiremi login --token ${setupToken}
+multiremi daemon start`,
   };
 }
 
@@ -62,7 +62,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const navigation = useNavigation();
   const newRuntimeIdRef = useRef<string | null>(null);
 
-  // `remi multiremi setup ... --start` stores config + token and starts the daemon.
+  // `multiremi setup ... --start` stores config + token and starts the daemon.
   // The dialog listens for the resulting `daemon:register` WS event.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
