@@ -80,6 +80,9 @@
   "detail": {
     "all_runtimes": "全部运行时",
     "read_only": "只读",
+    "name_edit_hint": "重命名运行时",
+    "name_toast_updated": "运行时已重命名",
+    "name_toast_failed": "重命名失败",
     "delete_button": "删除运行时",
     "delete_disabled_tooltip": "该运行时由正在运行的本地守护进程托管，删除后会在数秒内自动重新注册。需停止守护进程才能彻底移除。",
     "last_seen": "最后活跃 {{when}}",

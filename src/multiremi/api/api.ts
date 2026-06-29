@@ -1796,6 +1796,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<UpdateRuntimeInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (hasRequestField(body, "name")) {
+      const name = cleanString(typeof body.name === "string" ? body.name : null);
+      if (!name) return c.json({ error: "name must be a non-empty string" }, 400);
+      if (name.length > 100) return c.json({ error: "name must be at most 100 characters" }, 400);
+      return c.json(runtimeCompatibilityResponse(store.updateRuntime(loaded.runtime.id, { name })));
+    }
     if (hasRequestField(body, "visibility")) {
       const visibility = cleanString(typeof body.visibility === "string" ? body.visibility : null);
       if (visibility !== "private" && visibility !== "public") {

@@ -84,6 +84,9 @@
   "detail": {
     "all_runtimes": "All runtimes",
     "read_only": "Read-only",
+    "name_edit_hint": "Rename runtime",
+    "name_toast_updated": "Runtime renamed",
+    "name_toast_failed": "Couldn't rename runtime",
     "delete_button": "Delete runtime",
     "delete_disabled_tooltip": "This runtime is managed by a running local daemon and will re-register itself within seconds. Stop the daemon process to remove it permanently.",
     "last_seen": "last seen {{when}}",

@@ -1235,6 +1235,7 @@ export class MultiremiStore {
     this.addColumnIfMissing("multiremi_runtimes", "metadata TEXT NOT NULL DEFAULT '{}'");
     this.addColumnIfMissing("multiremi_runtimes", "owner_id TEXT");
     this.addColumnIfMissing("multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
+    this.addColumnIfMissing("multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("multiremi_access_tokens", "daemon_id TEXT");
     this.addColumnIfMissing("multiremi_access_tokens", "task_id TEXT");
     this.addColumnIfMissing("multiremi_access_tokens", "agent_id TEXT");
@@ -2541,7 +2542,7 @@ export class MultiremiStore {
         last_heartbeat_at, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
-        name = excluded.name,
+        name = CASE WHEN multiremi_runtimes.name_customized = 1 THEN multiremi_runtimes.name ELSE excluded.name END,
         provider = excluded.provider,
         daemon_id = excluded.daemon_id,
         legacy_daemon_id = excluded.legacy_daemon_id,
@@ -2638,6 +2639,7 @@ export class MultiremiStore {
     this.db.run(
       `UPDATE multiremi_runtimes SET
         name = ?,
+        name_customized = CASE WHEN ? = 1 THEN 1 ELSE name_customized END,
         runtime_mode = ?,
         device_info = ?,
         metadata = ?,
@@ -2648,6 +2650,7 @@ export class MultiremiStore {
        WHERE id = ?`,
       [
         input.name ?? current.name,
+        hasAnyField(input, "name") ? 1 : 0,
         runtimeMode,
         deviceInfo,
         toJson(metadata),

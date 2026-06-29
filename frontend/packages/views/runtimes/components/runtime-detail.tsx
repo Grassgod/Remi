@@ -7,6 +7,7 @@ import {
   Cpu,
   Globe,
   Lock,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -22,6 +23,7 @@ import {
 } from "@multiremi/core/agents";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Input } from "@multiremi/ui/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
@@ -163,6 +165,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               ownerMember={ownerMember}
               cliVersion={cliVersion}
               daemonShort={daemonShort}
+              canEdit={!!canDelete}
             />
             <UsageSection runtime={runtime} />
           </div>
@@ -213,6 +216,79 @@ function parseDeviceInfo(raw: string): { hostname: string; runtime?: string } {
   };
 }
 
+// Inline rename of the runtime's display name. Click → input → Enter/blur
+// saves via the same useUpdateRuntime mutation the visibility toggle uses; the
+// server flags the name as user-customized so the daemon stops overwriting it.
+function NameEditor({ runtime }: { runtime: AgentRuntime }) {
+  const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const updateRuntime = useUpdateRuntime(wsId);
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(runtime.name);
+
+  const cancel = () => {
+    setEditing(false);
+    setValue(runtime.name);
+  };
+  const save = () => {
+    const next = value.trim();
+    if (!next || next === runtime.name) {
+      cancel();
+      return;
+    }
+    updateRuntime.mutate(
+      { runtimeId: runtime.id, patch: { name: next } },
+      {
+        onSuccess: () => {
+          setEditing(false);
+          toast.success(t(($) => $.detail.name_toast_updated));
+        },
+        onError: (err) =>
+          toast.error(
+            err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.detail.name_toast_failed),
+          ),
+      },
+    );
+  };
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setValue(runtime.name);
+          setEditing(true);
+        }}
+        title={t(($) => $.detail.name_edit_hint)}
+        className="group inline-flex min-w-0 items-center gap-1.5"
+      >
+        <span className="truncate text-base font-semibold tracking-tight">
+          {runtime.name}
+        </span>
+        <Pencil className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+    );
+  }
+
+  return (
+    <Input
+      autoFocus
+      value={value}
+      maxLength={100}
+      disabled={updateRuntime.isPending}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") save();
+        else if (e.key === "Escape") cancel();
+      }}
+      className="h-7 w-56 text-base font-semibold"
+    />
+  );
+}
+
 function HeroCard({
   runtime,
   health,
@@ -220,6 +296,7 @@ function HeroCard({
   ownerMember,
   cliVersion,
   daemonShort,
+  canEdit,
 }: {
   runtime: AgentRuntime;
   health: ReturnType<typeof deriveRuntimeHealth>;
@@ -227,6 +304,7 @@ function HeroCard({
   ownerMember: MemberWithUser | null;
   cliVersion: string | null;
   daemonShort: string | null;
+  canEdit: boolean;
 }) {
   const { t } = useT("runtimes");
   const [showDetails, setShowDetails] = useState(false);
@@ -242,9 +320,13 @@ function HeroCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h2 className="truncate text-base font-semibold tracking-tight">
-              {runtime.name}
-            </h2>
+            {canEdit ? (
+              <NameEditor runtime={runtime} />
+            ) : (
+              <h2 className="truncate text-base font-semibold tracking-tight">
+                {runtime.name}
+              </h2>
+            )}
             <HealthBadge health={health} />
             <span className="text-xs text-muted-foreground">
               {t(($) => $.detail.last_seen, { when: lastSeen })}
