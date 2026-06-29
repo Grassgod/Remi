@@ -4,7 +4,7 @@ set -euo pipefail
 # Multiremi runtime daemon installer.
 #
 # Usage:
-#   curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-multiremi.sh | bash
+#   curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash
 #
 # Environment:
 #   MULTIREMI_VERSION  Specific version to install, with or without leading "v".

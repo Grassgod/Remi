@@ -34,5 +34,4 @@ jobs:
             dist/*.tar.gz
             scripts/install.sh
             scripts/install-remi.sh
-            scripts/install-multiremi.sh
           generate_release_notes: true
