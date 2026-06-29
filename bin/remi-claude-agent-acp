@@ -22,7 +22,7 @@ const PACKAGE_NAMES = [
 ];
 const SDK_PACKAGE_NAME = "@anthropic-ai/claude-agent-sdk";
 const MIN_CLAUDE_CODE_VERSION = "2.1.120";
-const PATCH_VERSION = "ask-bridge-v1";
+const PATCH_VERSION = "ask-bridge-v2";
 
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -367,9 +367,26 @@ function parseVersion(version) {
     .slice(0, 3);
 }
 
+// claude-agent-acp >= 0.44 surfaces the built-in AskUserQuestion tool as an ACP
+// form elicitation natively (see handleAskUserQuestion in the upstream
+// acp-agent), which is exactly what this wrapper used to patch in. When that
+// native bridge is present there is nothing to patch.
+function buildHasNativeAskBridge(source) {
+  return source.includes("handleAskUserQuestion")
+    && source.includes('toolName === "AskUserQuestion"');
+}
+
 function patchAcpAgent(path) {
   let source = readFileSync(path, "utf-8");
 
+  // Upstream already bridges AskUserQuestion → ACP elicitation; no patch needed.
+  if (buildHasNativeAskBridge(source)) {
+    verifyPatchedAgent(path);
+    return;
+  }
+
+  // Legacy builds: drop AskUserQuestion from the disallow list and forward the
+  // elicitation answer back to the tool's call() via updatedInput.
   const disallowedMarker = 'const disallowedTools = ["AskUserQuestion"];';
   if (source.includes(disallowedMarker)) {
     source = source.replace(disallowedMarker, "const disallowedTools = [];");
@@ -412,6 +429,8 @@ function patchAcpAgent(path) {
 
 function verifyPatchedAgent(path) {
   const source = readFileSync(path, "utf-8");
+  // Newer builds bridge AskUserQuestion natively — accept as-is.
+  if (buildHasNativeAskBridge(source)) return;
   if (!source.includes("const disallowedTools = [];")) {
     throw new Error("Patched claude-agent-acp still blocks AskUserQuestion.");
   }
