@@ -20,6 +20,6 @@ describe("CliInstallInstructions", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText(/remi setup self-host/)).toHaveClass(...ligatureClasses);
+    expect(screen.getByText(/remi multiremi setup/)).toHaveClass(...ligatureClasses);
   });
 });

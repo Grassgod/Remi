@@ -77,10 +77,10 @@ describe("ConnectRemoteDialog", () => {
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "remi setup self-host --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
+        "remi multiremi setup --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
       ),
     );
-    expect(baseElement).toHaveTextContent("remi daemon start");
+    expect(baseElement).toHaveTextContent("remi multiremi daemon start");
   });
 
   it("uses self-host daemon URLs from runtime config", async () => {
@@ -90,7 +90,7 @@ describe("ConnectRemoteDialog", () => {
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "remi setup self-host --server-url https://api.example.com --workspace-id ws-test --token mul_testtoken --start",
+        "remi multiremi setup --server-url https://api.example.com --workspace-id ws-test --token mul_testtoken --start",
       ),
     );
   });
@@ -109,7 +109,7 @@ describe("ConnectRemoteDialog", () => {
     const { baseElement } = renderDialog();
 
     const tokenCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("remi login --token"),
+      node.textContent?.includes("remi multiremi login --token"),
     );
 
     expect(tokenCode).toHaveClass(...ligatureClasses);

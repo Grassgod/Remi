@@ -9,7 +9,7 @@ import { copyText } from "@multiremi/ui/lib/clipboard";
 import { useT } from "../../i18n";
 
 const SETUP_CMD =
-  "remi setup self-host --server-url <SERVER_URL> --workspace-id <WORKSPACE_ID> --token <YOUR_TOKEN> --start";
+  "remi multiremi setup --server-url <SERVER_URL> --workspace-id <WORKSPACE_ID> --token <YOUR_TOKEN> --start";
 const INSTALL_CMD =
   "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash";
 
