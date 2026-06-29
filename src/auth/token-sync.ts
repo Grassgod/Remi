@@ -2,7 +2,7 @@
  * Token Sync Engine — declarative token distribution to external tools.
  *
  * Instead of hardcoding sync targets (e.g., ~/.lark_auth/tokens.json),
- * sync rules are declared in remi.toml and executed automatically
+ * sync rules are declared in config and executed automatically
  * whenever adapter tokens change.
  */
 

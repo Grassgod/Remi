@@ -96,7 +96,7 @@ export class Remi {
   }
 
   _getProvider(name?: string | null): Provider {
-    const n = name ?? this.config.provider.name ?? `acp:${this.config.provider.default}`;
+    const n = name ?? `acp:${this.config.provider.default}`;
     let provider = this._providers.get(n);
     if (!provider) {
       // "acp" → match first "acp:*" variant
@@ -294,14 +294,6 @@ export class Remi {
       return resultResponse;
     }
 
-    // Handle report detail request
-    const reportResponse = this._tryReportDetail(msg.text);
-    if (reportResponse) {
-      yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: reportResponse.text }] };
-      resultResponse = reportResponse;
-      return resultResponse;
-    }
-
     const sessionKey = this._resolveSessionKey(msg);
     const groupConfig = this._getGroupConfig(msg.chatId);
     const sessRow = sessDb.getSession(sessionKey);
@@ -339,10 +331,7 @@ export class Remi {
     };
     const cwd = sessionConfig.cwd;
 
-    // Provider selection:
-    // 1. Group → GroupConfig.provider (DB)
-    // 2. P2P → DB session provider (user switched via /switch or bot menu)
-    // 3. Default → config.provider.name
+    // Provider selection: group config (DB) → session provider → default
     const providerName =
       groupConfig?.provider                              // group-level config (DB)
       ?? sessRow?.provider                               // P2P user choice
@@ -498,35 +487,7 @@ export class Remi {
         });
       }
 
-      // Fallback: if primary result was an error, try fallback provider
-      if (
-        resultResponse &&
-        (resultResponse.text.startsWith("[Provider error") ||
-          resultResponse.text.startsWith("[Provider timeout"))
-      ) {
-        providerSpan?.endWithError("primary provider failed");
-
-        const fallbackName = this.config.provider.fallback ?? null;
-        if (fallbackName && this._providers.has(fallbackName)) {
-          _log.warn(`Primary provider failed, trying fallback: ${fallbackName}`);
-          const fallbackSpan = traceCtx?.startSpan("provider.chat.fallback", {
-            "provider.name": fallbackName,
-          });
-          const fallback = this._providers.get(fallbackName)!;
-          if (typeof fallback.sendStream === "function") {
-            for await (const event of fallback.sendStream(msg.text, streamOptions)) {
-              yield event;
-            }
-            resultResponse = fallback.getLastResponse?.() ?? null;
-          } else {
-            resultResponse = await fallback.send(msg.text, streamOptions);
-            yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: resultResponse.text }] };
-          }
-          fallbackSpan?.end();
-        }
-      } else {
-        providerSpan?.end();
-      }
+      providerSpan?.end();
     }
 
     // Update session + daily notes
@@ -865,12 +826,6 @@ export class Remi {
     }
   }
 
-  // ── Report detail on demand ─────────────────────────────
-
-  private _tryReportDetail(_text: string): AgentResponse | null {
-    return null;
-  }
-
   // ── Static factory ─────────────────────────────────────────
 
   /**
@@ -944,7 +899,7 @@ export class Remi {
       remi.addConnector(feishu);
       log.info("Registered Feishu connector (with 1Passport)");
 
-      // Bot menu sync (fire-and-forget on startup) — remi.toml is the single source of truth
+      // Bot menu sync (fire-and-forget on startup)
       const menuSyncer = new MenuSyncer({
         appId: config.feishu.appId,
         appSecret: config.feishu.appSecret,

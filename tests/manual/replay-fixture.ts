@@ -19,6 +19,7 @@ import { createAdapter } from "../../src/acp/index.js";
 import { formatToolInputSummary } from "../../src/connectors/feishu/tool-formatters.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../../src/connectors/feishu/permission-ui.js";
 import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../../src/acp/protocol.js";
+import { loadConfig as loadFeishuConfig } from "./_load-config.js";
 
 // ── Parse args ──────────────────────────────────────────────
 
@@ -41,31 +42,8 @@ const agentType = agentIdx !== -1 ? (args[agentIdx + 1] ?? "claude") : "claude";
 
 // ── Load config ─────────────────────────────────────────────
 
-function loadConfig(): { appId: string; appSecret: string; domain: string; chatId: string } {
-  const configPaths = [
-    join(process.cwd(), "remi.toml"),
-    join(process.env.HOME || "/home", ".remi", "remi.toml"),
-  ];
-
-  let tomlContent = "";
-  for (const p of configPaths) {
-    try { tomlContent = readFileSync(p, "utf-8"); break; } catch {}
-  }
-  if (!tomlContent) throw new Error("remi.toml not found");
-
-  const appIdMatch = tomlContent.match(/app_id\s*=\s*"([^"]+)"/);
-  const appSecretMatch = tomlContent.match(/app_secret\s*=\s*"([^"]+)"/);
-  const domainMatch = tomlContent.match(/domain\s*=\s*"([^"]+)"/);
-  const triggerMatch = tomlContent.match(/trigger_user_ids\s*=\s*\[\s*"([^"]+)"/);
-
-  if (!appIdMatch || !appSecretMatch) throw new Error("Feishu credentials not found in remi.toml");
-
-  return {
-    appId: appIdMatch[1],
-    appSecret: appSecretMatch[1],
-    domain: domainMatch?.[1] ?? "feishu",
-    chatId: chatIdOverride || triggerMatch?.[1] || "",
-  };
+function loadConfig() {
+  return loadFeishuConfig(chatIdOverride);
 }
 
 // ── Find fixture file ───────────────────────────────────────

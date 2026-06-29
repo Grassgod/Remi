@@ -7,7 +7,7 @@
  *
  *   const sso = new SsoPlugin();
  *   sso.migrate(getDb());           // create tables
- *   sso.seed();                     // bootstrap from remi.toml (idempotent)
+ *   sso.seed();                     // bootstrap dev provider (idempotent)
  *   sso.registerHttp(app);          // mount /api/auth/sso/* + /api/auth/me + host-info
  *   app.use("/api/*", sso.middleware()); // composable auth
  *
@@ -80,7 +80,7 @@ export class SsoPlugin {
     runMigrations(db);
   }
 
-  /** Bootstrap from legacy remi.toml. Idempotent. */
+  /** Bootstrap dev provider. Idempotent. */
   seed(): { seeded: { providers: number; clusters: number } } {
     return seedFromToml();
   }

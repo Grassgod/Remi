@@ -15,7 +15,8 @@
  * 日志: /tmp/feishu-probe-exp{N}.log
  */
 
-import { readFileSync, appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
+import { loadConfig } from "../manual/_load-config.js";
 
 const CHAT_ID = "oc_47c65d5f9f30ecf69649b734b01cf3c9";
 const EXP = process.env.EXP ?? "1";
@@ -26,18 +27,7 @@ const API = "https://open.feishu.cn/open-apis";
 
 writeFileSync(LOG, "");
 
-function readCreds() {
-  const toml = readFileSync(`${process.env.HOME}/.remi/remi.toml`, "utf-8");
-  const m = toml.match(/\[feishu\]\s*([\s\S]*?)(\n\[|$)/);
-  if (!m) throw new Error("no [feishu] section");
-  const block = m[1];
-  const appId = block.match(/^\s*app_id\s*=\s*"([^"]+)"/m)?.[1];
-  const appSecret = block.match(/^\s*app_secret\s*=\s*"([^"]+)"/m)?.[1];
-  if (!appId || !appSecret) throw new Error("missing app_id / app_secret in [feishu]");
-  return { appId, appSecret };
-}
-
-const creds = readCreds();
+const creds = loadConfig();
 
 function log(msg: string) {
   const line = `${new Date().toISOString()} ${msg}`;

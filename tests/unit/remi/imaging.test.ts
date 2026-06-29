@@ -1,6 +1,6 @@
 /**
  * Integration test for imaging module (Gemini Nano Banana 2).
- * Requires a valid Google API key in ~/.remi/remi.toml [google] section.
+ * Requires a valid Google API key in config (google section).
  *
  * Run: bun test tests/imaging.test.ts
  */

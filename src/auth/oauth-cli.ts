@@ -92,7 +92,7 @@ export async function runAuth(): Promise<void> {
   const { appId, appSecret, domain } = config.feishu;
 
   if (!appId || !appSecret) {
-    console.error("❌ 缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET，请检查 remi.toml 或环境变量。");
+    console.error("❌ 缺少 FEISHU_APP_ID 或 FEISHU_APP_SECRET，请运行 remi login 或设置环境变量。");
     process.exit(1);
   }
 

@@ -9,23 +9,10 @@
  * Usage: bun run tests/manual/test-card-limits.ts
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createFeishuClient } from "../../src/connectors/feishu/client.js";
 import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
 import { buildStepDiv } from "../../src/connectors/feishu/tool-formatters.js";
-
-function loadConfig() {
-  const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];
-  let toml = "";
-  for (const p of paths) { try { toml = readFileSync(p, "utf-8"); break; } catch {} }
-  if (!toml) throw new Error("remi.toml not found");
-  const appId = toml.match(/app_id\s*=\s*"([^"]+)"/)?.[1] ?? "";
-  const appSecret = toml.match(/app_secret\s*=\s*"([^"]+)"/)?.[1] ?? "";
-  const domain = toml.match(/domain\s*=\s*"([^"]+)"/)?.[1] ?? "feishu";
-  const chatId = toml.match(/trigger_user_ids\s*=\s*\[\s*"([^"]+)"/)?.[1] ?? "";
-  return { appId, appSecret, domain, chatId };
-}
+import { loadConfig } from "./_load-config.js";
 
 async function getToken(config: ReturnType<typeof loadConfig>): Promise<string> {
   const res = await fetch(

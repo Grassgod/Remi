@@ -1,7 +1,7 @@
 /**
  * PM2 ecosystem config generator and service management.
  *
- * Reads [[services]] from remi.toml and generates PM2 ecosystem config.
+ * Reads services config and generates PM2 ecosystem config.
  * Remi core is always included as the first app.
  */
 
@@ -37,7 +37,7 @@ export function getEcosystemPath(): string {
   return ECOSYSTEM_PATH;
 }
 
-/** Generate PM2 ecosystem config content from remi.toml services. */
+/** Generate PM2 ecosystem config content. */
 export function generateEcosystem(config: RemiConfig): string {
   const apps: Record<string, unknown>[] = [
     {

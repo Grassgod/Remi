@@ -125,7 +125,7 @@ export function registerWikiHandlers(app: Hono, data: RemiData) {
   // GET /api/v1/wiki/tree
   app.get("/api/v1/wiki/tree", (c) => {
     const tree: TreeNode[] = [];
-    const projects = getProjectMap(); // alias → path from remi.toml
+    const projects = getProjectMap();
 
     // Home — ~/.remi/wiki/ top-level content (excluding projects/)
     if (existsSync(WIKI_DIR)) {

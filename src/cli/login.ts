@@ -10,23 +10,17 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { VERSION } from "../shared/version.js";
 import { TokenPersistence, type PersistedTokens } from "../auth/persistence.js";
 import type { TokenEntry } from "../auth/types.js";
 import { createBot, authorizeUser, DEFAULT_SCOPES } from "./feishu-bot-creator.js";
-import { ensureConfigFile, setConfigValue, getConfigValue, getConfigPath } from "./toml-writer.js";
+import { ensureConfigFile, setConfigValue, getConfigValue, getConfigPath } from "./config-writer.js";
 import * as ui from "./ui.js";
 
 const TOTAL_STEPS = 6;
 const AUTH_DIR = join(homedir(), ".remi", "auth");
-const TEMPLATE_PATH = join(import.meta.dir, "template.toml");
-
-function loadTemplate(): string {
-  return readFileSync(TEMPLATE_PATH, "utf-8");
-}
 
 // ── Step 1: Claude Code Login ────────────────────────────────
 
@@ -69,11 +63,10 @@ async function stepClaudeLogin(): Promise<boolean> {
 async function stepFeishuBotCreation(): Promise<boolean> {
   ui.step(2, TOTAL_STEPS, "Feishu Bot Creation");
 
-  // Ensure config file exists
-  ensureConfigFile(loadTemplate());
+  ensureConfigFile();
 
   // Check if already configured
-  const existingAppId = getConfigValue("feishu", "app_id");
+  const existingAppId = getConfigValue("feishu", "appId");
   if (existingAppId && existingAppId.length > 0) {
     ui.pass(`Feishu Bot already configured (app_id: ${existingAppId.slice(0, 10)}...)`);
     const answer = await ui.prompt("  Reconfigure? (y/N):");
@@ -102,9 +95,8 @@ async function stepFeishuBotCreation(): Promise<boolean> {
       },
     });
 
-    // Save to remi.toml
-    setConfigValue("feishu", "app_id", creds.appId);
-    setConfigValue("feishu", "app_secret", creds.appSecret);
+    setConfigValue("feishu", "appId", creds.appId);
+    setConfigValue("feishu", "appSecret", creds.appSecret);
 
     console.log("");
     ui.pass(`Bot created! app_id: ${creds.appId}`);
@@ -112,15 +104,15 @@ async function stepFeishuBotCreation(): Promise<boolean> {
   } catch (e) {
     ui.fail(`Bot creation failed: ${(e as Error).message}`);
     console.log("\n  You can manually create a bot at: https://open.feishu.cn/app");
-    console.log("  Then set app_id and app_secret in ~/.remi/remi.toml\n");
+    console.log("  Then run: remi login\n");
 
     const answer = await ui.prompt("  Enter app_id manually (or press Enter to skip):");
     if (answer) {
-      setConfigValue("feishu", "app_id", answer);
+      setConfigValue("feishu", "appId", answer);
       const secret = await ui.prompt("  Enter app_secret:");
       if (secret) {
-        setConfigValue("feishu", "app_secret", secret);
-        ui.pass("Feishu credentials saved to remi.toml");
+        setConfigValue("feishu", "appSecret", secret);
+        ui.pass("Feishu credentials saved.");
         return true;
       }
     }
@@ -134,7 +126,7 @@ async function stepFeishuBotCreation(): Promise<boolean> {
 async function stepFeishuPermissionCheck(): Promise<boolean> {
   ui.step(3, TOTAL_STEPS, "Feishu Permission Check");
 
-  const appId = getConfigValue("feishu", "app_id");
+  const appId = getConfigValue("feishu", "appId");
   if (!appId) {
     ui.warn("No app_id configured — skipping permission check.");
     return true;
@@ -153,8 +145,8 @@ async function stepFeishuPermissionCheck(): Promise<boolean> {
 async function stepFeishuUserOAuth(): Promise<boolean> {
   ui.step(4, TOTAL_STEPS, "Feishu User OAuth");
 
-  const appId = getConfigValue("feishu", "app_id");
-  const appSecret = getConfigValue("feishu", "app_secret");
+  const appId = getConfigValue("feishu", "appId");
+  const appSecret = getConfigValue("feishu", "appSecret");
   if (!appId || !appSecret) {
     ui.warn("No Feishu credentials — skipping User OAuth.");
     return true;
@@ -223,7 +215,7 @@ async function stepFeishuUserOAuth(): Promise<boolean> {
 async function stepGeminiApiKey(): Promise<boolean> {
   ui.step(5, TOTAL_STEPS, "Gemini API Key (optional — image generation)");
 
-  const existing = getConfigValue("google", "api_key");
+  const existing = getConfigValue("google", "apiKey");
   if (existing && existing.length > 0) {
     ui.pass("Gemini API key already configured.");
     return true;
@@ -231,11 +223,11 @@ async function stepGeminiApiKey(): Promise<boolean> {
 
   const key = await ui.prompt("  Enter Gemini API key (press Enter to skip):");
   if (key) {
-    setConfigValue("google", "api_key", key);
+    setConfigValue("google", "apiKey", key);
     ui.pass("Gemini API key saved.");
   } else {
     ui.warn("Skipped. Image generation will be disabled.");
-    ui.info("You can add it later in ~/.remi/remi.toml under [google]");
+    ui.info("You can add it later via: remi login");
   }
   return true;
 }
@@ -245,7 +237,7 @@ async function stepGeminiApiKey(): Promise<boolean> {
 async function stepEmbeddingApiKey(): Promise<boolean> {
   ui.step(6, TOTAL_STEPS, "Embedding API Key (optional — vector search)");
 
-  const existing = getConfigValue("embedding", "api_key");
+  const existing = getConfigValue("embedding", "apiKey");
   if (existing && existing.length > 0) {
     ui.pass("Embedding API key already configured.");
     return true;
@@ -254,11 +246,11 @@ async function stepEmbeddingApiKey(): Promise<boolean> {
   const key = await ui.prompt("  Enter Embedding API key (press Enter to skip):");
   if (key) {
     setConfigValue("embedding", "provider", "voyage");
-    setConfigValue("embedding", "api_key", key);
+    setConfigValue("embedding", "apiKey", key);
     ui.pass("Embedding API key saved.");
   } else {
     ui.warn("Skipped. Vector search (L2) will be disabled; text search (L1) still works.");
-    ui.info("You can add it later in ~/.remi/remi.toml under [embedding]");
+    ui.info("You can add it later via: remi login");
   }
   return true;
 }

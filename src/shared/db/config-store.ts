@@ -1,5 +1,5 @@
 /**
- * ConfigStore — SQLite-backed config storage (replaces remi.toml).
+ * ConfigStore — SQLite-backed config storage.
  *
  * Each RemiConfig section is stored as a JSON blob in the remi_config table.
  * Environment variable overrides are applied on load (same as the old TOML path).
@@ -85,28 +85,13 @@ export class ConfigStore {
     const provider = (data.provider ?? defaults.provider) as ProviderConfig;
     const feishu = (data.feishu ?? defaults.feishu) as FeishuConfig;
 
-    // Apply env overrides (same logic as the old TOML loader)
     if (env.REMI_PROVIDER) {
       provider.default = env.REMI_PROVIDER as "claude" | "codex";
-      provider.name = env.REMI_PROVIDER;
     }
-    if (env.REMI_MODEL) {
-      provider.claude.model = env.REMI_MODEL;
-      if (provider.model !== undefined) provider.model = env.REMI_MODEL;
-    }
-    if (env.REMI_TIMEOUT) {
-      const t = parseInt(env.REMI_TIMEOUT, 10);
-      provider.claude.timeout = t;
-      if (provider.timeout !== undefined) provider.timeout = t;
-    }
-    if (env.REMI_API_KEY) {
-      provider.claude.apiKey = env.REMI_API_KEY;
-      if (provider.apiKey !== undefined) provider.apiKey = env.REMI_API_KEY;
-    }
-    if (env.REMI_BASE_URL) {
-      provider.claude.baseUrl = env.REMI_BASE_URL;
-      if (provider.baseUrl !== undefined) provider.baseUrl = env.REMI_BASE_URL;
-    }
+    if (env.REMI_MODEL) provider.claude.model = env.REMI_MODEL;
+    if (env.REMI_TIMEOUT) provider.claude.timeout = parseInt(env.REMI_TIMEOUT, 10);
+    if (env.REMI_API_KEY) provider.claude.apiKey = env.REMI_API_KEY;
+    if (env.REMI_BASE_URL) provider.claude.baseUrl = env.REMI_BASE_URL;
 
     if (env.FEISHU_APP_ID) feishu.appId = env.FEISHU_APP_ID;
     if (env.FEISHU_APP_SECRET) feishu.appSecret = env.FEISHU_APP_SECRET;

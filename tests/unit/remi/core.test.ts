@@ -21,10 +21,10 @@ class MockProvider implements Provider {
   lastContext: string | null = null;
   closed = false;
 
-  constructor(private _responseText: string = "Mock response") {}
+  constructor(private _responseText: string = "Mock response", private _name: string = "acp:claude") {}
 
   get name(): string {
-    return "mock";
+    return this._name;
   }
 
   async send(
@@ -102,11 +102,6 @@ function makeConfig(tmpDir: string): RemiConfig {
       default: "claude",
       claude: { timeout: 300, allowedTools: [] },
       codex: { timeout: 300, allowedTools: [] },
-      name: "mock",
-      fallback: null,
-      allowedTools: [],
-      model: null,
-      timeout: 300,
     },
     feishu: {
       appId: "",
@@ -217,23 +212,6 @@ describe("RemiCore", () => {
     await remi.handleMessage(msg);
     expect(provider.lastContext).not.toBeNull();
     expect(provider.lastContext).toContain("uv");
-  });
-
-  it("uses fallback provider", async () => {
-    config.provider.name = "fail";
-    config.provider.fallback = "mock";
-    const remi = new Remi(config);
-    remi.addProvider(new MockFailProvider());
-    remi.addProvider(new MockProvider("Fallback worked"));
-
-    const msg: IncomingMessage = {
-      text: "Hello",
-      chatId: "test-1",
-      sender: "user",
-      connectorName: "cli",
-    };
-    const response = await remi.handleMessage(msg);
-    expect(response.text).toBe("Fallback worked");
   });
 
   it("serializes lane messages", async () => {

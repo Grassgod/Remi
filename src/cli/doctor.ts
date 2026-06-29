@@ -3,7 +3,7 @@
  *
  * Checks three dimensions:
  * 1. Runtime: Bun, PM2, Claude CLI installed and version OK
- * 2. Config: remi.toml exists with required fields
+ * 2. Config: DB has required fields
  * 3. Auth: Claude logged in, Feishu tokens valid, optional API keys
  */
 
@@ -62,43 +62,46 @@ function checkClaudeCLI(): CheckResult {
 
 // ── Config Checks ────────────────────────────────────────────
 
-function checkConfigFile(): CheckResult {
-  const configPath = join(homedir(), ".remi", "remi.toml");
-  if (!existsSync(configPath)) {
-    return { status: "fail", message: "remi.toml not found at ~/.remi/remi.toml" };
+function checkConfigStore(): CheckResult {
+  try {
+    const { ConfigStore } = require("../shared/db/config-store.js");
+    const { getDb } = require("../shared/db/index.js");
+    const store = new ConfigStore(getDb());
+    if (store.isEmpty()) {
+      return { status: "fail", message: "Config DB is empty — run: remi login" };
+    }
+    return { status: "pass", message: "Config DB has data" };
+  } catch (e) {
+    return { status: "fail", message: `Config DB error: ${(e as Error).message}` };
   }
-  return { status: "pass", message: "remi.toml found" };
 }
 
 function checkFeishuConfig(): CheckResult {
-  const configPath = join(homedir(), ".remi", "remi.toml");
-  if (!existsSync(configPath)) {
-    return { status: "fail", message: "Cannot check — remi.toml missing" };
+  try {
+    const { ConfigStore } = require("../shared/db/config-store.js");
+    const { getDb } = require("../shared/db/index.js");
+    const store = new ConfigStore(getDb());
+    const feishu = store.getSection("feishu") as Record<string, unknown> | undefined;
+
+    const hasAppId = feishu?.appId && String(feishu.appId).length > 0;
+    const hasAppSecret = feishu?.appSecret && String(feishu.appSecret).length > 0;
+
+    if (!hasAppId || !hasAppSecret) {
+      const missing = [];
+      if (!hasAppId) missing.push("appId");
+      if (!hasAppSecret) missing.push("appSecret");
+      return { status: "fail", message: `Feishu config incomplete — missing: ${missing.join(", ")}` };
+    }
+    return { status: "pass", message: "Feishu appId + appSecret configured" };
+  } catch {
+    return { status: "fail", message: "Cannot check Feishu config — DB not available" };
   }
-  const raw = readFileSync(configPath, "utf-8");
-
-  const appIdMatch = raw.match(/app_id\s*=\s*"([^"]*)"/);
-  const appSecretMatch = raw.match(/app_secret\s*=\s*"([^"]*)"/);
-
-  const hasAppId = appIdMatch && appIdMatch[1].length > 0;
-  const hasAppSecret = appSecretMatch && appSecretMatch[1].length > 0;
-
-  if (!hasAppId || !hasAppSecret) {
-    const missing = [];
-    if (!hasAppId) missing.push("app_id");
-    if (!hasAppSecret) missing.push("app_secret");
-    return { status: "fail", message: `Feishu config incomplete — missing: ${missing.join(", ")}` };
-  }
-  return { status: "pass", message: "Feishu app_id + app_secret configured" };
 }
 
 // ── Auth Checks ──────────────────────────────────────────────
 
 function checkClaudeAuth(): CheckResult {
   try {
-    // `claude --version` succeeding implies the CLI is installed;
-    // a more reliable check would be `claude api ...` but that's heavy.
-    // For now, check if there's a claude config directory.
     const claudeDir = join(homedir(), ".claude");
     if (existsSync(claudeDir)) {
       return { status: "pass", message: "Claude CLI configured" };
@@ -149,28 +152,28 @@ function checkFeishuTokens(): CheckResult {
 }
 
 function checkGeminiKey(): CheckResult {
-  const configPath = join(homedir(), ".remi", "remi.toml");
-  if (!existsSync(configPath)) {
-    return { status: "warn", message: "Gemini API key not configured (image generation disabled)" };
-  }
-  const raw = readFileSync(configPath, "utf-8");
-  const match = raw.match(/\[google\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
-  if (match && match[1].length > 0) {
-    return { status: "pass", message: "Gemini API key configured" };
-  }
+  try {
+    const { ConfigStore } = require("../shared/db/config-store.js");
+    const { getDb } = require("../shared/db/index.js");
+    const store = new ConfigStore(getDb());
+    const google = store.getSection("google") as Record<string, unknown> | undefined;
+    if (google?.apiKey) {
+      return { status: "pass", message: "Gemini API key configured" };
+    }
+  } catch {}
   return { status: "warn", message: "Gemini API key not configured (image generation disabled)" };
 }
 
 function checkEmbeddingKey(): CheckResult {
-  const configPath = join(homedir(), ".remi", "remi.toml");
-  if (!existsSync(configPath)) {
-    return { status: "warn", message: "Embedding API key not configured (vector search disabled)" };
-  }
-  const raw = readFileSync(configPath, "utf-8");
-  const match = raw.match(/\[embedding\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
-  if (match && match[1].length > 0) {
-    return { status: "pass", message: "Embedding API key configured" };
-  }
+  try {
+    const { ConfigStore } = require("../shared/db/config-store.js");
+    const { getDb } = require("../shared/db/index.js");
+    const store = new ConfigStore(getDb());
+    const embedding = store.getSection("embedding") as Record<string, unknown> | undefined;
+    if (embedding?.apiKey) {
+      return { status: "pass", message: "Embedding API key configured" };
+    }
+  } catch {}
   return { status: "warn", message: "Embedding API key not configured (vector search disabled)" };
 }
 
@@ -200,7 +203,6 @@ function checkStorage(): CheckResult {
   if (!existsSync(remiDir)) {
     return { status: "fail", message: "~/.remi/ directory does not exist" };
   }
-  // Try write test
   const testFile = join(remiDir, ".doctor-test");
   try {
     const { writeFileSync: wf, unlinkSync } = require("node:fs");
@@ -234,7 +236,7 @@ export async function runDoctor(_args: string[]): Promise<void> {
 
   // Config
   ui.header("Config");
-  render(check(checkConfigFile));
+  render(check(checkConfigStore));
   render(check(checkFeishuConfig));
 
   // Auth
@@ -260,9 +262,9 @@ export async function runDoctor(_args: string[]): Promise<void> {
     console.log("Fix errors above before running remi start.");
   } else if (warnings > 0) {
     console.log(`Result: ${warnings} warning(s), 0 errors`);
-    console.log("💡 Run \`remi login\` to configure optional features.");
+    console.log("Run `remi login` to configure optional features.");
   } else {
-    console.log("Result: All checks passed ✅");
+    console.log("Result: All checks passed");
   }
   console.log("");
 }

@@ -157,7 +157,7 @@ export function getDb(): Database {
     --  clusters — are defined inside src/plugins/sso/db/migrations.ts and
     --  installed by SsoPlugin.migrate() at startup.)
 
-    -- Config store (replaces remi.toml)
+    -- Config store
     CREATE TABLE IF NOT EXISTS remi_config (
       section    TEXT NOT NULL,
       key        TEXT NOT NULL DEFAULT '',

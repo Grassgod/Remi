@@ -2,33 +2,15 @@
  * `remi serve` — Production daemon mode (PM2 subprocess).
  */
 
-import { loadConfigFromToml, findConfigPath } from "../shared/config.js";
-import { ConfigStore } from "../shared/db/config-store.js";
+import { loadConfig } from "../shared/config.js";
 import { Remi } from "../remi/core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "../shared/logger.js";
-// Board service has been merged into the main web service (src/remi/admin/server.ts).
-import { getDb } from "../shared/db/index.js";
 import { startWebDashboard, stopWebDashboard } from "../remi/admin/server.js";
-import { renameSync } from "node:fs";
 
 const log = createLogger("serve");
 
 export async function runServe(_args: string[]): Promise<void> {
-  const store = new ConfigStore(getDb());
-  let config;
-
-  if (store.isEmpty() && findConfigPath()) {
-    // First boot with existing TOML — migrate to DB
-    config = loadConfigFromToml();
-    store.save(config);
-    const tomlPath = findConfigPath()!;
-    renameSync(tomlPath, tomlPath + ".migrated");
-    log.info(`Config migrated: ${tomlPath} → SQLite (original renamed .migrated)`);
-  } else if (!store.isEmpty()) {
-    config = store.load();
-  } else {
-    config = store.load();
-  }
+  const config = loadConfig();
   setLogLevel(config.logLevel);
   if (config.tracing.enabled) initLogPersistence(config.tracing.logsDir);
 

@@ -16,7 +16,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { MemoryStore } from "./store.js";
 
 // ── Constants ────────────────────────────────────────────────
@@ -45,21 +45,20 @@ const PROTOCOL_VERSION = "2024-11-05";
 
 let store: MemoryStore;
 try {
-  // Try to load embedding config from remi.toml
   let vectorStore = null;
   try {
-    const tomlPath = join(homedir(), ".remi", "remi.toml");
-    if (existsSync(tomlPath)) {
-      const toml = readFileSync(tomlPath, "utf-8");
-      const apiKeyMatch = toml.match(/\[embedding\][\s\S]*?api_key\s*=\s*"([^"]+)"/);
-      if (apiKeyMatch?.[1]) {
-        const { VectorStore } = require("../shared/db/vector-store.js");
-        vectorStore = new VectorStore({
-          provider: "voyage",
-          apiKey: apiKeyMatch[1],
-        });
-        process.stderr.write(`[${SERVER_NAME}] VectorStore initialized\n`);
-      }
+    const { ConfigStore } = require("../shared/db/config-store.js");
+    const { getDb } = require("../shared/db/index.js");
+    const cs = new ConfigStore(getDb());
+    const embedding = cs.getSection("embedding") as Record<string, unknown> | undefined;
+    const apiKey = embedding?.apiKey as string | undefined;
+    if (apiKey) {
+      const { VectorStore } = require("../shared/db/vector-store.js");
+      vectorStore = new VectorStore({
+        provider: (embedding?.provider as string) ?? "voyage",
+        apiKey,
+      });
+      process.stderr.write(`[${SERVER_NAME}] VectorStore initialized\n`);
     }
   } catch (e) {
     process.stderr.write(`[${SERVER_NAME}] VectorStore unavailable: ${e}\n`);

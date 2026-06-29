@@ -112,7 +112,7 @@ export async function runProjectInit(
     if (!chatId) {
       const ownerOpenId = getOwnerOpenId();
       if (!ownerOpenId) {
-        throw new Error("No owner open_id configured. Set feishu.trigger_user_ids in remi.toml.");
+        throw new Error("No owner open_id configured. Set feishu.triggerUserIds via remi login.");
       }
       chatId = await createProjectChat(loadConfig().feishu, input.name, ownerOpenId);
       store.updateField(projectId, "chat_id", chatId);

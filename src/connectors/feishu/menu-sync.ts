@@ -1,5 +1,5 @@
 /**
- * Bot Menu Syncer — sync menu config from remi.toml to Feishu bot_menu API.
+ * Bot Menu Syncer — sync menu config to Feishu bot_menu API.
  *
  * Supports both global default menus and per-user personalized menus (千人千面).
  */

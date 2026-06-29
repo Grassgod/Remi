@@ -8,23 +8,9 @@
  * Usage: bun run tests/manual/test-degraded-mode.ts
  */
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { createFeishuClient } from "../../src/connectors/feishu/client.js";
 import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
-
-function loadConfig() {
-  const paths = [join(process.cwd(), "remi.toml"), join(process.env.HOME || "/home", ".remi", "remi.toml")];
-  let toml = "";
-  for (const p of paths) { try { toml = readFileSync(p, "utf-8"); break; } catch {} }
-  if (!toml) throw new Error("remi.toml not found");
-  return {
-    appId: toml.match(/app_id\s*=\s*"([^"]+)"/)?.[1] ?? "",
-    appSecret: toml.match(/app_secret\s*=\s*"([^"]+)"/)?.[1] ?? "",
-    domain: toml.match(/domain\s*=\s*"([^"]+)"/)?.[1] ?? "feishu",
-    chatId: toml.match(/trigger_user_ids\s*=\s*\[\s*"([^"]+)"/)?.[1] ?? "",
-  };
-}
+import { loadConfig } from "./_load-config.js";
 
 async function main() {
   const config = loadConfig();
