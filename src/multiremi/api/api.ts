@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { createLogger } from "@shared/logger.js";
 import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
@@ -134,6 +134,52 @@ const LOCAL_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_JWT_SECRET = "multiremi-dev-secret-change-in-production";
 const MULTIREMI_RELEASE_REPO = process.env.MULTIREMI_RELEASE_REPO ?? "Grassgod/remi";
 const MULTIREMI_INSTALL_SCRIPT = "install-remi.sh";
+
+// Self-host release mirror. Intranet machines that can't reach GitHub's asset
+// CDN install via MULTIREMI_BASE_URL=<this server>; install-remi.sh then pulls
+// the version + tarball from /api/remi/releases/* below. Tarballs come from
+// MULTIREMI_RELEASE_DIR (default <repo>/dist), scripts from <repo>/scripts.
+const MULTIREMI_REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
+const MULTIREMI_RELEASE_TARBALL_RE = /^multiremi-(\d+\.\d+\.\d+)-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz$/;
+function multiremiReleaseDir(): string {
+  return process.env.MULTIREMI_RELEASE_DIR ?? join(MULTIREMI_REPO_ROOT, "dist");
+}
+function multiremiScriptsDir(): string {
+  return process.env.MULTIREMI_SCRIPTS_DIR ?? join(MULTIREMI_REPO_ROOT, "scripts");
+}
+function compareMultiremiVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10));
+  const pb = b.split(".").map((n) => parseInt(n, 10));
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  }
+  return 0;
+}
+function latestMirrorReleaseVersion(): string | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(multiremiReleaseDir());
+  } catch {
+    return null;
+  }
+  const versions = entries
+    .map((f) => f.match(MULTIREMI_RELEASE_TARBALL_RE)?.[1])
+    .filter((v): v is string => Boolean(v));
+  if (versions.length === 0) return null;
+  return versions.sort(compareMultiremiVersions)[versions.length - 1];
+}
+function resolveMirrorReleaseFile(filename: string | undefined): string | null {
+  if (!filename || filename.includes("/") || filename.includes("..") || filename.includes("\\")) return null;
+  if (/^(multiremi|remi)-v?\d[\w.\-]*\.tar\.gz$/.test(filename)) {
+    const p = join(multiremiReleaseDir(), filename);
+    return existsSync(p) ? p : null;
+  }
+  if (/^install[\w.\-]*\.sh$/.test(filename)) {
+    const p = join(multiremiScriptsDir(), filename);
+    return existsSync(p) ? p : null;
+  }
+  return null;
+}
 const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex"]);
 const MAX_AGENT_DESCRIPTION_LENGTH = 255;
 const PROVIDER_THINKING_LEVELS: Record<string, Set<string>> = {
@@ -399,6 +445,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(response.body, response.statusCode);
   });
   app.get("/api/multiremi/health", (c) => c.json({ ok: true }));
+  // Self-host release mirror (install-remi.sh reads these when MULTIREMI_BASE_URL is set).
+  app.get("/api/remi/releases/latest/version", (c) => {
+    const version = latestMirrorReleaseVersion();
+    if (!version) return c.json({ error: "no releases available on this server" }, 404);
+    return c.text(version);
+  });
+  app.get("/api/remi/releases/latest/:filename", (c) => {
+    const file = resolveMirrorReleaseFile(c.req.param("filename"));
+    if (!file) return c.json({ error: "not found" }, 404);
+    return new Response(Bun.file(file));
+  });
+  app.get("/api/remi/releases/download/:tag/:filename", (c) => {
+    const file = resolveMirrorReleaseFile(c.req.param("filename"));
+    if (!file) return c.json({ error: "not found" }, 404);
+    return new Response(Bun.file(file));
+  });
   app.get("/api/multiremi/install/daemon", (c) => {
     return c.json(buildDaemonInstallInstructions({
       requestUrl: c.req.url,
