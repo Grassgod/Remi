@@ -17,8 +17,12 @@ const ROOT = resolve(import.meta.dir, "..");
 const DIST = join(ROOT, "dist");
 const BUILD_DIR = join(ROOT, ".build");
 
-const versionMatch = readFileSync(join(ROOT, "src", "version.ts"), "utf-8").match(/VERSION\s*=\s*"([^"]+)"/);
-const version = versionMatch?.[1] ?? "0.0.0";
+// Version resolves from the release tag in CI (GITHUB_REF_NAME), else
+// package.json. Mirrors scripts/build-multiremi.ts. (src/version.ts was
+// removed in the storage refactor.)
+const rootPkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")) as { version?: string };
+const rawVersion = process.env.REMI_VERSION || process.env.GITHUB_REF_NAME || rootPkg.version || "0.0.0";
+const version = rawVersion.replace(/^v/, "");
 
 const os = process.platform === "darwin" ? "darwin" : "linux";
 const arch = process.arch === "arm64" ? "arm64" : "x64";
@@ -63,7 +67,10 @@ const prodPkg = {
 };
 writeFileSync(join(BUILD_DIR, "package.json"), JSON.stringify(prodPkg, null, 2));
 
-cpSync(join(ROOT, "src", "cli", "template.toml"), join(BUILD_DIR, "dist", "template.toml"));
+// template.toml was removed with the TOML→SQLite ConfigStore refactor; copy
+// only if still present so the build doesn't break.
+const templateToml = join(ROOT, "src", "cli", "template.toml");
+if (existsSync(templateToml)) cpSync(templateToml, join(BUILD_DIR, "dist", "template.toml"));
 
 const coreSkills = ["image", "skill-creator", "memory-enhance", "agent-browser"];
 const skillsSrc = join(process.env.HOME!, ".claude", "skills");
