@@ -27,28 +27,37 @@ function register(name: string, description: string, loader: () => Promise<{ run
   };
 }
 
-// ── User-facing commands ──────────────────────────────────
+// Forward a `remi <name> …` command into the multiremi command layer (worker /
+// setup / issue / repo all live there). programName "remi multiremi" so the
+// agent's background re-invoke reconstructs a valid command on this binary.
+function forward(name: string, description: string, prefix: string[], hidden?: boolean): void {
+  register(name, description, async () => ({
+    run: async (args: string[]) => {
+      const { runMultiremi } = await import("./multiremi.js");
+      await runMultiremi([...prefix, ...args], { programName: "remi multiremi" });
+    },
+  }), hidden);
+}
 
-register("start", "Start all PM2 services", async () => {
-  const { runStart } = await import("./pm2-commands.js");
-  return { run: runStart };
-});
+// ── Agent lifecycle (multiremi worker + Feishu channels) ──
+forward("start", "Start the agent (multiremi worker + Feishu channel, per config)", ["daemon", "start"]);
+forward("stop", "Stop the agent", ["daemon", "stop"]);
+forward("restart", "Restart the agent", ["daemon", "restart"]);
+forward("status", "Show agent status", ["daemon", "status"]);
+forward("logs", "Show agent logs (-f to follow)", ["daemon", "logs"]);
+forward("service", "Install/uninstall the agent as an OS service", ["daemon", "service"]);
 
-register("stop", "Stop all PM2 services", async () => {
-  const { runStop } = await import("./pm2-commands.js");
-  return { run: runStop };
-});
+// ── Configuration ──
+forward("setup", "Configure the multiremi server connection", ["setup"]);
+forward("config", "Get/set agent config keys", ["config"]);
 
-register("restart", "Restart all PM2 services", async () => {
-  const { runRestart } = await import("./pm2-commands.js");
-  return { run: runRestart };
-});
+// ── multiremi server task/issue management (client → server) ──
+forward("repo", "Check out an allowed workspace repository", ["repo"]);
+forward("issue", "Manage issues on the multiremi server", ["issue"]);
+forward("attachment", "Download an attachment", ["attachment"]);
+forward("seed", "Create a default local agent", ["seed"]);
 
-register("status", "Show process status", async () => {
-  const { runStatus } = await import("./pm2-commands.js");
-  return { run: runStatus };
-});
-
+// ── Monolith-native ──
 register("doctor", "Health check (runtime, config, auth)", async () => {
   const { runDoctor } = await import("./doctor.js");
   return { run: runDoctor };
@@ -64,27 +73,19 @@ register("update", "Download latest version from GitHub", async () => {
   return { run: runUpdate };
 });
 
-register("multiremi", "Bun Multiremi task runtime", async () => {
-  const { runMultiremi } = await import("./multiremi.js");
-  return { run: runMultiremi };
-});
-
-// ── Internal commands (used by PM2, not user-facing) ─────
-
+// ── Internal / hidden ──
+// Feishu production subprocess (legacy PM2 entry; the Feishu channel now also
+// comes up via `remi start`).
 register("serve", "Production daemon (PM2 subprocess)", async () => {
   const { runServe } = await import("./serve.js");
   return { run: runServe };
 }, true);
 
-register("auth", "Feishu OAuth (legacy)", async () => {
-  const { runAuthCmd } = await import("./auth-cmd.js");
-  return { run: runAuthCmd };
-}, true);
-
-// Legacy alias
-register("pm2", "PM2 management (legacy)", async () => {
-  const { runPm2Legacy } = await import("./pm2-legacy.js");
-  return { run: runPm2Legacy };
+// `remi multiremi …` retained (hidden): the agent background re-invoke targets
+// `remi multiremi daemon start --foreground`.
+register("multiremi", "Multiremi subcommands (internal)", async () => {
+  const { runMultiremi } = await import("./multiremi.js");
+  return { run: runMultiremi };
 }, true);
 
 // ── Dispatcher ───────────────────────────────────────────

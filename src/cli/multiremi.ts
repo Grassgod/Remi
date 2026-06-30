@@ -13,6 +13,7 @@ import {
   saveMultiremiConfig,
   type MultiremiCliConfig,
 } from "../multiremi/config.js";
+import { bootFeishuChannel } from "./agent.js";
 
 interface ParsedArgs {
   command: string;
@@ -315,12 +316,22 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
 
 async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
   const daemons = await resolveWorkerDaemons(options);
-  if (daemons.length === 0) {
-    throw new Error(`No healthy Multiremi runtime provider found. Install and authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
+  // Co-resident Feishu channel: a long-running agent process also brings up the
+  // Feishu channel when configured, so one `remi start` runs both. Skipped in
+  // --once mode (tests / one-shot worker runs never touch Feishu).
+  const feishu = Boolean(options.once) ? null : await bootFeishuChannel();
+  if (daemons.length === 0 && !feishu) {
+    throw new Error(`Nothing to start: no healthy runtime provider (install/authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}) and Feishu is not configured.`);
   }
-  process.on("SIGINT", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
-  process.on("SIGTERM", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
-  await Promise.all(daemons.map((runtimeDaemon) => runtimeDaemon.start()));
+  const stopAll = (): void => {
+    for (const runtimeDaemon of daemons) runtimeDaemon.stop();
+    feishu?.stop().catch(() => {});
+  };
+  process.on("SIGINT", stopAll);
+  process.on("SIGTERM", stopAll);
+  const running: Promise<void>[] = daemons.map((runtimeDaemon) => runtimeDaemon.start());
+  if (feishu) running.push(feishu.start);
+  await Promise.all(running);
   if (!Boolean(options.once) && daemons.some((runtimeDaemon) => runtimeDaemon.restartRequested())) {
     restartForegroundDaemonProcess(options, programName);
   }
