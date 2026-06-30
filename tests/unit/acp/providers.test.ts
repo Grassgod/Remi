@@ -79,15 +79,15 @@ describe("AcpProvider", () => {
 
   it("checks Codex ACP health via the Codex ACP executable", () => {
     // codex with no explicit executable: fallback OR a discovered codex-acp binary.
-    // `--version` is a cheap liveness probe; `--help` would boot codex-acp's
-    // full app-server and could time out the health check on slow networks.
+    // codex-acp has no portable probe flag (npm boots a heavy app-server on
+    // --help; the Rust build rejects --version), so the check is existence-only:
+    // no args.
     const codexHealth = resolveAcpHealthCheckCommand("codex", null, "codex-acp");
-    expect(codexHealth.args).toEqual(["--version"]);
+    expect(codexHealth.args).toBeUndefined();
     expect(isCodexExecutable(codexHealth.command, "codex-acp")).toBe(true);
     // Explicit executable is always preserved verbatim.
     expect(resolveAcpHealthCheckCommand("codex", "/tmp/codex-acp", "codex-acp")).toEqual({
       command: "/tmp/codex-acp",
-      args: ["--version"],
     });
     const claudeHealth = resolveAcpHealthCheckCommand("claude", null, "claude-agent-acp");
     expect(claudeHealth.command.endsWith("/bin/remi-claude-agent-acp")).toBe(true);

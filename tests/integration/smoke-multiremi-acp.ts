@@ -76,7 +76,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
       status: "unavailable",
       reason: unavailable,
       executable,
-      healthCommand: [health.command, ...health.args].join(" "),
+      healthCommand: [health.command, ...(health.args ?? [])].join(" "),
     };
   }
 
@@ -88,7 +88,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
         status: "unavailable",
         reason: "health_check_failed",
         executable,
-        healthCommand: [health.command, ...health.args].join(" "),
+        healthCommand: [health.command, ...(health.args ?? [])].join(" "),
       };
     }
   } finally {
@@ -100,7 +100,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
       status: "available",
       reason: "check_only",
       executable,
-      healthCommand: [health.command, ...health.args].join(" "),
+      healthCommand: [health.command, ...(health.args ?? [])].join(" "),
     };
   }
 
@@ -145,7 +145,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
         status: "failed",
         reason: `hard_timeout_after_${options.timeoutMs + 10_000}ms`,
         executable,
-        healthCommand: [health.command, ...health.args].join(" "),
+        healthCommand: [health.command, ...(health.args ?? [])].join(" "),
       };
     }
 
@@ -171,7 +171,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
       usageCount,
       output,
       executable,
-      healthCommand: [health.command, ...health.args].join(" "),
+      healthCommand: [health.command, ...(health.args ?? [])].join(" "),
     };
 
     if (completed?.status !== "completed") {
@@ -212,7 +212,7 @@ async function runProviderSmoke(provider: SmokeProvider, options: SmokeOptions):
       status: "failed",
       reason: err instanceof Error ? err.message : String(err),
       executable,
-      healthCommand: [health.command, ...health.args].join(" "),
+      healthCommand: [health.command, ...(health.args ?? [])].join(" "),
     };
   } finally {
     server.stop(true);

@@ -170,7 +170,12 @@ function resolveExecutableOnPath(command: string): string | null {
 
 export interface AcpHealthCheckCommand {
   command: string;
-  args: string[];
+  /**
+   * Args to spawn for the check. When omitted, the check is "the executable
+   * resolves to a file" — no spawn. Used for ACP agents that have no portable
+   * probe flag.
+   */
+  args?: string[];
 }
 
 export function resolveAcpHealthCheckCommand(
@@ -179,14 +184,26 @@ export function resolveAcpHealthCheckCommand(
   fallback: string,
 ): AcpHealthCheckCommand {
   const command = resolveAcpExecutableForAgent(agentType, executable, fallback);
+  // The claude wrapper applies + verifies the AskUserQuestion patch, so it
+  // genuinely has to run --verify-patch.
   if (agentType === "claude" && command.endsWith(REMI_CLAUDE_AGENT_ACP_WRAPPER)) {
     return { command, args: ["--verify-patch"] };
   }
-  // `--version` is a cheap liveness probe across all ACP agents. (codex-acp's
-  // `--help` instead boots the full app-server — plugin marketplace sync, the
-  // works — which can outrun the health-check timeout on slow networks and
-  // silently drop a perfectly healthy codex from daemon registration.)
-  return { command, args: ["--version"] };
+  // Everything else (e.g. codex): existence-only, no spawn. There is no
+  // portable probe flag for codex-acp — the npm build boots a heavy app-server
+  // on --help (which can outrun the timeout on slow networks) while the Rust
+  // build rejects --version with exit 2. So we just confirm the executable
+  // resolves; a real task run surfaces anything deeper.
+  return { command };
+}
+
+/** True if `executable` is an existing file (by path) or resolvable on PATH. */
+export function acpExecutableResolves(executable: string): boolean {
+  if (executable.includes("/") || executable.includes("\\")) {
+    return existsSync(executable);
+  }
+  const dirs = (process.env.PATH ?? "").split(delimiter);
+  return dirs.some((dir) => dir && existsSync(join(dir, executable)));
 }
 
 export class AcpProvider implements Provider {
@@ -342,6 +359,15 @@ export class AcpProvider implements Provider {
       this._options.executable,
       this._adapter.defaultExecutable(),
     );
+    // No probe args → existence is the whole check (e.g. codex-acp).
+    if (!check.args) {
+      const ok = acpExecutableResolves(check.command);
+      if (!ok) {
+        console.error(`[acp] ${this._adapter.agentType} health check failed: executable not found (${check.command})`);
+      }
+      return ok;
+    }
+    const probeArgs = check.args;
     const { spawn } = await import("node:child_process");
     // Async spawn, NOT execFileSync: Bun's spawnSync hangs forever spawning
     // some node ACP scripts, which silently dropped a healthy provider from
@@ -350,7 +376,7 @@ export class AcpProvider implements Provider {
     // a swallowed health check is how a healthy provider silently vanishes.
     return await new Promise<boolean>((resolve) => {
       let settled = false;
-      const child = spawn(check.command, check.args, {
+      const child = spawn(check.command, probeArgs, {
         stdio: ["ignore", "ignore", "ignore"],
       });
       const finish = (ok: boolean, reason?: string) => {
