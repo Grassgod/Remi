@@ -142,6 +142,7 @@ function setup(options: CliOptions): void {
   const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTIREMI_RUNTIME_ID);
   const runtimeName = stringOpt(options.name ?? options["runtime-name"], process.env.MULTIREMI_RUNTIME_NAME);
   const daemonId = stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID);
+  const maxConcurrency = stringOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY);
 
   if (serverUrl) next.server_url = serverUrl.replace(/\/+$/, "");
   if (workspaceId) next.workspace_id = workspaceId;
@@ -150,6 +151,13 @@ function setup(options: CliOptions): void {
   if (runtimeId) next.runtime_id = runtimeId;
   if (runtimeName) next.runtime_name = runtimeName;
   if (daemonId) next.daemon_id = daemonId;
+  if (maxConcurrency) {
+    const n = parseInt(maxConcurrency, 10);
+    if (!Number.isFinite(n) || n < 1) {
+      throw new Error("--max-concurrency must be an integer >= 1");
+    }
+    next.max_concurrency = n;
+  }
 
   if (!next.server_url) {
     throw new Error("server URL is required: multiremi setup --server <url> --workspace <id> [--token <token>]");
@@ -190,7 +198,7 @@ function configCommand(positional: string[], options: CliOptions): void {
   if (action === "set") {
     const key = positional[1] as keyof MultiremiCliConfig | undefined;
     const value = positional[2];
-    const allowed = ["server_url", "workspace_id", "token", "provider", "runtime_id", "runtime_name"];
+    const allowed = ["server_url", "workspace_id", "token", "provider", "runtime_id", "runtime_name", "max_concurrency"];
     if (!key || !allowed.includes(key)) {
       throw new Error(`usage: multiremi config set <${allowed.join("|")}> <value>`);
     }
@@ -198,7 +206,13 @@ function configCommand(positional: string[], options: CliOptions): void {
     if (key === "provider" && !isSupportedDaemonProvider(value)) {
       throw new Error(`Unsupported Multiremi runtime provider: ${value}. Supported providers: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
     }
-    config[key] = value;
+    if (key === "max_concurrency") {
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1) throw new Error("max_concurrency must be an integer >= 1");
+      config.max_concurrency = n;
+    } else {
+      config[key] = value;
+    }
     saveMultiremiConfig(config);
     console.log(`Updated ${key}`);
     return;
@@ -265,6 +279,8 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   const runtimeName = stringOpt(options.name, process.env.MULTIREMI_RUNTIME_NAME)
     ?? config.runtime_name
     ?? undefined;
+  // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
+  const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
   const daemons: MultiremiDaemon[] = [];
   const stopAllForRestart = () => {
@@ -280,6 +296,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
         ?? null,
       runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
       provider,
+      maxConcurrency,
       workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
         ?? config.workspace_id
         ?? "local",
@@ -1657,6 +1674,7 @@ export function buildDaemonForegroundArgs(options: CliOptions = {}): string[] {
   pushStringOption(args, "--daemon-port", options.daemonPort ?? options["daemon-port"]);
   pushStringOption(args, "--repo-cache-root", options.repoCacheRoot ?? options["repo-cache-root"]);
   pushStringOption(args, "--name", options.name ?? options["runtime-name"]);
+  pushStringOption(args, "--max-concurrency", options["max-concurrency"] ?? options.maxConcurrency);
   pushStringOption(args, "--log-level", options.logLevel ?? options["log-level"]);
   return args;
 }

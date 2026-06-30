@@ -247,6 +247,67 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("runs tasks concurrently up to maxConcurrency", async () => {
+    db = new Database(":memory:");
+    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-concurrency-"));
+    const store = new MultiremiStore(db);
+    // Two distinct agents → no shared issue/chat, so the server's per-context
+    // serialization does not force these to run one at a time.
+    const agentA = store.createAgent({ name: "Concurrent A", provider: "claude", cwd: workDir });
+    const agentB = store.createAgent({ name: "Concurrent B", provider: "claude", cwd: workDir });
+    const taskA = store.createTask({ agentId: agentA.id, prompt: "Task A" });
+    const taskB = store.createTask({ agentId: agentB.id, prompt: "Task B" });
+    const daemonToken = await store.createAccessToken({ name: "Concurrency daemon", type: "daemon", workspaceId: "local" });
+    const server = startMultiremiServer({ store, scheduler: null, authToken: "root-concurrency-secret", hostname: "127.0.0.1", port: 0 });
+
+    let started = 0;
+    const bothStarted = deferred<void>();
+    const release = deferred<void>();
+    const providerFactory: MultiremiDaemonProviderFactory = () => ({
+      async *sendStream() {
+        started += 1;
+        if (started >= 2) bothStarted.resolve();
+        await release.promise; // hold the task open until both are confirmed in flight
+        yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "done" }] } as any;
+      },
+      getLastResponse: () => ({ text: "done", sessionId: "sess-concurrent", requestId: "req-concurrent" }),
+    });
+
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "concurrency-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 25,
+      maxConcurrency: 2,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory,
+    });
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await withTimeout(bothStarted.promise, 5_000, "two tasks did not start concurrently");
+      // Both tasks are in flight at once — proving the daemon is no longer serial.
+      expect((daemon as unknown as { activeTaskCount: number }).activeTaskCount).toBe(2);
+      // The configured cap reached the server via the daemon-register path.
+      expect(store.listRuntimes()[0]?.maxConcurrency).toBe(2);
+
+      release.resolve();
+      await waitForCondition(
+        () => store.getTask(taskA.id)?.status === "completed" && store.getTask(taskB.id)?.status === "completed",
+        5_000,
+      );
+    } finally {
+      release.resolve();
+      daemon.stop();
+      await daemonRun?.catch(() => {}); // drain-on-shutdown: resolves once in-flight tasks finish
+      server.stop(true);
+    }
+  });
+
   it("serves repo checkout from the daemon cache to a running provider", async () => {
     db = new Database(":memory:");
     workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-repo-"));

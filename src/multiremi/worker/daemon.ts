@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { homedir } from "node:os";
+import { cpus, homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
@@ -61,6 +61,7 @@ export interface MultiremiDaemonOptions {
   provider?: string;
   workspaceId?: string | null;
   pollIntervalMs?: number;
+  maxConcurrency?: number;
   once?: boolean;
   providerFactory?: MultiremiDaemonProviderFactory;
   updateRunner?: MultiremiDaemonUpdateRunner;
@@ -145,6 +146,7 @@ export class MultiremiDaemon {
   private startedAt = new Date();
   private ready = false;
   private activeTaskCount = 0;
+  private inflight = new Set<Promise<void>>();
   private claimsPaused = false;
   private restartRequestedFlag = false;
   private gcTimer: ReturnType<typeof setInterval> | null = null;
@@ -167,6 +169,7 @@ export class MultiremiDaemon {
       provider: options.provider ?? process.env.MULTIREMI_PROVIDER ?? "claude",
       workspaceId: options.workspaceId ?? process.env.MULTIREMI_WORKSPACE_ID ?? "local",
       pollIntervalMs: options.pollIntervalMs ?? parseInt(process.env.MULTIREMI_POLL_INTERVAL_MS ?? "3000", 10),
+      maxConcurrency: resolveDaemonConcurrency(options.maxConcurrency ?? numberEnv(process.env.MULTIREMI_MAX_CONCURRENCY, 0)),
       once: options.once ?? false,
       launchedBy: options.launchedBy ?? process.env.MULTIREMI_LAUNCHED_BY ?? null,
       taskTimeoutMs: options.taskTimeoutMs ?? parseInt(process.env.MULTIREMI_TASK_TIMEOUT_MS ?? "0", 10),
@@ -214,14 +217,32 @@ export class MultiremiDaemon {
             continue;
           }
 
-          const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
-          if (!task) {
-            if (this.options.once) return;
-            await sleep(this.options.pollIntervalMs);
-            continue;
+          if (this.options.once) {
+            // One-shot mode (tests, single runs) stays strictly serial:
+            // claim one task, run it to completion, return.
+            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            if (!task) return;
+            await this.handleTask(task);
+            return;
           }
-          await this.handleTask(task);
-          if (this.options.once) return;
+
+          // Bounded claim pump: keep claiming while we have spare capacity, and
+          // run each task concurrently (detached). The server's claim query also
+          // caps in-flight tasks at the runtime's maxConcurrency, so this local
+          // gate and the server agree. activeTaskCount is incremented
+          // synchronously at the top of handleTask, so the loop sees it grow.
+          while (this.activeTaskCount < this.options.maxConcurrency && !this.stopped && !this.claimsPaused) {
+            const task = await this.client.claimTask(this.options.runtimeId!) as MultiremiTaskWithAgent | null;
+            if (!task) break;
+            const run = this.handleTask(task).catch((err) => {
+              // handleTask routes task failures to failTask itself; this guards
+              // the detached promise against an unexpected unhandled rejection.
+              log.error(`task ${task.id} crashed outside handleTask: ${err instanceof Error ? err.message : String(err)}`);
+            });
+            this.inflight.add(run);
+            void run.finally(() => this.inflight.delete(run));
+          }
+          await sleep(this.options.pollIntervalMs);
         } catch (err) {
           // A transient server/network blip (e.g. the server restarting) must not
           // kill the daemon — that takes every runtime offline until a human
@@ -234,6 +255,9 @@ export class MultiremiDaemon {
       }
     } finally {
       this.ready = false;
+      // Running tasks depend on the repo-checkout server, so let any in-flight
+      // tasks drain before tearing it (and the GC loop) down.
+      await Promise.allSettled([...this.inflight]);
       this.stopGcLoop();
       this.stopRepoCheckoutServer();
     }
@@ -252,6 +276,7 @@ export class MultiremiDaemon {
           type: this.options.provider,
           version: multiremiVersion,
           status: "online",
+          maxConcurrency: this.options.maxConcurrency,
         },
       });
       const runtime = response.runtimes.find((item) => (item.provider ?? item.type) === this.options.provider) ?? response.runtimes[0];
@@ -283,7 +308,7 @@ export class MultiremiDaemon {
       daemonId: this.options.daemonId ?? undefined,
       runtimeMode: "local",
       workspaceId: this.options.workspaceId,
-      maxConcurrency: 1,
+      maxConcurrency: this.options.maxConcurrency,
       metadata: {
         version: multiremiVersion,
         cli_version: multiremiVersion,
@@ -825,6 +850,17 @@ function optionalBoolean(value: unknown): boolean | null {
 function numberEnv(value: string | undefined, fallback: number): number {
   const parsed = value ? parseInt(value, 10) : NaN;
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/**
+ * Resolve the runtime's task concurrency. An explicit value >= 1 wins;
+ * anything else (0/unset) defaults to one fewer than the machine's CPU count
+ * (min 1), so a daemon runs several tasks at once without saturating the box.
+ */
+function resolveDaemonConcurrency(value: number | undefined): number {
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+  return Math.max(1, cpus().length - 1);
 }
 
 function booleanEnv(value: string | undefined, fallback: boolean): boolean {

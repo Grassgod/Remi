@@ -234,6 +234,7 @@ type DaemonRegisterRequestBody = {
     type?: string;
     version?: string;
     status?: string;
+    maxConcurrency?: number;
   }>;
 };
 
@@ -7912,7 +7913,9 @@ function registerDaemonRuntimes(
         workspaceId,
         ownerId: auth.ownerId,
         status: runtime.status === "offline" ? "offline" : "online",
-        maxConcurrency: 1,
+        maxConcurrency: Number.isFinite(Number(runtime.maxConcurrency)) && Number(runtime.maxConcurrency) >= 1
+          ? Math.floor(Number(runtime.maxConcurrency))
+          : 1,
       });
     } catch (error) {
       store.recordRuntimeFailure({

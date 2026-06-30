@@ -10,6 +10,7 @@ export interface MultiremiCliConfig {
   runtime_id?: string;
   runtime_name?: string;
   daemon_id?: string;
+  max_concurrency?: number;
 }
 
 export function multiremiConfigPath(): string {

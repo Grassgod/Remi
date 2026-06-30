@@ -29,6 +29,7 @@ export interface MultiremiDaemonRegisterRuntimeInput {
     type: string;
     version: string;
     status?: "online" | "offline";
+    maxConcurrency?: number;
   };
 }
 
