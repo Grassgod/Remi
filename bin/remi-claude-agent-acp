@@ -137,6 +137,13 @@ function findUpstreamPackageRoot() {
   const pathBinary = resolveCommand("claude-agent-acp");
   if (pathBinary) candidates.push(pathBinary);
 
+  // remi-provisioned location (`remi` installs the bridge here when missing).
+  const remiHome = process.env.REMI_HOME || join(homedir(), ".remi");
+  candidates.push(
+    join(remiHome, "acp", "node_modules", "@zed-industries", "claude-agent-acp"),
+    join(remiHome, "acp", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
+  );
+
   candidates.push(
     join(homedir(), ".npm-global", "lib", "node_modules", "@zed-industries", "claude-agent-acp"),
     join(homedir(), ".npm-global", "lib", "node_modules", "@agentclientprotocol", "claude-agent-acp"),

@@ -251,6 +251,7 @@
     "col_workload": "工作负载",
     "col_cost": "费用 · 7 天",
     "col_cli": "CLI",
+    "col_acp": "ACP",
     "cost_delta_flat": "持平",
     "cli_managed_badge": "桌面端",
     "cli_update_available_aria": "有可用更新",

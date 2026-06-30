@@ -14,6 +14,7 @@ import {
   type MultiremiCliConfig,
 } from "../multiremi/config.js";
 import { bootFeishuChannel } from "./agent.js";
+import { ensureAcpBridges, type ProvisionProvider } from "../acp/provision.js";
 
 interface ParsedArgs {
   command: string;
@@ -172,12 +173,17 @@ function setup(options: CliOptions): void {
 
   saveMultiremiConfig(next);
   console.log(`Config saved to ${multiremiConfigPath()}`);
+  // Pre-provision ACP bridges for whichever agents the user has (no-op if absent
+  // or already present). The user only needs `claude` / `codex` themselves.
+  const provisionTargets = (next.provider && isSupportedDaemonProvider(next.provider)
+    ? [next.provider]
+    : [...SUPPORTED_DAEMON_PROVIDERS]) as ProvisionProvider[];
+  ensureAcpBridges(provisionTargets, (m) => console.log(`  ${m}`));
   if (!next.token) {
     console.log("Token is not set. Run:");
-    console.log("  multiremi login --token <YOUR_TOKEN>");
+    console.log("  remi login --token <YOUR_TOKEN>");
   }
-  console.log("Ready. Start the daemon with:");
-  console.log("  multiremi daemon");
+  console.log("Ready. Start the agent with:  remi start");
 }
 
 function login(options: CliOptions): void {
@@ -272,6 +278,10 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   }
   const requestedProvider: SupportedDaemonProvider | null =
     explicitProvider && isSupportedDaemonProvider(explicitProvider) ? explicitProvider : null;
+  // Provision the ACP bridges for the candidate providers (install any that are
+  // missing) before the health check decides what's available — the user only
+  // needs `claude` / `codex` themselves.
+  ensureAcpBridges((requestedProvider ? [requestedProvider] : [...SUPPORTED_DAEMON_PROVIDERS]) as ProvisionProvider[]);
   const providers = await resolveHealthyDaemonProviders(requestedProvider);
   if (providers.length === 0) return [];
 
@@ -284,6 +294,12 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   const runtimeName = stringOpt(options.name, process.env.MULTIREMI_RUNTIME_NAME)
     ?? config.runtime_name
     ?? undefined;
+  // The unsuffixed machine name. Both providers register under this single
+  // daemon_id so the dashboard groups them into ONE machine card (it keys cards
+  // by daemon_id; the server still mints a distinct runtime id per provider).
+  // Sharing the daemon_id also means single→multi provider never changes it, so
+  // no orphan runtime is left behind when a second provider comes online.
+  const baseRuntimeName = runtimeName ?? `${Bun.env.USER ?? "local"}-bun-runtime`;
   // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
   const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
@@ -298,7 +314,7 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
       runtimeId,
       daemonId: stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID)
         ?? config.daemon_id
-        ?? null,
+        ?? (providers.length > 1 ? baseRuntimeName : null),
       runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
       provider,
       maxConcurrency,

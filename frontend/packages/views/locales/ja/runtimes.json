@@ -248,6 +248,7 @@
     "col_workload": "作業量",
     "col_cost": "コスト · 7 日",
     "col_cli": "CLI",
+    "col_acp": "ACP",
     "cost_delta_flat": "変化なし",
     "cli_managed_badge": "デスクトップ",
     "cli_update_available_aria": "更新あり",

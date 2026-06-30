@@ -21,6 +21,7 @@ export {
   resolveAcpHealthCheckCommand,
 } from "./provider.js";
 export type { AcpProviderOptions } from "./provider.js";
+export { ensureAcpBridges, bridgeVersion, type ProvisionProvider } from "./provision.js";
 
 // ── Provider interface & shared types ─────────────────────────
 export type { Provider, AgentResponse, SendOptions, ProviderEvent } from "./provider-types.js";

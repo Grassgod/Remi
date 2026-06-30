@@ -235,6 +235,7 @@ type DaemonRegisterRequestBody = {
     version?: string;
     status?: string;
     maxConcurrency?: number;
+    acpVersion?: string | null;
   }>;
 };
 
@@ -7909,6 +7910,7 @@ function registerDaemonRuntimes(
           version,
           cli_version: cliVersion,
           launched_by: launchedBy,
+          ...(typeof runtime.acpVersion === "string" && runtime.acpVersion ? { acp_version: runtime.acpVersion } : {}),
         },
         workspaceId,
         ownerId: auth.ownerId,

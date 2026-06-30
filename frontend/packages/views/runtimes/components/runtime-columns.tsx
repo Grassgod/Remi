@@ -68,6 +68,7 @@ const COL_WIDTHS = {
   workload: 120,
   cost: 96,
   cli: 112,
+  acp: 100,
   // 60 = 16 left padding + 28 kebab + 16 right padding. Keeps the
   // kebab's right edge 16px from the card so it lines up with the
   // toolbar's px-4 right inset.
@@ -173,6 +174,12 @@ export function createRuntimeColumns({
           latestCliVersion={latestCliVersion}
         />
       ),
+    },
+    {
+      id: "acp",
+      header: () => t(($) => $.list.col_acp),
+      size: COL_WIDTHS.acp,
+      cell: ({ row }) => <AcpCell runtime={row.original.runtime} />,
     },
     {
       id: "actions",
@@ -370,6 +377,23 @@ function CostCell({ runtimeId }: { runtimeId: string }) {
         </span>
       )}
     </div>
+  );
+}
+
+function AcpCell({ runtime }: { runtime: AgentRuntime }) {
+  if (runtime.runtime_mode === "cloud") {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  const meta = runtime.metadata as Record<string, unknown> | null;
+  const acpVersion =
+    meta && typeof meta.acp_version === "string" ? meta.acp_version : null;
+  if (!acpVersion) {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  return (
+    <span className="truncate font-mono text-xs text-muted-foreground">
+      {acpVersion}
+    </span>
   );
 }
 

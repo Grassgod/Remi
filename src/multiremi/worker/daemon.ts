@@ -3,7 +3,7 @@ import { cpus, homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
-import { AcpProvider, type AcpProviderOptions } from "@acp/index.js";
+import { AcpProvider, type AcpProviderOptions, bridgeVersion } from "@acp/index.js";
 import type { PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
@@ -277,6 +277,7 @@ export class MultiremiDaemon {
           version: multiremiVersion,
           status: "online",
           maxConcurrency: this.options.maxConcurrency,
+          acpVersion: this.acpVersion(),
         },
       });
       const runtime = response.runtimes.find((item) => (item.provider ?? item.type) === this.options.provider) ?? response.runtimes[0];
@@ -300,6 +301,12 @@ export class MultiremiDaemon {
     this.repoCache.sync(workspaceId, repos);
   }
 
+  /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
+  private acpVersion(): string | null {
+    const provider = this.options.provider;
+    return provider === "claude" || provider === "codex" ? bridgeVersion(provider) : null;
+  }
+
   private currentRuntimeRegistrationInput(): RegisterRuntimeInput {
     return {
       id: this.options.runtimeId ?? undefined,
@@ -312,6 +319,7 @@ export class MultiremiDaemon {
       metadata: {
         version: multiremiVersion,
         cli_version: multiremiVersion,
+        acp_version: this.acpVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
       },
       deviceInfo: `${this.options.runtimeName} · ${multiremiVersion}`,

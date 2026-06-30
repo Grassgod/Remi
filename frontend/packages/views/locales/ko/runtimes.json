@@ -260,6 +260,7 @@
     "col_workload": "작업량",
     "col_cost": "비용 · 7일",
     "col_cli": "CLI",
+    "col_acp": "ACP",
     "cost_delta_flat": "변화 없음",
     "cli_managed_badge": "데스크톱",
     "cli_update_available_aria": "업데이트 가능",

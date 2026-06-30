@@ -263,6 +263,7 @@
     "col_workload": "Workload",
     "col_cost": "Cost · 7d",
     "col_cli": "CLI",
+    "col_acp": "ACP",
     "cost_delta_flat": "flat",
     "cli_managed_badge": "Desktop",
     "cli_update_available_aria": "Update available",
