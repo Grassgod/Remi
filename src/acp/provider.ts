@@ -376,8 +376,12 @@ export class AcpProvider implements Provider {
     // a swallowed health check is how a healthy provider silently vanishes.
     return await new Promise<boolean>((resolve) => {
       let settled = false;
+      let stderr = "";
       const child = spawn(check.command, probeArgs, {
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      child.stderr?.on("data", (chunk) => {
+        if (stderr.length < 2000) stderr += String(chunk);
       });
       const finish = (ok: boolean, reason?: string) => {
         if (settled) return;
@@ -387,7 +391,8 @@ export class AcpProvider implements Provider {
           child.kill("SIGKILL");
         } catch {}
         if (!ok && reason) {
-          console.error(`[acp] ${this._adapter.agentType} health check failed: ${reason}`);
+          const detail = stderr.trim() ? ` — ${stderr.trim().slice(0, 400)}` : "";
+          console.error(`[acp] ${this._adapter.agentType} health check failed (${check.command} ${probeArgs.join(" ")}): ${reason}${detail}`);
         }
         resolve(ok);
       };

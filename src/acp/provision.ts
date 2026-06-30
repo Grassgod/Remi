@@ -176,8 +176,12 @@ function linkCodexBin(log: Logger): void {
  */
 export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (m) => console.error(`[provision] ${m}`)): void {
   // Always put our managed dirs on PATH so already-provisioned bridges + node
-  // are visible to child processes (the daemon spawns the bridges).
+  // are visible to child processes (the daemon spawns the bridges), and point
+  // the claude wrapper directly at the located package via env — this is
+  // resolution-proof: it works even when a stale remi-claude-agent-acp on PATH
+  // would otherwise be picked and fail to find the package.
   prependManagedPath();
+  pointClaudeBridgeDir();
 
   const missing = providers.filter((p) => which(PROVIDER_CLI[p]) && !bridgePresent(p));
   if (missing.length === 0) return;
@@ -196,6 +200,14 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
     }
   }
   prependManagedPath();
+  pointClaudeBridgeDir();
+}
+
+/** Point the claude wrapper at the located package via REMI_CLAUDE_AGENT_ACP_DIR. */
+function pointClaudeBridgeDir(): void {
+  if (process.env.REMI_CLAUDE_AGENT_ACP_DIR) return;
+  const dir = locateBridgePackage("claude");
+  if (dir) process.env.REMI_CLAUDE_AGENT_ACP_DIR = dir;
 }
 
 function prependManagedPath(): void {
