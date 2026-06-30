@@ -20,7 +20,7 @@ import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "../connectors/base.js";
-import { AsyncLock, resolveSessionKey } from "../daemon/orchestrator.js";
+import { LaneScheduler, resolveSessionKey } from "../daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
@@ -67,7 +67,10 @@ export class Remi {
   _configManager: any = null; // ConfigManager instance
   _providers = new Map<string, Provider>();
   private _connectors: Connector[] = [];
-  private _laneLocks = new Map<string, AsyncLock>();
+  // Per-lane (per session-key) serialization. Unbounded by default, matching the
+  // monolith's historical behavior; the shared LaneScheduler also caps total
+  // concurrency, which is what the multiremi daemon uses via its SQL queue.
+  private _scheduler = new LaneScheduler();
   private _activeAborts = new Map<string, AbortController>();
   private _runtime = new AgentRuntime();
   private _onRestart: ((info: { chatId: string; connectorName?: string }) => void) | null = null;
@@ -140,15 +143,6 @@ export class Remi {
     }
   }
 
-  // ── Lane Queue (per-chat serialization) ──────────────────
-
-  private _getLaneLock(chatId: string): AsyncLock {
-    if (!this._laneLocks.has(chatId)) {
-      this._laneLocks.set(chatId, new AsyncLock());
-    }
-    return this._laneLocks.get(chatId)!;
-  }
-
   // ── Session key resolution (thread-aware) ────────────────
 
   /**
@@ -177,14 +171,7 @@ export class Remi {
 
   async handleMessage(msg: IncomingMessage): Promise<AgentResponse> {
     const sessionKey = this._resolveSessionKey(msg);
-    const lock = this._getLaneLock(sessionKey);
-    await lock.acquire();
-    try {
-      return await this._process(msg);
-    } finally {
-      lock.release();
-      if (lock.isIdle) this._laneLocks.delete(sessionKey);
-    }
+    return this._scheduler.run(sessionKey, () => this._process(msg));
   }
 
   async handleMessageStream(
@@ -192,8 +179,7 @@ export class Remi {
     consumer: (stream: AsyncIterable<ProviderEvent>, meta: import("../connectors/base.js").StreamMeta) => Promise<void>,
   ): Promise<void> {
     const sessionKey = this._resolveSessionKey(msg);
-    const lock = this._getLaneLock(sessionKey);
-    await lock.acquire();
+    await this._scheduler.run(sessionKey, async () => {
     // Create root trace span
     const msgPreview = msg.text.slice(0, 50).replace(/\n/g, " ");
     const rootSpan = this.traceCollector.startTrace(`handle: ${msgPreview}`, {
@@ -275,9 +261,8 @@ export class Remi {
       // Guarantee span is always recorded — SpanImpl._ended prevents double-write
       rootSpan.end();
       this._activeAborts.delete(sessionKey);
-      lock.release();
-      if (lock.isIdle) this._laneLocks.delete(sessionKey);
     }
+    });
   }
 
   private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("../shared/logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {

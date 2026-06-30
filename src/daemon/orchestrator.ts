@@ -66,3 +66,82 @@ export function resolveSessionKey(msg: IncomingMessage): string {
   }
   return msg.chatId;
 }
+
+export interface LaneSchedulerOptions {
+  /** Max work items running at once across all lanes. Falsy = unbounded. */
+  maxConcurrency?: number;
+}
+
+/**
+ * Bounded, lane-aware work scheduler.
+ *
+ * The shared concurrency model for both products: work in the **same lane**
+ * (e.g. one chat session, keyed by {@link resolveSessionKey}) runs serially,
+ * while different lanes run in parallel up to a global concurrency cap. The
+ * monolith Remi feeds its message loop through this; the multiremi daemon
+ * realizes the same model via its server-side SQL claim queue (per-runtime
+ * maxConcurrency + per-issue/chat serialization), so it does not need an
+ * in-process LaneScheduler on top.
+ *
+ * Composes {@link AsyncLock} (per-lane mutex) with a counting semaphore. A lane
+ * lock is acquired *before* a global permit so a task waiting behind a same-lane
+ * predecessor never holds one of the scarce permits.
+ */
+export class LaneScheduler {
+  private _lanes = new Map<string, AsyncLock>();
+  private readonly _limit: number; // 0 = unbounded
+  private _active = 0;
+  private _permitWaiters: Array<() => void> = [];
+
+  constructor(options: LaneSchedulerOptions = {}) {
+    const n = Number(options.maxConcurrency);
+    this._limit = Number.isFinite(n) && n >= 1 ? Math.floor(n) : 0;
+  }
+
+  /** Number of tasks currently running (past the global permit). */
+  get activeCount(): number {
+    return this._active;
+  }
+
+  /** Run `fn` under lane `laneKey`, respecting per-lane serialization and the global cap. */
+  async run<T>(laneKey: string, fn: () => Promise<T>): Promise<T> {
+    const lane = this._getLane(laneKey);
+    await lane.acquire();
+    await this._acquirePermit();
+    try {
+      return await fn();
+    } finally {
+      this._releasePermit();
+      lane.release();
+      if (lane.isIdle) this._lanes.delete(laneKey);
+    }
+  }
+
+  private _getLane(laneKey: string): AsyncLock {
+    let lane = this._lanes.get(laneKey);
+    if (!lane) {
+      lane = new AsyncLock();
+      this._lanes.set(laneKey, lane);
+    }
+    return lane;
+  }
+
+  private async _acquirePermit(): Promise<void> {
+    if (this._limit === 0 || this._active < this._limit) {
+      this._active++;
+      return;
+    }
+    // At capacity: wait for a permit to be handed to us directly (no increment
+    // on wake — the releaser keeps `_active` at the cap during the handoff).
+    await new Promise<void>((resolve) => this._permitWaiters.push(resolve));
+  }
+
+  private _releasePermit(): void {
+    const next = this._permitWaiters.shift();
+    if (next) {
+      next();
+    } else {
+      this._active = Math.max(0, this._active - 1);
+    }
+  }
+}
