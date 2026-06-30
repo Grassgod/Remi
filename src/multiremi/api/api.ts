@@ -3850,7 +3850,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
   const app = createMultiremiApp({ ...options, store, scheduler, realtimeState });
-  const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6130", 10);
+  const port = options.port ?? parseInt(process.env.MULTIREMI_PORT ?? "6120", 10);
   const hostname = options.hostname ?? process.env.MULTIREMI_HOST ?? "0.0.0.0";
   const daemonWebSockets: DaemonWebSocketRegistry = new Map();
   const browserWebSockets: BrowserWebSocketRegistry = new Map();
@@ -4091,7 +4091,7 @@ function requestOrigin(requestUrl: string): string {
   try {
     return new URL(requestUrl).origin;
   } catch {
-    return "http://127.0.0.1:6130";
+    return "http://127.0.0.1:6120";
   }
 }
 

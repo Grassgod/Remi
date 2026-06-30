@@ -124,7 +124,7 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
 }
 
 async function serve(options: CliOptions): Promise<void> {
-  const port = numberOpt(options.port, process.env.MULTIREMI_PORT, 6130);
+  const port = numberOpt(options.port, process.env.MULTIREMI_PORT, 6120);
   const host = stringOpt(options.host, process.env.MULTIREMI_HOST) ?? "0.0.0.0";
   const token = stringOpt(options.token, process.env.MULTIREMI_TOKEN);
   const server = startMultiremiServer({ port, hostname: host, authToken: token });
@@ -243,7 +243,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
     ?? stringOpt(options["server-url"], undefined)
     ?? stringOpt(undefined, process.env.MULTIREMI_SERVER_URL)
     ?? config.server_url
-    ?? "http://127.0.0.1:6130";
+    ?? "http://127.0.0.1:6120";
   const explicitProvider = stringOpt(options.provider, process.env.MULTIREMI_PROVIDER)
     ?? config.provider;
   if (explicitProvider && !isSupportedDaemonProvider(explicitProvider)) {
@@ -1141,7 +1141,7 @@ function multiremiApiConnection(options: CliOptions): MultiremiApiConnection {
     serverUrl: (
       stringOpt(options.server ?? options["server-url"], process.env.MULTIREMI_SERVER_URL)
       ?? config.server_url
-      ?? `http://127.0.0.1:6130`
+      ?? `http://127.0.0.1:6120`
     ).replace(/\/+$/, ""),
     token: stringOpt(options.token, process.env.MULTIREMI_TOKEN) ?? config.token ?? null,
     workspaceId: stringOpt(options.workspace ?? options["workspace-id"], process.env.MULTIREMI_WORKSPACE_ID) ?? config.workspace_id ?? null,
@@ -1494,10 +1494,10 @@ Commands:
   version                Print Multiremi version
 
 Options:
-  --port <number>        API port for serve (default: 6130)
+  --port <number>        API port for serve (default: 6120)
   --host <address>       API listen host for serve (default: 0.0.0.0)
   --token <token>        Bearer token for server/daemon auth
-  --server <url>         Daemon server URL (default: http://127.0.0.1:6130)
+  --server <url>         Daemon server URL (default: http://127.0.0.1:6120)
   --output json|table    Output format for supported read commands
   --full-id              Show full IDs in supported table output
   --attachment <path>    Attach a local file to issue create/comment add (repeatable)
