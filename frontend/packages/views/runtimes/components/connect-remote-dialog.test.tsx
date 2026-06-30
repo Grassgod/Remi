@@ -80,7 +80,7 @@ describe("ConnectRemoteDialog", () => {
         "multiremi setup --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
       ),
     );
-    expect(baseElement).toHaveTextContent("multiremi daemon start");
+    expect(baseElement).toHaveTextContent("MULTIREMI_BASE_URL=http://localhost:3000");
   });
 
   it("uses self-host daemon URLs from runtime config", async () => {
@@ -105,13 +105,13 @@ describe("ConnectRemoteDialog", () => {
     expect(setupCode).toHaveClass(...ligatureClasses);
   });
 
-  it("disables font ligatures in fallback token command code", () => {
+  it("disables font ligatures in self-host install command code", () => {
     const { baseElement } = renderDialog();
 
-    const tokenCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("multiremi login --token"),
+    const installCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
+      node.textContent?.includes("MULTIREMI_BASE_URL"),
     );
 
-    expect(tokenCode).toHaveClass(...ligatureClasses);
+    expect(installCode).toHaveClass(...ligatureClasses);
   });
 });

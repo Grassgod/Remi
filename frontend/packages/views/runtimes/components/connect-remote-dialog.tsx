@@ -48,9 +48,9 @@ function daemonCommands(
 
   return {
     setupCmd: `${setupBase} --token ${setupToken} --start`,
-    tokenCmd: `${setupBase}
-multiremi login --token ${setupToken}
-multiremi daemon start`,
+    // Install from this server instead of GitHub (for machines that can't reach
+    // GitHub's release CDN). install-remi.sh honors MULTIREMI_BASE_URL.
+    installCmd: `MULTIREMI_BASE_URL=${normalizedServerUrl} bash -c 'curl -fsSL ${normalizedServerUrl}/api/remi/releases/latest/install-remi.sh | bash'`,
   };
 }
 
@@ -209,7 +209,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
       cancelled = true;
     };
   }, []);
-  const { setupCmd, tokenCmd } = daemonCommands(
+  const { setupCmd, installCmd } = daemonCommands(
     daemonServerUrl || browserOrigin,
     wsId,
     setupToken,
@@ -248,7 +248,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
 
           <LiveListening />
 
-          <TroubleshootingDetails tokenCmd={tokenCmd} />
+          <TroubleshootingDetails installCmd={installCmd} setupCmd={setupCmd} />
         </div>
       </div>
 
@@ -261,7 +261,13 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   );
 }
 
-function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
+function TroubleshootingDetails({
+  installCmd,
+  setupCmd,
+}: {
+  installCmd: string;
+  setupCmd: string;
+}) {
   const { t } = useT("runtimes");
   return (
     <details className="group rounded-lg border border-dashed">
@@ -275,18 +281,17 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
       <div className="space-y-2 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
         <p>{t(($) => $.connect.trouble_intro)}</p>
         <CommandStep
-          n={2}
-          label={t(($) => $.connect.step2_label)}
-          cmd={tokenCmd}
+          n={1}
+          label={t(($) => $.connect.step1_label)}
+          cmd={installCmd}
           copyAria={t(($) => $.connect.copy_aria)}
         />
-        <p>
-          {t(($) => $.connect.trouble_token_hint_prefix)}
-          <span className="font-medium text-foreground">
-            {t(($) => $.connect.trouble_token_hint_destination)}
-          </span>
-          {t(($) => $.connect.trouble_token_hint_suffix)}
-        </p>
+        <CommandStep
+          n={2}
+          label={t(($) => $.connect.step2_label)}
+          cmd={setupCmd}
+          copyAria={t(($) => $.connect.copy_aria)}
+        />
         <ul className="space-y-1">
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>
@@ -298,7 +303,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"remi daemon status"}
+              {"multiremi daemon status"}
             </code>
           </li>
           <li className="flex items-center gap-1.5">
@@ -311,7 +316,7 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"remi daemon logs -f"}
+              {"multiremi daemon logs -f"}
             </code>
           </li>
         </ul>
