@@ -26,6 +26,8 @@ export interface AgentResponse {
 
 export interface SendOptions {
   systemPrompt?: string | null;
+  /** Assembled memory/context block (passed alongside the system prompt). */
+  context?: string | null;
   cwd?: string | null;
   sessionId?: string | null;
   chatId?: string | null;

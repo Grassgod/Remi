@@ -42,6 +42,12 @@ export interface RecoveryConfig {
   retryOnStaleSession: boolean;
   retryOnPromptTooLong: boolean;
   fallbackAgentType?: string | null;
+  /**
+   * Called when a recovery reset happens, before the provider session is
+   * cleared — lets the caller drop any external session mapping it owns (e.g.
+   * Remi's session DB). The provider's own session is cleared regardless.
+   */
+  onSessionReset?: () => void | Promise<void>;
 }
 
 // ── Runtime contexts ─────────────────────────────────────
@@ -88,4 +94,6 @@ export interface AgentRunResult {
   sessionId: string | null;
   text: string;
   thinking: string;
+  /** Set when an auto-recovery retry happened (for tracing/observability). */
+  recovered?: "prompt_too_long" | "stale_session" | null;
 }

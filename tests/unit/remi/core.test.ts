@@ -511,3 +511,90 @@ describe("RemiCore", () => {
     expect(response.text).toContain("当前");
   });
 });
+
+// Characterization tests for the streaming auto-recovery path (prompt-too-long /
+// stale-session). They lock the observable behavior so the Stage-2 refactor
+// (routing the Feishu path through AgentSession) can be verified as a no-op.
+describe("RemiCore auto-recovery", () => {
+  function textsOf(e: ProviderEvent): string[] {
+    if (e.sessionUpdate === "agent_message_chunk" || e.sessionUpdate === "agent_thought_chunk") {
+      const blocks = Array.isArray(e.content) ? e.content : [e.content];
+      return blocks.filter((b) => b.type === "text").map((b) => (b as { text: string }).text);
+    }
+    return [];
+  }
+
+  async function collectStream(remi: Remi, msg: IncomingMessage): Promise<string[]> {
+    const texts: string[] = [];
+    await remi.handleMessageStream(msg, async (stream) => {
+      for await (const e of stream) texts.push(...textsOf(e));
+    });
+    return texts;
+  }
+
+  class PromptTooLongProvider implements Provider {
+    calls = 0;
+    cleared: string[] = [];
+    private _last: AgentResponse | null = null;
+    get name(): string { return "acp:claude"; }
+    async send(): Promise<AgentResponse> { return createAgentResponse({ text: "x" }); }
+    async *sendStream(): AsyncGenerator<ProviderEvent> {
+      this.calls += 1;
+      const text = this.calls === 1 ? "prompt is too long, reset please" : "recovered answer";
+      this._last = createAgentResponse({ text, sessionId: this.calls === 1 ? null : "sess-new" });
+      yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text }] };
+    }
+    getLastResponse(): AgentResponse | null { return this._last; }
+    async clearSession(key?: string): Promise<void> { this.cleared.push(key ?? ""); }
+    async healthCheck(): Promise<boolean> { return true; }
+  }
+
+  class StaleProvider implements Provider {
+    calls = 0;
+    cleared: string[] = [];
+    private _last: AgentResponse | null = null;
+    get name(): string { return "acp:claude"; }
+    async send(): Promise<AgentResponse> { return createAgentResponse({ text: "x" }); }
+    async *sendStream(): AsyncGenerator<ProviderEvent> {
+      this.calls += 1;
+      if (this.calls === 1) {
+        this._last = createAgentResponse({ text: "first", sessionId: "sess-1", inputTokens: 5, durationMs: 10 });
+        yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: "first" }] };
+      } else if (this.calls === 2) {
+        // Stale: existing session + zero tokens / zero duration.
+        this._last = createAgentResponse({ text: "stale", sessionId: "sess-1", inputTokens: 0, durationMs: 0 });
+        yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: "stale" }] };
+      } else {
+        this._last = createAgentResponse({ text: "fresh answer", sessionId: "sess-2", inputTokens: 3, durationMs: 8 });
+        yield { sessionUpdate: "agent_message_chunk" as const, content: [{ type: "text" as const, text: "fresh answer" }] };
+      }
+    }
+    getLastResponse(): AgentResponse | null { return this._last; }
+    async clearSession(key?: string): Promise<void> { this.cleared.push(key ?? ""); }
+    async healthCheck(): Promise<boolean> { return true; }
+  }
+
+  it("auto-resets and retries when the response is prompt-too-long", async () => {
+    const remi = new Remi(config);
+    const provider = new PromptTooLongProvider();
+    remi.addProvider(provider);
+    const texts = await collectStream(remi, { text: "hi", chatId: "ptl-1", sender: "u", connectorName: "cli" });
+    expect(provider.calls).toBe(2); // retried once
+    expect(provider.cleared.length).toBeGreaterThanOrEqual(1); // provider session cleared
+    expect(texts.some((t) => t.includes("自动重置"))).toBe(true); // recovery notice yielded
+    expect(texts.some((t) => t.includes("recovered answer"))).toBe(true); // retry output yielded
+  });
+
+  it("auto-resets and retries on a stale session, clearing the session DB", async () => {
+    const remi = new Remi(config);
+    const provider = new StaleProvider();
+    remi.addProvider(provider);
+    await collectStream(remi, { text: "first", chatId: "stale-1", sender: "u", connectorName: "cli" });
+    expect(sessDb.getSessionId("stale-1")).toBe("sess-1");
+    const texts = await collectStream(remi, { text: "second", chatId: "stale-1", sender: "u", connectorName: "cli" });
+    expect(provider.calls).toBe(3); // turn 2 (stale) + retry
+    expect(provider.cleared.length).toBeGreaterThanOrEqual(1);
+    expect(texts.some((t) => t.includes("会话已过期"))).toBe(true);
+    expect(sessDb.getSessionId("stale-1")).toBe("sess-2"); // session updated to the fresh one
+  });
+});

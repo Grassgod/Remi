@@ -67,11 +67,14 @@ export class AgentSession {
     }
 
     // Recovery
+    let recovered: AgentRunResult["recovered"] = null;
     if (config.recovery) {
       if (promptTooLong && config.recovery.retryOnPromptTooLong) {
+        recovered = "prompt_too_long";
         yield* this.retryAfterReset(prompt, sendOptions, "上下文过长，已自动重置会话。正在重新处理...\n\n");
         resultResponse = provider.getLastResponse?.() ?? null;
       } else if (staleSession && config.recovery.retryOnStaleSession) {
+        recovered = "stale_session";
         yield* this.retryAfterReset(prompt, sendOptions, "会话已过期，自动重置。正在重新处理...\n\n");
         resultResponse = provider.getLastResponse?.() ?? null;
       }
@@ -82,6 +85,7 @@ export class AgentSession {
       sessionId: resultResponse?.sessionId ?? null,
       text: resultResponse?.text ?? streamedText,
       thinking: resultResponse?.thinking ?? streamedThinking,
+      recovered,
     };
   }
 
@@ -89,6 +93,7 @@ export class AgentSession {
     const c = this.config;
     return {
       systemPrompt: c.systemPrompt,
+      context: c.context,
       chatId: c.chatId,
       sessionId: c.sessionId,
       cwd: c.cwd,
@@ -124,6 +129,8 @@ export class AgentSession {
     opts: SendOptions,
     message: string,
   ): AsyncGenerator<ProviderEvent> {
+    // Let the caller drop its own session mapping first (e.g. Remi's session DB).
+    await this.config.recovery?.onSessionReset?.();
     // Clear session on provider if supported
     if ("clearSession" in this.provider && typeof (this.provider as any).clearSession === "function") {
       await (this.provider as any).clearSession(opts.chatId);

@@ -25,6 +25,8 @@ import { createAgentResponse, type AgentResponse, type Provider, type ProviderEv
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
 import { AgentRuntime } from "../daemon/agent-runtime/runtime.js";
+import { AgentSession } from "../daemon/agent-runtime/session.js";
+import type { AgentRunResult } from "../daemon/agent-runtime/types.js";
 import { FeishuConnector } from "../connectors/feishu/index.js";
 import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
 
@@ -301,19 +303,6 @@ export class Remi {
     };
     const sessionConfig = this._runtime.assemble(runtimeCtx);
 
-    const streamOptions = {
-      systemPrompt: sessionConfig.systemPrompt,
-      context: sessionConfig.context,
-      chatId: sessionConfig.chatId,
-      sessionId: sessionConfig.sessionId,
-      cwd: sessionConfig.cwd,
-      media: sessionConfig.media,
-      allowedTools: sessionConfig.allowedTools,
-      addDirs: sessionConfig.addDirs,
-      permissionMode: sessionConfig.permissionMode,
-      traceId: sessionConfig.traceId,
-      signal: abortController.signal,
-    };
     const cwd = sessionConfig.cwd;
 
     // Provider selection: group config (DB) → session provider → default
@@ -333,17 +322,32 @@ export class Remi {
       "session.id": existingSessionId ?? "new",
     });
 
-    _log.debug("starting provider.sendStream iteration");
+    // Run the turn through the shared AgentSession — the same execution wrapper
+    // the multiremi worker uses — so stream iteration + auto-recovery
+    // (prompt-too-long / stale-session) live in one place. onSessionReset drops
+    // Remi's own session-DB mapping when AgentSession resets the provider session.
+    _log.debug("starting AgentSession.run iteration");
     const toolSpans = new Map<string, Span>(); // toolUseId → Span
-    let promptTooLong = false;
-    let staleSession = false;
-
     const toolCallMap = new Map<string, { name: string; toolUseId: string; input?: Record<string, unknown>; resultPreview?: string; durationMs?: number }>();
     let streamedText = "";
     let streamedThinking = "";
 
+    const session = new AgentSession(provider, {
+      ...sessionConfig,
+      signal: abortController.signal,
+      recovery: {
+        retryOnPromptTooLong: true,
+        retryOnStaleSession: true,
+        onSessionReset: () => { sessDb.clearSessionId(sessionKey); },
+      },
+    });
+
+    let runResult: AgentRunResult | null = null;
     try {
-      for await (const event of provider.sendStream(msg.text, streamOptions)) {
+      const iter = session.run(msg.text);
+      let step = await iter.next();
+      while (!step.done) {
+        const event = step.value;
         _log.debug(`received event: ${event.sessionUpdate}`);
         if (event.sessionUpdate === "agent_message_chunk") {
           const blocks = Array.isArray(event.content) ? event.content : [event.content];
@@ -385,80 +389,31 @@ export class Remi {
             }
           }
         }
+        step = await iter.next();
       }
+      runResult = step.value;
     } catch (streamErr) {
+      // Preserve prior behavior: an unrecoverable stream error degrades
+      // gracefully (use whatever the provider already produced) rather than
+      // aborting the turn.
       _log.error(`Stream error: ${streamErr instanceof Error ? streamErr.message : String(streamErr)}`);
-      const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
-      if (/prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(errText)) {
-        promptTooLong = true;
-      } else if (existingSessionId && /no conversation found/i.test(errText)) {
-        staleSession = true;
-      }
     }
 
-    // Get response from provider after stream ends
-    resultResponse = provider.getLastResponse?.() ?? null;
-    if (!resultResponse && streamedText) {
-      resultResponse = createAgentResponse({ text: streamedText, thinking: streamedThinking || null });
-    }
-    // Detect prompt-too-long from response text
-    if (!promptTooLong && resultResponse && /prompt.*(too long|too_long)|context.*(too long|exceed)/i.test(resultResponse.text)) {
-      promptTooLong = true;
-    }
-    if (!staleSession && existingSessionId && resultResponse && resultResponse.inputTokens === 0 && resultResponse.durationMs === 0) {
-      staleSession = true;
-    }
+    resultResponse = runResult?.response
+      ?? provider.getLastResponse?.()
+      ?? (streamedText ? createAgentResponse({ text: streamedText, thinking: streamedThinking || null }) : null);
 
     // End any unclosed tool spans
     for (const [, s] of toolSpans) s.end();
     toolSpans.clear();
 
-    // ── Auto-recovery: prompt too long → reset session + retry ──
-    if (promptTooLong) {
-      _log.warn(`Prompt too long for "${sessionKey}", auto-resetting session and retrying`);
+    if (runResult?.recovered === "prompt_too_long") {
+      _log.warn(`Prompt too long for "${sessionKey}", auto-reset and retried`);
       providerSpan?.endWithError("prompt_too_long");
-
-      // Clear session mapping (keep display_name)
-      sessDb.clearSessionId(sessionKey);
-
-      // Kill the old process so a fresh one is spawned on retry
-      if ("clearSession" in provider && typeof provider.clearSession === "function") {
-        await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
-      }
-
-      // Notify user via card content
-      yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "上下文过长，已自动重置会话。正在重新处理...\n\n" }] } as ProviderEvent;
-
-      const retryOptions = { ...streamOptions, sessionId: undefined };
-      resultResponse = null;
-      for await (const event of provider.sendStream(msg.text, retryOptions)) {
-        yield event;
-      }
-      resultResponse = provider.getLastResponse?.() ?? null;
-    }
-
-    // ── Auto-recovery: stale session → clear session + retry ──
-    if (staleSession) {
-      _log.warn(`Stale session for "${sessionKey}" (sessionId=${existingSessionId}), auto-resetting and retrying`);
+    } else if (runResult?.recovered === "stale_session") {
+      _log.warn(`Stale session for "${sessionKey}", auto-reset and retried`);
       providerSpan?.endWithError("stale_session");
-
-      sessDb.clearSessionId(sessionKey);
-
-      if ("clearSession" in provider && typeof provider.clearSession === "function") {
-        await (provider as Provider & { clearSession: (k?: string) => Promise<void> }).clearSession(sessionKey);
-      }
-
-      yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "会话已过期，自动重置。正在重新处理...\n\n" }] } as ProviderEvent;
-
-      const retryOptions = { ...streamOptions, sessionId: undefined };
-      resultResponse = null;
-      for await (const event of provider.sendStream(msg.text, retryOptions)) {
-        yield event;
-      }
-      resultResponse = provider.getLastResponse?.() ?? null;
-    }
-
-    if (!promptTooLong && !staleSession) {
+    } else {
       // Attach result attributes to provider span
       if (resultResponse && providerSpan) {
         providerSpan.setAttributes({
