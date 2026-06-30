@@ -182,9 +182,10 @@ export function resolveAcpHealthCheckCommand(
   if (agentType === "claude" && command.endsWith(REMI_CLAUDE_AGENT_ACP_WRAPPER)) {
     return { command, args: ["--verify-patch"] };
   }
-  if (agentType === "codex") {
-    return { command, args: ["--help"] };
-  }
+  // `--version` is a cheap liveness probe across all ACP agents. (codex-acp's
+  // `--help` instead boots the full app-server — plugin marketplace sync, the
+  // works — which can outrun the health-check timeout on slow networks and
+  // silently drop a perfectly healthy codex from daemon registration.)
   return { command, args: ["--version"] };
 }
 
@@ -336,18 +337,38 @@ export class AcpProvider implements Provider {
   }
 
   async healthCheck(): Promise<boolean> {
-    try {
-      const { execFileSync } = await import("node:child_process");
-      const check = resolveAcpHealthCheckCommand(
-        this._adapter.agentType,
-        this._options.executable,
-        this._adapter.defaultExecutable(),
-      );
-      execFileSync(check.command, check.args, { timeout: 5000, stdio: "pipe" });
-      return true;
-    } catch {
-      return false;
-    }
+    const check = resolveAcpHealthCheckCommand(
+      this._adapter.agentType,
+      this._options.executable,
+      this._adapter.defaultExecutable(),
+    );
+    const { spawn } = await import("node:child_process");
+    // Async spawn, NOT execFileSync: Bun's spawnSync hangs forever spawning
+    // some node ACP scripts, which silently dropped a healthy provider from
+    // daemon registration. stdin/stdout/stderr are /dev/null so the child can't
+    // block on them; we only need the exit code. On failure we log the reason —
+    // a swallowed health check is how a healthy provider silently vanishes.
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const child = spawn(check.command, check.args, {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      const finish = (ok: boolean, reason?: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+        if (!ok && reason) {
+          console.error(`[acp] ${this._adapter.agentType} health check failed: ${reason}`);
+        }
+        resolve(ok);
+      };
+      const timer = setTimeout(() => finish(false, "timed out"), 15000);
+      child.on("error", (err) => finish(false, err.message));
+      child.on("exit", (code) => finish(code === 0, code === 0 ? undefined : `exit ${code}`));
+    });
   }
 
   // ── Session pool management ────────────────────────────────────
