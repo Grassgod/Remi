@@ -25,7 +25,7 @@ interface RunMultiremiOptions {
 }
 
 type CliOptionValue = string | boolean | string[];
-type CliOptions = Record<string, CliOptionValue>;
+export type CliOptions = Record<string, CliOptionValue>;
 
 const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex"] as const;
 type SupportedDaemonProvider = typeof SUPPORTED_DAEMON_PROVIDERS[number];
@@ -251,7 +251,13 @@ async function daemon(options: CliOptions, positional: string[], programName: st
   }
 }
 
-async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
+/**
+ * Build (but do not start) the worker daemon(s) for the multiremi-server channel
+ * from CLI options + saved config. Returns one MultiremiDaemon per healthy
+ * provider, or `[]` if no provider is healthy (the caller decides whether that
+ * is an error — e.g. the unified agent tolerates it when Feishu is configured).
+ */
+export async function resolveWorkerDaemons(options: CliOptions): Promise<MultiremiDaemon[]> {
   const config = loadMultiremiConfig();
   const serverUrl = stringOpt(options.server, undefined)
     ?? stringOpt(options["server-url"], undefined)
@@ -266,9 +272,7 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
   const requestedProvider: SupportedDaemonProvider | null =
     explicitProvider && isSupportedDaemonProvider(explicitProvider) ? explicitProvider : null;
   const providers = await resolveHealthyDaemonProviders(requestedProvider);
-  if (providers.length === 0) {
-    throw new Error(`No healthy Multiremi runtime provider found. Install and authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
-  }
+  if (providers.length === 0) return [];
 
   const runtimeId = stringOpt(options.runtimeId ?? options["runtime-id"], process.env.MULTIREMI_RUNTIME_ID)
     ?? config.runtime_id;
@@ -305,6 +309,14 @@ async function runDaemonForeground(options: CliOptions, programName: string): Pr
       once: Boolean(options.once),
       onRestartRequested: stopAllForRestart,
     }));
+  }
+  return daemons;
+}
+
+async function runDaemonForeground(options: CliOptions, programName: string): Promise<void> {
+  const daemons = await resolveWorkerDaemons(options);
+  if (daemons.length === 0) {
+    throw new Error(`No healthy Multiremi runtime provider found. Install and authenticate one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
   }
   process.on("SIGINT", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
   process.on("SIGTERM", () => daemons.forEach((runtimeDaemon) => runtimeDaemon.stop()));
