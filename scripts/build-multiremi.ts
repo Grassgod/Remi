@@ -28,7 +28,7 @@ export const MULTIREMI_RELEASE_TARGETS: MultiremiReleaseTarget[] = [
   { os: "darwin", arch: "arm64", bunTarget: "bun-darwin-arm64" },
 ];
 
-export const MULTIREMI_ARCHIVE_ENTRIES = ["multiremi", "remi-claude-agent-acp"] as const;
+export const MULTIREMI_ARCHIVE_ENTRIES = ["remi", "remi-claude-agent-acp"] as const;
 
 export function normalizeMultiremiTagVersion(rawVersion: string): string {
   return rawVersion.startsWith("v") ? rawVersion : `v${rawVersion}`;
@@ -39,7 +39,7 @@ export function multiremiAssetVersion(rawVersion: string): string {
 }
 
 export function multiremiArchiveName(rawVersion: string, target: Pick<MultiremiReleaseTarget, "os" | "arch">): string {
-  return `multiremi-${multiremiAssetVersion(rawVersion)}-${target.os}-${target.arch}.tar.gz`;
+  return `remi-${multiremiAssetVersion(rawVersion)}-${target.os}-${target.arch}.tar.gz`;
 }
 
 export function createMultiremiArchive(targetDir: string, archive: string, stdio: "inherit" | "pipe" = "inherit"): void {
@@ -57,15 +57,15 @@ export function buildMultiremiReleaseArchives(): void {
 
   for (const target of MULTIREMI_RELEASE_TARGETS) {
     const targetDir = join(BUILD, `${target.os}-${target.arch}`);
-    const bin = join(targetDir, "multiremi");
+    const bin = join(targetDir, "remi");
     mkdirSync(targetDir, { recursive: true });
 
-    console.log(`Building multiremi ${tagVersion} for ${target.os}-${target.arch}`);
+    console.log(`Building remi agent ${tagVersion} for ${target.os}-${target.arch}`);
     execFileSync(
       "bun",
       [
         "build",
-        "src/multiremi-main.ts",
+        "src/main.ts",
         "--compile",
         "--minify",
         "--target",

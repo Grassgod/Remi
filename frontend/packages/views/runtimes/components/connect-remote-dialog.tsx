@@ -44,7 +44,7 @@ function daemonCommands(
   const normalizedWorkspaceId = workspaceId?.trim() || WORKSPACE_ID_PLACEHOLDER;
   const setupToken = token?.trim() || "<YOUR_TOKEN>";
   const setupBase =
-    `multiremi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
+    `remi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
 
   return {
     setupCmd: `${setupBase} --token ${setupToken} --start`,
@@ -62,7 +62,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const navigation = useNavigation();
   const newRuntimeIdRef = useRef<string | null>(null);
 
-  // `multiremi setup ... --start` stores config + token and starts the daemon.
+  // `remi setup ... --start` stores config + token and starts the agent.
   // The dialog listens for the resulting `daemon:register` WS event.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
@@ -303,7 +303,7 @@ function TroubleshootingDetails({
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multiremi daemon status"}
+              {"remi status"}
             </code>
           </li>
           <li className="flex items-center gap-1.5">
@@ -316,7 +316,7 @@ function TroubleshootingDetails({
                 CODE_LIGATURE_CLASS,
               )}
             >
-              {"multiremi daemon logs -f"}
+              {"remi logs -f"}
             </code>
           </li>
         </ul>

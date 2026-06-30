@@ -23,7 +23,7 @@ describe("Multiremi release artifacts", () => {
     expect(normalizeMultiremiTagVersion("0.2.0-test")).toBe("v0.2.0-test");
     expect(multiremiAssetVersion("v0.2.0-test")).toBe("0.2.0-test");
     expect(multiremiArchiveName("v0.2.0-test", { os: "linux", arch: "x64" })).toBe(
-      "multiremi-0.2.0-test-linux-x64.tar.gz",
+      "remi-0.2.0-test-linux-x64.tar.gz",
     );
   });
 

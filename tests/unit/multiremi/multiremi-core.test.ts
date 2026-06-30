@@ -2101,7 +2101,7 @@ describe("Bun Multiremi core store", () => {
     const prompt = buildTaskPrompt(taskWithContext);
     expect(prompt).toContain("## Project Context");
     expect(prompt).toContain("## Available Repositories");
-    expect(prompt).toContain("multiremi repo checkout <url>");
+    expect(prompt).toContain("remi repo checkout <url>");
     expect(prompt).toContain("https://github.com/example/repo-updated");
     expect(prompt).toContain("Local directory: /tmp/multiremi-local-project (local clone)");
     expect(prompt).not.toContain("https://github.com/example/workspace");
@@ -2237,8 +2237,8 @@ describe("Bun Multiremi core store", () => {
     expect(prompt).toContain("> Please inspect `$PATH` handling.");
     expect(prompt).toContain("> Second line");
     expect(prompt).toContain("do not reply");
-    expect(prompt).toContain(`multiremi issue comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
-    expect(prompt).toContain(`multiremi issue comment add ${issue.id} --parent ${comment.id} --content-stdin`);
+    expect(prompt).toContain(`remi issue comment list ${issue.id} --thread ${root.id} --since 2025-01-01T00:00:00.000Z --output json`);
+    expect(prompt).toContain(`remi issue comment add ${issue.id} --parent ${comment.id} --content-stdin`);
     expect(prompt).toContain("<<'COMMENT'");
     expect(prompt).not.toContain("multimira");
   });

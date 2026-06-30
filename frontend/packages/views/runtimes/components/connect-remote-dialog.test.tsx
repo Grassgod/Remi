@@ -77,7 +77,7 @@ describe("ConnectRemoteDialog", () => {
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "multiremi setup --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
+        "remi setup --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
       ),
     );
     expect(baseElement).toHaveTextContent("MULTIREMI_BASE_URL=http://localhost:3000");
@@ -90,7 +90,7 @@ describe("ConnectRemoteDialog", () => {
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "multiremi setup --server-url https://api.example.com --workspace-id ws-test --token mul_testtoken --start",
+        "remi setup --server-url https://api.example.com --workspace-id ws-test --token mul_testtoken --start",
       ),
     );
   });

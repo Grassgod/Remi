@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Multiremi runtime daemon installer.
+# Remi agent installer.
 #
 # Usage:
 #   curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash
@@ -9,7 +9,7 @@ set -euo pipefail
 # Environment:
 #   MULTIREMI_VERSION  Specific version to install, with or without leading "v".
 #   MULTIREMI_BASE_URL Download from a self-hosted Remi server instead of GitHub.
-#   MULTIREMI_BIN_DIR  Directory for the multiremi binary. Defaults to
+#   MULTIREMI_BIN_DIR  Directory for the remi binary. Defaults to
 #                      /usr/local/bin, falling back to ~/.local/bin when sudo
 #                      is unavailable.
 
@@ -65,33 +65,33 @@ install_binary() {
   fi
   version="${tag#v}"
   if [ -n "${MULTIREMI_BASE_URL:-}" ]; then
-    url="${MULTIREMI_BASE_URL%/}/api/remi/releases/download/${tag}/multiremi-${version}-${OS}-${ARCH}.tar.gz"
+    url="${MULTIREMI_BASE_URL%/}/api/remi/releases/download/${tag}/remi-${version}-${OS}-${ARCH}.tar.gz"
   else
-    url="https://github.com/${REPO}/releases/download/${tag}/multiremi-${version}-${OS}-${ARCH}.tar.gz"
+    url="https://github.com/${REPO}/releases/download/${tag}/remi-${version}-${OS}-${ARCH}.tar.gz"
   fi
   tmp="$(mktemp -d)"
 
   info "Downloading ${url}"
-  curl -fsSL "$url" -o "$tmp/multiremi.tar.gz"
-  tar -xzf "$tmp/multiremi.tar.gz" -C "$tmp"
-  chmod +x "$tmp/multiremi"
+  curl -fsSL "$url" -o "$tmp/remi.tar.gz"
+  tar -xzf "$tmp/remi.tar.gz" -C "$tmp"
+  chmod +x "$tmp/remi"
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     chmod +x "$tmp/remi-claude-agent-acp"
   fi
 
-  install_file "$tmp/multiremi" "multiremi"
+  install_file "$tmp/remi" "remi"
   if [ -f "$tmp/remi-claude-agent-acp" ]; then
     install_file "$tmp/remi-claude-agent-acp" "remi-claude-agent-acp"
   fi
   rm -rf "$tmp"
-  ok "Installed multiremi to ${BIN_DIR}/multiremi"
+  ok "Installed remi to ${BIN_DIR}/remi"
   if command -v remi-claude-agent-acp >/dev/null 2>&1 || [ -x "${BIN_DIR}/remi-claude-agent-acp" ]; then
     ok "Installed Remi Claude ACP wrapper to ${BIN_DIR}/remi-claude-agent-acp"
   fi
 
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
-    *) printf "Note: add %s to PATH if your shell cannot find multiremi.\n" "$BIN_DIR" ;;
+    *) printf "Note: add %s to PATH if your shell cannot find remi.\n" "$BIN_DIR" ;;
   esac
 }
 
@@ -114,8 +114,8 @@ detect_platform
 install_binary
 
 printf "\nNext step:\n"
-printf "  multiremi setup --server <SERVER_URL> --workspace <WORKSPACE_ID> --token <YOUR_TOKEN> --start\n"
-printf "\nDaemon controls:\n"
-printf "  multiremi daemon status\n"
-printf "  multiremi daemon logs --follow\n"
-printf "  multiremi daemon stop\n"
+printf "  remi setup --server <SERVER_URL> --workspace <WORKSPACE_ID> --token <YOUR_TOKEN> --start\n"
+printf "\nAgent controls:\n"
+printf "  remi status\n"
+printf "  remi logs --follow\n"
+printf "  remi stop\n"

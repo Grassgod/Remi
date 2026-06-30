@@ -44,7 +44,7 @@ export function buildTaskPrompt(task: AgentTask): string {
   if (task.repos.length) {
     sections.push("");
     sections.push("## Available Repositories");
-    sections.push("Use `multiremi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
+    sections.push("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
     for (const repo of task.repos) {
       sections.push(repo.description ? `- ${repo.url} - ${repo.description}` : `- ${repo.url}`);
     }
@@ -186,12 +186,12 @@ function buildCommentReadHint(
   const threadId = triggerThreadId || triggerCommentId;
   if (!issueId || !threadId) return "";
   if (newCommentCount > 0 && newCommentsSince) {
-    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`multiremi issue comment list ${issueId} --thread ${threadId} --since ${newCommentsSince} --output json\` (swap \`--since\` for \`--tail 30\` if you need the full thread). Only if you need context from other threads, catch up issue-wide: \`multiremi issue comment list ${issueId} --since ${newCommentsSince} --output json\`.`;
+    return `${newCommentCount} new comment(s) on this issue since your last run. Start with the thread your triggering comment is in: \`remi issue comment list ${issueId} --thread ${threadId} --since ${newCommentsSince} --output json\` (swap \`--since\` for \`--tail 30\` if you need the full thread). Only if you need context from other threads, catch up issue-wide: \`remi issue comment list ${issueId} --since ${newCommentsSince} --output json\`.`;
   }
   if (hasPriorSession) {
-    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`multiremi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`.`;
+    return `You are resuming a prior session, and the triggering comment is already included above. Use active thread anchor \`${threadId}\` and triggering comment ID \`${triggerCommentId}\`. If your reply depends on thread context, refresh the triggering conversation first: \`remi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`.`;
   }
-  return `Read the triggering conversation first: \`multiremi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`multiremi issue comment list ${issueId} --recent 20 --output json\`.`;
+  return `Read the triggering conversation first: \`remi issue comment list ${issueId} --thread ${threadId} --tail 30 --output json\`. Need cross-thread background? \`remi issue comment list ${issueId} --recent 20 --output json\`.`;
 }
 
 function buildCommentReplyInstructions(issueId: string, triggerCommentId: string): string {
@@ -200,7 +200,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     return [
       "If you decide to reply, post it as a comment. Always use the trigger comment ID below, and do not reuse --parent values from previous turns.",
       "",
-      `On Windows, write the reply body to a UTF-8 file, then run: \`multiremi issue comment add ${issueId} --parent ${triggerCommentId} --content-file ./reply.md\`.`,
+      `On Windows, write the reply body to a UTF-8 file, then run: \`remi issue comment add ${issueId} --parent ${triggerCommentId} --content-file ./reply.md\`.`,
       "Do not pipe via --content-stdin on Windows, and do not use inline --content.",
     ].join("\n");
   }
@@ -209,7 +209,7 @@ function buildCommentReplyInstructions(issueId: string, triggerCommentId: string
     "",
     "Use --content-stdin with a quoted HEREDOC so the shell cannot rewrite backticks, $(), variables, quotes, or formatting:",
     "",
-    `    cat <<'COMMENT' | multiremi issue comment add ${issueId} --parent ${triggerCommentId} --content-stdin`,
+    `    cat <<'COMMENT' | remi issue comment add ${issueId} --parent ${triggerCommentId} --content-stdin`,
     "    First paragraph.",
     "",
     "    Second paragraph.",
