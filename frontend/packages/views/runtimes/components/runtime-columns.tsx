@@ -61,7 +61,7 @@ export interface RuntimeRow {
 // min-width, giving each column a real floor below which the container
 // scrolls horizontally instead of shrinking further.
 const COL_WIDTHS = {
-  runtime: 340,
+  runtime: 200,
   health: 150,
   owner: 72,
   agents: 92,
@@ -98,7 +98,6 @@ export function createRuntimeColumns({
       id: "runtime",
       header: () => t(($) => $.list.col_runtime),
       size: COL_WIDTHS.runtime,
-      meta: { grow: true },
       cell: ({ row }) => <RuntimeNameCell runtime={row.original.runtime} />,
     },
     {
@@ -192,6 +191,10 @@ export function createRuntimeColumns({
       id: "actions",
       header: () => null,
       size: COL_WIDTHS.actions,
+      // Absorb the table's leftover width here (the kebab stays right-aligned)
+      // so the data columns — especially the runtime name — stay tight-left
+      // instead of one column ballooning.
+      meta: { grow: true },
       enableResizing: false,
       cell: ({ row }) => (
         <div
