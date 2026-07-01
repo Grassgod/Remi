@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multiremi/core/auth";
@@ -26,6 +26,10 @@ function CallbackContent() {
   const qc = useQueryClient();
   const loginWithLark = useAuthStore((s) => s.loginWithLark);
   const [error, setError] = useState("");
+  // An OAuth code is single-use. Guard against the effect firing twice (re-render
+  // / remount) which would re-POST the same code and fail "code already used",
+  // masking a login that actually succeeded on the first submit.
+  const submittedRef = useRef(false);
 
   useEffect(() => {
     const code = searchParams.get("code");
@@ -39,6 +43,9 @@ function CallbackContent() {
       setError(errorParam === "access_denied" ? "Access denied" : errorParam);
       return;
     }
+
+    if (submittedRef.current) return;
+    submittedRef.current = true;
 
     const state = searchParams.get("state") || "";
     const nextPart = state.split(",").find((p) => p.startsWith("next:"));
