@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Loader2,
   CheckCircle2,
@@ -69,7 +70,11 @@ interface UpdateFlow {
 
 // One update lifecycle (initiate → poll → status), shared by the CLI / Agent /
 // ACP rows so the poll + status machinery isn't triplicated.
-function useUpdateFlow(runtimeId: string, completedFallback: string): UpdateFlow {
+function useUpdateFlow(
+  runtimeId: string,
+  completedFallback: string,
+  onRefresh: () => void,
+): UpdateFlow {
   const { t } = useT("runtimes");
   const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
   const [error, setError] = useState("");
@@ -100,9 +105,16 @@ function useUpdateFlow(runtimeId: string, completedFallback: string): UpdateFlow
             if (result.status === "completed") {
               setOutput(result.output ?? completedFallback);
               cleanup();
-              // Clear after a few seconds so the row refreshes to the new
-              // version once the runtime re-registers.
-              setTimeout(() => setStatus(null), 5000);
+              // The daemon restarts + re-registers after the update, so the new
+              // version lands a few seconds later. Refetch the runtime now and
+              // again over the next ~20s to catch it without a manual reload.
+              onRefresh();
+              [5000, 12000, 20000].forEach((ms) =>
+                setTimeout(onRefresh, ms),
+              );
+              // Clear the completed pill after the row has had a chance to
+              // refresh to the new version.
+              setTimeout(() => setStatus(null), 6000);
             } else if (
               result.status === "failed" ||
               result.status === "timeout"
@@ -119,7 +131,7 @@ function useUpdateFlow(runtimeId: string, completedFallback: string): UpdateFlow
         setError(t(($) => $.update.initiate_failed));
       }
     },
-    [runtimeId, completedFallback, cleanup, t],
+    [runtimeId, completedFallback, cleanup, t, onRefresh],
   );
 
   const active = status === "pending" || status === "running";
@@ -224,12 +236,19 @@ export function UpdateSection({
   launchedBy,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
+  const qc = useQueryClient();
   const isManaged = launchedBy === "desktop";
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
-  const cliFlow = useUpdateFlow(runtimeId, "CLI updated");
-  const agentFlow = useUpdateFlow(runtimeId, "Agent updated");
-  const acpFlow = useUpdateFlow(runtimeId, "ACP bridge updated");
+  // Refetch the runtime list (which feeds this detail view) so the version
+  // number refreshes once the daemon re-registers after an update.
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["runtimes"] });
+  }, [qc]);
+
+  const cliFlow = useUpdateFlow(runtimeId, "CLI updated", refresh);
+  const agentFlow = useUpdateFlow(runtimeId, "Agent updated", refresh);
+  const acpFlow = useUpdateFlow(runtimeId, "ACP bridge updated", refresh);
 
   // Fetch latest CLI version on mount (only the CLI row gates its button on it).
   useEffect(() => {
