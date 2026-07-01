@@ -1,7 +1,10 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
+// CommonJS (not ESM): this file ships to /usr/local/bin without a `.mjs`
+// extension or a sibling package.json, so Node <20 would parse it as CJS and
+// reject `import`. Using require keeps it runnable on Node 18+ and newer alike.
+const { spawn, spawnSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
+const {
   cpSync,
   existsSync,
   mkdirSync,
@@ -11,10 +14,10 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-} from "node:fs";
-import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+} = require("node:fs");
+const { createRequire } = require("node:module");
+const { homedir } = require("node:os");
+const { basename, dirname, join, resolve } = require("node:path");
 
 const PACKAGE_NAMES = [
   "@zed-industries/claude-agent-acp",
@@ -206,7 +209,7 @@ function normalizePackageRoot(candidate) {
 }
 
 function resolvePackageWithRequire(packageNames) {
-  const require = createRequire(import.meta.url);
+  const require = createRequire(__filename);
   const names = Array.isArray(packageNames) ? packageNames : [packageNames];
   for (const packageName of names) {
     try {
