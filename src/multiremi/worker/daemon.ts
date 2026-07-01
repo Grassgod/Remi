@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { cpus, homedir } from "node:os";
+import { cpus, homedir, hostname } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
-import { AcpProvider, type AcpProviderOptions, bridgeVersion } from "@acp/index.js";
+import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "@acp/index.js";
 import type { PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
@@ -34,6 +34,7 @@ import type {
   MultiremiRepoData,
   MultiremiRuntimeLocalSkillSummary,
   MultiremiRuntimeModel,
+  MultiremiRuntimeUpdateScope,
   MultiremiSkillFile,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
@@ -157,7 +158,7 @@ export class MultiremiDaemon {
 
   constructor(options: MultiremiDaemonOptions) {
     const workspacesRoot = options.workspacesRoot ?? process.env.MULTIREMI_WORKSPACES_ROOT ?? join(homedir(), ".remi", "multiremi", "workspaces");
-    const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${Bun.env.USER ?? "local"}-bun-runtime`;
+    const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
     const runtimeId = options.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID ?? null;
     const daemonId = options.daemonId ?? process.env.MULTIREMI_DAEMON_ID ?? runtimeId ?? runtimeName;
     this.explicitRuntimeId = Boolean(runtimeId);
@@ -278,6 +279,7 @@ export class MultiremiDaemon {
           status: "online",
           maxConcurrency: this.options.maxConcurrency,
           acpVersion: this.acpVersion(),
+          agentVersion: this.agentVersion(),
         },
       });
       const runtime = response.runtimes.find((item) => (item.provider ?? item.type) === this.options.provider) ?? response.runtimes[0];
@@ -307,6 +309,12 @@ export class MultiremiDaemon {
     return provider === "claude" || provider === "codex" ? bridgeVersion(provider) : null;
   }
 
+  /** Version of the underlying agent CLI (`claude` / `codex`), or null. */
+  private agentVersion(): string | null {
+    const provider = this.options.provider;
+    return provider === "claude" || provider === "codex" ? agentCliVersion(provider) : null;
+  }
+
   private currentRuntimeRegistrationInput(): RegisterRuntimeInput {
     return {
       id: this.options.runtimeId ?? undefined,
@@ -320,6 +328,7 @@ export class MultiremiDaemon {
         version: multiremiVersion,
         cli_version: multiremiVersion,
         acp_version: this.acpVersion() ?? undefined,
+        agent_version: this.agentVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
       },
       deviceInfo: `${this.options.runtimeName} · ${multiremiVersion}`,
@@ -332,7 +341,7 @@ export class MultiremiDaemon {
       return !(await this.handleRuntimeGone(runtimeId, Date.now()));
     }
     if (ack.pending_update) {
-      await this.handleRuntimeUpdate(runtimeId, ack.pending_update.id, ack.pending_update.target_version);
+      await this.handleRuntimeUpdate(runtimeId, ack.pending_update.id, ack.pending_update.target_version, ack.pending_update.scope ?? "cli");
     }
     if (ack.pending_model_list) {
       await this.handleRuntimeModelList(runtimeId, ack.pending_model_list.id);
@@ -385,8 +394,15 @@ export class MultiremiDaemon {
     }
   }
 
-  private async handleRuntimeUpdate(runtimeId: string, requestId: string, targetVersion: string): Promise<void> {
-    if (this.options.launchedBy === "desktop") {
+  private async handleRuntimeUpdate(
+    runtimeId: string,
+    requestId: string,
+    targetVersion: string,
+    scope: MultiremiRuntimeUpdateScope = "cli",
+  ): Promise<void> {
+    // Only the CLI binary is owned by the Desktop app; the ACP bridges live in
+    // ~/.remi and are independent of how the daemon was launched.
+    if (scope === "cli" && this.options.launchedBy === "desktop") {
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "failed",
         error: "CLI is managed by Multiremi Desktop - update the Desktop app to upgrade the CLI",
@@ -402,10 +418,14 @@ export class MultiremiDaemon {
     }
     try {
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, { status: "running" });
-      const output = await this.updateRunner(targetVersion);
+      const output = scope === "acp"
+        ? this.reinstallAcpBridge()
+        : scope === "agent"
+          ? await this.updateAgentCli()
+          : await this.updateRunner(targetVersion);
       await this.client.reportRuntimeUpdateResult(runtimeId, requestId, {
         status: "completed",
-        output: output || `Updated to ${targetVersion}`,
+        output: output || (scope === "acp" ? "ACP bridge updated" : scope === "agent" ? "Agent updated" : `Updated to ${targetVersion}`),
       });
       this.requestRestartAfterUpdate();
     } catch (err) {
@@ -415,6 +435,34 @@ export class MultiremiDaemon {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /** Force-reinstall this runtime's ACP bridge to the latest version. */
+  private reinstallAcpBridge(): string {
+    const provider = this.options.provider;
+    if (provider !== "claude" && provider !== "codex") {
+      throw new Error(`ACP bridge update not supported for provider: ${provider}`);
+    }
+    return reinstallBridge(provider as ProvisionProvider, (m) => log.info(`[acp] ${m}`));
+  }
+
+  /** Update the underlying agent CLI (claude/codex) via its own `update` subcommand. */
+  private async updateAgentCli(): Promise<string> {
+    const provider = this.options.provider;
+    if (provider !== "claude" && provider !== "codex") {
+      throw new Error(`agent update not supported for provider: ${provider}`);
+    }
+    // Spawn with the daemon's own env: it was launched from a login shell, so
+    // PATH already resolves claude/codex (incl. Homebrew on macOS).
+    const proc = Bun.spawn([provider, "update"], { stdout: "pipe", stderr: "pipe", env: process.env });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      streamText(proc.stdout),
+      streamText(proc.stderr),
+      proc.exited,
+    ]);
+    const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+    if (exitCode !== 0) throw new Error(output || `${provider} update failed with exit code ${exitCode}`);
+    return output || `${provider} updated`;
   }
 
   private async handleRuntimeModelList(runtimeId: string, requestId: string): Promise<void> {

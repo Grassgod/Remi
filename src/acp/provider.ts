@@ -6,7 +6,7 @@
 
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import type {
   Provider,
   SendOptions,
@@ -125,6 +125,12 @@ export function resolveAcpExecutableForAgent(agentType: string, executable: stri
 
     const remiHome = process.env.REMI_HOME ?? join(homedir(), ".remi");
     const candidates = [
+      // Prefer the wrapper shipped next to the running remi binary — it always
+      // matches this build. Otherwise a stale copy earlier on PATH (e.g. an old
+      // /usr/local/bin/remi-claude-agent-acp) gets picked and can fail
+      // --verify-patch against a newer bridge. (For source runs execPath is the
+      // bun binary, so this candidate simply doesn't exist and we fall through.)
+      join(dirname(process.execPath), REMI_CLAUDE_AGENT_ACP_WRAPPER),
       join(remiHome, "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
       join(homedir(), ".remi", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),
       join(import.meta.dir, "..", "bin", REMI_CLAUDE_AGENT_ACP_WRAPPER),

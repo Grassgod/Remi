@@ -553,6 +553,7 @@ export class MultiremiStore {
         id TEXT PRIMARY KEY,
         runtime_id TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
+        scope TEXT NOT NULL DEFAULT 'cli',
         target_version TEXT NOT NULL,
         output TEXT,
         error TEXT,
@@ -1282,6 +1283,7 @@ export class MultiremiStore {
     this.addColumnIfMissing("multiremi_autopilot_triggers", "event_filters TEXT");
     this.addColumnIfMissing("multiremi_autopilot_triggers", "provider TEXT");
     this.addColumnIfMissing("multiremi_autopilot_triggers", "signing_secret_hint TEXT");
+    this.addColumnIfMissing("multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");
@@ -3054,7 +3056,9 @@ export class MultiremiStore {
     const runtime = this.getRuntime(runtimeId);
     if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
     if (runtime.status !== "online") throw new Error("runtime is offline");
-    const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim();
+    const scope = input.scope === "acp" || input.scope === "agent" ? input.scope : "cli";
+    // ACP/agent updates always pull @latest, so no target version is required.
+    const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim() || (scope !== "cli" ? "latest" : "");
     if (!targetVersion) throw new Error("target_version is required");
     const active = this.db.query(
       `SELECT id FROM multiremi_runtime_update_requests
@@ -3066,9 +3070,9 @@ export class MultiremiStore {
     const now = nowIso();
     this.db.run(
       `INSERT INTO multiremi_runtime_update_requests (
-        id, runtime_id, status, target_version, created_at, updated_at
-      ) VALUES (?, ?, 'pending', ?, ?, ?)`,
-      [id, runtimeId, targetVersion, now, now],
+        id, runtime_id, status, scope, target_version, created_at, updated_at
+      ) VALUES (?, ?, 'pending', ?, ?, ?, ?)`,
+      [id, runtimeId, scope, targetVersion, now, now],
     );
     return this.getRuntimeUpdateRequest(runtimeId, id)!;
   }
@@ -3543,6 +3547,7 @@ export class MultiremiStore {
       ack.pending_update = {
         id: pendingUpdate.id,
         target_version: pendingUpdate.targetVersion,
+        scope: pendingUpdate.scope,
       };
     }
     const pendingModelList = this.claimRuntimeModelListRequest(runtimeId);
@@ -9800,6 +9805,7 @@ function toRuntimeUpdateRequest(row: Row): MultiremiRuntimeUpdateRequest {
     id: String(row.id),
     runtimeId: String(row.runtime_id),
     status: normalizeRuntimeUpdateStatus(row.status),
+    scope: row.scope === "acp" || row.scope === "agent" ? row.scope : "cli",
     targetVersion,
     target_version: targetVersion,
     output: nullableString(row.output),

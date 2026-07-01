@@ -236,6 +236,7 @@ type DaemonRegisterRequestBody = {
     status?: string;
     maxConcurrency?: number;
     acpVersion?: string | null;
+    agentVersion?: string | null;
   }>;
 };
 
@@ -1649,7 +1650,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<CreateRuntimeUpdateInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const result = safeCreateRuntimeUpdateRequest(store, loaded.runtime.id, { target_version: body.target_version });
+    const result = safeCreateRuntimeUpdateRequest(store, loaded.runtime.id, { target_version: body.target_version, scope: body.scope });
     if ("apiError" in result) return c.json({ error: result.apiError }, result.statusCode);
     return c.json(runtimeUpdateRequestCompatibilityResponse(result));
   });
@@ -5316,6 +5317,7 @@ function runtimeUpdateRequestCompatibilityResponse(request: MultiremiRuntimeUpda
     id: request.id,
     runtime_id: request.runtimeId,
     status: request.status,
+    scope: request.scope,
     target_version: request.targetVersion,
     created_at: request.createdAt,
     updated_at: request.updatedAt,
@@ -7911,6 +7913,7 @@ function registerDaemonRuntimes(
           cli_version: cliVersion,
           launched_by: launchedBy,
           ...(typeof runtime.acpVersion === "string" && runtime.acpVersion ? { acp_version: runtime.acpVersion } : {}),
+          ...(typeof runtime.agentVersion === "string" && runtime.agentVersion ? { agent_version: runtime.agentVersion } : {}),
         },
         workspaceId,
         ownerId: auth.ownerId,
@@ -7942,6 +7945,22 @@ function registerDaemonRuntimes(
       cliVersion,
       launchedBy,
     }));
+  }
+  if (registered.length > 0) {
+    // Let browsers (e.g. the "Add computer" dialog) auto-detect a daemon coming
+    // online and jump to the new runtime. `runtime_id` targets the primary card.
+    store.emitWorkspaceEvent({
+      type: "daemon:register",
+      workspaceId,
+      actorType: "daemon",
+      actorId: daemonId,
+      payload: {
+        daemon_id: daemonId,
+        device_name: deviceName,
+        runtime_id: registered[0].id,
+        runtime_ids: registered.map((runtime) => runtime.id),
+      },
+    });
   }
   return {
     runtimes: registered,

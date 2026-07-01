@@ -6598,6 +6598,49 @@ describe("Bun Multiremi API", () => {
     expect(store.getRuntimeUpdateRequest("rt_update_flow", staleRunning.id)?.status).toBe("timeout");
   });
 
+  it("supports ACP-scope update requests (no target version, defaults to latest)", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_acp_update", name: "ACP update runtime", provider: "codex" });
+    const app = createMultiremiApp({ store });
+
+    // ACP-bridge updates always pull @latest, so no target_version is required.
+    const created = await app.request(`/api/runtimes/${runtime.id}/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "acp" }),
+    });
+    expect(created.status).toBe(200);
+    const createdBody = await created.json();
+    expect(createdBody.scope).toBe("acp");
+    expect(createdBody.target_version).toBe("latest");
+    expect(createdBody.status).toBe("pending");
+
+    // The heartbeat ack carries the scope so the daemon reinstalls bridges (not the CLI).
+    const ack = store.heartbeatRuntime(runtime.id, { supportsBatchImport: true });
+    expect(ack.pending_update).toMatchObject({ id: createdBody.id, scope: "acp", target_version: "latest" });
+    expect(store.getRuntimeUpdateRequest(runtime.id, createdBody.id)?.scope).toBe("acp");
+  });
+
+  it("supports agent-scope update requests (runs the agent CLI updater)", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_agent_update", name: "Agent update runtime", provider: "claude" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request(`/api/runtimes/${runtime.id}/update`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "agent" }),
+    });
+    expect(created.status).toBe(200);
+    const createdBody = await created.json();
+    expect(createdBody.scope).toBe("agent");
+    expect(createdBody.target_version).toBe("latest");
+
+    const ack = store.heartbeatRuntime(runtime.id, { supportsBatchImport: true });
+    expect(ack.pending_update).toMatchObject({ id: createdBody.id, scope: "agent" });
+    expect(store.getRuntimeUpdateRequest(runtime.id, createdBody.id)?.scope).toBe("agent");
+  });
+
   it("serves runtime local skill list and import request flows", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "skill-runtime", provider: "claude", workspaceId: "local" });

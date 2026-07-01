@@ -26,3 +26,16 @@ test("locateBridgePackage + bridgeVersion read the provisioned bridge's package.
   expect(locateBridgePackage("claude")).toBe(pkgDir);
   expect(bridgeVersion("claude")).toBe("0.44.1");
 });
+
+test("locateBridgePackage prefers the maintained @agentclientprotocol claude bridge", () => {
+  dir = mkdtempSync(join(tmpdir(), "remi-provision-"));
+  process.env.REMI_HOME = dir;
+  const zedDir = join(dir, "acp", "node_modules", "@zed-industries", "claude-agent-acp");
+  const acpDir = join(dir, "acp", "node_modules", "@agentclientprotocol", "claude-agent-acp");
+  mkdirSync(zedDir, { recursive: true });
+  mkdirSync(acpDir, { recursive: true });
+  writeFileSync(join(zedDir, "package.json"), JSON.stringify({ version: "0.23.1" }));
+  writeFileSync(join(acpDir, "package.json"), JSON.stringify({ version: "0.53.0" }));
+  expect(locateBridgePackage("claude")).toBe(acpDir);
+  expect(bridgeVersion("claude")).toBe("0.53.0");
+});

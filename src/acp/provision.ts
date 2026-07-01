@@ -21,8 +21,11 @@ type Logger = (message: string) => void;
 const NODE_VERSION = "v22.14.0"; // pinned LTS for the bundled fallback
 
 const PROVIDER_CLI: Record<ProvisionProvider, string> = { claude: "claude", codex: "codex" };
+// First entry is the package we install; both are checked when locating an
+// already-installed bridge. @zed-industries/claude-agent-acp is deprecated
+// (stuck at 0.23.1, renamed) — prefer the maintained @agentclientprotocol one.
 const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
-  claude: ["@zed-industries/claude-agent-acp", "@agentclientprotocol/claude-agent-acp"],
+  claude: ["@agentclientprotocol/claude-agent-acp", "@zed-industries/claude-agent-acp"],
   codex: ["@agentclientprotocol/codex-acp"],
 };
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
@@ -92,6 +95,18 @@ export function bridgeVersion(provider: ProvisionProvider): string | null {
       if (m) return m[0];
     } catch {}
   }
+  return null;
+}
+
+/** Version of the underlying agent CLI itself (`claude` / `codex`), or null. */
+export function agentCliVersion(provider: ProvisionProvider): string | null {
+  const cli = which(PROVIDER_CLI[provider]);
+  if (!cli) return null;
+  try {
+    const out = execFileSync(cli, ["--version"], { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
+    const m = out.match(/\d+\.\d+\.\d+[\w.-]*/);
+    if (m) return m[0];
+  } catch {}
   return null;
 }
 
@@ -201,6 +216,33 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
   }
   prependManagedPath();
   pointClaudeBridgeDir();
+}
+
+/**
+ * Force-reinstall the ACP bridge for `provider` to the latest published version
+ * (ignores whether one is already present), re-link/re-point, and return the
+ * new bridge version. Throws on failure. Services a remote "update ACP bridge"
+ * request from the dashboard.
+ */
+export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`)): string {
+  const node = ensureNode(log);
+  if (!node) throw new Error("cannot reinstall ACP bridge: node unavailable");
+  const pkg = `${PROVIDER_PACKAGES[provider][0]}@latest`;
+  log(`reinstalling ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
+  if (!npmInstall(node.npm, node.node, pkg, log)) {
+    throw new Error(`npm install ${pkg} failed`);
+  }
+  if (provider === "codex") linkCodexBin(log);
+  prependManagedPath();
+  // Re-point the claude wrapper unconditionally — the located package dir may
+  // have changed (e.g. @zed-industries → @agentclientprotocol).
+  if (provider === "claude") {
+    const dir = locateBridgePackage("claude");
+    if (dir) process.env.REMI_CLAUDE_AGENT_ACP_DIR = dir;
+  }
+  const version = bridgeVersion(provider);
+  log(`${provider} ACP bridge ready${version ? ` (${version})` : ""}`);
+  return version ?? "latest";
 }
 
 /** Point the claude wrapper at the located package via REMI_CLAUDE_AGENT_ACP_DIR. */

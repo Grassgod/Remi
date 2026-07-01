@@ -242,10 +242,17 @@ export interface MultiremiRuntimeModelListRequest {
   runStartedAt: string | null;
 }
 
+/**
+ * What a runtime update request targets: the remi CLI binary (`cli`), the ACP
+ * bridges (`acp`), or the underlying agent CLI — claude/codex (`agent`).
+ */
+export type MultiremiRuntimeUpdateScope = "cli" | "acp" | "agent";
+
 export interface MultiremiRuntimeUpdateRequest {
   id: string;
   runtimeId: string;
   status: MultiremiRuntimeUpdateRequestStatus;
+  scope: MultiremiRuntimeUpdateScope;
   targetVersion: string;
   target_version?: string;
   output: string | null;
@@ -262,6 +269,7 @@ export interface MultiremiDaemonHeartbeatAck {
   pending_update?: {
     id: string;
     target_version: string;
+    scope?: MultiremiRuntimeUpdateScope;
   };
   pending_model_list?: {
     id: string;
@@ -1441,6 +1449,7 @@ export interface ReportRuntimeModelListInput {
 export interface CreateRuntimeUpdateInput {
   targetVersion?: string;
   target_version?: string;
+  scope?: MultiremiRuntimeUpdateScope;
 }
 
 export interface ReportRuntimeUpdateInput {
