@@ -300,6 +300,10 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   // Sharing the daemon_id also means single→multi provider never changes it, so
   // no orphan runtime is left behind when a second provider comes online.
   const baseRuntimeName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
+  // Human-facing machine name (host+user, no internal "bun-runtime" token, no
+  // provider suffix). Shown as the runtime-card title; the server derives each
+  // row label as `<provider> (<deviceName>)`.
+  const deviceName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
   // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
   const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
@@ -316,6 +320,7 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
         ?? config.daemon_id
         ?? (providers.length > 1 ? baseRuntimeName : null),
       runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
+      deviceName,
       provider,
       maxConcurrency,
       workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)
