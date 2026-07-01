@@ -8,7 +8,10 @@ import {
   Globe,
   Lock,
   Pencil,
+  Copy,
+  Check,
 } from "lucide-react";
+import { copyText } from "@multiremi/ui/lib/clipboard";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntime, Agent, MemberWithUser } from "@multiremi/core/types";
@@ -70,6 +73,29 @@ function shortDaemonId(id: string | null): string | null {
   if (!id) return null;
   if (id.length <= 10) return id;
   return `${id.slice(0, 6)}··${id.slice(-2)}`;
+}
+
+function DaemonIdCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      onClick={() => void copyText(text).then((ok) => ok && setCopied(true))}
+      aria-label="Copy daemon ID"
+      className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {copied ? (
+        <Check className="h-3 w-3 text-success" aria-hidden />
+      ) : (
+        <Copy className="h-3 w-3" aria-hidden />
+      )}
+    </button>
+  );
 }
 
 // 30s tick keeps derived runtime health honest as time-based windows
@@ -418,7 +444,10 @@ function HeroCard({
               )}
               {daemonShort && (
                 <Fact label="Daemon ID" mono compact>
-                  {daemonShort}
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <span className="break-all">{runtime.daemon_id}</span>
+                    <DaemonIdCopyButton text={runtime.daemon_id ?? ""} />
+                  </span>
                 </Fact>
               )}
             </dl>
