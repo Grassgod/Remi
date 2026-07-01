@@ -228,6 +228,10 @@
     "available": "可用",
     "action": "更新",
     "retry": "重试",
+    "acp_label": "ACP 桥：",
+    "acp_action": "更新 ACP",
+    "agent_label": "Agent：",
+    "agent_action": "更新 Agent",
     "unknown_error": "未知错误",
     "initiate_failed": "启动更新失败",
     "status": {
@@ -251,6 +255,7 @@
     "col_workload": "工作负载",
     "col_cost": "费用 · 7 天",
     "col_cli": "CLI",
+    "col_agent": "Agent",
     "col_acp": "ACP",
     "cost_delta_flat": "持平",
     "cli_managed_badge": "桌面端",

@@ -225,6 +225,10 @@
     "available": "利用可能",
     "action": "更新",
     "retry": "再試行",
+    "acp_label": "ACP ブリッジ:",
+    "acp_action": "ACP を更新",
+    "agent_label": "Agent:",
+    "agent_action": "Agent を更新",
     "unknown_error": "不明なエラー",
     "initiate_failed": "更新を開始できませんでした",
     "status": {
@@ -248,6 +252,7 @@
     "col_workload": "作業量",
     "col_cost": "コスト · 7 日",
     "col_cli": "CLI",
+    "col_agent": "Agent",
     "col_acp": "ACP",
     "cost_delta_flat": "変化なし",
     "cli_managed_badge": "デスクトップ",

@@ -1219,10 +1219,11 @@ export class ApiClient {
   async initiateUpdate(
     runtimeId: string,
     targetVersion: string,
+    scope?: "cli" | "acp" | "agent",
   ): Promise<RuntimeUpdate> {
     return this.fetch(`/api/runtimes/${runtimeId}/update`, {
       method: "POST",
-      body: JSON.stringify({ target_version: targetVersion }),
+      body: JSON.stringify({ target_version: targetVersion, scope }),
     });
   }
 

@@ -68,6 +68,7 @@ const COL_WIDTHS = {
   workload: 120,
   cost: 96,
   cli: 112,
+  agent: 92,
   acp: 100,
   // 60 = 16 left padding + 28 kebab + 16 right padding. Keeps the
   // kebab's right edge 16px from the card so it lines up with the
@@ -174,6 +175,12 @@ export function createRuntimeColumns({
           latestCliVersion={latestCliVersion}
         />
       ),
+    },
+    {
+      id: "agent",
+      header: () => t(($) => $.list.col_agent),
+      size: COL_WIDTHS.agent,
+      cell: ({ row }) => <AgentCell runtime={row.original.runtime} />,
     },
     {
       id: "acp",
@@ -377,6 +384,23 @@ function CostCell({ runtimeId }: { runtimeId: string }) {
         </span>
       )}
     </div>
+  );
+}
+
+function AgentCell({ runtime }: { runtime: AgentRuntime }) {
+  if (runtime.runtime_mode === "cloud") {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  const meta = runtime.metadata as Record<string, unknown> | null;
+  const agentVersion =
+    meta && typeof meta.agent_version === "string" ? meta.agent_version : null;
+  if (!agentVersion) {
+    return <span className="text-xs text-muted-foreground/50">—</span>;
+  }
+  return (
+    <span className="truncate font-mono text-xs text-muted-foreground">
+      {agentVersion}
+    </span>
   );
 }
 

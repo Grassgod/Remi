@@ -59,9 +59,152 @@ const statusConfig: Record<
   timeout: { icon: XCircle, color: "text-warning" },
 };
 
+interface UpdateFlow {
+  status: RuntimeUpdateStatus | null;
+  error: string;
+  output: string;
+  active: boolean;
+  run: (initiate: () => Promise<{ id: string }>) => Promise<void>;
+}
+
+// One update lifecycle (initiate → poll → status), shared by the CLI / Agent /
+// ACP rows so the poll + status machinery isn't triplicated.
+function useUpdateFlow(runtimeId: string, completedFallback: string): UpdateFlow {
+  const { t } = useT("runtimes");
+  const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
+  const [error, setError] = useState("");
+  const [output, setOutput] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const cleanup = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => cleanup, [cleanup]);
+
+  const run = useCallback(
+    async (initiate: () => Promise<{ id: string }>) => {
+      cleanup();
+      setStatus("pending");
+      setError("");
+      setOutput("");
+      try {
+        const update = await initiate();
+        pollRef.current = setInterval(async () => {
+          try {
+            const result = await api.getUpdateResult(runtimeId, update.id);
+            setStatus(result.status as RuntimeUpdateStatus);
+            if (result.status === "completed") {
+              setOutput(result.output ?? completedFallback);
+              cleanup();
+              // Clear after a few seconds so the row refreshes to the new
+              // version once the runtime re-registers.
+              setTimeout(() => setStatus(null), 5000);
+            } else if (
+              result.status === "failed" ||
+              result.status === "timeout"
+            ) {
+              setError(result.error ?? t(($) => $.update.unknown_error));
+              cleanup();
+            }
+          } catch {
+            // ignore poll errors
+          }
+        }, 2000);
+      } catch {
+        setStatus("failed");
+        setError(t(($) => $.update.initiate_failed));
+      }
+    },
+    [runtimeId, completedFallback, cleanup, t],
+  );
+
+  const active = status === "pending" || status === "running";
+  return { status, error, output, active, run };
+}
+
+function UpdateRow({
+  label,
+  version,
+  hint,
+  showAction,
+  actionLabel,
+  onAction,
+  flow,
+  retryLabel,
+}: {
+  label: string;
+  version: string | null;
+  hint?: React.ReactNode;
+  showAction: boolean;
+  actionLabel: string;
+  onAction: () => void;
+  flow: UpdateFlow;
+  retryLabel: string;
+}) {
+  const { t } = useT("runtimes");
+  const config = flow.status ? statusConfig[flow.status] : null;
+  const Icon = config?.icon;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-xs font-mono">{version ?? "—"}</span>
+        {hint}
+        {showAction && (
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={onAction}
+            disabled={flow.active}
+          >
+            <ArrowUpCircle className="h-3 w-3" />
+            {actionLabel}
+          </Button>
+        )}
+        {config && Icon && flow.status && (
+          <span
+            className={`inline-flex items-center gap-1 text-xs ${config.color}`}
+          >
+            <Icon className={`h-3 w-3 ${flow.active ? "animate-spin" : ""}`} />
+            {t(($) => $.update.status[flow.status as RuntimeUpdateStatus])}
+          </span>
+        )}
+      </div>
+
+      {flow.status === "completed" && flow.output && (
+        <div className="rounded-lg border bg-success/5 px-3 py-2">
+          <p className="text-xs text-success">{flow.output}</p>
+        </div>
+      )}
+
+      {(flow.status === "failed" || flow.status === "timeout") && flow.error && (
+        <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
+          <p className="text-xs text-destructive">{flow.error}</p>
+          {flow.status === "failed" && (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="mt-1"
+              onClick={onAction}
+            >
+              {retryLabel}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface UpdateSectionProps {
   runtimeId: string;
   currentVersion: string | null;
+  agentVersion: string | null;
+  acpVersion: string | null;
   isOnline: boolean;
   /**
    * Non-null when the daemon process was spawned by a managed launcher
@@ -75,184 +218,93 @@ interface UpdateSectionProps {
 export function UpdateSection({
   runtimeId,
   currentVersion,
+  agentVersion,
+  acpVersion,
   isOnline,
   launchedBy,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const isManaged = launchedBy === "desktop";
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
-  const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
-  const [error, setError] = useState("");
-  const [output, setOutput] = useState("");
-  const [updating, setUpdating] = useState(false);
-  const [targetVersion, setTargetVersion] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const cleanup = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }, []);
+  const cliFlow = useUpdateFlow(runtimeId, "CLI updated");
+  const agentFlow = useUpdateFlow(runtimeId, "Agent updated");
+  const acpFlow = useUpdateFlow(runtimeId, "ACP bridge updated");
 
-  useEffect(() => cleanup, [cleanup]);
-
-  // Fetch latest version on mount.
+  // Fetch latest CLI version on mount (only the CLI row gates its button on it).
   useEffect(() => {
     fetchLatestVersion().then(setLatestVersion);
   }, []);
 
-  const markCompleted = useCallback(
-    (message: string) => {
-      setStatus("completed");
-      setOutput(message);
-      setUpdating(false);
-      setTargetVersion(null);
-      cleanup();
-      // Auto-clear status after a few seconds so the UI refreshes to show the
-      // new version from the re-fetched runtime data.
-      setTimeout(() => setStatus(null), 5000);
-    },
-    [cleanup],
-  );
-
-  useEffect(() => {
-    if (!updating || !targetVersion || !currentVersion) return;
-    if (!isNewer(targetVersion, currentVersion)) {
-      markCompleted(`Updated to ${targetVersion}`);
-    }
-  }, [currentVersion, markCompleted, targetVersion, updating]);
-
-  const handleUpdate = async () => {
-    if (!latestVersion) return;
-    cleanup();
-    setUpdating(true);
-    setTargetVersion(latestVersion);
-    setStatus("pending");
-    setError("");
-    setOutput("");
-
-    try {
-      const update = await api.initiateUpdate(runtimeId, latestVersion);
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const result = await api.getUpdateResult(runtimeId, update.id);
-          setStatus(result.status as RuntimeUpdateStatus);
-
-          if (result.status === "completed") {
-            markCompleted(
-              result.output ?? `Updated to ${targetVersion ?? latestVersion}`,
-            );
-          } else if (
-            result.status === "failed" ||
-            result.status === "timeout"
-          ) {
-            setError(result.error ?? t(($) => $.update.unknown_error));
-            setUpdating(false);
-            setTargetVersion(null);
-            cleanup();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000);
-    } catch {
-      setStatus("failed");
-      setError(t(($) => $.update.initiate_failed));
-      setUpdating(false);
-      setTargetVersion(null);
-    }
-  };
-
-  const hasUpdate =
-    currentVersion &&
-    latestVersion &&
+  const hasCliUpdate =
+    !!currentVersion &&
+    !!latestVersion &&
+    !isManaged &&
     isNewer(latestVersion, currentVersion);
 
-  const config = status ? statusConfig[status] : null;
-  const Icon = config?.icon;
-  const isActive = status === "pending" || status === "running";
+  const cliHint = isManaged ? (
+    <span
+      className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+      title={t(($) => $.update.managed_by_desktop_title)}
+    >
+      {t(($) => $.update.managed_by_desktop)}
+    </span>
+  ) : hasCliUpdate && !cliFlow.status ? (
+    <>
+      <span className="text-xs text-muted-foreground">→</span>
+      <span className="text-xs font-mono text-info">{latestVersion}</span>
+      <span className="text-xs text-muted-foreground">
+        {t(($) => $.update.available)}
+      </span>
+    </>
+  ) : currentVersion && latestVersion && !cliFlow.status ? (
+    <span className="inline-flex items-center gap-1 text-xs text-success">
+      <Check className="h-3 w-3" />
+      {t(($) => $.update.latest)}
+    </span>
+  ) : null;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-muted-foreground">{t(($) => $.update.cli_version_label)}</span>
-        <span className="text-xs font-mono">
-          {currentVersion ?? t(($) => $.update.version_unknown)}
-        </span>
+    <div className="space-y-2.5">
+      <UpdateRow
+        label={t(($) => $.update.cli_version_label)}
+        version={currentVersion}
+        hint={cliHint}
+        showAction={hasCliUpdate && isOnline && !cliFlow.status}
+        actionLabel={t(($) => $.update.action)}
+        onAction={() =>
+          latestVersion &&
+          cliFlow.run(() => api.initiateUpdate(runtimeId, latestVersion))
+        }
+        flow={cliFlow}
+        retryLabel={t(($) => $.update.retry)}
+      />
 
-        {isManaged ? (
-          <span
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-            title={t(($) => $.update.managed_by_desktop_title)}
-          >
-            {t(($) => $.update.managed_by_desktop)}
-          </span>
-        ) : (
-          <>
-            {!hasUpdate && currentVersion && latestVersion && !status && (
-              <span className="inline-flex items-center gap-1 text-xs text-success">
-                <Check className="h-3 w-3" />
-                {t(($) => $.update.latest)}
-              </span>
-            )}
+      <UpdateRow
+        label={t(($) => $.update.agent_label)}
+        version={agentVersion}
+        showAction={isOnline && !agentFlow.active}
+        actionLabel={t(($) => $.update.agent_action)}
+        onAction={() =>
+          agentFlow.run(() =>
+            api.initiateUpdate(runtimeId, "latest", "agent"),
+          )
+        }
+        flow={agentFlow}
+        retryLabel={t(($) => $.update.retry)}
+      />
 
-            {hasUpdate && !status && (
-              <>
-                <span className="text-xs text-muted-foreground">→</span>
-                <span className="text-xs font-mono text-info">
-                  {latestVersion}
-                </span>
-                <span className="text-xs text-muted-foreground">{t(($) => $.update.available)}</span>
-              </>
-            )}
-
-            {hasUpdate && isOnline && !status && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={handleUpdate}
-                disabled={updating}
-              >
-                <ArrowUpCircle className="h-3 w-3" />
-                {t(($) => $.update.action)}
-              </Button>
-            )}
-          </>
-        )}
-
-        {config && Icon && status && (
-          <span
-            className={`inline-flex items-center gap-1 text-xs ${config.color}`}
-          >
-            <Icon className={`h-3 w-3 ${isActive ? "animate-spin" : ""}`} />
-            {t(($) => $.update.status[status])}
-          </span>
-        )}
-      </div>
-
-      {status === "completed" && output && (
-        <div className="rounded-lg border bg-success/5 px-3 py-2">
-          <p className="text-xs text-success">{output}</p>
-        </div>
-      )}
-
-      {(status === "failed" || status === "timeout") && error && (
-        <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <p className="text-xs text-destructive">{error}</p>
-          {status === "failed" && (
-            <Button
-              variant="ghost"
-              size="xs"
-              className="mt-1"
-              onClick={handleUpdate}
-            >
-              {t(($) => $.update.retry)}
-            </Button>
-          )}
-        </div>
-      )}
+      <UpdateRow
+        label={t(($) => $.update.acp_label)}
+        version={acpVersion}
+        showAction={isOnline && !acpFlow.active}
+        actionLabel={t(($) => $.update.acp_action)}
+        onAction={() =>
+          acpFlow.run(() => api.initiateUpdate(runtimeId, "latest", "acp"))
+        }
+        flow={acpFlow}
+        retryLabel={t(($) => $.update.retry)}
+      />
     </div>
   );
 }

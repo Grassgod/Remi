@@ -240,6 +240,10 @@
     "available": "available",
     "action": "Update",
     "retry": "Retry",
+    "acp_label": "ACP Bridge:",
+    "acp_action": "Update ACP",
+    "agent_label": "Agent:",
+    "agent_action": "Update Agent",
     "unknown_error": "Unknown error",
     "initiate_failed": "Failed to initiate update",
     "status": {
@@ -263,6 +267,7 @@
     "col_workload": "Workload",
     "col_cost": "Cost · 7d",
     "col_cli": "CLI",
+    "col_agent": "Agent",
     "col_acp": "ACP",
     "cost_delta_flat": "flat",
     "cli_managed_badge": "Desktop",

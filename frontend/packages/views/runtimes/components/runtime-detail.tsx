@@ -41,15 +41,18 @@ import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
 import { useT } from "../../i18n";
 
-function getCliVersion(metadata: Record<string, unknown>): string | null {
-  if (
-    metadata &&
-    typeof metadata.cli_version === "string" &&
-    metadata.cli_version
-  ) {
-    return metadata.cli_version;
+function getMetaString(
+  metadata: Record<string, unknown>,
+  key: string,
+): string | null {
+  if (metadata && typeof metadata[key] === "string" && metadata[key]) {
+    return metadata[key] as string;
   }
   return null;
+}
+
+function getCliVersion(metadata: Record<string, unknown>): string | null {
+  return getMetaString(metadata, "cli_version");
 }
 
 function getLaunchedBy(metadata: Record<string, unknown>): string | null {
@@ -87,6 +90,14 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const { t } = useT("runtimes");
   const cliVersion =
     runtime.runtime_mode === "local" ? getCliVersion(runtime.metadata) : null;
+  const agentVersion =
+    runtime.runtime_mode === "local"
+      ? getMetaString(runtime.metadata, "agent_version")
+      : null;
+  const acpVersion =
+    runtime.runtime_mode === "local"
+      ? getMetaString(runtime.metadata, "acp_version")
+      : null;
   const launchedBy =
     runtime.runtime_mode === "local" ? getLaunchedBy(runtime.metadata) : null;
 
@@ -180,6 +191,8 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <DiagnosticsCard
               runtime={runtime}
               cliVersion={cliVersion}
+              agentVersion={agentVersion}
+              acpVersion={acpVersion}
               launchedBy={launchedBy}
               canDelete={!!canDelete}
               onDelete={() => setDeleteOpen(true)}
@@ -520,12 +533,16 @@ function ServingAgentsCard({
 function DiagnosticsCard({
   runtime,
   cliVersion,
+  agentVersion,
+  acpVersion,
   launchedBy,
   canDelete,
   onDelete,
 }: {
   runtime: AgentRuntime;
   cliVersion: string | null;
+  agentVersion: string | null;
+  acpVersion: string | null;
   launchedBy: string | null;
   canDelete: boolean;
   onDelete: () => void;
@@ -560,6 +577,8 @@ function DiagnosticsCard({
             <UpdateSection
               runtimeId={runtime.id}
               currentVersion={cliVersion}
+              agentVersion={agentVersion}
+              acpVersion={acpVersion}
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
             />

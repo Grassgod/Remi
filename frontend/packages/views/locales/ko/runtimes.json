@@ -237,6 +237,10 @@
     "available": "사용 가능",
     "action": "업데이트",
     "retry": "다시 시도",
+    "acp_label": "ACP 브리지:",
+    "acp_action": "ACP 업데이트",
+    "agent_label": "Agent:",
+    "agent_action": "Agent 업데이트",
     "unknown_error": "알 수 없는 오류",
     "initiate_failed": "업데이트를 시작하지 못했습니다",
     "status": {
@@ -260,6 +264,7 @@
     "col_workload": "작업량",
     "col_cost": "비용 · 7일",
     "col_cli": "CLI",
+    "col_agent": "Agent",
     "col_acp": "ACP",
     "cost_delta_flat": "변화 없음",
     "cli_managed_badge": "데스크톱",
