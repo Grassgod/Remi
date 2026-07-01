@@ -313,6 +313,24 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   if (authToken) {
     app.use("*", async (c, next) => {
+      // Public routes that must work WITHOUT auth, otherwise enabling
+      // MULTIREMI_TOKEN locks everyone out: login (chicken-and-egg), health
+      // checks, self-host release downloads (install-remi.sh runs unauthed),
+      // and external webhooks (authed by their own path token).
+      const path = c.req.path;
+      if (
+        path === "/" ||
+        path === "/favicon.ico" ||
+        path === "/api/config" ||
+        path === "/readyz" ||
+        path.startsWith("/auth/") ||
+        path.startsWith("/health") ||
+        path.startsWith("/api/remi/releases/") ||
+        path.startsWith("/api/webhooks/")
+      ) {
+        await next();
+        return;
+      }
       const header = c.req.header("Authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
       if (token === authToken) {
