@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
+import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "../multiremi/index.js";
 import { AcpProvider } from "@acp/index.js";
@@ -299,7 +299,7 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   // by daemon_id; the server still mints a distinct runtime id per provider).
   // Sharing the daemon_id also means single→multi provider never changes it, so
   // no orphan runtime is left behind when a second provider comes online.
-  const baseRuntimeName = runtimeName ?? `${Bun.env.USER ?? "local"}-bun-runtime`;
+  const baseRuntimeName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
   // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
   const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
@@ -2013,7 +2013,7 @@ function executableExtensions(pathExt?: string): string[] {
 }
 
 function formatRuntimeName(baseName: string | undefined, provider: string): string {
-  return `${baseName ?? `${Bun.env.USER ?? "local"}-bun-runtime`}-${provider}`;
+  return `${baseName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`}-${provider}`;
 }
 
 function formatListenUrls(host: string, port: number): string[] {
