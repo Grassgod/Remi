@@ -62,7 +62,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multiremi/ui/components/ui/dropdown-menu";
-import { useAuthStore } from "@multiremi/core/auth";
+import { useAuthStore, displayableEmail } from "@multiremi/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multiremi/core/paths";
 import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
@@ -506,9 +506,11 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <p className="truncate text-sm font-medium leading-tight">
                         {user?.name}
                       </p>
-                      <p className="truncate text-xs text-muted-foreground leading-tight">
-                        {user?.email}
-                      </p>
+                      {displayableEmail(user?.email) && (
+                        <p className="truncate text-xs text-muted-foreground leading-tight">
+                          {displayableEmail(user?.email)}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <DropdownMenuSeparator />
