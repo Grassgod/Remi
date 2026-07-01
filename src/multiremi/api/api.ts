@@ -190,6 +190,13 @@ const MAX_WEBHOOK_BODY_BYTES = 256 * 1024;
 const DEFAULT_WEBHOOK_RATE_LIMIT: WebhookRateLimitConfig = { limit: 60, windowMs: 60 * 1000 };
 const DEFAULT_WEBHOOK_IP_RATE_LIMIT: WebhookRateLimitConfig = { limit: 30, windowMs: 60 * 1000 };
 const localAuthCodes = new Map<string, { code: string; expiresAt: number }>();
+
+// Email verification-code + Google fallback logins let anyone in with just an
+// email; production keeps only Feishu SSO. Off unless explicitly enabled (FR9).
+function isEmailCodeLoginEnabled(): boolean {
+  const value = (process.env.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN ?? "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
 const JWT_HMAC_ALGORITHMS: Record<string, string> = {
   HS256: "sha256",
   HS384: "sha384",
@@ -313,6 +320,24 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   if (authToken) {
     app.use("*", async (c, next) => {
+      // Public routes that must work WITHOUT auth, otherwise enabling
+      // MULTIREMI_TOKEN locks everyone out: login (chicken-and-egg), health
+      // checks, self-host release downloads (install-remi.sh runs unauthed),
+      // and external webhooks (authed by their own path token).
+      const path = c.req.path;
+      if (
+        path === "/" ||
+        path === "/favicon.ico" ||
+        path === "/api/config" ||
+        path === "/readyz" ||
+        path.startsWith("/auth/") ||
+        path.startsWith("/health") ||
+        path.startsWith("/api/remi/releases/") ||
+        path.startsWith("/api/webhooks/")
+      ) {
+        await next();
+        return;
+      }
       const header = c.req.header("Authorization") ?? "";
       const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
       if (token === authToken) {
@@ -373,16 +398,19 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/auth/logout", (c) => c.json({ message: "logged out" }));
   app.post("/auth/send-code", async (c) => {
+    if (!isEmailCodeLoginEnabled()) return c.json({ error: "email code login is disabled" }, 403);
     const result = sendLocalAuthCode(store, await readJson(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/auth/verify-code", async (c) => {
+    if (!isEmailCodeLoginEnabled()) return c.json({ error: "email code login is disabled" }, 403);
     const result = await verifyLocalAuthCode(store, await readJson(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/auth/google", async (c) => {
+    if (!isEmailCodeLoginEnabled()) return c.json({ error: "email login is disabled" }, 403);
     const result = await localGoogleAuthFallback(store, await readJson(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
@@ -406,8 +434,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     try {
       const userAccessToken = await larkExchangeCode(cfg, code, redirectUri);
       const profile = await larkFetchUserInfo(cfg, userAccessToken);
+      // open_id is the stable per-user identity; Feishu often returns no email,
+      // so synthesize one from open_id purely for display/uniqueness.
       const email = profile.email ?? `${profile.openId ?? "feishu-user"}@feishu.local`;
-      return c.json(await localAuthResponse(store, email, profile.name));
+      return c.json(await localAuthResponse(store, { externalId: profile.openId, email, name: profile.name }));
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Feishu login failed" }, 401);
     }
@@ -499,6 +529,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!token && shouldCreateToken) {
       const created = await store.createAccessToken({
         workspaceId,
+        // Own the daemon token by the user provisioning it, so runtimes it later
+        // registers are attributed to that person (FR6/FR8).
+        userId: currentRequestUserId(c),
         daemonId: body.daemonId ?? body.daemon_id ?? c.req.query("daemonId") ?? c.req.query("daemon_id") ?? null,
         name: body.tokenName ?? body.token_name ?? "Multiremi daemon",
         type: "daemon",
@@ -721,7 +754,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
-  app.get("/api/workspaces", (c) => c.json(store.listWorkspaces()));
+  app.get("/api/workspaces", (c) => {
+    const userId = authenticatedRequestUserId(c);
+    const all = store.listWorkspaces();
+    // Master token / open mode (no identity) is admin and sees everything;
+    // a logged-in user sees only the workspaces they are a member of.
+    if (!userId) return c.json(all);
+    return c.json(all.filter((ws) => store.getUserRoleInWorkspace(userId, ws.id) !== null));
+  });
   app.post("/api/workspaces", async (c) => {
     const body = await readJson<any>(c);
     const result = safeCreateWorkspace(store, body);
@@ -729,19 +769,28 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result, 201);
   });
   app.get("/api/workspaces/:id", (c) => {
-    const workspace = store.getWorkspace(c.req.param("id"));
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const workspace = store.getWorkspace(workspaceId);
     if (!workspace) return c.json({ error: "workspace not found" }, 404);
     return c.json(workspace);
   });
   app.put("/api/workspaces/:id", async (c) => {
+    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.patch("/api/workspaces/:id", async (c) => {
+    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
   app.delete("/api/workspaces/:id", (c) => {
+    const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const deleted = store.deleteWorkspace(c.req.param("id"));
     if (!deleted) return c.json({ error: "workspace not found" }, 404);
     return c.body(null, 204);
@@ -797,7 +846,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const requester = loadCurrentWorkspaceRole(c, store, c.req.param("id"), ["owner", "admin"]);
     if (requester instanceof Response) return requester;
     const body = await readJson<any>(c);
-    const result = safeCreateInvitation(store, c.req.param("id"), body);
+    const result = safeCreateInvitation(store, c.req.param("id"), body, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     publishWorkspaceEvent(c, store, "invitation:created", c.req.param("id"), {
       invitation: result,
@@ -853,14 +902,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     });
     return c.body(null, 204);
   });
-  app.get("/api/invitations", (c) => c.json(store.listCurrentUserInvitations()));
+  app.get("/api/invitations", (c) => c.json(store.listCurrentUserInvitations(currentRequestUserId(c))));
   app.get("/api/invitations/:id", (c) => {
     const invitation = store.getInvitation(c.req.param("id"));
     if (!invitation) return c.json({ error: "invitation not found" }, 404);
     return c.json(invitation);
   });
   app.post("/api/invitations/:id/accept", (c) => {
-    const result = safeAcceptInvitation(store, c.req.param("id"));
+    const result = safeAcceptInvitation(store, c.req.param("id"), currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     const member = acceptedInvitationMemberToGoResponse(store, result);
     if (isMemberResponseError(member)) return c.json({ error: member.error }, member.status);
@@ -875,7 +924,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(member);
   });
   app.post("/api/invitations/:id/decline", (c) => {
-    const result = safeDeclineInvitation(store, c.req.param("id"));
+    const result = safeDeclineInvitation(store, c.req.param("id"), currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     publishWorkspaceEvent(c, store, "invitation:declined", result.workspaceId, {
       invitation_id: result.id,
@@ -5786,8 +5835,10 @@ function denyCurrentUserRuntimeWorkspaceAccess(c: any, store: MultiremiStore, ru
   if (token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "runtime not found" }, 404);
   }
-  const jwtUserId = currentJwtUserId(c);
-  if (jwtUserId && !hasJwtWorkspaceAccess(store, jwtUserId, workspaceId)) {
+  if (token?.type === "task") return null;
+  // A logged-in human who is not a member of the runtime's workspace can't see it.
+  const userId = authenticatedRequestUserId(c);
+  if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
@@ -6031,14 +6082,16 @@ function canCurrentUserAccessAgent(c: { get: (key: string) => unknown }, store: 
 function currentWorkspaceRole(c: { get: (key: string) => unknown }, store: MultiremiStore, workspaceId: string): string {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;
-  if (workspaceId === "local" && currentRequestUserId(c) === "local") return "owner";
+  // No real member: only the no-identity admin path (master token / open mode)
+  // is treated as local owner. A logged-in non-member is NOT auto-"member".
+  if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
   return "member";
 }
 
 function currentWorkspaceRoleStrict(c: { get: (key: string) => unknown }, store: MultiremiStore, workspaceId: string): string | null {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;
-  if (workspaceId === "local" && currentRequestUserId(c) === "local") return "owner";
+  if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
   return null;
 }
 
@@ -6049,7 +6102,7 @@ function currentWorkspaceMember(
 ): MultiremiWorkspaceMember | null {
   const userId = currentRequestUserId(c);
   return store.listWorkspaceMembers(workspaceId).find((item) =>
-    item.id === userId || item.id === `mem_${workspaceId}_${userId}`
+    item.userId === userId || item.id === userId || item.id === `mem_${workspaceId}_${userId}`
   ) ?? null;
 }
 
@@ -6100,11 +6153,18 @@ function requestedChatWorkspaceId(c: any, input?: Pick<CreateChatSessionInput, "
 function denyCurrentUserWorkspaceAccess(c: any, store: MultiremiStore, workspaceId: string): Response | null {
   const token = currentAccessToken(c);
   if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
+  // Tokens bound to one workspace (task tokens, workspace-scoped PATs) can't reach others.
   if (token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
-  const jwtUserId = currentJwtUserId(c);
-  if (jwtUserId && !hasJwtWorkspaceAccess(store, jwtUserId, workspaceId)) {
+  // Task tokens are scoped by the check above and act on behalf of a task within
+  // their workspace — no separate membership row required.
+  if (token?.type === "task") return null;
+  // Any authenticated human (login PAT or JWT) must be a member of the workspace;
+  // non-members get 404 (existence hidden). No user id => master token / open
+  // mode => full admin access.
+  const userId = authenticatedRequestUserId(c);
+  if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;
@@ -6176,10 +6236,7 @@ function normalizeSendChatMessageInput(c: any, input: SendChatMessageInput): Sen
 }
 
 function hasJwtWorkspaceAccess(store: MultiremiStore, userId: string, workspaceId: string): boolean {
-  if (workspaceId === "local" && userId === store.getCurrentUser().id) return true;
-  return store.listWorkspaceMembers(workspaceId).some((member) =>
-    member.id === userId || member.id === `mem_${workspaceId}_${userId}`
-  );
+  return store.getUserRoleInWorkspace(userId, workspaceId) !== null;
 }
 
 type DaemonWorkspaceDenyOptions = {
@@ -7036,7 +7093,9 @@ async function authorizeBrowserWebSocketToken(
     if (accessToken.type === "daemon") return { error: "forbidden for daemon token", status: 403 };
     if (accessToken.type === "task") return { error: "forbidden for task token", status: 403 };
     const userId = accessToken.userId || "local";
-    if (accessToken.workspaceId !== workspaceId && !hasJwtWorkspaceAccess(store, userId, workspaceId)) {
+    // Membership is the sole authority — a token being bound to this workspace
+    // does not by itself make its user a member.
+    if (!hasJwtWorkspaceAccess(store, userId, workspaceId)) {
       return { error: "not a member of this workspace", status: 403 };
     }
     return { userId, accessToken };
@@ -7722,9 +7781,10 @@ function safeCreateInvitation(
   store: MultiremiStore,
   workspaceId: string,
   input: any,
+  inviterUserId?: string | null,
 ): NonNullable<ReturnType<MultiremiStore["createWorkspaceInvitation"]>> | { error: string; status: 400 | 404 | 409 } {
   try {
-    return store.createWorkspaceInvitation(workspaceId, input);
+    return store.createWorkspaceInvitation(workspaceId, input, inviterUserId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.startsWith("Workspace not found")) return { error: "workspace not found", status: 404 };
@@ -7741,9 +7801,10 @@ function safeCreateInvitation(
 function safeAcceptInvitation(
   store: MultiremiStore,
   invitationId: string,
+  actingUserId?: string | null,
 ): NonNullable<ReturnType<MultiremiStore["acceptInvitation"]>> | { error: string; status: 400 | 403 | 404 | 409 | 410 } {
   try {
-    const invitation = store.acceptInvitation(invitationId);
+    const invitation = store.acceptInvitation(invitationId, actingUserId);
     if (!invitation) return { error: "invitation not found", status: 404 };
     return invitation;
   } catch (error) {
@@ -7758,9 +7819,10 @@ function safeAcceptInvitation(
 function safeDeclineInvitation(
   store: MultiremiStore,
   invitationId: string,
+  actingUserId?: string | null,
 ): NonNullable<ReturnType<MultiremiStore["declineInvitation"]>> | { error: string; status: 400 | 403 | 404 } {
   try {
-    const invitation = store.declineInvitation(invitationId);
+    const invitation = store.declineInvitation(invitationId, actingUserId);
     if (!invitation) return { error: "invitation not found", status: 404 };
     return invitation;
   } catch (error) {
@@ -7899,6 +7961,10 @@ function registerDaemonRuntimes(
     const name = String(runtime.name ?? "").trim() || (deviceName ? `${provider} (${deviceName})` : provider);
     const id = daemonRuntimeId(daemonId, provider);
     const deviceInfo = [deviceName, version].filter(Boolean).join(" · ");
+    // Ownership is set once, on first registration (owner = the registering
+    // token's user). Re-registration (daemon restart/heartbeat) must never
+    // hijack an already-owned runtime.
+    const ownerId = store.getRuntime(id)?.ownerId ?? auth.ownerId;
     let saved: ReturnType<MultiremiStore["registerRuntime"]>;
     try {
       saved = store.registerRuntime({
@@ -7916,7 +7982,7 @@ function registerDaemonRuntimes(
           ...(typeof runtime.agentVersion === "string" && runtime.agentVersion ? { agent_version: runtime.agentVersion } : {}),
         },
         workspaceId,
-        ownerId: auth.ownerId,
+        ownerId,
         status: runtime.status === "offline" ? "offline" : "online",
         maxConcurrency: Number.isFinite(Number(runtime.maxConcurrency)) && Number(runtime.maxConcurrency) >= 1
           ? Math.floor(Number(runtime.maxConcurrency))
@@ -7985,7 +8051,9 @@ function daemonRegisterOwnerContext(
     }
     return { ownerId: jwtUserId };
   }
-  if (token.type === "daemon") return { ownerId: null };
+  // Daemon tokens are machine identities: runtimes they register are owned by the
+  // user who created the token (during `remi setup`), not left ownerless.
+  if (token.type === "daemon") return { ownerId: cleanString(token.userId) ?? null };
   if (token.workspaceId !== targetWorkspaceId) {
     return { error: "forbidden for token workspace", status: 403 };
   }
@@ -8157,7 +8225,7 @@ async function verifyLocalAuthCode(
     return { error: "invalid code", status: 401 };
   }
   localAuthCodes.delete(email);
-  return localAuthResponse(store, email, body.name);
+  return localAuthResponse(store, { email, name: body.name });
 }
 
 async function localGoogleAuthFallback(
@@ -8166,24 +8234,31 @@ async function localGoogleAuthFallback(
 ): Promise<Awaited<ReturnType<typeof localAuthResponse>> | { error: string; status: 400 }> {
   const email = normalizeAuthEmail(body.email ?? store.getCurrentUser().email);
   if (typeof email !== "string") return email;
-  return localAuthResponse(store, email, body.name);
+  return localAuthResponse(store, { email, name: body.name });
 }
 
-async function localAuthResponse(store: MultiremiStore, email: string, name?: string): Promise<{
+async function localAuthResponse(
+  store: MultiremiStore,
+  identity: { externalId?: string | null; email: string; name?: string | null },
+): Promise<{
   ok: true;
   token: string;
   access_token: string;
   token_type: "bearer";
   user: ReturnType<MultiremiStore["getCurrentUser"]>;
 }> {
-  const current = store.getCurrentUser();
-  const user = store.updateCurrentUser({
-    name: String(name ?? current.name).trim() || "Local User",
-    email,
+  // Provision/resolve the distinct user for this identity, then sign a token that
+  // carries that user's real id — never the "local" catch-all. Multiple people
+  // logging in each get their own record and their own token.
+  const user = store.getOrCreateUser({
+    externalId: identity.externalId ?? null,
+    email: identity.email,
+    name: identity.name ?? null,
   });
   const token = await store.createAccessToken({
     workspaceId: "local",
-    name: `Local login for ${email}`,
+    userId: user.id,
+    name: `Login for ${user.email}`,
     type: "pat",
     expiresInDays: 30,
   });

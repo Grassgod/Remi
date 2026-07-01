@@ -386,6 +386,7 @@ export interface MultiremiAgentActivityBucket {
 export interface MultiremiWorkspaceMember {
   id: string;
   workspaceId: string;
+  userId: string | null;
   name: string;
   email: string | null;
   role: string;
@@ -396,6 +397,8 @@ export interface MultiremiWorkspaceMember {
 
 export interface MultiremiUser {
   id: string;
+  externalId: string | null;
+  external_id: string | null;
   name: string;
   email: string;
   avatarUrl: string | null;
@@ -1279,6 +1282,7 @@ export interface SetAgentSkillsInput {
 export interface CreateWorkspaceMemberInput {
   id?: string;
   workspaceId?: string | null;
+  userId?: string | null;
   name: string;
   email?: string | null;
   role?: string;

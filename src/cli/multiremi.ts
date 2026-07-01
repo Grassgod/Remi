@@ -294,12 +294,12 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
   const runtimeName = stringOpt(options.name, process.env.MULTIREMI_RUNTIME_NAME)
     ?? config.runtime_name
     ?? undefined;
-  // The unsuffixed machine name. Both providers register under this single
-  // daemon_id so the dashboard groups them into ONE machine card (it keys cards
-  // by daemon_id; the server still mints a distinct runtime id per provider).
-  // Sharing the daemon_id also means single→multi provider never changes it, so
-  // no orphan runtime is left behind when a second provider comes online.
-  const baseRuntimeName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
+  // Machine identity (host+user, no internal "bun-runtime" token, no provider
+  // suffix). Used as BOTH the shared daemon_id — so the dashboard groups this
+  // host's providers into ONE card and single→multi provider never orphans it —
+  // and the card title; the server derives each row label as
+  // `<provider> (<deviceName>)`.
+  const deviceName = runtimeName ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
   // 0 = "unset" → the daemon defaults to CPU-1 (resolveDaemonConcurrency).
   const maxConcurrency = numberOpt(options["max-concurrency"] ?? options.maxConcurrency, process.env.MULTIREMI_MAX_CONCURRENCY, config.max_concurrency ?? 0);
   const baseDaemonPort = daemonPortFromOptions(options);
@@ -314,8 +314,9 @@ export async function resolveWorkerDaemons(options: CliOptions): Promise<Multire
       runtimeId,
       daemonId: stringOpt(options.daemonId ?? options["daemon-id"], process.env.MULTIREMI_DAEMON_ID)
         ?? config.daemon_id
-        ?? (providers.length > 1 ? baseRuntimeName : null),
+        ?? (providers.length > 1 ? deviceName : null),
       runtimeName: providers.length > 1 ? formatRuntimeName(runtimeName, provider) : runtimeName,
+      deviceName,
       provider,
       maxConcurrency,
       workspaceId: stringOpt(options.workspace, process.env.MULTIREMI_WORKSPACE_ID)

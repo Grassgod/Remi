@@ -2327,6 +2327,8 @@ describe("Bun Multiremi core store", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ name: "Chat runtime", provider: "codex" });
     const agent = store.createAgent({ name: "Chat Codex", provider: "codex", visibility: "workspace", runtimeId: runtime.id });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
     const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
@@ -2493,6 +2495,8 @@ describe("Bun Multiremi core store", () => {
   it("rechecks private agent access across chat and agent HTTP surfaces", async () => {
     const store = createStore();
     store.createWorkspaceMember({ id: "admin", name: "Admin", role: "admin" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
     const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
     const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
     const adminToken = await store.createAccessToken({ name: "Admin", type: "pat", workspaceId: "local", userId: "admin" });
@@ -3812,6 +3816,9 @@ describe("Bun Multiremi API", () => {
     const agent = store.createAgent({ name: "Browser Claude", provider: "claude" });
     const remoteWorkspace = store.createWorkspace({ id: "ws_browser_remote", name: "Browser Remote", slug: "browser-remote" });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local", title: "Private browser chat" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "local", name: "Local", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "other-user", name: "Other Local", role: "member" });
+    store.createWorkspaceMember({ workspaceId: remoteWorkspace.id, userId: "local", name: "Local", role: "owner" });
     const localToken = await store.createAccessToken({ name: "Local browser", type: "pat", workspaceId: "local" });
     const otherLocalToken = await store.createAccessToken({ name: "Other local browser", type: "pat", workspaceId: "local", userId: "other-user" });
     const remoteToken = await store.createAccessToken({ name: "Remote browser", type: "pat", workspaceId: remoteWorkspace.id });
@@ -3937,6 +3944,8 @@ describe("Bun Multiremi API", () => {
     const agent = store.createAgent({ name: "Chat Claude", provider: "claude", workspaceId: "local" });
     const runtime = store.registerRuntime({ id: "rt_chat_realtime", name: "chat runtime", provider: "claude", workspaceId: "local" });
     const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local", title: "Private chat" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "local", name: "Creator", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "peer-user", name: "Workspace peer", role: "member" });
     const creatorToken = await store.createAccessToken({ name: "Creator", type: "pat", workspaceId: "local", userId: "local" });
     const peerToken = await store.createAccessToken({ name: "Workspace peer", type: "pat", workspaceId: "local", userId: "peer-user" });
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
@@ -4255,6 +4264,8 @@ describe("Bun Multiremi API", () => {
       workspaceId: remoteWorkspace.id,
       daemonId: "daemon-remote",
     });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "local", name: "Local", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: remoteWorkspace.id, userId: "remote-user", name: "Remote", role: "owner" });
     const localBrowserToken = await store.createAccessToken({
       name: "Local browser",
       type: "pat",
@@ -7563,6 +7574,7 @@ describe("Bun Multiremi API", () => {
   });
 
   it("serves workspace, runtime, auth, webhook, and setup compatibility fallbacks", async () => {
+    process.env.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN = "1";
     const store = createStore();
     const workspace = store.createWorkspace({ name: "Fallback Team", slug: "fallback-team" });
     const runtime = store.registerRuntime({ name: "Fallback Runtime", provider: "codex", workspaceId: workspace.id });
@@ -7632,6 +7644,7 @@ describe("Bun Multiremi API", () => {
 
     const removable = store.createWorkspace({ name: "Removable Team", slug: "removable-team" });
     expect((await app.request(`/api/workspaces/${removable.id}`, { method: "DELETE" })).status).toBe(204);
+    delete process.env.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN;
   });
 
   it("serves local workspace invitation compatibility endpoints", async () => {
@@ -10613,6 +10626,8 @@ describe("Bun Multiremi API", () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const remoteWorkspace = store.createWorkspace({ id: "ws_att_remote", name: "Att Remote", slug: "att-remote" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "local", name: "Local", role: "owner" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "peer-user", name: "Peer", role: "member" });
     const remoteToken = await store.createAccessToken({ name: "remote", type: "pat", workspaceId: remoteWorkspace.id });
     const localToken = await store.createAccessToken({ name: "local", type: "pat", workspaceId: "local", userId: "local" });
     const peerToken = await store.createAccessToken({ name: "peer", type: "pat", workspaceId: "local", userId: "peer-user" });

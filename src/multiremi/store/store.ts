@@ -163,6 +163,10 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const SYSTEM_AUTHOR_ID = "00000000-0000-0000-0000-000000000000";
+// Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
+// `local` user is tagged with this on migration so SSO login re-binds to it
+// instead of creating a duplicate. Overridable via MULTIREMI_OWNER_OPEN_ID.
+const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
@@ -1284,6 +1288,15 @@ export class MultiremiStore {
     this.addColumnIfMissing("multiremi_autopilot_triggers", "provider TEXT");
     this.addColumnIfMissing("multiremi_autopilot_triggers", "signing_secret_hint TEXT");
     this.addColumnIfMissing("multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
+    // Multi-user auth: stable external identity (Feishu open_id) on users, and an
+    // explicit user↔member link so membership no longer relies solely on the
+    // legacy `mem_<ws>_<userId>` id convention.
+    this.addColumnIfMissing("multiremi_users", "external_id TEXT");
+    this.addColumnIfMissing("multiremi_workspace_members", "user_id TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
+    this.backfillMemberUserIds();
+    this.backfillOwnerExternalId();
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");
@@ -1730,11 +1743,12 @@ export class MultiremiStore {
     const now = nowIso();
     this.db.run(
       `INSERT INTO multiremi_workspace_members (
-        id, workspace_id, name, email, role, archived_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+        id, workspace_id, user_id, name, email, role, archived_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       [
         id,
         input.workspaceId ?? "local",
+        cleanOptionalString(input.userId) ?? null,
         input.name.trim(),
         input.email ?? null,
         input.role ?? "member",
@@ -1831,6 +1845,94 @@ export class MultiremiStore {
   getUser(id: string): MultiremiUser | null {
     const row = this.db.query("SELECT * FROM multiremi_users WHERE id = ?").get(id) as Row | null;
     return row ? toUser(row) : null;
+  }
+
+  getUserByExternalId(externalId: string | null | undefined): MultiremiUser | null {
+    const value = cleanOptionalString(externalId);
+    if (!value) return null;
+    const row = this.db.query("SELECT * FROM multiremi_users WHERE external_id = ?").get(value) as Row | null;
+    return row ? toUser(row) : null;
+  }
+
+  getUserByEmail(email: string | null | undefined): MultiremiUser | null {
+    const value = cleanOptionalString(email)?.toLowerCase();
+    if (!value) return null;
+    const row = this.db.query("SELECT * FROM multiremi_users WHERE lower(email) = ?").get(value) as Row | null;
+    return row ? toUser(row) : null;
+  }
+
+  // Resolve (or provision) the distinct user record behind a login identity.
+  // Match order: stable external id (Feishu open_id) → email → mint a new user.
+  // Never rewrites a different user's id — each identity keeps its own record so
+  // concurrent logins can't overwrite one another.
+  getOrCreateUser(identity: { externalId?: string | null; email?: string | null; name?: string | null }): MultiremiUser {
+    const externalId = cleanOptionalString(identity.externalId);
+    const email = cleanOptionalString(identity.email)?.toLowerCase() ?? null;
+    const name = cleanOptionalString(identity.name);
+    let user = externalId ? this.getUserByExternalId(externalId) : null;
+    // Legacy/seed users may predate external_id; claim by email so we don't fork.
+    // But never let an email match resolve to an account already bound to a
+    // DIFFERENT external identity — that would let email login hijack an SSO user.
+    if (!user && email) {
+      const byEmail = this.getUserByEmail(email);
+      if (byEmail && (!byEmail.externalId || byEmail.externalId === externalId)) user = byEmail;
+    }
+    if (user) return this.reconcileUserIdentity(user, { externalId, email, name });
+    const id = createId("usr");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_users (
+        id, external_id, name, email, avatar_url, language, timezone, onboarded_at,
+        onboarding_questionnaire, starter_content_state, profile_description,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, '{}', NULL, '', ?, ?)`,
+      [id, externalId ?? null, name || email || "User", email ?? `${id}@multiremi.local`, now, now],
+    );
+    return this.getUser(id)!;
+  }
+
+  private reconcileUserIdentity(
+    user: MultiremiUser,
+    identity: { externalId?: string | null; email?: string | null; name?: string | null },
+  ): MultiremiUser {
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    if (identity.externalId && user.externalId !== identity.externalId) {
+      updates.push("external_id = ?");
+      params.push(identity.externalId);
+    }
+    if (identity.email && user.email.toLowerCase() !== identity.email) {
+      updates.push("email = ?");
+      params.push(identity.email);
+    }
+    if (identity.name && user.name !== identity.name) {
+      updates.push("name = ?");
+      params.push(identity.name);
+    }
+    if (!updates.length) return user;
+    updates.push("updated_at = ?");
+    params.push(nowIso());
+    params.push(user.id);
+    this.db.run(`UPDATE multiremi_users SET ${updates.join(", ")} WHERE id = ?`, params);
+    return this.getUser(user.id)!;
+  }
+
+  // Real role of a user in a workspace, or null when they are not a member.
+  // Matches on the explicit user_id link, falling back to the legacy
+  // `mem_<ws>_<userId>` id convention for members created before user_id existed.
+  getUserRoleInWorkspace(userId: string | null | undefined, workspaceId: string): string | null {
+    const uid = cleanOptionalString(userId);
+    if (!uid) return null;
+    const member = this.listWorkspaceMembers(workspaceId).find((m) =>
+      m.userId === uid || m.id === uid || m.id === `mem_${workspaceId}_${uid}`
+    );
+    return member ? member.role : null;
+  }
+
+  listWorkspacesForUser(userId: string | null | undefined): MultiremiWorkspace[] {
+    const uid = cleanOptionalString(userId);
+    if (!uid) return [];
+    return this.listWorkspaces().filter((ws) => this.getUserRoleInWorkspace(uid, ws.id) !== null);
   }
 
   updateCurrentUser(input: UpdateMultiremiUserInput): MultiremiUser {
@@ -1939,6 +2041,7 @@ export class MultiremiStore {
       this.createWorkspaceMember({
         id: memberId,
         workspaceId: id,
+        userId: user.id,
         name: user.name,
         email: user.email,
         role: "owner",
@@ -2008,14 +2111,14 @@ export class MultiremiStore {
     return this.createWorkspace({ id: "local", name: "Local Workspace", slug: "local", issuePrefix: "MUL" });
   }
 
-  createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput): MultiremiWorkspaceInvitation {
+  createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput, inviterUserId?: string | null): MultiremiWorkspaceInvitation {
     const workspace = this.getWorkspace(workspaceId);
     if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
     const email = String(input.email ?? input.inviteeEmail ?? input.invitee_email ?? "").trim().toLowerCase();
     if (!email) throw new Error("email is required");
     const role = normalizeWorkspaceInvitationRole(input.role ?? "member");
     if (role === "owner") throw new Error("cannot invite as owner");
-    const currentUser = this.getCurrentUser();
+    const currentUser = this.resolveActingUser(inviterUserId);
     if (email === currentUser.email.toLowerCase()) {
       const existingMember = this.listWorkspaceMembers(workspaceId).find((member) => member.email?.toLowerCase() === email);
       if (existingMember) throw new Error("user is already a member");
@@ -2059,8 +2162,20 @@ export class MultiremiStore {
     return rows.map((row) => this.hydrateInvitation(toInvitation(row))!);
   }
 
-  listCurrentUserInvitations(): MultiremiWorkspaceInvitation[] {
-    const user = this.getCurrentUser();
+  // Resolve the user acting on a request. The API passes the authenticated user
+  // id so invitation accept/decline/list operate on the real person; falling back
+  // to the local user keeps CLI/single-user flows working.
+  private resolveActingUser(actingUserId?: string | null): MultiremiUser {
+    const uid = cleanOptionalString(actingUserId);
+    if (uid) {
+      const user = this.getUser(uid);
+      if (user) return user;
+    }
+    return this.getCurrentUser();
+  }
+
+  listCurrentUserInvitations(actingUserId?: string | null): MultiremiWorkspaceInvitation[] {
+    const user = this.resolveActingUser(actingUserId);
     const now = nowIso();
     const rows = this.db.query(
       `SELECT * FROM multiremi_workspace_invitations
@@ -2083,10 +2198,10 @@ export class MultiremiStore {
     return true;
   }
 
-  acceptInvitation(invitationId: string): MultiremiWorkspaceInvitation | null {
+  acceptInvitation(invitationId: string, actingUserId?: string | null): MultiremiWorkspaceInvitation | null {
     const invitation = this.hydrateInvitation(this.getInvitation(invitationId));
     if (!invitation || invitation.status !== "pending") return null;
-    const user = this.getCurrentUser();
+    const user = this.resolveActingUser(actingUserId);
     if (invitation.inviteeEmail !== user.email.toLowerCase() && invitation.inviteeUserId !== user.id) {
       throw new Error("invitation does not belong to you");
     }
@@ -2097,18 +2212,20 @@ export class MultiremiStore {
     this.createWorkspaceMember({
       id: memberId,
       workspaceId: invitation.workspaceId,
+      userId: user.id,
       name: user.name,
       email: user.email,
       role: invitation.role,
     });
-    this.markCurrentUserOnboarded();
+    const now = nowIso();
+    this.db.run("UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?", [now, now, user.id]);
     return this.hydrateInvitation(accepted)!;
   }
 
-  declineInvitation(invitationId: string): MultiremiWorkspaceInvitation | null {
+  declineInvitation(invitationId: string, actingUserId?: string | null): MultiremiWorkspaceInvitation | null {
     const invitation = this.getInvitation(invitationId);
     if (!invitation || invitation.status !== "pending") return null;
-    const user = this.getCurrentUser();
+    const user = this.resolveActingUser(actingUserId);
     if (invitation.inviteeEmail !== user.email.toLowerCase() && invitation.inviteeUserId !== user.id) {
       throw new Error("invitation does not belong to you");
     }
@@ -8149,6 +8266,38 @@ export class MultiremiStore {
     }
   }
 
+  // Populate multiremi_workspace_members.user_id from the legacy `mem_<ws>_<userId>`
+  // id convention so pre-existing members (created before the user_id column) keep
+  // resolving to their user. The workspace_id column gives us the exact prefix to
+  // strip, so extraction is deterministic even when the user id contains `_`.
+  private backfillMemberUserIds(): void {
+    const rows = this.db.query(
+      "SELECT id, workspace_id FROM multiremi_workspace_members WHERE user_id IS NULL OR user_id = ''",
+    ).all() as Array<{ id: string; workspace_id?: string }>;
+    for (const row of rows) {
+      const workspaceId = String(row.workspace_id ?? "local");
+      const prefix = `mem_${workspaceId}_`;
+      const id = String(row.id);
+      if (!id.startsWith(prefix)) continue;
+      const userId = id.slice(prefix.length);
+      if (!userId) continue;
+      this.db.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [userId, id]);
+    }
+  }
+
+  // Tag the seed `local` user with the deployment owner's stable Feishu open_id so
+  // that when they log in via SSO, getOrCreateUser matches this existing record
+  // (keeping their id="local" ownership + history) instead of minting a new user.
+  // Only ever touches the pre-existing local row; a fresh install has none.
+  private backfillOwnerExternalId(): void {
+    const ownerOpenId = (process.env.MULTIREMI_OWNER_OPEN_ID ?? DEFAULT_OWNER_OPEN_ID).trim();
+    if (!ownerOpenId) return;
+    this.db.run(
+      "UPDATE multiremi_users SET external_id = ? WHERE id = 'local' AND (external_id IS NULL OR external_id = '')",
+      [ownerOpenId],
+    );
+  }
+
   private notifyTaskEnqueued(task: MultiremiTask): void {
     for (const listener of [...this.taskEnqueuedListeners]) {
       try {
@@ -9913,6 +10062,7 @@ function toWorkspaceMember(row: Row): MultiremiWorkspaceMember {
   return {
     id: String(row.id),
     workspaceId: String(row.workspace_id ?? "local"),
+    userId: nullableString(row.user_id),
     name: String(row.name),
     email: nullableString(row.email),
     role: String(row.role ?? "member"),
@@ -9926,6 +10076,8 @@ function toUser(row: Row): MultiremiUser {
   const onboardingQuestionnaire = parseJson<Record<string, unknown>>(row.onboarding_questionnaire, {});
   return {
     id: String(row.id),
+    externalId: nullableString(row.external_id),
+    external_id: nullableString(row.external_id),
     name: String(row.name),
     email: String(row.email),
     avatarUrl: nullableString(row.avatar_url),

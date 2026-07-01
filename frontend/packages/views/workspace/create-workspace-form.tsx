@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
@@ -28,13 +28,10 @@ export function CreateWorkspaceForm({ onSuccess }: CreateWorkspaceFormProps) {
   const [slug, setSlug] = useState("");
   const [slugServerError, setSlugServerError] = useState<string | null>(null);
   const slugTouched = useRef(false);
-  // Show the instance's own host as the URL prefix instead of a hardcoded
-  // brand domain — self-hosted instances aren't served from multimira.ai.
-  // Resolved in an effect since `window` is unavailable during SSR.
-  const [hostPrefix, setHostPrefix] = useState("");
-  useEffect(() => {
-    setHostPrefix(`${window.location.host}/`);
-  }, []);
+  // Brand prefix for the workspace URL — cosmetic only. The workspace is
+  // actually served from this instance's host under /<slug>; we just show a
+  // friendlier label instead of the raw host.
+  const hostPrefix = "multiremi/";
 
   const slugValidationError =
     slug.length > 0 && !WORKSPACE_SLUG_REGEX.test(slug)

@@ -59,6 +59,13 @@ export interface MultiremiDaemonOptions {
   runtimeId?: string | null;
   daemonId?: string | null;
   runtimeName?: string;
+  /**
+   * Human-facing machine name shown as the runtime-card title. Shared across
+   * all providers on this host (no provider suffix, no internal "bun-runtime"
+   * token). The per-runtime row label is derived server-side as
+   * `<provider> (<deviceName>)`.
+   */
+  deviceName?: string;
   provider?: string;
   workspaceId?: string | null;
   pollIntervalMs?: number;
@@ -159,14 +166,16 @@ export class MultiremiDaemon {
   constructor(options: MultiremiDaemonOptions) {
     const workspacesRoot = options.workspacesRoot ?? process.env.MULTIREMI_WORKSPACES_ROOT ?? join(homedir(), ".remi", "multiremi", "workspaces");
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
+    const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
     const runtimeId = options.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID ?? null;
-    const daemonId = options.daemonId ?? process.env.MULTIREMI_DAEMON_ID ?? runtimeId ?? runtimeName;
+    const daemonId = options.daemonId ?? process.env.MULTIREMI_DAEMON_ID ?? runtimeId ?? deviceName;
     this.explicitRuntimeId = Boolean(runtimeId);
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
       runtimeId,
       daemonId,
       runtimeName,
+      deviceName,
       provider: options.provider ?? process.env.MULTIREMI_PROVIDER ?? "claude",
       workspaceId: options.workspaceId ?? process.env.MULTIREMI_WORKSPACE_ID ?? "local",
       pollIntervalMs: options.pollIntervalMs ?? parseInt(process.env.MULTIREMI_POLL_INTERVAL_MS ?? "3000", 10),
@@ -269,11 +278,13 @@ export class MultiremiDaemon {
       const response = await this.client.registerDaemonRuntime({
         workspaceId: this.options.workspaceId ?? "local",
         daemonId: this.options.daemonId ?? this.options.runtimeName,
-        deviceName: this.options.runtimeName,
+        deviceName: this.options.deviceName,
         cliVersion: multiremiVersion,
         launchedBy: this.options.launchedBy ?? "manual",
         runtime: {
-          name: this.options.runtimeName,
+          // Empty name → server derives `<provider> (<deviceName>)`, which the
+          // dashboard splits into the machine title + a clean provider row.
+          name: "",
           type: this.options.provider,
           version: multiremiVersion,
           status: "online",
