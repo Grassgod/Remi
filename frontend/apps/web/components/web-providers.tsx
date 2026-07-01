@@ -13,21 +13,6 @@ import {
 } from "@/features/auth/auth-cookie";
 import { PageviewTracker } from "./pageview-tracker";
 
-// Legacy token in localStorage → keep this session in token mode so users who
-// logged in before the cookie-auth migration stay authed. They migrate to
-// cookie mode on their next logout/login cycle (logout clears multimira_token).
-// Sunset: once telemetry shows <1% of sessions still carry multimira_token,
-// delete this branch and hard-code `cookieAuth` — the localStorage token is
-// XSS-exposed and is the exact thing the cookie migration exists to remove.
-function hasLegacyToken(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return Boolean(window.localStorage.getItem("multimira_token"));
-  } catch {
-    return false;
-  }
-}
-
 // Derive WebSocket URL from the page origin so self-hosted / LAN deployments
 // work without explicit NEXT_PUBLIC_WS_URL.  The Next.js rewrite rule
 // (/ws → backend) handles proxying.
@@ -53,7 +38,10 @@ export function WebProviders({
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
 }) {
-  const cookieAuth = !hasLegacyToken();
+  // This deployment runs the token-based Bun multiremi server: login returns a
+  // token in the response body and sets NO auth cookie. cookieAuth mode would
+  // discard that token and 401 every protected request, so force token mode.
+  const cookieAuth = false;
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.
   const identity = useMemo(
