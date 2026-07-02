@@ -66,19 +66,3 @@ export async function completeOnboarding(
   );
   await useAuthStore.getState().refreshMe();
 }
-
-/**
- * Records interest in cloud runtimes. Pure side effect — does NOT
- * complete onboarding; the user still has to pick a real Step 3
- * path (CLI with a detected runtime) or Skip to move on.
- *
- * Returned user object is not synced into the auth store because no
- * user-visible field (`onboarded_at`, anything in `UserResponse`)
- * actually changes here.
- */
-export async function joinCloudWaitlist(
-  email: string,
-  reason: string,
-): Promise<void> {
-  await api.joinCloudWaitlist({ email, reason });
-}
