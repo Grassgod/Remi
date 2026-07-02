@@ -1006,15 +1006,24 @@ export class MultiremiStore {
       updates.push("email = ?");
       params.push(identity.email);
     }
-    if (identity.name && user.name !== identity.name) {
+    const newName = identity.name && user.name !== identity.name ? identity.name : null;
+    if (newName) {
       updates.push("name = ?");
-      params.push(identity.name);
+      params.push(newName);
     }
     if (!updates.length) return user;
     updates.push("updated_at = ?");
     params.push(nowIso());
     params.push(user.id);
     this.db.run(`UPDATE multiremi_users SET ${updates.join(", ")} WHERE id = ?`, params);
+    // Member rows denormalize the display name; sync them so pickers/member
+    // lists don't keep showing a stale seed snapshot (e.g. "Local User").
+    if (newName) {
+      this.db.run(
+        "UPDATE multiremi_workspace_members SET name = ?, updated_at = ? WHERE user_id = ? AND name <> ?",
+        [newName, nowIso(), user.id, newName],
+      );
+    }
     return this.getUser(user.id)!;
   }
 
