@@ -84,6 +84,9 @@
   "detail": {
     "all_runtimes": "모든 런타임",
     "read_only": "읽기 전용",
+    "name_edit_hint": "런타임 이름 변경",
+    "name_toast_updated": "런타임 이름이 변경되었습니다",
+    "name_toast_failed": "런타임 이름을 변경하지 못했습니다",
     "delete_button": "런타임 삭제",
     "delete_disabled_tooltip": "이 런타임은 실행 중인 로컬 데몬이 관리하며 몇 초 안에 다시 등록됩니다. 영구 제거하려면 데몬 프로세스를 중지하세요.",
     "last_seen": "마지막 확인 {{when}}",

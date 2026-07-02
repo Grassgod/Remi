@@ -80,6 +80,9 @@
   "detail": {
     "all_runtimes": "すべてのランタイム",
     "read_only": "読み取り専用",
+    "name_edit_hint": "ランタイムの名前を変更",
+    "name_toast_updated": "ランタイムの名前を変更しました",
+    "name_toast_failed": "ランタイムの名前を変更できませんでした",
     "delete_button": "ランタイムを削除",
     "delete_disabled_tooltip": "このランタイムは実行中のローカルデーモンが管理しており、数秒以内に自分で再登録します。完全に削除するには、デーモンプロセスを停止してください。",
     "last_seen": "最終確認 {{when}}",
