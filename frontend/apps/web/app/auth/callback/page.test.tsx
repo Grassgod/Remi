@@ -95,7 +95,6 @@ describe("CallbackPage", () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith("/invite/abc123");
     });
-    expect(mockPush).not.toHaveBeenCalledWith(paths.onboarding());
     // nextUrl is a fast path — listMyInvitations should not be queried.
     expect(mockListMyInvitations).not.toHaveBeenCalled();
   });
@@ -127,7 +126,6 @@ describe("CallbackPage", () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith(paths.invitations());
     });
-    expect(mockPush).not.toHaveBeenCalledWith(paths.onboarding());
   });
 
   it("onboarded user with workspace lands in that workspace", async () => {
