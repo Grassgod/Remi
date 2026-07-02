@@ -72,7 +72,7 @@ export { approvePlanOption, rejectPermissionOption, isPlanApproval } from "./ada
 export { generateUniqueName, getSessionName } from "./session-name.js";
 
 // ── Group utilities ───────────────────────────────────────────
-export { createProjectChat, getChatName, transferChatOwner, updateChat, addChatTab, setupProjectChat, getBoardBaseUrl, REMI_AVATAR_KEY } from "./chat.js";
+export { createProjectChat, getChatName, transferChatOwner, updateChat, REMI_AVATAR_KEY } from "./chat.js";
 export { createThread, sendToThread, getThreadMessages, getBaseUrl as getFeishuBaseUrl, getTenantToken } from "./thread.js";
 export type { ThreadMessage } from "./thread.js";
 export { MenuSyncer } from "./menu-sync.js";

@@ -1,12 +1,12 @@
 export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "./base.js";
-export { ClaudeAdapter } from "./claude-code/index.js";
-export { CodexAdapter } from "./codex/index.js";
+export { ClaudeAdapter } from "../../../acp/adapters/claude-code/index.js";
+export { CodexAdapter } from "../../../acp/adapters/codex/index.js";
 export { handleAgentStream, allowCurrentToolOption, approvePlanOption, rejectPermissionOption, isPlanApproval } from "./stream-handler.js";
 export type { StreamMeta, StreamHandlerLog } from "./stream-handler.js";
 
 import type { AgentAdapter } from "./base.js";
-import { ClaudeAdapter } from "./claude-code/index.js";
-import { CodexAdapter } from "./codex/index.js";
+import { ClaudeAdapter } from "../../../acp/adapters/claude-code/index.js";
+import { CodexAdapter } from "../../../acp/adapters/codex/index.js";
 
 const registry: Record<string, () => AgentAdapter> = {
   claude: () => new ClaudeAdapter(),
