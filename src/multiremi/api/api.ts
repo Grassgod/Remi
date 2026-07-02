@@ -128,6 +128,7 @@ declare module "hono" {
 }
 
 const log = createLogger("multiremi-api");
+let authDisabledWarningEmitted = false;
 const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
 const LOCAL_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
@@ -361,6 +362,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       c.set("multiremiAccessToken", accessToken);
       await next();
     });
+  } else if (!authDisabledWarningEmitted) {
+    authDisabledWarningEmitted = true;
+    log.warn(
+      "dashboard auth is DISABLED (MULTIREMI_TOKEN is unset): all requests are unauthenticated and act as the local admin with full access",
+    );
   }
 
   app.onError((err, c) => {
@@ -523,6 +529,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       daemon_id?: string | null;
     }>(c);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     let token = body.token ?? c.req.query("token");
     let tokenId: string | null = null;
     const shouldCreateToken = (body.createToken ?? body.create_token ?? true) !== false;
@@ -1177,25 +1185,43 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result, 201);
   });
   app.get("/api/multiremi/agent-task-snapshot", (c) => {
-    const tasks = store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId);
     return c.json({ tasks, total: tasks.length });
   });
   app.get("/api/agent-task-snapshot", (c) => {
-    return c.json(store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId));
   });
   app.get("/api/multiremi/agent-run-counts", (c) => {
-    const counts = store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const counts = store.listWorkspaceAgentRunCounts(workspaceId);
     return c.json({ counts, total: counts.length });
   });
   app.get("/api/agent-run-counts", (c) => {
-    return c.json(store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentRunCounts(workspaceId));
   });
   app.get("/api/multiremi/agent-activity-30d", (c) => {
-    const activity = store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const activity = store.listWorkspaceAgentActivity30d(workspaceId);
     return c.json({ activity, total: activity.length });
   });
   app.get("/api/agent-activity-30d", (c) => {
-    return c.json(store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentActivity30d(workspaceId));
   });
   app.get("/api/multiremi/agent-templates", (c) => {
     const templates = listAgentTemplates();
@@ -1417,11 +1443,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/members", (c) => {
-    const members = store.listWorkspaceMembers(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const members = store.listWorkspaceMembers(workspaceId);
     return c.json({ members, total: members.length });
   });
   app.post("/api/multiremi/members", async (c) => {
     const body = await readJson<CreateWorkspaceMemberInput>(c);
+    const workspaceId = body.workspaceId ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json({ member: store.createWorkspaceMember(body) }, 201);
   });
   app.get("/api/multiremi/members/:id", (c) => {
@@ -1442,12 +1474,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/tokens", (c) => {
-    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tokens = store.listAccessTokens(workspaceId);
     return c.json({ tokens, total: tokens.length });
   });
   app.post("/api/multiremi/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json({ token: await store.createAccessToken(body) }, 201);
   });
   app.delete("/api/multiremi/tokens/:id", (c) => {
@@ -1455,52 +1493,76 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ token, ok: true });
   });
   app.get("/api/multiremi/notification-preferences", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.getNotificationPreferences({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       memberId: c.req.query("memberId") ?? c.req.query("member_id"),
     }));
   });
   app.put("/api/multiremi/notification-preferences", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MultiremiNotificationPreferences }>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.updateNotificationPreferences({
-      workspaceId: body.workspaceId ?? body.workspace_id,
+      workspaceId,
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? {},
     }));
   });
   app.get("/api/notification-preferences", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.getNotificationPreferences({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       memberId: c.req.query("memberId") ?? c.req.query("member_id"),
     }));
   });
   app.put("/api/notification-preferences", async (c) => {
     const body = await readJson<MultiremiNotificationPreferences & { workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MultiremiNotificationPreferences }>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.updateNotificationPreferences({
-      workspaceId: body.workspaceId ?? body.workspace_id,
+      workspaceId,
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? body,
     }));
   });
   app.post("/api/multiremi/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
     return c.json({ feedback }, 201);
   });
   app.get("/api/multiremi/feedback", (c) => {
-    const feedback = store.listFeedback(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const feedback = store.listFeedback(workspaceId);
     return c.json({ feedback, total: feedback.length });
   });
   app.post("/api/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
     return c.json({ id: feedback.id, created_at: feedback.createdAt }, 201);
   });
   app.get("/api/multiremi/github/settings", (c) => {
-    return c.json({ settings: store.getGitHubSettings(c.req.query("workspaceId") ?? "local") });
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json({ settings: store.getGitHubSettings(workspaceId) });
   });
   app.put("/api/multiremi/github/settings", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; enabled?: boolean; prSidebar?: boolean; pr_sidebar?: boolean; coAuthor?: boolean; co_author?: boolean; autoLinkPRs?: boolean; auto_link_prs?: boolean }>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({
       settings: store.updateGitHubSettings({
         workspaceId: body.workspaceId ?? body.workspace_id,
@@ -1512,8 +1574,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     });
   });
   app.get("/api/multiremi/github/pull-requests", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const pullRequests = store.listGitHubPullRequests({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       issueId: c.req.query("issueId") ?? c.req.query("issue_id"),
     });
     return c.json({ pullRequests, total: pullRequests.length });
@@ -1530,19 +1595,28 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/github/pull-requests", async (c) => {
     const body = await readJson<any>(c);
-    return c.json({ pullRequest: store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody(body)) }, 201);
+    const normalized = normalizeGitHubPullRequestBody(body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, normalized.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json({ pullRequest: store.upsertGitHubPullRequest(normalized) }, 201);
   });
   app.post("/api/multiremi/github/webhook", async (c) => {
     const body = await readJson<any>(c);
     return c.json(handleGitHubWebhook(store, body), 202);
   });
   app.get("/api/tokens", (c) => {
-    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tokens = store.listAccessTokens(workspaceId);
     return c.json(tokens);
   });
   app.post("/api/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(await store.createAccessToken(body), 201);
   });
   app.post("/api/tokens/current/renew", async (c) => {
@@ -1935,19 +2009,45 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(ack);
   });
 
-  app.get("/api/dashboard/usage/daily", (c) => c.json(store.listUsageDaily(usageQuery(c))));
-  app.get("/api/dashboard/usage/by-agent", (c) => c.json(store.listUsageByAgent(usageQuery(c))));
-  app.get("/api/dashboard/agent-runtime", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
-  app.get("/api/dashboard/runtime/daily", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
+  app.get("/api/dashboard/usage/daily", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listUsageDaily(query));
+  });
+  app.get("/api/dashboard/usage/by-agent", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listUsageByAgent(query));
+  });
+  app.get("/api/dashboard/agent-runtime", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listRuntimeDaily(query));
+  });
+  app.get("/api/dashboard/runtime/daily", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listRuntimeDaily(query));
+  });
 
   app.get("/api/multiremi/projects", (c) => {
-    const projects = store.listProjects(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const projects = store.listProjects(workspaceId);
     return c.json({ projects, total: projects.length });
   });
   app.get("/api/multiremi/projects/search", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const result = store.searchProjects({
       q: c.req.query("q") ?? "",
-      workspaceId: c.req.query("workspaceId"),
+      workspaceId,
       includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
@@ -1955,10 +2055,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result);
   });
   app.get("/api/projects/search", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     try {
       const result = store.searchProjects({
         q: c.req.query("q") ?? "",
-        workspaceId: c.req.query("workspace_id"),
+        workspaceId,
         includeClosed: c.req.query("include_closed") === "true",
         limit: parseOptionalInt(c.req.query("limit")),
         offset: parseOptionalInt(c.req.query("offset")),
@@ -1975,16 +2078,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.get("/api/projects", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const projects = store
-      .listProjects(c.req.query("workspace_id") ?? "local")
+      .listProjects(workspaceId)
       .map(projectCompatibilityResponse);
     return c.json({ projects, total: projects.length });
   });
   app.post("/api/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const projectInput = projectCreateCompatibilityInput(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
+    if (denied) return denied;
     try {
-      const project = store.createProject(projectCreateCompatibilityInput(c, body));
+      const project = store.createProject(projectInput);
       const response = projectCompatibilityResponse(project);
       publishProjectCreated(c, store, project, response);
       return c.json(response, 201);
@@ -1997,6 +2106,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({ project: store.createProject(body) }, 201);
   });
   app.get("/api/multiremi/projects/:id", (c) => {
@@ -2116,11 +2227,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/squads", (c) => {
-    const squads = store.listSquads(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const squads = store.listSquads(workspaceId);
     return c.json({ squads, total: squads.length });
   });
   app.get("/api/squads", (c) => {
     const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.listSquads(workspaceId).map((squad) => squadCompatibilityResponse(store, squad)));
   });
   app.post("/api/squads", async (c) => {
@@ -2136,6 +2252,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const squadCreateDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (squadCreateDenied) return squadCreateDenied;
     const leaderId = cleanString(body.leader_id);
     const name = cleanString(body.name);
     if (!name) return c.json({ error: "name is required" }, 400);
@@ -2160,6 +2278,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/squads", async (c) => {
     const body = await readJson<CreateSquadInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? "local");
+    if (denied) return denied;
     return c.json({ squad: store.createSquad(body) }, 201);
   });
   app.get("/api/multiremi/squads/:id", (c) => {
@@ -2195,11 +2315,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!squad) return c.json({ error: "squad not found" }, 404);
     const workspaceId = compatibilityWorkspaceId(c);
     if (squad.workspaceId !== workspaceId) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(squadCompatibilityResponse(store, squad));
   });
   app.put("/api/squads/:id", async (c) => {
     const existing = store.getSquad(c.req.param("id"));
     if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{
       name?: string;
       description?: string | null;
@@ -2227,22 +2351,30 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/squads/:id", (c) => {
     const existing = store.getSquad(c.req.param("id"));
     if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
+    if (denied) return denied;
     store.archiveSquad(c.req.param("id"));
     return c.body(null, 204);
   });
   app.get("/api/squads/:id/members", (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(store.listSquadMembers(c.req.param("id")).map(squadMemberCompatibilityResponse));
   });
   app.get("/api/squads/:id/members/status", (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(squadMemberStatusResponse(store, c.req.param("id")));
   });
   app.post("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2263,6 +2395,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.patch("/api/squads/:id/members/role", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2283,6 +2417,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2297,12 +2433,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/autopilots", (c) => {
-    const autopilots = store.listAutopilots(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const autopilots = store.listAutopilots(workspaceId);
     return c.json({ autopilots, total: autopilots.length });
   });
   app.get("/api/autopilots", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const status = cleanString(c.req.query("status"));
-    let autopilots = store.listAutopilots(c.req.query("workspace_id") ?? "local");
+    let autopilots = store.listAutopilots(workspaceId);
     if (status) autopilots = autopilots.filter((autopilot) => autopilot.status === status);
     const response = autopilots.map(autopilotCompatibilityResponse);
     return c.json({ autopilots: response, total: response.length });
@@ -2312,6 +2454,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = autopilotCreateCompatibilityInput(c, body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
+    if (denied) return denied;
     try {
       const autopilot = store.createAutopilot(input);
       scheduler?.sync();
@@ -2324,7 +2468,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/autopilots", async (c) => {
     const body = await readJson<CreateAutopilotInput>(c);
-    const autopilot = store.createAutopilot(autopilotCreateInput(c, body));
+    const input = autopilotCreateInput(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
+    if (denied) return denied;
+    const autopilot = store.createAutopilot(input);
     scheduler?.sync();
     return c.json({ autopilot }, 201);
   });
@@ -2553,11 +2700,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/labels", (c) => {
-    const labels = store.listLabels(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const labels = store.listLabels(workspaceId);
     return c.json({ labels, total: labels.length });
   });
   app.post("/api/multiremi/labels", async (c) => {
     const body = await readJson<CreateLabelInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({ label: store.createLabel(body) }, 201);
   });
   app.get("/api/multiremi/labels/:id", (c) => {
@@ -2578,12 +2730,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/labels", (c) => {
-    const labels = store.listLabels(c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const labels = store.listLabels(workspaceId);
     return c.json({ labels: labels.map(labelCompatibilityResponse), total: labels.length });
   });
   app.post("/api/labels", async (c) => {
     const body = await readJsonStrict<CreateLabelInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "local");
+    if (denied) return denied;
     try {
       return c.json(labelCompatibilityResponse(store.createLabel(labelCreateCompatibilityInput(body))), 201);
     } catch (error) {
@@ -2614,34 +2771,70 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/pins", (c) => {
-    const pins = store.listPinnedItems(c.req.query("workspaceId"), c.req.query("userId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = c.req.query("userId") ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.listPinnedItems(workspaceId, userId);
     return c.json({ pins, total: pins.length });
   });
   app.post("/api/multiremi/pins", async (c) => {
     const body = await readJson<CreatePinnedItemInput>(c);
-    return c.json({ pin: store.createPinnedItem(body) }, 201);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    return c.json({ pin: store.createPinnedItem({ ...body, workspaceId, userId }) }, 201);
   });
   app.put("/api/multiremi/pins/reorder", async (c) => {
     const body = await readJson<{ workspaceId?: string; workspace_id?: string; userId?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
-    const pins = store.reorderPinnedItems(body.workspaceId ?? body.workspace_id, body.userId ?? body.user_id, body.items ?? []);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.reorderPinnedItems(workspaceId, userId, body.items ?? []);
     return c.json({ pins, total: pins.length });
   });
   app.delete("/api/multiremi/pins/:itemType/:itemId", (c) => {
-    store.deletePinnedItem(c.req.query("workspaceId"), c.req.query("userId"), c.req.param("itemType"), c.req.param("itemId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = c.req.query("userId") ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    store.deletePinnedItem(workspaceId, userId, c.req.param("itemType"), c.req.param("itemId"));
     return c.json({ ok: true });
   });
 
   app.get("/api/pins", (c) => {
-    return c.json(store.listPinnedItems(compatibilityWorkspaceId(c), compatibilityUserId(c)).map(pinCompatibilityResponse));
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    return c.json(store.listPinnedItems(workspaceId, userId).map(pinCompatibilityResponse));
   });
   app.post("/api/pins", async (c) => {
     const body = await readJsonStrict<{ id?: string; workspace_id?: string | null; user_id?: string | null; item_type?: string; item_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = cleanString(body.user_id) ?? compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
     try {
       const pin = store.createPinnedItem({
         id: body.id,
-        workspace_id: cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c),
-        user_id: cleanString(body.user_id) ?? compatibilityUserId(c),
+        workspace_id: workspaceId,
+        user_id: userId,
         item_type: body.item_type,
         item_id: body.item_id,
       });
@@ -2653,11 +2846,23 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.put("/api/pins/reorder", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const pins = store.reorderPinnedItems(body.workspace_id ?? compatibilityWorkspaceId(c), body.user_id ?? compatibilityUserId(c), body.items ?? []);
+    const workspaceId = body.workspace_id ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.user_id ?? compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.reorderPinnedItems(workspaceId, userId, body.items ?? []);
     return c.json(pins.map(pinCompatibilityResponse));
   });
   app.delete("/api/pins/:itemType/:itemId", (c) => {
-    store.deletePinnedItem(compatibilityWorkspaceId(c), compatibilityUserId(c), c.req.param("itemType"), c.req.param("itemId"));
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    store.deletePinnedItem(workspaceId, userId, c.req.param("itemType"), c.req.param("itemId"));
     return c.body(null, 204);
   });
 
@@ -2675,21 +2880,50 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   };
 
   app.get("/api/multiremi/issues", (c) => {
-    const { issues } = listIssuesResponse(issueListQuery(store, c));
+    const query = issueListQuery(store, c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    const { issues } = listIssuesResponse(query);
     return c.json({ issues });
   });
   app.get("/api/issues", (c) => {
-    const issues = store.listIssues(issueListQuery(store, c, "compat")).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
+    const query = issueListQuery(store, c, "compat");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
     return c.json({ issues, total: issues.length });
   });
-  app.get("/api/multiremi/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(store, c))));
-  app.get("/api/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(store, c, "compat"))));
-  app.get("/api/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
-  app.get("/api/multiremi/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
+  app.get("/api/multiremi/issues/grouped", (c) => {
+    const query = issueListQuery(store, c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listGroupedIssues(query));
+  });
+  app.get("/api/issues/grouped", (c) => {
+    const query = issueListQuery(store, c, "compat");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listGroupedIssues(query));
+  });
+  app.get("/api/assignee-frequency", (c) => {
+    const query = assigneeFrequencyQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listAssigneeFrequency(query));
+  });
+  app.get("/api/multiremi/assignee-frequency", (c) => {
+    const query = assigneeFrequencyQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listAssigneeFrequency(query));
+  });
   app.get("/api/multiremi/issues/search", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const result = store.searchIssues({
       q: c.req.query("q") ?? "",
-      workspaceId: c.req.query("workspaceId"),
+      workspaceId,
       includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
@@ -2697,10 +2931,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result);
   });
   app.get("/api/issues/search", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     try {
       const result = store.searchIssues({
         q: c.req.query("q") ?? "",
-        workspaceId: c.req.query("workspace_id"),
+        workspaceId,
         includeClosed: c.req.query("include_closed") === "true",
         limit: parseOptionalInt(c.req.query("limit")),
         offset: parseOptionalInt(c.req.query("offset")),
@@ -2717,11 +2954,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.get("/api/multiremi/issues/child-progress", (c) => {
-    const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const progress = store.listChildIssueProgress(workspaceId);
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/child-progress", (c) => {
-    const progress = store.listChildIssueProgress(c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const progress = store.listChildIssueProgress(workspaceId);
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/children", (c) => {
@@ -2763,6 +3006,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const issue = store.createIssue({
@@ -2787,8 +3032,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
+    const issueInput = withIssueCreateRequestContext(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
+    if (denied) return denied;
     try {
-      const issue = store.createIssue(withIssueCreateRequestContext(c, body));
+      const issue = store.createIssue(issueInput);
       let response = issueCompatibilityResponse(issue);
       publishIssueCreated(c, store, issue, response);
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
@@ -2815,6 +3063,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/issues/quick-create", async (c) => {
     const body = await readJson<QuickCreateIssueInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const result = safeQuickCreateIssue(store, body);
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
@@ -2826,7 +3076,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/issues/quick-create", async (c) => {
     const body = await readJson<QuickCreateIssueInput>(c);
-    const result = safeQuickCreateIssue(store, issueQuickCreateCompatibilityInput(body));
+    const input = issueQuickCreateCompatibilityInput(body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
+    if (denied) return denied;
+    const result = safeQuickCreateIssue(store, input);
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({ task_id: result.task.id }, 202);
   });
@@ -2858,19 +3111,27 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.get("/api/multiremi/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c);
-    const response = issue ? issueTimelineResponse(store, issue.id, c) : null;
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const response = issueTimelineResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
   app.get("/api/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
-    const response = issue ? issueTimelineCompatibilityResponse(store, issue.id, c) : null;
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const response = issueTimelineCompatibilityResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
   app.get("/api/issues/:id/active-task", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const tasks = store.listTasksForIssue(issue.id)
       .filter((task) => isActiveTaskStatus(task.status))
       .map((task) => taskCompatibilityResponse(task));
@@ -2879,16 +3140,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/issues/:id/task-runs", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id).map((task) => taskCompatibilityResponse(task)));
   });
   app.get("/api/issues/:id/usage", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(issueUsageResponse(store, issue));
   });
   app.post("/api/issues/:id/rerun", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
     const result = safeRerunIssue(store, issue.id, body);
     if ("error" in result) return c.json({ error: result.error }, result.status);
@@ -2898,6 +3165,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const issue = issueFromParam(store, c, "id", "compat");
     const task = issue ? store.getTaskByRef(c.req.param("taskId"), { issueId: issue.id }) : null;
     if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.post("/api/issues/:id/squad-evaluated", async (c) => {
@@ -2912,6 +3181,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     try {
       const issue = issueFromParam(store, c, "id", "compat");
       if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
       const taskToken = currentTaskAccessToken(c);
       const activity = store.recordSquadLeaderEvaluation(issue.id, {
         outcome: body.outcome ?? "",
@@ -2937,36 +3208,48 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const children = store.listChildIssues(issue.id);
     return c.json({ issues: children, total: children.length });
   });
   app.get("/api/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const children = store.listChildIssues(issue.id);
     return c.json({ issues: children, total: children.length });
   });
   app.get("/api/multiremi/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const dependencies = store.listIssueDependencies(issue.id);
     return c.json({ dependencies, total: dependencies.length });
   });
   app.get("/api/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const dependencies = store.listIssueDependencies(issue.id).map(issueDependencyCompatibilityResponse);
     return c.json({ dependencies, total: dependencies.length });
   });
   app.post("/api/multiremi/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateIssueDependencyInput>(c);
     return c.json({ dependency: store.createIssueDependency(issue.id, body) }, 201);
   });
   app.post("/api/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateIssueDependencyInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -2980,12 +3263,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/dependencies/:dependencyId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id/dependencies/:dependencyId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     try {
       store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
       return c.json({ status: "ok" });
@@ -2998,12 +3285,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
     return c.json({ issue: store.updateIssue(issue.id, body) });
   });
   const updateIssueCompatibilityRoute = async (c: any) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = issueUpdateCompatibilityInput(body);
@@ -3022,25 +3313,33 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.put("/api/issues/:id", updateIssueCompatibilityRoute);
   app.delete("/api/multiremi/issues/:id", (c) => {
     const issue = issueFromParam(store, c);
-    const deleted = issue ? store.deleteIssue(issue.id) : false;
-    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.deleteIssue(issue.id)) return c.json({ error: "issue not found" }, 404);
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
-    const deleted = issue ? store.deleteIssue(issue.id) : false;
-    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.deleteIssue(issue.id)) return c.json({ error: "issue not found" }, 404);
     return c.body(null, 204);
   });
   app.post("/api/multiremi/issues/:id/assign", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
     return c.json(store.assignIssue(issue.id, body));
   });
   app.get("/api/multiremi/issues/:id/comments", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const input = parseIssueCommentListQuery(c);
     if ("error" in input) return c.json({ error: input.error }, input.status);
     try {
@@ -3054,6 +3353,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/issues/:id/comments", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const input = parseIssueCommentListQuery(c);
     if ("error" in input) return c.json({ error: input.error }, input.status);
     try {
@@ -3067,12 +3368,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body)) }, 201);
   });
   app.post("/api/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateIssueCommentInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -3084,22 +3389,30 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/reactions", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ reactions: store.listIssueReactions(issue.id) });
   });
   app.get("/api/issues/:id/reactions", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueReactions(issue.id).map(issueReactionCompatibilityResponse));
   });
   app.post("/api/multiremi/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(body)) }, 201);
   });
   app.post("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3109,6 +3422,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     store.removeIssueReaction(issue.id, normalizeReactionInput(body));
     return c.json({ ok: true });
@@ -3116,6 +3431,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3140,6 +3457,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/issues/:id/attachments", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateAttachmentInput>(c);
     const attachment = store.createAttachment({ ...body, issueId: issue.id });
     return c.json({ attachment }, 201);
@@ -3147,12 +3466,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/labels", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.listLabelsForIssue(issue.id);
     return c.json({ labels, total: labels.length });
   });
   app.post("/api/multiremi/issues/:id/labels", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ labelId?: string; label_id?: string }>(c);
     const labels = store.attachLabelToIssue(issue.id, body.labelId ?? body.label_id ?? "");
     return c.json({ labels, total: labels.length }, 201);
@@ -3160,18 +3483,24 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/labels/:labelId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
     return c.json({ labels, total: labels.length });
   });
   app.get("/api/issues/:id/labels", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.listLabelsForIssue(issue.id);
     return c.json({ labels: labels.map(labelCompatibilityResponse) });
   });
   app.post("/api/issues/:id/labels", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ label_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const labelId = body.label_id ?? "";
@@ -3186,6 +3515,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/issues/:id/labels/:labelId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     try {
       const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
       return c.json({ labels: labels.map(labelCompatibilityResponse) });
@@ -3196,16 +3527,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/subscribers", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ subscribers: store.listIssueSubscribers(issue.id) });
   });
   app.get("/api/issues/:id/subscribers", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueSubscribers(issue.id).map(issueSubscriberCompatibilityResponse));
   });
   app.post("/api/multiremi/issues/:id/subscribers", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ memberId?: string; reason?: unknown }>(c);
     return c.json({
       subscriber: store.addIssueSubscriber(issue.id, body.memberId ?? "", normalizeSubscriptionReason(body.reason)),
@@ -3214,6 +3551,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/issues/:id/subscribe", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ member_id?: string; user_id?: string; user_type?: string; reason?: unknown }>(c);
     const target = issueSubscriberTarget(c, body);
     if ("error" in target) return c.json({ error: target.error }, target.status);
@@ -3239,6 +3578,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/issues/:id/unsubscribe", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ member_id?: string; user_id?: string; user_type?: string }>(c);
     const target = issueSubscriberTarget(c, body);
     if ("error" in target) return c.json({ error: target.error }, target.status);
@@ -3264,39 +3605,53 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/subscribers/:memberId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     store.removeIssueSubscriber(issue.id, c.req.param("memberId"));
     return c.json({ ok: true });
   });
   app.get("/api/multiremi/issues/:id/metadata", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ metadata: store.listIssueMetadata(issue.id) });
   });
   app.get("/api/issues/:id/metadata", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueMetadata(issue.id));
   });
   app.put("/api/multiremi/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
   });
   app.put("/api/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
   });
   app.delete("/api/multiremi/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
   });
   app.delete("/api/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
   });
 
@@ -6161,12 +6516,23 @@ function denyCurrentUserWorkspaceAccess(c: any, store: MultiremiStore, workspace
   // their workspace — no separate membership row required.
   if (token?.type === "task") return null;
   // Any authenticated human (login PAT or JWT) must be a member of the workspace;
-  // non-members get 404 (existence hidden). No user id => master token / open
-  // mode => full admin access.
+  // non-members get 404 (existence hidden). No user id (or the synthetic "local"
+  // admin identity carried by user-less workspace access tokens) => master token /
+  // open mode => full admin access.
   const userId = authenticatedRequestUserId(c);
-  if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
+  return null;
+}
+
+// Pins are private to their owner. When the request is authenticated as a real
+// user, the pin's user id must equal that user — nobody can read or mutate
+// another person's pins. Master-token / open mode (no authenticated user id)
+// keeps full access.
+function denyPinOwnerAccess(c: any, userId: string): Response | null {
+  const authUser = authenticatedRequestUserId(c);
+  if (authUser && userId !== authUser) return c.json({ error: "forbidden" }, 403);
   return null;
 }
 
@@ -9150,6 +9516,10 @@ function headersToRecord(headers: Headers): Record<string, string> {
 }
 
 function verifyJwtToken(token: string): { userId: string } | null {
+  // No real secret configured (outside development) => reject every JWT rather
+  // than validating against a publicly-known hardcoded default.
+  const secret = jwtSecret();
+  if (!secret) return null;
   const [encodedHeader, encodedClaims, signature, extra] = token.split(".");
   if (!encodedHeader || !encodedClaims || !signature || extra !== undefined) return null;
   const header = decodeBase64UrlJson(encodedHeader);
@@ -9158,15 +9528,21 @@ function verifyJwtToken(token: string): { userId: string } | null {
   const digest = JWT_HMAC_ALGORITHMS[String(header.alg ?? "")];
   if (!digest) return null;
   const signingInput = `${encodedHeader}.${encodedClaims}`;
-  const expected = base64UrlEncode(createHmac(digest, jwtSecret()).update(signingInput).digest());
+  const expected = base64UrlEncode(createHmac(digest, secret).update(signingInput).digest());
   if (!safeEqualText(signature, expected)) return null;
   const userId = cleanString(typeof claims.sub === "string" ? claims.sub : null);
   if (!userId || !jwtTimeClaimsAreValid(claims)) return null;
   return { userId };
 }
 
-function jwtSecret(): string {
-  return process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+// Returns the configured JWT signing secret, or null when none is set. The
+// hardcoded dev default is only allowed in non-production dev/test environments;
+// in production a missing JWT_SECRET means JWTs are rejected outright rather
+// than validated against a publicly-known key.
+function jwtSecret(): string | null {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") return DEFAULT_JWT_SECRET;
+  return null;
 }
 
 function jwtTimeClaimsAreValid(claims: Record<string, unknown>, nowSeconds = Date.now() / 1000): boolean {
