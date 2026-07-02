@@ -1,6 +1,7 @@
 import { Cron } from "croner";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/sql-database.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   AddSquadMemberInput,
   AssignIssueInput,
@@ -148,6 +149,8 @@ import type {
   UpdateSquadInput,
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
+
+const log = createLogger("multiremi-store");
 
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
 const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "running", "waiting_local_directory"];
@@ -3825,13 +3828,28 @@ export class MultiremiStore {
   }
 
   listIssues(input: ListIssuesInput = {}): MultiremiIssue[] {
-    const rows = this.db.query("SELECT * FROM multiremi_issues ORDER BY updated_at DESC").all() as Row[];
+    const { where, params } = buildIssueListWhere(input);
     const offset = normalizeListOffset(input.offset);
     const limit = input.limit === undefined ? Number.POSITIVE_INFINITY : normalizeListLimit(input.limit);
-    return rows
-      .map((row) => this.hydrateIssue(toIssue(row)))
+    // Metadata is a JSON column filtered in JS; when it (or an unbounded limit) is present we can't
+    // safely push LIMIT/OFFSET into SQL, so we narrow the rows in SQL and paginate afterward.
+    const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+
+    if (!hasMetadata && Number.isFinite(limit)) {
+      const rows = this.db
+        .query(`SELECT * FROM multiremi_issues ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+        .all(...params, limit, offset) as Row[];
+      return this.hydrateIssues(rows.map((row) => toIssue(row)));
+    }
+
+    const rows = this.db
+      .query(`SELECT * FROM multiremi_issues ${where} ORDER BY updated_at DESC`)
+      .all(...params) as Row[];
+    const issues = rows
+      .map((row) => toIssue(row))
       .filter((issue) => issueMatchesListFilter(issue, input))
       .slice(offset, offset + limit);
+    return this.hydrateIssues(issues);
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -7696,6 +7714,32 @@ export class MultiremiStore {
     };
   }
 
+  private hydrateIssues(issues: MultiremiIssue[]): MultiremiIssue[] {
+    if (issues.length === 0) return issues;
+    const labelsByIssue = this.labelsForIssues(issues.map((issue) => issue.id));
+    return issues.map((issue) => ({ ...issue, labels: labelsByIssue.get(issue.id) ?? [] }));
+  }
+
+  private labelsForIssues(issueIds: string[]): Map<string, MultiremiLabel[]> {
+    const result = new Map<string, MultiremiLabel[]>();
+    if (issueIds.length === 0) return result;
+    const placeholders = issueIds.map(() => "?").join(", ");
+    const rows = this.db.query(
+      `SELECT il.issue_id AS __issue_id, l.*
+       FROM multiremi_issue_labels l
+       JOIN multiremi_issue_to_labels il ON il.label_id = l.id
+       WHERE il.issue_id IN (${placeholders})
+       ORDER BY lower(l.name) ASC`,
+    ).all(...issueIds) as Row[];
+    for (const row of rows) {
+      const issueId = String(row.__issue_id);
+      const list = result.get(issueId) ?? [];
+      list.push(toLabel(row));
+      result.set(issueId, list);
+    }
+    return result;
+  }
+
   private hydrateRuntime(runtime: MultiremiRuntime): MultiremiRuntime {
     const stats = this.runtimeUsageSummary(runtime.id);
     return {
@@ -8112,7 +8156,14 @@ export class MultiremiStore {
     try {
       this.db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
     } catch (err) {
-      if (!String((err as Error).message ?? err).toLowerCase().includes("duplicate column")) throw err;
+      const message = String((err as Error).message ?? err).toLowerCase();
+      // Idempotency: the column already exists. SQLite says "duplicate column name",
+      // Postgres says "column ... already exists". Any other ALTER failure is real.
+      const alreadyExists = message.includes("duplicate column") || message.includes("already exists");
+      if (!alreadyExists) {
+        log.error(`addColumnIfMissing failed for ${table}.${definition}`, err);
+        throw err;
+      }
     }
   }
 
@@ -9469,6 +9520,48 @@ function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): 
     }
   }
   return true;
+}
+
+// SQL equivalent of issueMatchesListFilter for every column-level filter (metadata, a JSON column,
+// stays in JS). Kept in lockstep with issueMatchesListFilter so callers can push filters + pagination
+// into SQL without changing results.
+function buildIssueListWhere(input: ListIssuesInput): { where: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  const inClause = (column: string, values: string[]) => {
+    clauses.push(`${column} IN (${values.map(() => "?").join(", ")})`);
+    params.push(...values);
+  };
+
+  const workspaceId = input.workspaceId ?? input.workspace_id;
+  if (workspaceId) {
+    clauses.push("workspace_id = ?");
+    params.push(workspaceId);
+  }
+  const statuses = normalizeIssueStatusList(input.statuses ?? input.status);
+  if (statuses.length) inClause("status", statuses);
+  const priorities = normalizeStringList(input.priorities ?? input.priority);
+  if (priorities.length) inClause("priority", priorities);
+  const assigneeTypes = normalizeStringList(input.assigneeTypes ?? input.assignee_types);
+  if (assigneeTypes.length) inClause("assignee_type", assigneeTypes);
+  const assigneeId = input.assigneeId ?? input.assignee_id;
+  if (assigneeId) {
+    clauses.push("assignee_id = ?");
+    params.push(assigneeId);
+  }
+  const assigneeIds = normalizeStringList(input.assigneeIds ?? input.assignee_ids);
+  if (assigneeIds.length) inClause("assignee_id", assigneeIds);
+  if (input.includeNoAssignee) clauses.push("(assignee_id IS NULL OR assignee_id = '')");
+  const projectId = input.projectId ?? input.project_id;
+  if (projectId) {
+    clauses.push("project_id = ?");
+    params.push(projectId);
+  }
+  const projectIds = normalizeStringList(input.projectIds ?? input.project_ids);
+  if (projectIds.length) inClause("project_id", projectIds);
+  if (input.includeNoProject) clauses.push("(project_id IS NULL OR project_id = '')");
+
+  return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
 function normalizeStringList(value: string[] | string | undefined | null): string[] {
