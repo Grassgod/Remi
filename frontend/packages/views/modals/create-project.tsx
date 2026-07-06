@@ -413,33 +413,31 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           </Popover>
 
           <Popover open={repoPopoverOpen} onOpenChange={setRepoPopoverOpen}>
-            {pendingResources.length === 0 ? (
+            {/* The trigger tree must stay structurally identical whether or not
+                resources are selected: swapping the PopoverTrigger element while
+                the popover is open detaches its anchor and the popover jumps to
+                the viewport origin. Only the label text and the (detached)
+                TooltipContent vary with the count. */}
+            <Tooltip>
               <PopoverTrigger
                 render={
-                  <PillButton>
-                    <FolderGit className="size-3" />
-                    <span>{t(($) => $.create_project.repos_pill)}</span>
-                  </PillButton>
+                  <TooltipTrigger
+                    render={
+                      <PillButton>
+                        <FolderGit className="size-3" />
+                        <span>
+                          {pendingResources.length === 0
+                            ? t(($) => $.create_project.repos_pill)
+                            : t(($) => $.create_project.sources_pill_count, {
+                                count: pendingResources.length,
+                              })}
+                        </span>
+                      </PillButton>
+                    }
+                  />
                 }
               />
-            ) : (
-              <Tooltip>
-                <PopoverTrigger
-                  render={
-                    <TooltipTrigger
-                      render={
-                        <PillButton>
-                          <FolderGit className="size-3" />
-                          <span>
-                            {t(($) => $.create_project.sources_pill_count, {
-                              count: pendingResources.length,
-                            })}
-                          </span>
-                        </PillButton>
-                      }
-                    />
-                  }
-                />
+              {pendingResources.length > 0 && (
                 <TooltipContent side="top" align="start" className="max-w-xs">
                   <ul className="space-y-0.5 text-xs">
                     {selectedResourceNames.slice(0, MAX_PILL_NAMES).map((name, i) => (
@@ -456,8 +454,8 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     )}
                   </ul>
                 </TooltipContent>
-              </Tooltip>
-            )}
+              )}
+            </Tooltip>
             <PopoverContent side="top" align="start" className="w-auto p-2">
               <RepoSourcePopover
                 resources={pendingResources}

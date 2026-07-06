@@ -246,6 +246,25 @@ describe("CreateProjectModal", () => {
     ]);
   });
 
+  it("keeps the repo popover anchored to the same pill element as the selection grows", async () => {
+    const user = userEvent.setup();
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    // Swapping the PopoverTrigger element when the count goes 0→1 detaches the
+    // open popover's anchor and it jumps to the viewport origin. Pin the DOM
+    // node identity across the first selection.
+    const pill = screen
+      .getAllByRole("button", { name: /Repos/i })
+      .find((el) => el.textContent === "Repos") as HTMLElement;
+    await user.click(pill);
+    await user.click(
+      screen.getByRole("button", { name: (name) => name.includes(apiRepoUrl) }),
+    );
+
+    expect(pill.isConnected).toBe(true);
+    expect(pill).toHaveTextContent("1 resource");
+  });
+
   it("keeps the disabled-submit reason keyboard-reachable via a focusable wrapper", () => {
     renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
 
