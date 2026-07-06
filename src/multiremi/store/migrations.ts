@@ -195,6 +195,22 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_local_skill_import_runtime ON multiremi_runtime_local_skill_import_requests(runtime_id, status, created_at);
 
+    CREATE TABLE IF NOT EXISTS multiremi_runtime_directory_scan_requests (
+      id TEXT PRIMARY KEY,
+      runtime_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      params TEXT NOT NULL DEFAULT '{}',
+      candidates TEXT NOT NULL DEFAULT '[]',
+      supported INTEGER NOT NULL DEFAULT 1,
+      error TEXT,
+      run_started_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_directory_scan_runtime ON multiremi_runtime_directory_scan_requests(runtime_id, status, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

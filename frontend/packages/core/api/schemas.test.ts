@@ -6,8 +6,10 @@ import {
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_CLI_LATEST_VERSION,
+  EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  RuntimeDirectoryScanRequestSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
@@ -303,6 +305,137 @@ describe("CliLatestVersionResponseSchema", () => {
         { endpoint: "test" },
       );
       expect(parsed.version).toBeNull();
+    }
+  });
+});
+
+// The runtime directory-scan row is polled by resolveRuntimeDirectoryScan
+// until it terminates. A malformed row must degrade — either to a graceful
+// default (empty candidates) or to the explicit failed fallback — but never
+// throw into the poll loop, and unknown terminal states must survive so the
+// loop's default branch can stop instead of spinning forever.
+describe("RuntimeDirectoryScanRequestSchema", () => {
+  const opts = { endpoint: "GET /api/runtimes/:id/directory-scans/:requestId" };
+  const valid = {
+    id: "rds-1",
+    runtime_id: "runtime-1",
+    status: "completed",
+    params: { root: "~", max_depth: 3 },
+    candidates: [
+      {
+        path: "/home/dev/repo",
+        name: "repo",
+        remote_url: "git@github.com:org/repo.git",
+        current_branch: "main",
+        is_dirty: null,
+      },
+    ],
+    supported: true,
+    error: null,
+    run_started_at: "2026-04-16T00:00:00Z",
+    created_at: "2026-04-16T00:00:00Z",
+    updated_at: "2026-04-16T00:00:01Z",
+  };
+
+  it("parses a well-formed row and preserves candidates", () => {
+    const parsed = parseWithFallback(
+      valid,
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed.status).toBe("completed");
+    expect(parsed.candidates).toHaveLength(1);
+    expect(parsed.candidates[0]?.path).toBe("/home/dev/repo");
+    expect(parsed.candidates[0]?.remote_url).toBe("git@github.com:org/repo.git");
+  });
+
+  it("defaults candidates to [] when the field is missing (older daemon)", () => {
+    const { candidates: _omit, ...withoutCandidates } = valid;
+    const parsed = parseWithFallback(
+      withoutCandidates,
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed.candidates).toEqual([]);
+    expect(parsed.status).toBe("completed");
+  });
+
+  it("tolerates null metadata fields on a candidate", () => {
+    const parsed = parseWithFallback(
+      {
+        ...valid,
+        candidates: [
+          {
+            path: "/home/dev/plain",
+            name: "plain",
+            remote_url: null,
+            current_branch: null,
+            is_dirty: null,
+          },
+        ],
+      },
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed.candidates[0]?.remote_url).toBeNull();
+    expect(parsed.candidates[0]?.current_branch).toBeNull();
+    expect(parsed.candidates[0]?.is_dirty).toBeNull();
+  });
+
+  it("keeps an unknown terminal status so the poll loop can stop", () => {
+    const parsed = parseWithFallback(
+      { ...valid, status: "cancelled" },
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    // status stays z.string(): enum drift degrades, it does not fall back.
+    expect(parsed.status).toBe("cancelled");
+  });
+
+  it("falls back to the failed shape when status is the wrong type", () => {
+    const parsed = parseWithFallback(
+      { ...valid, status: 7 },
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST);
+    expect(parsed.status).toBe("failed");
+  });
+
+  it("falls back when candidates is not an array", () => {
+    const parsed = parseWithFallback(
+      { ...valid, candidates: null },
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST);
+  });
+
+  it("falls back when a candidate is missing its required path", () => {
+    const parsed = parseWithFallback(
+      { ...valid, candidates: [{ name: "no-path" }] },
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST);
+  });
+
+  it("falls back when id is missing or malformed", () => {
+    for (const bad of [{}, null, { ...valid, id: 42 }]) {
+      const parsed = parseWithFallback(
+        bad,
+        RuntimeDirectoryScanRequestSchema,
+        EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+        opts,
+      );
+      expect(parsed).toBe(EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST);
     }
   });
 });

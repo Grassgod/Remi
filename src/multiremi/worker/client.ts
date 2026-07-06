@@ -1,6 +1,7 @@
 import type {
   MultiremiDaemonHeartbeatAck,
   MultiremiRepoData,
+  MultiremiRuntimeDirectoryCandidate,
   MultiremiRuntimeModel,
   MultiremiRuntimeLocalSkillSummary,
   MultiremiSkillFile,
@@ -93,6 +94,7 @@ export class MultiremiDaemonClient {
       resp = await this.post<Partial<MultiremiDaemonHeartbeatAck>>("/api/daemon/heartbeat", {
         runtime_id: runtimeId,
         supports_batch_import: true,
+        supports_directory_scan: true,
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -131,6 +133,15 @@ export class MultiremiDaemonClient {
     error?: string;
   }): Promise<void> {
     await this.post(`/api/daemon/runtimes/${runtimeId}/local-skills/${requestId}/result`, result);
+  }
+
+  async reportRuntimeDirectoryScanResult(runtimeId: string, requestId: string, result: {
+    status: string;
+    candidates?: MultiremiRuntimeDirectoryCandidate[];
+    supported?: boolean;
+    error?: string;
+  }): Promise<void> {
+    await this.post(`/api/daemon/runtimes/${runtimeId}/directory-scans/${requestId}/result`, result);
   }
 
   async reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, result: {

@@ -92,6 +92,10 @@ import type {
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRepoData,
+  MultiremiRuntimeDirectoryCandidate,
+  MultiremiRuntimeDirectoryScanParams,
+  MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeDirectoryScanRequestStatus,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillRequestStatus,
@@ -101,6 +105,7 @@ import type {
   MultiremiRuntimeUpdateRequest,
   MultiremiRuntimeUpdateRequestStatus,
   QuickCreateIssueInput,
+  ReportRuntimeDirectoryScanInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
@@ -178,6 +183,9 @@ const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
 const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 150 * 1000;
 const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
+const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
+const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
+const PROJECT_REF_MAX_DEPTH = 5;
 const AUTOPILOT_FAILURE_MONITOR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTOPILOT_FAILURE_MONITOR_MIN_RUNS = 50;
 const AUTOPILOT_FAILURE_MONITOR_FAIL_RATIO = 0.9;
@@ -2133,6 +2141,89 @@ export class MultiremiStore {
     return this.getRuntimeModelListRequest(runtimeId, requestId)!;
   }
 
+  createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number } = {}): MultiremiRuntimeDirectoryScanRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const normalizedParams = normalizeRuntimeDirectoryScanParams(params);
+    const id = createId("rds");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_runtime_directory_scan_requests (
+        id, runtime_id, status, params, candidates, supported, created_at, updated_at
+      ) VALUES (?, ?, 'pending', ?, '[]', 1, ?, ?)`,
+      [id, runtimeId, toJson(normalizedParams), now, now],
+    );
+    return this.getRuntimeDirectoryScanRequest(runtimeId, id)!;
+  }
+
+  getRuntimeDirectoryScanRequest(runtimeId: string, requestId: string): MultiremiRuntimeDirectoryScanRequest | null {
+    this.expireRuntimeDirectoryScanRequests(runtimeId);
+    const row = this.db.query(
+      "SELECT * FROM multiremi_runtime_directory_scan_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? toRuntimeDirectoryScanRequest(row) : null;
+  }
+
+  claimRuntimeDirectoryScanRequest(runtimeId: string): MultiremiRuntimeDirectoryScanRequest | null {
+    this.expireRuntimeDirectoryScanRequests(runtimeId);
+    const row = this.db.query(
+      `SELECT * FROM multiremi_runtime_directory_scan_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (!row) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multiremi_runtime_directory_scan_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, String(row.id)],
+    );
+    return this.getRuntimeDirectoryScanRequest(runtimeId, String(row.id));
+  }
+
+  private expireRuntimeDirectoryScanRequests(runtimeId: string): void {
+    const now = nowIso();
+    const pendingCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS).toISOString();
+    const runningCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS).toISOString();
+    this.db.run(
+      `UPDATE multiremi_runtime_directory_scan_requests
+       SET status = 'timeout', error = 'daemon did not respond within 3 minutes; the runtime daemon may need updating', updated_at = ?
+       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
+      [now, runtimeId, pendingCutoff],
+    );
+    this.db.run(
+      `UPDATE multiremi_runtime_directory_scan_requests
+       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
+       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
+      [now, runtimeId, runningCutoff],
+    );
+  }
+
+  reportRuntimeDirectoryScanResult(runtimeId: string, requestId: string, input: ReportRuntimeDirectoryScanInput): MultiremiRuntimeDirectoryScanRequest {
+    const current = this.getRuntimeDirectoryScanRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    if (isTerminalRuntimeRequestStatus(current.status)) return current;
+    const status = normalizeRuntimeDirectoryScanStatus(input.status);
+    const now = nowIso();
+    if (status === "completed") {
+      this.db.run(
+        `UPDATE multiremi_runtime_directory_scan_requests
+         SET status = 'completed', candidates = ?, supported = ?, error = NULL, updated_at = ?
+         WHERE id = ?`,
+        [toJson(normalizeRuntimeDirectoryCandidates(input.candidates ?? [])), input.supported === false ? 0 : 1, now, requestId],
+      );
+    } else {
+      this.db.run(
+        `UPDATE multiremi_runtime_directory_scan_requests
+         SET status = 'failed', error = ?, updated_at = ?
+         WHERE id = ?`,
+        [input.error ?? "runtime directory scan failed", now, requestId],
+      );
+    }
+    return this.getRuntimeDirectoryScanRequest(runtimeId, requestId)!;
+  }
+
   createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
     const runtime = this.getRuntime(runtimeId);
     if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
@@ -2610,7 +2701,7 @@ export class MultiremiStore {
     return [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date));
   }
 
-  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean } = {}): MultiremiDaemonHeartbeatAck {
+  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean; supportsDirectoryScan?: boolean } = {}): MultiremiDaemonHeartbeatAck {
     const runtime = this.getRuntime(runtimeId);
     if (!runtime) {
       return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
@@ -2638,6 +2729,16 @@ export class MultiremiStore {
     const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
     if (pendingLocalSkills) {
       ack.pending_local_skills = { id: pendingLocalSkills.id };
+    }
+    if (options.supportsDirectoryScan) {
+      const pendingDirectoryScan = this.claimRuntimeDirectoryScanRequest(runtimeId);
+      if (pendingDirectoryScan) {
+        ack.pending_directory_scan = {
+          id: pendingDirectoryScan.id,
+          root: pendingDirectoryScan.params.root,
+          max_depth: pendingDirectoryScan.params.maxDepth,
+        };
+      }
     }
     const importLimit = options.supportsBatchImport ? 10 : 1;
     const pendingImports = this.claimRuntimeLocalSkillImportRequests(runtimeId, importLimit);
@@ -4494,6 +4595,7 @@ export class MultiremiStore {
     const rawRef = input.resourceRef ?? input.resource_ref ?? {};
     const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, resourceType, resourceRef, null, "create");
+    if (resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, project.workspaceId);
     const id = input.id ?? createId("res");
     const now = nowIso();
     const position = normalizeProjectResourcePosition(input.position, this.countProjectResources(projectId));
@@ -4530,6 +4632,7 @@ export class MultiremiStore {
     const rawRef = hasRef ? input.resourceRef ?? input.resource_ref ?? {} : existing.resourceRef;
     const resourceRef = normalizeProjectResourceRef(existing.resourceType, rawRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, existing.resourceType, resourceRef, resourceId, "update");
+    if (existing.resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, existing.workspaceId);
     const label = hasAnyField(input, "label") ? cleanProjectResourceLabel(input.label) : existing.label;
     const position = hasAnyField(input, "position")
       ? normalizeProjectResourcePosition(input.position, existing.position)
@@ -5967,9 +6070,30 @@ export class MultiremiStore {
   }
 
   private resolveTaskRepos(workspaceId: string, projectResources: MultiremiProjectResource[]): MultiremiRepoData[] {
-    const projectRepos = normalizeRepos(projectResources
-      .filter((resource) => resource.resourceType === "github_repo")
-      .map((resource) => resource.resourceRef));
+    const ownProjectId = projectResources[0]?.projectId ?? null;
+    const refs: Record<string, unknown>[] = [];
+    const visited = new Set<string>();
+    if (ownProjectId) visited.add(ownProjectId);
+    // Own github_repo refs plus those of referenced projects, walked
+    // recursively. The visited set is the real cycle defense (write-time
+    // validation has a TOCTOU gap); dangling targets are silently skipped and
+    // referenced projects' local_directory resources are never pulled.
+    const collect = (resources: MultiremiProjectResource[], depth: number): void => {
+      for (const resource of resources) {
+        if (resource.resourceType === "github_repo") {
+          refs.push(resource.resourceRef);
+        } else if (resource.resourceType === "project_ref") {
+          if (depth >= PROJECT_REF_MAX_DEPTH) continue;
+          const targetId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+          if (!targetId || visited.has(targetId)) continue;
+          visited.add(targetId);
+          if (!this.getProject(targetId)) continue;
+          collect(this.listProjectResources(targetId), depth + 1);
+        }
+      }
+    };
+    collect(projectResources, 0);
+    const projectRepos = normalizeRepos(refs);
     if (projectRepos.length) return projectRepos;
     return normalizeRepos(this.getWorkspace(workspaceId)?.repos ?? []);
   }
@@ -7138,6 +7262,35 @@ export class MultiremiStore {
       }
       throw new Error("another local_directory on this daemon is already attached to the project");
     }
+  }
+
+  private assertValidProjectRef(owningProjectId: string, resourceRef: Record<string, unknown>, workspaceId: string): void {
+    const targetId = String(resourceRef.projectId ?? resourceRef.project_id ?? "").trim();
+    if (!targetId) throw new Error("project_ref project_id is required");
+    if (targetId === owningProjectId) throw new Error("project_ref cannot reference its own project");
+    const target = this.getProject(targetId);
+    if (!target) throw new Error(`project_ref target project not found: ${targetId}`);
+    if (target.workspaceId !== workspaceId) throw new Error("project_ref target belongs to another workspace");
+    // Walk the target's project_ref graph; reaching the owning project again
+    // means this edge would close a cycle. The visited set prunes shared
+    // subtrees so a DAG diamond is not mistaken for a cycle. Write-time
+    // rejection has a TOCTOU gap, so runtime resolution guards with its own
+    // visited set — this keeps the graph acyclic under normal use.
+    const visited = new Set<string>();
+    const walk = (projectId: string, depth: number): void => {
+      if (projectId === owningProjectId) throw new Error("project_ref would introduce a reference cycle");
+      if (depth > PROJECT_REF_MAX_DEPTH || visited.has(projectId)) return;
+      visited.add(projectId);
+      for (const resource of this.listProjectResources(projectId)) {
+        if (resource.resourceType !== "project_ref") continue;
+        const nextId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+        // Dangling targets are silently skipped (like resolveTaskRepos) so a
+        // hard-deleted referenced project can't break a valid new edge.
+        if (!nextId || !this.getProject(nextId)) continue;
+        walk(nextId, depth + 1);
+      }
+    };
+    walk(targetId, 1);
   }
 
   private nextIssueNumber(workspaceId: string): number {
@@ -8578,6 +8731,7 @@ function extractSearchSnippet(value: string, query: string): string {
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
   if (!resourceType) throw new Error("resource_type is required");
   if (resourceType === "local_directory") return normalizeLocalDirectoryResourceRef(rawRef);
+  if (resourceType === "project_ref") return normalizeProjectRefResourceRef(rawRef);
   if (resourceType !== "github_repo") throw new Error(`unknown resource_type "${resourceType}"`);
   const url = String(rawRef.url ?? "").trim();
   if (!url) throw new Error("github_repo url is required");
@@ -8586,6 +8740,14 @@ function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string
   return defaultBranchHint
     ? { url, defaultBranchHint, default_branch_hint: defaultBranchHint }
     : { url };
+}
+
+function normalizeProjectRefResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
+  const projectId = String(rawRef.projectId ?? rawRef.project_id ?? "").trim();
+  if (!projectId) throw new Error("project_ref project_id is required");
+  // Fixed key order keeps toJson deterministic so the UNIQUE(project_id,
+  // resource_type, resource_ref) index catches duplicate references.
+  return { projectId, project_id: projectId };
 }
 
 function normalizeLocalDirectoryResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
@@ -8760,6 +8922,62 @@ function normalizeRuntimeModelListStatus(value: unknown): MultiremiRuntimeModelL
   const status = String(value ?? "failed").trim();
   if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
   return "failed";
+}
+
+function toRuntimeDirectoryScanRequest(row: Row): MultiremiRuntimeDirectoryScanRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    status: normalizeRuntimeDirectoryScanStatus(row.status),
+    params: normalizeRuntimeDirectoryScanParams(parseJson(row.params, {})),
+    candidates: normalizeRuntimeDirectoryCandidates(parseJson(row.candidates, [])),
+    supported: Number(row.supported ?? 1) !== 0,
+    error: nullableString(row.error),
+    runStartedAt: nullableString(row.run_started_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function normalizeRuntimeDirectoryScanStatus(value: unknown): MultiremiRuntimeDirectoryScanRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
+}
+
+function normalizeRuntimeDirectoryScanParams(raw: unknown): MultiremiRuntimeDirectoryScanParams {
+  if (!isRecord(raw)) return {};
+  const params: MultiremiRuntimeDirectoryScanParams = {};
+  const root = typeof raw.root === "string" ? raw.root.trim() : "";
+  if (root) params.root = root;
+  const maxDepth = Number(raw.maxDepth ?? raw.max_depth);
+  if (Number.isFinite(maxDepth) && maxDepth > 0) params.maxDepth = Math.floor(maxDepth);
+  return params;
+}
+
+function normalizeRuntimeDirectoryCandidates(value: unknown): MultiremiRuntimeDirectoryCandidate[] {
+  if (!Array.isArray(value)) return [];
+  const candidates: MultiremiRuntimeDirectoryCandidate[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const path = typeof item.path === "string" ? item.path.trim() : "";
+    if (!path) continue;
+    const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : path;
+    const remoteUrl = firstNonEmptyString(item.remoteUrl, item.remote_url);
+    const currentBranch = firstNonEmptyString(item.currentBranch, item.current_branch);
+    const isDirty = typeof item.isDirty === "boolean"
+      ? item.isDirty
+      : typeof item.is_dirty === "boolean" ? item.is_dirty : null;
+    candidates.push({ path, name, remoteUrl, currentBranch, isDirty });
+  }
+  return candidates;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function toRuntimeUpdateRequest(row: Row): MultiremiRuntimeUpdateRequest {

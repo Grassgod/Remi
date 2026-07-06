@@ -302,4 +302,51 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getProject(project.id)?.title).toBe("With resources");
     expect(store.listProjectResources(project.id).length).toBe(1);
   });
+
+  it("drives the runtime directory scan queue (create → claim → report)", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({ name: "rt-dirscan", provider: "claude", workspaceId: ws });
+    const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "~/code", maxDepth: 2 });
+    expect(request.status).toBe("pending");
+    expect(request.params).toEqual({ root: "~/code", maxDepth: 2 });
+
+    const claimed = store.claimRuntimeDirectoryScanRequest(runtime.id);
+    expect(claimed?.id).toBe(request.id);
+    expect(claimed?.status).toBe("running");
+    expect(store.claimRuntimeDirectoryScanRequest(runtime.id)).toBeNull();
+
+    const reported = store.reportRuntimeDirectoryScanResult(runtime.id, request.id, {
+      status: "completed",
+      candidates: [{ path: "/home/dev/code/app", name: "app", remoteUrl: "git@github.com:acme/app.git", currentBranch: "main", isDirty: null }],
+    });
+    expect(reported.status).toBe("completed");
+    expect(reported.candidates).toEqual([
+      { path: "/home/dev/code/app", name: "app", remoteUrl: "git@github.com:acme/app.git", currentBranch: "main", isDirty: null },
+    ]);
+  });
+
+  it("resolves project_ref expansion and rejects duplicate refs via the UNIQUE index", () => {
+    const ws = freshWorkspace();
+    const lib = store.createProject({ title: "Lib", workspaceId: ws, resources: [{ resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/lib" } }] });
+    const main = store.createProject({
+      title: "Main",
+      workspaceId: ws,
+      resources: [
+        { resourceType: "github_repo", resourceRef: { url: "https://github.com/acme/main" } },
+        { resourceType: "project_ref", resourceRef: { project_id: lib.id } },
+      ],
+    });
+
+    const agent = store.createAgent({ name: "dirscan-agent", provider: "claude", workspaceId: ws });
+    const issue = store.createIssue({ title: "Ref work", workspaceId: ws, projectId: main.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: ws });
+    expect(store.getTaskWithAgent(task.id)!.repos.map((repo) => repo.url)).toEqual([
+      "https://github.com/acme/main",
+      "https://github.com/acme/lib",
+    ]);
+
+    // Re-attaching the same reference collides on UNIQUE(project_id, resource_type, resource_ref).
+    expect(() => store.createProjectResource(main.id, { resourceType: "project_ref", resourceRef: { projectId: lib.id } }))
+      .toThrow("duplicate key value violates unique constraint");
+  });
 });

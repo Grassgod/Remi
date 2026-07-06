@@ -14,6 +14,7 @@ export type MultiremiRuntimeStatus = "online" | "offline";
 export type MultiremiRuntimeVisibility = "private" | "public";
 export type MultiremiRuntimeLocalSkillRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MultiremiRuntimeModelListRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+export type MultiremiRuntimeDirectoryScanRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MultiremiRuntimeUpdateRequestStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 export type MultiremiIssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 export type MultiremiIssueDependencyType = "blocks" | "blocked_by" | "related";
@@ -242,6 +243,32 @@ export interface MultiremiRuntimeModelListRequest {
   runStartedAt: string | null;
 }
 
+export interface MultiremiRuntimeDirectoryCandidate {
+  path: string;
+  name: string;
+  remoteUrl: string | null;
+  currentBranch: string | null;
+  isDirty: boolean | null;
+}
+
+export interface MultiremiRuntimeDirectoryScanParams {
+  root?: string;
+  maxDepth?: number;
+}
+
+export interface MultiremiRuntimeDirectoryScanRequest {
+  id: string;
+  runtimeId: string;
+  status: MultiremiRuntimeDirectoryScanRequestStatus;
+  params: MultiremiRuntimeDirectoryScanParams;
+  candidates: MultiremiRuntimeDirectoryCandidate[];
+  supported: boolean;
+  error: string | null;
+  runStartedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * What a runtime update request targets: the remi CLI binary (`cli`), the ACP
  * bridges (`acp`), or the underlying agent CLI — claude/codex (`agent`).
@@ -276,6 +303,11 @@ export interface MultiremiDaemonHeartbeatAck {
   };
   pending_local_skills?: {
     id: string;
+  };
+  pending_directory_scan?: {
+    id: string;
+    root?: string;
+    max_depth?: number;
   };
   pending_local_skill_import?: {
     id: string;
@@ -1425,6 +1457,19 @@ export interface CreateRuntimeLocalSkillImportInput {
 export interface ReportRuntimeLocalSkillListInput {
   status?: string;
   skills?: MultiremiRuntimeLocalSkillSummary[];
+  supported?: boolean;
+  error?: string;
+}
+
+export interface CreateRuntimeDirectoryScanInput {
+  root?: string;
+  maxDepth?: number;
+  max_depth?: number;
+}
+
+export interface ReportRuntimeDirectoryScanInput {
+  status?: "completed" | "failed";
+  candidates?: MultiremiRuntimeDirectoryCandidate[];
   supported?: boolean;
   error?: string;
 }

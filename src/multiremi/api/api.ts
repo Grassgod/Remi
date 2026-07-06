@@ -40,6 +40,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateRuntimeDirectoryScanInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
@@ -51,6 +52,7 @@ import type {
   ListIssuesInput,
   QuickCreateIssueInput,
   RegisterRuntimeInput,
+  ReportRuntimeDirectoryScanInput,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
@@ -93,6 +95,8 @@ import type {
   MultiremiTaskTriggerMetadata,
   TaskUsageEntry,
   MultiremiRuntime,
+  MultiremiRuntimeDirectoryCandidate,
+  MultiremiRuntimeDirectoryScanRequest,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillSummary,
@@ -648,7 +652,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ status: "ok" });
   });
   app.post("/api/daemon/heartbeat", async (c) => {
-    const body = await readJsonStrict<{ runtime_id?: string; supports_batch_import?: boolean }>(c);
+    const body = await readJsonStrict<{ runtime_id?: string; supports_batch_import?: boolean; supports_directory_scan?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
     if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
@@ -656,6 +660,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: body.supports_batch_import ?? false,
+      supportsDirectoryScan: body.supports_directory_scan ?? false,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(daemonHeartbeatHttpResponse(ack));
@@ -1648,10 +1653,19 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
-    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    // The dashboard "add computer" dialog posts no workspace in the body; fall
+    // back to the X-Workspace-Slug header the web client sends on every request,
+    // so the token is minted (and access-checked) for the workspace the user is
+    // actually in — not the "local" default they may not be a member of.
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? workspaceIdFromSlugHeader(c, store) ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    return c.json(await store.createAccessToken(body), 201);
+    // A human requester always mints for themselves: bind the token to the
+    // resolved workspace and their own user id, so they can't mint a user-less
+    // "local" admin credential. Master token / open mode keeps body semantics.
+    const userId = authenticatedRequestUserId(c);
+    const input = userId && userId !== "local" ? { ...body, workspaceId, userId } : body;
+    return c.json(await store.createAccessToken(input), 201);
   });
   app.post("/api/tokens/current/renew", async (c) => {
     const current = currentAccessToken(c);
@@ -1916,6 +1930,50 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store.reportRuntimeLocalSkillImportResult(runtimeId, requestId, daemonLocalSkillImportReportBody(body));
     return c.json({ status: "ok" });
   });
+  app.post("/api/multiremi/runtimes/:id/directory-scans", async (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
+    const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return c.json(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth }));
+  });
+  app.post("/api/runtimes/:id/directory-scans", async (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
+    const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return c.json(runtimeDirectoryScanRequestCompatibilityResponse(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth })));
+  });
+  app.get("/api/multiremi/runtimes/:id/directory-scans/:requestId", (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    const request = store.getRuntimeDirectoryScanRequest(loaded.runtime.id, c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.get("/api/runtimes/:id/directory-scans/:requestId", (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    const request = store.getRuntimeDirectoryScanRequest(loaded.runtime.id, c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(runtimeDirectoryScanRequestCompatibilityResponse(request));
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/directory-scans/claim", (c) => {
+    return c.json({ request: store.claimRuntimeDirectoryScanRequest(c.req.param("runtimeId")) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const requestId = c.req.param("requestId");
+    const request = store.getRuntimeDirectoryScanRequest(runtimeId, requestId);
+    if (!request) return c.json({ error: "request not found" }, 404);
+    if (isTerminalRuntimeRequestForDaemon(request.status)) return c.json({ status: "ok" });
+    const body = await readJsonStrict<ReportRuntimeDirectoryScanInput>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    store.reportRuntimeDirectoryScanResult(runtimeId, requestId, body);
+    return c.json({ status: "ok" });
+  });
   app.get("/api/multiremi/runtimes/:id/usage", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
@@ -2038,6 +2096,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const ack = store.heartbeatRuntime(c.req.param("id"), {
       supportsBatchImport: c.req.query("supports_batch_import") === "true" || c.req.query("supportsBatchImport") === "true",
+      supportsDirectoryScan: c.req.query("supports_directory_scan") === "true" || c.req.query("supportsDirectoryScan") === "true",
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(ack);
@@ -4416,6 +4475,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           ws.data.runtimeId = heartbeat.runtimeId;
           const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
             supportsBatchImport: heartbeat.supportsBatchImport,
+            supportsDirectoryScan: heartbeat.supportsDirectoryScan,
           });
           ws.sendText(JSON.stringify({
             type: "daemon:heartbeat_ack",
@@ -4603,6 +4663,14 @@ function compatibilityWorkspaceId(c: Context): string {
     "local";
 }
 
+// The web client tags every request with the slug of the workspace the user is
+// viewing (client.ts authHeaders). Null when absent or not a known workspace.
+function workspaceIdFromSlugHeader(c: Context, store: MultiremiStore): string | null {
+  const slug = cleanString(c.req.header("X-Workspace-Slug"));
+  if (!slug) return null;
+  return store.listWorkspaces().find((workspace) => workspace.slug === slug)?.id ?? null;
+}
+
 function compatibilityUserId(c: Context): string {
   return authenticatedRequestUserId(c) ??
     cleanString(c.req.query("user_id")) ??
@@ -4687,11 +4755,11 @@ function loadRuntimeForCurrentEditor(
   return loaded;
 }
 
-function loadRuntimeForCurrentOwner(c: Context, store: MultiremiStore, runtimeId: string): { runtime: MultiremiRuntime } | Response {
+function loadRuntimeForCurrentOwner(c: Context, store: MultiremiStore, runtimeId: string, feature = "local skills"): { runtime: MultiremiRuntime } | Response {
   const loaded = loadRuntimeForCurrentUser(c, store, runtimeId);
   if (loaded instanceof Response) return loaded;
   if (runtimeOwnerId(loaded.runtime) !== currentRequestUserId(c)) {
-    return c.json({ error: "you can only access local skills from your own runtimes" }, 403);
+    return c.json({ error: `you can only access ${feature} from your own runtimes` }, 403);
   }
   return loaded;
 }
@@ -5615,6 +5683,9 @@ function projectResourceRefCompatibilityResponse(resource: MultiremiProjectResou
       ? { local_path: localPath, daemon_id: daemonId, label }
       : { local_path: localPath, daemon_id: daemonId };
   }
+  if (resource.resourceType === "project_ref") {
+    return { project_id: String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "") };
+  }
   return resource.resourceRef;
 }
 
@@ -5670,7 +5741,7 @@ function projectResourceErrorResponse(c: Context, err: unknown): Response | null
   const message = err.message;
   if (message.startsWith("Project not found")) return c.json({ error: "project not found" }, 404);
   if (message.startsWith("Project resource not found")) return c.json({ error: "project resource not found" }, 404);
-  if (message.includes("UNIQUE constraint failed")) {
+  if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) {
     return c.json({ error: "this resource is already attached to the project" }, 409);
   }
   if (
@@ -5684,6 +5755,7 @@ function projectResourceErrorResponse(c: Context, err: unknown): Response | null
     || message.includes("unknown resource_type")
     || message.includes("github_repo")
     || message.includes("local_directory")
+    || message.includes("project_ref")
     || message === "position must be an integer"
   ) {
     return c.json({ error: message }, 400);
@@ -5786,6 +5858,34 @@ function runtimeLocalSkillListRequestCompatibilityResponse(request: MultiremiRun
   if (request.skills.length) response.skills = request.skills.map(runtimeLocalSkillSummaryCompatibilityResponse);
   if (request.error) response.error = request.error;
   return response;
+}
+
+function runtimeDirectoryCandidateCompatibilityResponse(candidate: MultiremiRuntimeDirectoryCandidate): Record<string, unknown> {
+  return {
+    path: candidate.path,
+    name: candidate.name,
+    remote_url: candidate.remoteUrl,
+    current_branch: candidate.currentBranch,
+    is_dirty: candidate.isDirty,
+  };
+}
+
+function runtimeDirectoryScanRequestCompatibilityResponse(request: MultiremiRuntimeDirectoryScanRequest): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (request.params.root !== undefined) params.root = request.params.root;
+  if (request.params.maxDepth !== undefined) params.max_depth = request.params.maxDepth;
+  return {
+    id: request.id,
+    runtime_id: request.runtimeId,
+    status: request.status,
+    params,
+    candidates: request.candidates.map(runtimeDirectoryCandidateCompatibilityResponse),
+    supported: request.supported,
+    error: request.error,
+    run_started_at: request.runStartedAt,
+    created_at: request.createdAt,
+    updated_at: request.updatedAt,
+  };
 }
 
 function runtimeLocalSkillImportRequestCompatibilityResponse(request: MultiremiRuntimeLocalSkillImportRequest): Record<string, unknown> {
@@ -6897,6 +6997,7 @@ function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): Record<s
   if (ack.pending_update) response.pending_update = ack.pending_update;
   if (ack.pending_model_list) response.pending_model_list = ack.pending_model_list;
   if (ack.pending_local_skills) response.pending_local_skills = ack.pending_local_skills;
+  if (ack.pending_directory_scan) response.pending_directory_scan = ack.pending_directory_scan;
   if (ack.pending_local_skill_import) response.pending_local_skill_import = ack.pending_local_skill_import;
   if (ack.pending_local_skill_imports?.length) response.pending_local_skill_imports = ack.pending_local_skill_imports;
   return response;
@@ -7499,12 +7600,13 @@ function parseDaemonWebSocketMessage(message: string | BufferSource): Record<str
   }
 }
 
-function parseDaemonWebSocketHeartbeat(event: Record<string, any>): { runtimeId: string | null; supportsBatchImport: boolean } {
+function parseDaemonWebSocketHeartbeat(event: Record<string, any>): { runtimeId: string | null; supportsBatchImport: boolean; supportsDirectoryScan: boolean } {
   const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
   const runtimeId = cleanString(payload.runtime_id ?? event.runtime_id);
   return {
     runtimeId,
     supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
+    supportsDirectoryScan: Boolean(payload.supports_directory_scan ?? event.supports_directory_scan),
   };
 }
 

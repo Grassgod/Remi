@@ -667,3 +667,42 @@ export interface RuntimeLocalSkillsResult {
 export interface RuntimeLocalSkillImportResult {
   skill: Skill;
 }
+
+export type RuntimeDirectoryScanStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timeout";
+
+// One git repo found by the daemon while walking a directory tree. Metadata is
+// read straight off the filesystem: `remote_url` from .git/config's origin,
+// `current_branch` from .git/HEAD. `is_dirty` is always null in v1 (no
+// `git status` spawn), left nullable so a future daemon can populate it.
+export interface RuntimeDirectoryCandidate {
+  path: string;
+  name: string;
+  remote_url: string | null;
+  current_branch: string | null;
+  is_dirty: boolean | null;
+}
+
+// Snake_case wire shape returned by the `/api/runtimes/:id/directory-scans`
+// compatibility endpoints (mirrors the daemon request-queue row).
+export interface RuntimeDirectoryScanRequest {
+  id: string;
+  runtime_id: string;
+  status: RuntimeDirectoryScanStatus;
+  params: { root?: string; max_depth?: number };
+  candidates: RuntimeDirectoryCandidate[];
+  supported: boolean;
+  error: string | null;
+  run_started_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRuntimeDirectoryScanRequest {
+  root?: string;
+  max_depth?: number;
+}
