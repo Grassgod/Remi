@@ -97,6 +97,7 @@
     "no_results": "結果なし",
     "submit": "プロジェクトを作成",
     "submitting": "作成中...",
+    "title_required": "先にプロジェクトのタイトルを入力してください",
     "toast_created": "プロジェクトを作成しました",
     "toast_failed": "プロジェクトを作成できませんでした",
     "repos_pill": "リポジトリ",

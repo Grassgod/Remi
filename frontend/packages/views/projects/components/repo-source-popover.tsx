@@ -8,6 +8,7 @@ import {
   CornerLeftUp,
   Folder,
   FolderGit,
+  FolderKanban,
   FolderOpen,
   GitBranch,
   HardDrive,
@@ -15,11 +16,13 @@ import {
   Search,
   X as XIcon,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type {
   AgentRuntime,
   CreateProjectResourceRequest,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
+  Project,
   ProjectRefResourceRef,
   RuntimeDirectoryCandidate,
 } from "@multiremi/core/types";
@@ -69,6 +72,8 @@ export interface RepoSourcePopoverProps {
   onRemove?: (resource: CreateProjectResourceRequest) => void;
   /** Excluded from the project_ref picker so a project can't reference itself. */
   currentProjectId?: string;
+  /** Closes the containing popover from the footer's Done button. */
+  onClose?: () => void;
 }
 
 // Scanning is a machine-level action, so the fleet picker lists computers, not
@@ -176,15 +181,67 @@ function sameResource(
   return false;
 }
 
+// Last path/URL segment, minus a trailing ".git" and any scp-style "host:"
+// prefix — used to name a git repo or local directory in the selected bar.
+function basename(pathOrUrl: string): string {
+  const trimmed = pathOrUrl.replace(/[/\\]+$/, "");
+  let seg = trimmed.slice(trimmed.lastIndexOf("/") + 1);
+  if (seg.includes(":")) seg = seg.slice(seg.lastIndexOf(":") + 1);
+  return seg.replace(/\.git$/i, "") || pathOrUrl;
+}
+
+// Human-readable chip label per resource type. Project refs resolve their
+// title from the cached project list, falling back to the raw id.
+export function resourceDisplayName(
+  resource: CreateProjectResourceRequest,
+  projects: Project[],
+): string {
+  if (resource.resource_type === "github_repo") {
+    return basename((resource.resource_ref as GithubRepoResourceRef).url);
+  }
+  if (resource.resource_type === "local_directory") {
+    const ref = resource.resource_ref as LocalDirectoryResourceRef;
+    return ref.label?.trim() || basename(ref.local_path);
+  }
+  if (resource.resource_type === "project_ref") {
+    const id = (resource.resource_ref as ProjectRefResourceRef).project_id;
+    return projects.find((p) => p.id === id)?.title ?? id;
+  }
+  return resource.resource_type;
+}
+
+// Stable React key derived from a resource's identity fields.
+function resourceKey(resource: CreateProjectResourceRequest): string {
+  if (resource.resource_type === "github_repo") {
+    return `git:${(resource.resource_ref as GithubRepoResourceRef).url}`;
+  }
+  if (resource.resource_type === "local_directory") {
+    const ref = resource.resource_ref as LocalDirectoryResourceRef;
+    return `local:${ref.daemon_id}:${ref.local_path}`;
+  }
+  if (resource.resource_type === "project_ref") {
+    return `project:${(resource.resource_ref as ProjectRefResourceRef).project_id}`;
+  }
+  return resource.resource_type;
+}
+
+function resourceIcon(type: CreateProjectResourceRequest["resource_type"]): LucideIcon {
+  if (type === "local_directory") return FolderOpen;
+  if (type === "project_ref") return FolderKanban;
+  return FolderGit;
+}
+
 export function RepoSourcePopover({
   resources,
   onAdd,
   onRemove,
   currentProjectId,
+  onClose,
 }: RepoSourcePopoverProps) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
+  const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const [tab, setTab] = useState<SourceTab>("git");
 
   const isSelected = (resource: CreateProjectResourceRequest) =>
@@ -247,15 +304,145 @@ export function RepoSourcePopover({
           resources={resources}
           isSelected={isSelected}
           toggle={toggle}
+          showSelected={!!onRemove}
         />
       )}
       {tab === "project" && (
         <ProjectRefTab
           wsId={wsId}
           currentProjectId={currentProjectId}
-          resources={resources}
-          onAdd={onAdd}
+          isSelected={isSelected}
+          toggle={toggle}
+          showSelected={!!onRemove}
         />
+      )}
+
+      {/* Selected bar: only the removable (create) flow shows chips; the
+          detail flow commits on check and marks attached rows in-place. The
+          inline chip budget tracks the active tab's width (the fleet tab is
+          much wider than the compact git/project tabs). */}
+      {onRemove && (
+        <SelectedResourcesBar
+          resources={resources}
+          projects={projects}
+          onRemove={onRemove}
+          maxVisible={tab === "runtime" ? MAX_VISIBLE_CHIPS : NARROW_MAX_VISIBLE_CHIPS}
+        />
+      )}
+
+      <SelectedFooter count={resources.length} onClose={onClose} />
+    </div>
+  );
+}
+
+// Persistent bar of the currently-selected resources, shown across every tab.
+// Chips wrap up to ~two rows; beyond that they collapse behind a "+N" affordance
+// that expands into a scrollable vertical list (and can be collapsed again).
+// The inline budget is layout-aware: the wide fleet tab fits ~6 chips in two
+// rows, the compact w-72 tabs only ~3 before long names spill past two rows.
+const MAX_VISIBLE_CHIPS = 6;
+const NARROW_MAX_VISIBLE_CHIPS = 3;
+
+function SelectedResourcesBar({
+  resources,
+  projects,
+  onRemove,
+  maxVisible,
+}: {
+  resources: CreateProjectResourceRequest[];
+  projects: Project[];
+  onRemove: (resource: CreateProjectResourceRequest) => void;
+  maxVisible: number;
+}) {
+  const { t } = useT("projects");
+  const [expanded, setExpanded] = useState(false);
+
+  const overflowing = resources.length > maxVisible;
+
+  // Collapse when the list shrinks back within the inline budget (removals) or
+  // the active tab widens, so a stale expanded state never sticks around.
+  useEffect(() => {
+    if (!overflowing) setExpanded(false);
+  }, [overflowing]);
+
+  if (resources.length === 0) return null;
+
+  const collapsed = overflowing && !expanded;
+  const visible = collapsed ? resources.slice(0, maxVisible) : resources;
+
+  return (
+    <div className="border-t pt-2">
+      <div
+        className={cn(
+          "flex flex-wrap gap-1",
+          expanded &&
+            overflowing &&
+            "max-h-32 flex-col flex-nowrap overflow-y-auto pr-1",
+        )}
+      >
+        {visible.map((resource) => {
+          const Icon = resourceIcon(resource.resource_type);
+          const name = resourceDisplayName(resource, projects);
+          return (
+            <span
+              key={resourceKey(resource)}
+              className="inline-flex max-w-[160px] items-center gap-1 rounded-full border bg-muted/40 py-0.5 pl-1.5 pr-1 text-xs"
+            >
+              <Icon className="size-3 shrink-0 text-muted-foreground" />
+              <span className="truncate" title={name}>
+                {name}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemove(resource)}
+                aria-label={`${t(($) => $.resources.remove_tooltip)} ${name}`}
+                className="shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </span>
+          );
+        })}
+        {overflowing && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            {expanded
+              ? t(($) => $.repo_source.collapse)
+              : t(($) => $.repo_source.more, {
+                  count: resources.length - maxVisible,
+                })}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SelectedFooter({
+  count,
+  onClose,
+}: {
+  count: number;
+  onClose?: () => void;
+}) {
+  const { t } = useT("projects");
+  return (
+    <div className="flex items-center justify-between gap-2 border-t pt-2">
+      <span className="text-xs text-muted-foreground">
+        {t(($) => $.repo_source.footer_count, { count })}
+      </span>
+      {onClose && (
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 px-3 text-xs"
+          onClick={onClose}
+        >
+          {t(($) => $.repo_source.done)}
+        </Button>
       )}
     </div>
   );
@@ -292,9 +479,6 @@ function GitRepoTab({
   const [customUrl, setCustomUrl] = useState("");
   const query = search.trim().toLowerCase();
   const filtered = repos.filter((repo) => repo.url.toLowerCase().includes(query));
-  const selectedUrls = repos
-    .map((repo) => repo.url)
-    .filter((url) => isSelected(githubRepoResource(url)));
 
   const addCustom = () => {
     const url = customUrl.trim();
@@ -355,7 +539,7 @@ function GitRepoTab({
                   <RepoUrlText url={repo.url} />
                   {locked && (
                     <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {t(($) => $.repo_source.attached_badge)}
+                      {t(($) => $.repo_source.added_badge)}
                     </span>
                   )}
                 </button>
@@ -392,26 +576,6 @@ function GitRepoTab({
           {t(($) => $.repo_source.url_add)}
         </Button>
       </form>
-      {showSelected && selectedUrls.length > 0 && (
-        <div className="space-y-1 pt-1 border-t">
-          <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-            {t(($) => $.repo_source.selected_heading)}
-          </div>
-          {selectedUrls.map((url) => (
-            <div key={url} className="flex items-center gap-2 text-xs">
-              <FolderGit className="size-3 text-muted-foreground" />
-              <RepoUrlText url={url} />
-              <button
-                type="button"
-                onClick={() => toggle(githubRepoResource(url))}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <XIcon className="size-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
     </>
   );
 }
@@ -466,11 +630,15 @@ function RuntimeImportTab({
   resources,
   isSelected,
   toggle,
+  showSelected,
 }: {
   wsId: string;
   resources: CreateProjectResourceRequest[];
   isSelected: (r: CreateProjectResourceRequest) => boolean;
   toggle: (r: CreateProjectResourceRequest) => void;
+  // When false (detail flow, no onRemove), an already-attached row locks with
+  // an "Added" hint instead of toggling — mirrors GitRepoTab.
+  showSelected: boolean;
 }) {
   const { t } = useT("projects");
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
@@ -763,7 +931,10 @@ function RuntimeImportTab({
               const checked = isSelected(resource);
               const noRemote = !candidate.remote_url;
               const capped = noRemote && !checked && hasLocalForDaemon;
-              const importDisabled = capped || (noRemote && daemonId === null);
+              // Already attached in the detail flow: lock, don't toggle off.
+              const locked = checked && !showSelected;
+              const importDisabled =
+                locked || capped || (noRemote && daemonId === null);
               return (
                 <div
                   key={candidate.path}
@@ -791,6 +962,11 @@ function RuntimeImportTab({
                     <FolderGit className="size-3.5 shrink-0" />
                     <CandidateBody candidate={candidate} noRemoteLabel={noRemoteLabel} />
                   </button>
+                  {locked && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {t(($) => $.repo_source.added_badge)}
+                    </span>
+                  )}
                   <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
                 </div>
               );
@@ -814,7 +990,9 @@ function RuntimeImportTab({
             // No-remote candidates become local_directory rows and hit the
             // per-daemon cap; disable further ones once one is pending.
             const capped = noRemote && !checked && hasLocalForDaemon;
-            const disabled = capped || (noRemote && daemonId === null);
+            // Already attached in the detail flow: lock, don't toggle off.
+            const locked = checked && !showSelected;
+            const disabled = locked || capped || (noRemote && daemonId === null);
             return (
               <button
                 type="button"
@@ -836,6 +1014,11 @@ function RuntimeImportTab({
                   className="size-3.5 shrink-0"
                 />
                 <CandidateBody candidate={candidate} noRemoteLabel={noRemoteLabel} />
+                {locked && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {t(($) => $.repo_source.added_badge)}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -881,29 +1064,27 @@ function RuntimeImportTab({
 function ProjectRefTab({
   wsId,
   currentProjectId,
-  resources,
-  onAdd,
+  isSelected,
+  toggle,
+  showSelected,
 }: {
   wsId: string;
   currentProjectId?: string;
-  resources: CreateProjectResourceRequest[];
-  onAdd: (r: CreateProjectResourceRequest) => void;
+  isSelected: (r: CreateProjectResourceRequest) => boolean;
+  toggle: (r: CreateProjectResourceRequest) => void;
+  // When false (detail flow, no onRemove), an already-referenced project row
+  // locks with an "Added" hint instead of toggling — mirrors GitRepoTab.
+  showSelected: boolean;
 }) {
   const { t } = useT("projects");
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const [search, setSearch] = useState("");
 
-  const referencedIds = new Set(
-    resources
-      .filter((r) => r.resource_type === "project_ref")
-      .map((r) => (r.resource_ref as ProjectRefResourceRef).project_id),
-  );
   const query = search.trim().toLowerCase();
+  // Keep already-referenced projects in the list (rendered as checked rows) so
+  // a selection stays visible instead of vanishing on click.
   const candidates = projects.filter(
-    (p) =>
-      p.id !== currentProjectId &&
-      !referencedIds.has(p.id) &&
-      p.title.toLowerCase().includes(query),
+    (p) => p.id !== currentProjectId && p.title.toLowerCase().includes(query),
   );
 
   return (
@@ -928,22 +1109,43 @@ function ProjectRefTab({
             {t(($) => $.repo_source.project_empty)}
           </p>
         ) : (
-          candidates.map((p) => (
-            <button
-              type="button"
-              key={p.id}
-              onClick={() =>
-                onAdd({
-                  resource_type: "project_ref",
-                  resource_ref: { project_id: p.id },
-                })
-              }
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors"
-            >
-              <ProjectIcon project={p} size="sm" />
-              <span className="truncate flex-1 text-left">{p.title}</span>
-            </button>
-          ))
+          candidates.map((p) => {
+            const resource: CreateProjectResourceRequest = {
+              resource_type: "project_ref",
+              resource_ref: { project_id: p.id },
+            };
+            const checked = isSelected(resource);
+            const locked = checked && !showSelected;
+            return (
+              <button
+                type="button"
+                key={p.id}
+                aria-disabled={locked}
+                onClick={() => {
+                  if (locked) return;
+                  toggle(resource);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors aria-disabled:cursor-not-allowed",
+                  checked && "bg-accent",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  readOnly
+                  className="size-3.5 shrink-0"
+                />
+                <ProjectIcon project={p} size="sm" />
+                <span className="truncate flex-1 text-left">{p.title}</span>
+                {locked && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {t(($) => $.repo_source.added_badge)}
+                  </span>
+                )}
+              </button>
+            );
+          })
         )}
       </div>
     </>

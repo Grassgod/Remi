@@ -201,6 +201,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 resources={pendingResources}
                 onAdd={handleAdd}
                 currentProjectId={projectId}
+                onClose={() => setAddOpen(false)}
               />
             </PopoverContent>
           </Popover>

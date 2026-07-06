@@ -245,4 +245,24 @@ describe("CreateProjectModal", () => {
       { resource_type: "project_ref", resource_ref: { project_id: "proj-lib" } },
     ]);
   });
+
+  it("keeps the disabled-submit reason keyboard-reachable via a focusable wrapper", () => {
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    // Draft title starts empty, so the submit is disabled with a reason tooltip.
+    const submit = screen.getByRole("button", { name: "Create Project" });
+    expect(submit).toBeDisabled();
+
+    // A disabled button can't take focus, so the tooltip trigger wraps it in a
+    // focusable span — without tabIndex a keyboard user could never summon the
+    // reason. Assert the wrapper and its focusability survive.
+    const wrapper = submit.parentElement as HTMLElement;
+    expect(wrapper.tagName).toBe("SPAN");
+    expect(wrapper).toHaveAttribute("tabindex", "0");
+
+    // The reason string itself is wired into the tooltip content.
+    expect(
+      screen.getByRole("tooltip", { name: "Enter a project title first" }),
+    ).toBeInTheDocument();
+  });
 });

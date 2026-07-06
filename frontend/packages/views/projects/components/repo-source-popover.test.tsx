@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { CreateProjectResourceRequest } from "@multiremi/core/types";
@@ -32,8 +32,17 @@ vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
+// Mutable so a test can seed workspace-level repos (the detail-flow row needs a
+// rendered git row to mark as already-added).
+const mockWorkspaceRepos = vi.hoisted(() => ({ current: [] as { url: string }[] }));
+
 vi.mock("@multiremi/core/paths", () => ({
-  useCurrentWorkspace: () => ({ id: "ws-1", name: "WS", slug: "ws", repos: [] }),
+  useCurrentWorkspace: () => ({
+    id: "ws-1",
+    name: "WS",
+    slug: "ws",
+    repos: mockWorkspaceRepos.current,
+  }),
 }));
 
 vi.mock("@multiremi/core/runtimes", () => ({
@@ -121,6 +130,36 @@ function renderPopover(
     </I18nWrapper>,
   );
   return { onAdd };
+}
+
+// Self-managing wrapper: the selected bar and its two-way sync only make sense
+// when the parent owns the resource list, so mirror the create-project flow.
+function StatefulPopover({
+  initial = [],
+}: {
+  initial?: CreateProjectResourceRequest[];
+}) {
+  const [resources, setResources] = useState<CreateProjectResourceRequest[]>(initial);
+  return (
+    <RepoSourcePopover
+      resources={resources}
+      onAdd={(r) => setResources((prev) => [...prev, r])}
+      onRemove={(r) => setResources((prev) => prev.filter((x) => x !== r))}
+    />
+  );
+}
+
+function renderStateful(initial?: CreateProjectResourceRequest[]) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(
+    <I18nWrapper>
+      <QueryClientProvider client={queryClient}>
+        <StatefulPopover initial={initial} />
+      </QueryClientProvider>
+    </I18nWrapper>,
+  );
 }
 
 async function openFleetTabAndScan() {
@@ -535,5 +574,299 @@ describe("RepoSourcePopover — reference project tab", () => {
       resource_type: "project_ref",
       resource_ref: { project_id: "proj-other" },
     });
+  });
+
+  it("renders an already-referenced project as a checked, toggle-off row in the create flow", async () => {
+    const onRemove = vi.fn();
+    const resource: CreateProjectResourceRequest = {
+      resource_type: "project_ref",
+      resource_ref: { project_id: "proj-other" },
+    };
+    renderPopover({ resources: [resource], onRemove, currentProjectId: "proj-self" });
+    fireEvent.click(screen.getByRole("button", { name: /Reference project/i }));
+
+    // The referenced project stays in the list as a checked row rather than
+    // vanishing on selection. Scope to the row's checkbox — the create flow's
+    // selected bar also renders a "Design System" chip.
+    const checkbox = await screen.findByRole("checkbox");
+    expect(checkbox).toBeChecked();
+    const row = checkbox.closest("button")!;
+    expect(within(row).getByText("Design System")).toBeInTheDocument();
+    expect(row).not.toHaveAttribute("aria-disabled", "true");
+
+    // Clicking it in the create flow toggles the reference back off.
+    fireEvent.click(row);
+    expect(onRemove).toHaveBeenCalledWith(resource);
+  });
+
+  it("locks an already-referenced project row with an Added hint in the detail flow", async () => {
+    const resource: CreateProjectResourceRequest = {
+      resource_type: "project_ref",
+      resource_ref: { project_id: "proj-other" },
+    };
+    const { onAdd } = renderPopover({
+      resources: [resource],
+      currentProjectId: "proj-self",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Reference project/i }));
+
+    const row = (await screen.findByText("Design System")).closest("button")!;
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(within(row).getByText("Added")).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+});
+
+describe("RepoSourcePopover — selected resources bar", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWorkspaceRepos.current = [];
+    mockIsDesktopShell.mockReturnValue(false);
+    mockUseLocalDaemonStatus.mockReturnValue({
+      daemonId: null,
+      deviceName: null,
+      running: false,
+    });
+    mockRuntimeListOptions.mockReturnValue({
+      queryKey: ["runtimes", "ws-1", "list"],
+      queryFn: () => Promise.resolve([MOCK_RUNTIME]),
+    });
+    mockProjectListOptions.mockReturnValue({
+      queryKey: ["projects", "ws-1", "list"],
+      queryFn: () => Promise.resolve([]),
+    });
+    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+      id: "rds-1",
+      runtime_id: "runtime-1",
+      status: "completed",
+      params: { root: "~" },
+      candidates: [REMOTE_CANDIDATE, LOCAL_CANDIDATE],
+      supported: true,
+      error: null,
+      run_started_at: null,
+      created_at: "2026-04-16T00:00:00Z",
+      updated_at: "2026-04-16T00:00:00Z",
+    });
+  });
+
+  it("adds a chip when a scanned repo is checked", async () => {
+    renderStateful();
+    await openFleetTabAndScan();
+
+    const row = (await screen.findByText("/home/dev/api")).closest("button")!;
+    fireEvent.click(row);
+
+    // The chip labels the repo by its basename, not the full remote URL.
+    expect(
+      await screen.findByRole("button", { name: "Remove api" }),
+    ).toBeInTheDocument();
+  });
+
+  it("removing a chip drops the resource and unchecks the source row", async () => {
+    renderStateful();
+    await openFleetTabAndScan();
+
+    const row = (await screen.findByText("/home/dev/api")).closest("button")!;
+    fireEvent.click(row);
+
+    const chipRemove = await screen.findByRole("button", { name: "Remove api" });
+    expect(within(row).getByRole("checkbox")).toBeChecked();
+
+    fireEvent.click(chipRemove);
+
+    expect(
+      screen.queryByRole("button", { name: "Remove api" }),
+    ).not.toBeInTheDocument();
+    expect(within(row).getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("keeps chips when switching tabs", async () => {
+    renderStateful();
+
+    // Attach an ad-hoc repo from the git tab's custom-URL form.
+    const urlInput = screen.getByPlaceholderText(/owner\/repo/i);
+    fireEvent.change(urlInput, {
+      target: { value: "https://github.com/org/web.git" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(
+      await screen.findByRole("button", { name: "Remove web" }),
+    ).toBeInTheDocument();
+
+    // The bar lives above the tabs, so the chip survives a tab switch.
+    fireEvent.click(screen.getByRole("button", { name: /Reference project/i }));
+    expect(
+      screen.getByRole("button", { name: "Remove web" }),
+    ).toBeInTheDocument();
+  });
+
+  const manyRepos = (n: number): CreateProjectResourceRequest[] =>
+    Array.from({ length: n }, (_, i) => ({
+      resource_type: "github_repo",
+      resource_ref: { url: `https://github.com/org/repo-${i}.git` },
+    }));
+
+  it("folds overflow behind a +N affordance on the narrow tabs and collapses again", () => {
+    renderStateful(manyRepos(8));
+
+    // The default (git) tab is narrow, so only three chips render inline; the
+    // remaining five collapse into "+5 more".
+    expect(screen.getByRole("button", { name: "+5 more" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Remove repo-7" }),
+    ).not.toBeInTheDocument();
+
+    // Expanding reveals every chip plus a Collapse affordance...
+    fireEvent.click(screen.getByRole("button", { name: "+5 more" }));
+    expect(
+      screen.getByRole("button", { name: "Remove repo-7" }),
+    ).toBeInTheDocument();
+
+    // ...and Collapse folds them back behind "+5 more".
+    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(screen.getByRole("button", { name: "+5 more" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Remove repo-7" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a wider six-chip budget on the fleet tab", () => {
+    renderStateful(manyRepos(8));
+
+    // Git tab (narrow) collapses at three; switching to the wide fleet tab
+    // lifts the inline budget to six, so only two overflow.
+    expect(screen.getByRole("button", { name: "+5 more" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+    expect(screen.getByRole("button", { name: "+2 more" })).toBeInTheDocument();
+  });
+
+  it("resets the expanded state when removals bring the list back within budget", () => {
+    renderStateful(manyRepos(4));
+
+    // Four repos overflow the narrow three-chip budget. Expand, then remove one
+    // chip so only three remain (within budget).
+    fireEvent.click(screen.getByRole("button", { name: "+1 more" }));
+    expect(screen.getByRole("button", { name: "Collapse" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove repo-0" }));
+
+    // No overflow affordance while within budget.
+    expect(
+      screen.queryByRole("button", { name: "Collapse" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /more$/ }),
+    ).not.toBeInTheDocument();
+
+    // Re-adding a fourth repo starts collapsed again — the stale expanded state
+    // was reset, so we see "+1 more" rather than the fully-expanded list.
+    const urlInput = screen.getByPlaceholderText(/owner\/repo/i);
+    fireEvent.change(urlInput, {
+      target: { value: "https://github.com/org/repo-9.git" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("button", { name: "+1 more" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Remove repo-9" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("RepoSourcePopover — detail flow (already attached)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWorkspaceRepos.current = [{ url: "https://github.com/org/api.git" }];
+    mockIsDesktopShell.mockReturnValue(false);
+    mockUseLocalDaemonStatus.mockReturnValue({
+      daemonId: null,
+      deviceName: null,
+      running: false,
+    });
+    mockRuntimeListOptions.mockReturnValue({
+      queryKey: ["runtimes", "ws-1", "list"],
+      queryFn: () => Promise.resolve([]),
+    });
+    mockProjectListOptions.mockReturnValue({
+      queryKey: ["projects", "ws-1", "list"],
+      queryFn: () => Promise.resolve([]),
+    });
+  });
+
+  it("marks an already-attached repo row as added and non-toggleable when onRemove is absent", () => {
+    const onAdd = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <I18nWrapper>
+        <QueryClientProvider client={queryClient}>
+          <RepoSourcePopover
+            resources={[
+              {
+                resource_type: "github_repo",
+                resource_ref: { url: "https://github.com/org/api.git" },
+              },
+            ]}
+            onAdd={onAdd}
+          />
+        </QueryClientProvider>
+      </I18nWrapper>,
+    );
+
+    // Detail flow: no chips bar (onRemove omitted), and the attached row is
+    // locked with an "Added" hint.
+    const badge = screen.getByText("Added");
+    const row = badge.closest("button")!;
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(row);
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /^Remove / }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("marks an already-attached fleet scan row as added and non-toggleable when onRemove is absent", async () => {
+    mockRuntimeListOptions.mockReturnValue({
+      queryKey: ["runtimes", "ws-1", "list"],
+      queryFn: () => Promise.resolve([MOCK_RUNTIME]),
+    });
+    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+      id: "rds-1",
+      runtime_id: "runtime-1",
+      status: "completed",
+      params: { root: "~" },
+      candidates: [REMOTE_CANDIDATE],
+      supported: true,
+      error: null,
+      run_started_at: null,
+      created_at: "2026-04-16T00:00:00Z",
+      updated_at: "2026-04-16T00:00:00Z",
+    });
+    const onAdd = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <I18nWrapper>
+        <QueryClientProvider client={queryClient}>
+          <RepoSourcePopover
+            resources={[
+              {
+                resource_type: "github_repo",
+                resource_ref: { url: "git@github.com:org/api.git" },
+              },
+            ]}
+            onAdd={onAdd}
+          />
+        </QueryClientProvider>
+      </I18nWrapper>,
+    );
+    await openFleetTabAndScan();
+
+    const row = (await screen.findByText("/home/dev/api")).closest("button")!;
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(within(row).getByText("Added")).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(onAdd).not.toHaveBeenCalled();
   });
 });

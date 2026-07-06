@@ -98,6 +98,7 @@
     "no_results": "未找到结果",
     "submit": "创建项目",
     "submitting": "创建中...",
+    "title_required": "请先填写项目标题",
     "toast_created": "已创建项目",
     "toast_failed": "创建项目失败",
     "repos_pill": "代码仓库",

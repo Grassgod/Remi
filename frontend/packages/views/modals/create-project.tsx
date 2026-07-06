@@ -5,6 +5,7 @@ import { ChevronRight, FolderGit, Maximize2, Minimize2, X as XIcon, UserMinus } 
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multiremi/core/projects/mutations";
 import { useProjectDraftStore } from "@multiremi/core/projects";
+import { projectListOptions } from "@multiremi/core/projects/queries";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -38,7 +39,10 @@ import {
   useProjectStatusLabels,
   useProjectPriorityLabels,
 } from "../projects/components/labels";
-import { RepoSourcePopover } from "../projects/components/repo-source-popover";
+import {
+  RepoSourcePopover,
+  resourceDisplayName,
+} from "../projects/components/repo-source-popover";
 
 function PillButton({
   children,
@@ -62,6 +66,8 @@ function PillButton({
 
 export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const { t } = useT("modals");
+  // The pill's overflow label reuses the shared repo-source copy.
+  const { t: tRepo } = useT("projects");
   const router = useNavigation();
   const workspace = useCurrentWorkspace();
   const workspaceName = workspace?.name;
@@ -69,6 +75,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -101,6 +108,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const removeResource = (resource: CreateProjectResourceRequest) => {
     setPendingResources((prev) => prev.filter((r) => r !== resource));
   };
+
+  // Names shown in the pill's hover tooltip (capped, with a "+N more" line).
+  const MAX_PILL_NAMES = 5;
+  const selectedResourceNames = pendingResources.map((r) =>
+    resourceDisplayName(r, projects),
+  );
 
   // Sync field changes to draft store
   const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
@@ -400,38 +413,90 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           </Popover>
 
           <Popover open={repoPopoverOpen} onOpenChange={setRepoPopoverOpen}>
-            <PopoverTrigger
-              render={
-                <PillButton>
-                  <FolderGit className="size-3" />
-                  <span>
-                    {pendingResources.length === 0
-                      ? t(($) => $.create_project.repos_pill)
-                      : t(($) => $.create_project.sources_pill_count, {
-                          count: pendingResources.length,
+            {pendingResources.length === 0 ? (
+              <PopoverTrigger
+                render={
+                  <PillButton>
+                    <FolderGit className="size-3" />
+                    <span>{t(($) => $.create_project.repos_pill)}</span>
+                  </PillButton>
+                }
+              />
+            ) : (
+              <Tooltip>
+                <PopoverTrigger
+                  render={
+                    <TooltipTrigger
+                      render={
+                        <PillButton>
+                          <FolderGit className="size-3" />
+                          <span>
+                            {t(($) => $.create_project.sources_pill_count, {
+                              count: pendingResources.length,
+                            })}
+                          </span>
+                        </PillButton>
+                      }
+                    />
+                  }
+                />
+                <TooltipContent side="top" align="start" className="max-w-xs">
+                  <ul className="space-y-0.5 text-xs">
+                    {selectedResourceNames.slice(0, MAX_PILL_NAMES).map((name, i) => (
+                      <li key={i} className="truncate">
+                        {name}
+                      </li>
+                    ))}
+                    {selectedResourceNames.length > MAX_PILL_NAMES && (
+                      <li className="text-muted-foreground">
+                        {tRepo(($) => $.repo_source.more, {
+                          count: selectedResourceNames.length - MAX_PILL_NAMES,
                         })}
-                  </span>
-                </PillButton>
-              }
-            />
+                      </li>
+                    )}
+                  </ul>
+                </TooltipContent>
+              </Tooltip>
+            )}
             <PopoverContent side="top" align="start" className="w-auto p-2">
               <RepoSourcePopover
                 resources={pendingResources}
                 onAdd={addResource}
                 onRemove={removeResource}
+                onClose={() => setRepoPopoverOpen(false)}
               />
             </PopoverContent>
           </Popover>
           </div>
 
-          <Button
-            size="sm"
-            onClick={handleSubmit}
-            disabled={!title.trim() || submitting}
-            className="shrink-0"
-          >
-            {submitting ? t(($) => $.create_project.submitting) : t(($) => $.create_project.submit)}
-          </Button>
+          {!title.trim() ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  // A disabled button can't receive focus, so the trigger wraps
+                  // it in a focusable span — keyboard users can still summon the
+                  // reason the submit is blocked.
+                  <span className="shrink-0" tabIndex={0}>
+                    <Button size="sm" onClick={handleSubmit} disabled>
+                      {t(($) => $.create_project.submit)}
+                    </Button>
+                  </span>
+                }
+              />
+              <TooltipContent side="top">
+                {t(($) => $.create_project.title_required)}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <Button
+              size="sm"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="shrink-0"
+            >
+              {submitting ? t(($) => $.create_project.submitting) : t(($) => $.create_project.submit)}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -98,6 +98,7 @@
     "no_results": "No results",
     "submit": "Create Project",
     "submitting": "Creating...",
+    "title_required": "Enter a project title first",
     "toast_created": "Project created",
     "toast_failed": "Failed to create project",
     "repos_pill": "Repos",
