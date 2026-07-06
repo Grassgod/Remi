@@ -806,7 +806,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/workspaces", async (c) => {
     const body = await readJson<any>(c);
-    const result = safeCreateWorkspace(store, body);
+    const result = safeCreateWorkspace(store, body, authenticatedRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result, 201);
   });
@@ -6180,12 +6180,15 @@ function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore
   const workspaceId = runtimeWorkspaceId(runtime);
   const token = currentAccessToken(c);
   if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
-  if (token?.workspaceId && token.workspaceId !== workspaceId) {
+  const userId = authenticatedRequestUserId(c);
+  // Same rule as denyCurrentUserWorkspaceAccess: a human's login PAT is not
+  // workspace-scoped — membership decides which runtimes they can see.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "runtime not found" }, 404);
   }
   if (token?.type === "task") return null;
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  const userId = authenticatedRequestUserId(c);
   if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
@@ -6501,8 +6504,13 @@ function requestedChatWorkspaceId(c: Context, input?: Pick<CreateChatSessionInpu
 function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
   const token = currentAccessToken(c);
   if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
-  // Tokens bound to one workspace (task tokens, workspace-scoped PATs) can't reach others.
-  if (token?.workspaceId && token.workspaceId !== workspaceId) {
+  const userId = authenticatedRequestUserId(c);
+  // Tokens bound to one workspace (task tokens, user-less workspace PATs) can't
+  // reach others. A human's login PAT is minted under "local" but is a session
+  // credential, not a scope — the membership check below is the authority for
+  // real users, otherwise they could never open a workspace created after login.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
   // Task tokens are scoped by the check above and act on behalf of a task within
@@ -6512,7 +6520,6 @@ function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, works
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  const userId = authenticatedRequestUserId(c);
   if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
@@ -7989,6 +7996,7 @@ function safeUpdateCurrentUser(
 function safeCreateWorkspace(
   store: MultiremiStore,
   input: any,
+  actingUserId: string | null,
 ): ReturnType<MultiremiStore["createWorkspace"]> | { error: string; status: 400 | 409 } {
   try {
     return store.createWorkspace({
@@ -7999,7 +8007,7 @@ function safeCreateWorkspace(
       settings: input.settings,
       repos: input.repos,
       issuePrefix: input.issuePrefix ?? input.issue_prefix,
-    });
+    }, actingUserId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "name and slug are required" || message.startsWith("slug must contain")) {

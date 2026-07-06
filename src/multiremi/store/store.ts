@@ -1121,7 +1121,7 @@ export class MultiremiStore {
     return row ? toWorkspace(row) : null;
   }
 
-  createWorkspace(input: CreateWorkspaceInput): MultiremiWorkspace {
+  createWorkspace(input: CreateWorkspaceInput, actingUserId?: string | null): MultiremiWorkspace {
     const name = String(input.name ?? "").trim();
     const slug = normalizeWorkspaceSlug(input.slug ?? slugifyWorkspaceName(name));
     if (!name || !slug) throw new Error("name and slug are required");
@@ -1145,7 +1145,9 @@ export class MultiremiStore {
         now,
       ],
     );
-    const user = this.getCurrentUser();
+    // The authenticated creator (not the legacy "local" user) becomes the owner,
+    // otherwise a new user could create a workspace they cannot access.
+    const user = this.resolveActingUser(actingUserId);
     const memberId = `mem_${id}_${user.id}`;
     if (!this.getWorkspaceMember(memberId)) {
       this.createWorkspaceMember({
@@ -1157,7 +1159,7 @@ export class MultiremiStore {
         role: "owner",
       });
     }
-    this.markCurrentUserOnboarded();
+    this.db.run("UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?", [now, now, user.id]);
     return this.getWorkspace(id)!;
   }
 
