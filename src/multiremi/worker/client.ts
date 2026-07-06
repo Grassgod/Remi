@@ -140,6 +140,7 @@ export class MultiremiDaemonClient {
     candidates?: MultiremiRuntimeDirectoryCandidate[];
     supported?: boolean;
     error?: string;
+    resolvedRoot?: string;
   }): Promise<void> {
     await this.post(`/api/daemon/runtimes/${runtimeId}/directory-scans/${requestId}/result`, result);
   }

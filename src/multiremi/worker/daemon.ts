@@ -514,14 +514,25 @@ export class MultiremiDaemon {
 
   private async handleRuntimeDirectoryScan(
     runtimeId: string,
-    request: { id: string; root?: string; max_depth?: number },
+    request: { id: string; root?: string; max_depth?: number; mode?: string },
   ): Promise<void> {
     try {
-      await this.client.reportRuntimeDirectoryScanResult(runtimeId, request.id, {
-        status: "completed",
-        supported: true,
-        candidates: await scanRuntimeDirectories(request.root, request.max_depth),
-      });
+      if (request.mode === "browse") {
+        const { candidates, resolvedRoot } = await browseRuntimeDirectory(request.root);
+        await this.client.reportRuntimeDirectoryScanResult(runtimeId, request.id, {
+          status: "completed",
+          supported: true,
+          candidates,
+          resolvedRoot,
+        });
+      } else {
+        const candidates = await scanRuntimeDirectories(request.root, request.max_depth);
+        await this.client.reportRuntimeDirectoryScanResult(runtimeId, request.id, {
+          status: "completed",
+          supported: true,
+          candidates,
+        });
+      }
     } catch (err) {
       await this.client.reportRuntimeDirectoryScanResult(runtimeId, request.id, {
         status: "failed",
@@ -1352,6 +1363,67 @@ export async function scanRuntimeDirectories(root: string | undefined, maxDepthP
     }
   }
   return candidates;
+}
+
+const DIRECTORY_BROWSE_MAX_ENTRIES = 200;
+const DIRECTORY_BROWSE_TIME_BUDGET_MS = 10_000;
+const DIRECTORY_BROWSE_YIELD_EVERY = 200;
+
+/**
+ * List the immediate child directories of `root` (depth 1) — the folder-picker
+ * counterpart to scan mode. Every visible directory is surfaced, git or not;
+ * dot-dirs and the usual junk (see DIRECTORY_SCAN_SKIP_DIRS) are hidden and
+ * symlinked dirs are skipped for loop safety. Git children carry the same
+ * remote/branch metadata scan mode reads. Sorted by name, capped at 200.
+ *
+ * Like scan mode, this is guarded against a pathological root (e.g. a directory
+ * with hundreds of thousands of entries, worse on cold NFS): the per-entry lstat
+ * sweep checks a time box and yields to the event loop periodically so it can't
+ * block ACP streaming or cancellation polling on a busy daemon. Returns the
+ * expanded absolute `resolvedRoot` so the UI can render/ascend on empty listings.
+ */
+export async function browseRuntimeDirectory(root: string | undefined): Promise<{
+  candidates: MultiremiRuntimeDirectoryCandidate[];
+  resolvedRoot: string;
+}> {
+  const rootPath = resolve(root && root.trim() ? expandHomePath(root.trim()) : homedir());
+  if (!isDirectory(rootPath)) throw new Error(`directory does not exist: ${rootPath}`);
+  const entries = safeReadDir(rootPath);
+  if (!entries) return { candidates: [], resolvedRoot: rootPath };
+  const deadline = Date.now() + DIRECTORY_BROWSE_TIME_BUDGET_MS;
+  const names: string[] = [];
+  let seen = 0;
+  for (const entry of entries) {
+    if (Date.now() >= deadline) break;
+    // Yield to the event loop periodically so a huge fan-out can't block the
+    // daemon's ACP streaming / cancellation polling mid-sweep.
+    if (++seen % DIRECTORY_BROWSE_YIELD_EVERY === 0) await new Promise((r) => setTimeout(r, 0));
+    if (isSkippedScanDir(entry.name)) continue;
+    // lstat (no symlink follow) so symlinked directories are skipped for loop safety.
+    if (!isRealDirectory(join(rootPath, entry.name))) continue;
+    names.push(entry.name);
+  }
+  names.sort((a, b) => a.localeCompare(b));
+  const capped = names.slice(0, DIRECTORY_BROWSE_MAX_ENTRIES);
+  const candidates: MultiremiRuntimeDirectoryCandidate[] = [];
+  for (let i = 0; i < capped.length; i++) {
+    if (i > 0 && i % DIRECTORY_BROWSE_YIELD_EVERY === 0) await new Promise((r) => setTimeout(r, 0));
+    candidates.push(readBrowseCandidate(join(rootPath, capped[i]!)));
+  }
+  return { candidates, resolvedRoot: rootPath };
+}
+
+function readBrowseCandidate(dir: string): MultiremiRuntimeDirectoryCandidate {
+  const isGitRepo = existsSync(join(dir, ".git"));
+  const gitDir = isGitRepo ? resolveGitDir(dir) : null;
+  return {
+    path: dir,
+    name: basename(dir),
+    remoteUrl: gitDir ? readGitRemoteOriginUrl(gitDir) : null,
+    currentBranch: gitDir ? readGitCurrentBranch(gitDir) : null,
+    isDirty: null,
+    isGitRepo,
+  };
 }
 
 function isSkippedScanDir(name: string): boolean {

@@ -4,8 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
+  ChevronRight,
+  CornerLeftUp,
+  Folder,
   FolderGit,
   FolderOpen,
+  GitBranch,
   HardDrive,
   Loader2,
   Search,
@@ -67,8 +71,60 @@ export interface RepoSourcePopoverProps {
   currentProjectId?: string;
 }
 
-function runtimeLabel(runtime: AgentRuntime): string {
-  return `${runtime.name} (${runtime.provider})`;
+// Scanning is a machine-level action, so the fleet picker lists computers, not
+// runtimes. The device name is the text inside the outermost parens of the
+// runtime name pattern "<provider> (<device>)"; fall back to the full name.
+function machineLabel(runtime: AgentRuntime): string {
+  const open = runtime.name.indexOf("(");
+  const close = runtime.name.lastIndexOf(")");
+  if (open !== -1 && close > open) {
+    return runtime.name.slice(open + 1, close).trim() || runtime.name;
+  }
+  return runtime.name;
+}
+
+// Parent directory of an absolute POSIX path (the fleet daemons are Linux/Mac).
+// Returns null when there is no separator to ascend past (e.g. "~").
+function parentOf(path: string): string | null {
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  if (idx < 0) return null;
+  return idx === 0 ? "/" : trimmed.slice(0, idx);
+}
+
+// One fleet computer: the runtimes sharing a daemon collapse into a single
+// pickable entry. Online when ANY of its runtimes is online; scans/browses run
+// against the first online runtime (or the first runtime when all are offline).
+interface FleetMachine {
+  key: string;
+  daemonId: string | null;
+  label: string;
+  online: boolean;
+  scanRuntimeId: string;
+}
+
+function groupMachines(runtimes: AgentRuntime[]): FleetMachine[] {
+  const order: string[] = [];
+  const byKey = new Map<string, FleetMachine>();
+  for (const runtime of runtimes) {
+    const key = runtime.daemon_id ?? `runtime:${runtime.id}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        key,
+        daemonId: runtime.daemon_id,
+        label: machineLabel(runtime),
+        online: runtime.status === "online",
+        scanRuntimeId: runtime.id,
+      });
+      order.push(key);
+    } else if (runtime.status === "online" && !existing.online) {
+      // Prefer the first online runtime as the scan target.
+      existing.online = true;
+      existing.scanRuntimeId = runtime.id;
+    }
+  }
+  return order.map((key) => byKey.get(key)!);
 }
 
 function githubRepoResource(url: string): CreateProjectResourceRequest {
@@ -150,7 +206,14 @@ export function RepoSourcePopover({
   ];
 
   return (
-    <div className="space-y-2">
+    <div
+      className={cn(
+        "space-y-2",
+        // The fleet tab needs room to breathe (path browser + long remotes);
+        // the other tabs stay compact.
+        tab === "runtime" ? "w-[560px] max-w-[90vw]" : "w-72",
+      )}
+    >
       <div className="grid grid-cols-3 gap-1 rounded-md bg-muted/60 p-0.5">
         {TABS.map((entry) => (
           <button
@@ -353,6 +416,51 @@ function GitRepoTab({
   );
 }
 
+// Two-line candidate display shared by scan results and browse git-repo rows:
+// name + branch on line 1, absolute path (mono) on line 2, and the full remote
+// on a third muted line — every field truncates with a title tooltip so nothing
+// hard-clips mid-text.
+function CandidateBody({
+  candidate,
+  noRemoteLabel,
+}: {
+  candidate: RuntimeDirectoryCandidate;
+  noRemoteLabel: string;
+}) {
+  return (
+    <div className="min-w-0 flex-1 space-y-0.5 text-left">
+      <div className="flex items-center gap-1.5">
+        <span className="truncate font-medium">{candidate.name}</span>
+        {candidate.current_branch && (
+          <Badge variant="secondary" className="shrink-0 gap-1 font-normal">
+            <GitBranch className="size-3" />
+            {candidate.current_branch}
+          </Badge>
+        )}
+        {!candidate.remote_url && (
+          <Badge variant="outline" className="ml-auto shrink-0">
+            {noRemoteLabel}
+          </Badge>
+        )}
+      </div>
+      <div
+        className="truncate font-mono text-xs text-muted-foreground"
+        title={candidate.path}
+      >
+        {candidate.path}
+      </div>
+      {candidate.remote_url && (
+        <div
+          className="truncate text-xs text-muted-foreground"
+          title={candidate.remote_url}
+        >
+          {candidate.remote_url}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RuntimeImportTab({
   wsId,
   resources,
@@ -366,21 +474,24 @@ function RuntimeImportTab({
 }) {
   const { t } = useT("projects");
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
-  const localRuntimes = useMemo(
-    () => runtimes.filter((r) => r.runtime_mode === "local"),
+  // Scanning is machine-level, so collapse a machine's runtimes into one entry.
+  const machines = useMemo(
+    () => groupMachines(runtimes.filter((r) => r.runtime_mode === "local")),
     [runtimes],
   );
 
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState("");
-  const [root, setRoot] = useState("~");
+  const [selectedKey, setSelectedKey] = useState("");
+  const [path, setPath] = useState("~");
+  const [view, setView] = useState<"browse" | "scan" | null>(null);
 
   useEffect(() => {
-    setSelectedRuntimeId((prev) => prev || localRuntimes[0]?.id || "");
-  }, [localRuntimes]);
+    setSelectedKey((prev) => prev || machines[0]?.key || "");
+  }, [machines]);
 
-  const selectedRuntime = localRuntimes.find((r) => r.id === selectedRuntimeId);
-  const daemonId = selectedRuntime?.daemon_id ?? null;
-  const online = selectedRuntime?.status === "online";
+  const machine = machines.find((m) => m.key === selectedKey);
+  const daemonId = machine?.daemonId ?? null;
+  const runtimeId = machine?.scanRuntimeId ?? "";
+  const online = machine?.online ?? false;
 
   const scan = useMutation({
     mutationFn: (vars: { runtimeId: string; root: string }) =>
@@ -389,11 +500,46 @@ function RuntimeImportTab({
         vars.root.trim() ? { root: vars.root.trim() } : undefined,
       ),
   });
+  const browse = useMutation({
+    mutationFn: (vars: { runtimeId: string; root: string }) =>
+      resolveRuntimeDirectoryScan(vars.runtimeId, {
+        root: vars.root.trim() || "~",
+        mode: "browse",
+      }),
+  });
+
+  const busy = scan.isPending || browse.isPending;
+
+  const browseTo = (root: string) => {
+    if (!runtimeId) return;
+    setPath(root);
+    setView("browse");
+    scan.reset();
+    browse.mutate({ runtimeId, root });
+  };
+
+  const scanHere = () => {
+    if (!runtimeId) return;
+    setView("scan");
+    browse.reset();
+    scan.mutate({ runtimeId, root: path });
+  };
 
   const candidates = scan.data?.candidates ?? [];
-  const scanErrorMessage = (() => {
-    if (!scan.isError) return null;
-    const msg = scan.error instanceof Error ? scan.error.message : "";
+  const browseCandidates = browse.data?.candidates ?? [];
+  // The daemon echoes the expanded absolute root (e.g. "~" -> "/home/dev"), so
+  // prefer that for the current dir — it renders and ascends even on an empty
+  // listing. Fall back to a child's shared parent, then the requested path.
+  const firstChild = browseCandidates[0];
+  const currentDir =
+    browse.data?.params?.resolved_root ??
+    (firstChild ? parentOf(firstChild.path) ?? path : path);
+  const upTarget = parentOf(currentDir);
+
+  const errorMessage = (() => {
+    const m = view === "browse" ? browse : view === "scan" ? scan : null;
+    if (!m || !m.isError) return null;
+    const msg = m.error instanceof Error ? m.error.message : "";
     if (msg && !/timed out|timeout/i.test(msg)) return msg;
     return t(($) => $.repo_source.scan_timeout_error);
   })();
@@ -464,13 +610,15 @@ function RuntimeImportTab({
     }
   };
 
-  if (localRuntimes.length === 0) {
+  if (machines.length === 0) {
     return (
       <p className="px-1 py-6 text-center text-xs text-muted-foreground">
         {t(($) => $.repo_source.no_local_runtimes)}
       </p>
     );
   }
+
+  const noRemoteLabel = t(($) => $.repo_source.no_remote_badge);
 
   return (
     <div className="space-y-2">
@@ -479,62 +627,74 @@ function RuntimeImportTab({
           {t(($) => $.repo_source.runtime_label)}
         </label>
         <Select
-          value={selectedRuntimeId}
+          value={selectedKey}
           onValueChange={(v) => {
             if (!v) return;
-            // Drop stale candidates from the previously-selected machine.
+            // Drop stale results from the previously-selected machine.
             scan.reset();
-            setSelectedRuntimeId(v);
+            browse.reset();
+            setView(null);
+            setSelectedKey(v);
           }}
         >
           <SelectTrigger className="h-8 w-full text-xs">
             <SelectValue placeholder={t(($) => $.repo_source.runtime_placeholder)}>
-              {selectedRuntime ? runtimeLabel(selectedRuntime) : null}
+              {machine ? machine.label : null}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {localRuntimes.map((r) => (
-              <SelectItem key={r.id} value={r.id}>
-                {runtimeLabel(r)}
+            {machines.map((m) => (
+              <SelectItem key={m.key} value={m.key}>
+                {m.label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
 
-      <div className="flex items-end gap-1.5">
-        <div className="min-w-0 flex-1 space-y-1">
-          <label className="text-xs text-muted-foreground">
-            {t(($) => $.repo_source.root_label)}
-          </label>
+      <div className="space-y-1">
+        <label className="text-xs text-muted-foreground">
+          {t(($) => $.repo_source.root_label)}
+        </label>
+        <div className="flex items-center gap-1.5">
           <input
             type="text"
-            value={root}
-            onChange={(e) => setRoot(e.target.value)}
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
             placeholder={t(($) => $.repo_source.root_placeholder)}
             aria-label={t(($) => $.repo_source.root_label)}
-            className="h-8 w-full rounded-md border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
           />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 text-xs"
+            disabled={!online || busy}
+            onClick={() => browseTo(path.trim() || "~")}
+          >
+            {browse.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <FolderOpen className="size-3" />
+            )}
+            {t(($) => $.repo_source.browse_button)}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 shrink-0 text-xs"
+            disabled={!online || busy}
+            onClick={scanHere}
+          >
+            {scan.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <HardDrive className="size-3" />
+            )}
+            {t(($) => $.repo_source.browse_scan_here)}
+          </Button>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          className="h-8 shrink-0 text-xs"
-          disabled={!online || scan.isPending}
-          onClick={() =>
-            selectedRuntimeId &&
-            scan.mutate({ runtimeId: selectedRuntimeId, root })
-          }
-        >
-          {scan.isPending ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : (
-            <HardDrive className="size-3" />
-          )}
-          {scan.isPending
-            ? t(($) => $.repo_source.scanning)
-            : t(($) => $.repo_source.scan_button)}
-        </Button>
       </div>
 
       {!online && (
@@ -543,21 +703,110 @@ function RuntimeImportTab({
         </p>
       )}
 
-      {scanErrorMessage && (
+      {errorMessage && (
         <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          {scanErrorMessage}
+          {errorMessage}
         </div>
       )}
 
-      {scan.isSuccess && candidates.length === 0 && (
+      {view === "browse" && !browse.isError && (
+        <div className="space-y-1">
+          <div
+            className="truncate px-1 font-mono text-[11px] text-muted-foreground"
+            title={currentDir}
+          >
+            {currentDir}
+          </div>
+          <div className="max-h-[340px] space-y-1 overflow-y-auto">
+            {upTarget && (
+              <button
+                type="button"
+                onClick={() => browseTo(upTarget)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent transition-colors"
+              >
+                <CornerLeftUp className="size-3.5 shrink-0" />
+                {t(($) => $.repo_source.browse_up)}
+              </button>
+            )}
+            {!browse.isPending && browseCandidates.length === 0 && (
+              <p className="px-1 py-3 text-center text-xs text-muted-foreground">
+                {t(($) => $.repo_source.browse_empty)}
+              </p>
+            )}
+            {browseCandidates.map((candidate) => {
+              if (candidate.is_git_repo !== true) {
+                // Plain directory — navigate into it, nothing to import.
+                return (
+                  <button
+                    type="button"
+                    key={candidate.path}
+                    onClick={() => browseTo(candidate.path)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors"
+                  >
+                    <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1 text-left">
+                      <div className="truncate font-medium">{candidate.name}</div>
+                      <div
+                        className="truncate font-mono text-xs text-muted-foreground"
+                        title={candidate.path}
+                      >
+                        {candidate.path}
+                      </div>
+                    </div>
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                );
+              }
+              // Git repo — descend on the row, import via the checkbox.
+              const resource = candidateResource(candidate, daemonId ?? "");
+              const checked = isSelected(resource);
+              const noRemote = !candidate.remote_url;
+              const capped = noRemote && !checked && hasLocalForDaemon;
+              const importDisabled = capped || (noRemote && daemonId === null);
+              return (
+                <div
+                  key={candidate.path}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors",
+                    checked && "bg-accent",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={importDisabled}
+                    aria-label={candidate.name}
+                    onChange={() => {
+                      if (importDisabled) return;
+                      toggle(resource);
+                    }}
+                    className="size-3.5 shrink-0 disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => browseTo(candidate.path)}
+                    className="flex min-w-0 flex-1 items-center gap-2"
+                  >
+                    <FolderGit className="size-3.5 shrink-0" />
+                    <CandidateBody candidate={candidate} noRemoteLabel={noRemoteLabel} />
+                  </button>
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {view === "scan" && scan.isSuccess && candidates.length === 0 && (
         <p className="px-1 py-4 text-center text-xs text-muted-foreground">
           {t(($) => $.repo_source.scan_empty)}
         </p>
       )}
 
-      {candidates.length > 0 && (
-        <div className="max-h-48 space-y-1 overflow-y-auto">
+      {view === "scan" && candidates.length > 0 && (
+        <div className="max-h-[340px] space-y-1 overflow-y-auto">
           {candidates.map((candidate) => {
             const resource = candidateResource(candidate, daemonId ?? "");
             const checked = isSelected(resource);
@@ -584,23 +833,9 @@ function RuntimeImportTab({
                   type="checkbox"
                   checked={checked}
                   readOnly
-                  className="size-3.5"
+                  className="size-3.5 shrink-0"
                 />
-                <div className="min-w-0 flex-1 text-left">
-                  <div className="truncate font-medium">{candidate.name}</div>
-                  <div className="truncate font-mono text-[10px] text-muted-foreground">
-                    {candidate.path}
-                  </div>
-                </div>
-                {candidate.remote_url ? (
-                  <Badge variant="secondary" className="max-w-[8rem] shrink-0 truncate">
-                    {candidate.remote_url}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline" className="shrink-0">
-                    {t(($) => $.repo_source.no_remote_badge)}
-                  </Badge>
-                )}
+                <CandidateBody candidate={candidate} noRemoteLabel={noRemoteLabel} />
               </button>
             );
           })}

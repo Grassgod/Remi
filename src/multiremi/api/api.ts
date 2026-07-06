@@ -1936,7 +1936,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
     const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    return c.json(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth }));
+    try {
+      return c.json(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth, mode: body.mode }));
+    } catch (err) {
+      const response = directoryScanErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.post("/api/runtimes/:id/directory-scans", async (c) => {
     const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
@@ -1944,7 +1950,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
     const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    return c.json(runtimeDirectoryScanRequestCompatibilityResponse(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth })));
+    try {
+      return c.json(runtimeDirectoryScanRequestCompatibilityResponse(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth, mode: body.mode })));
+    } catch (err) {
+      const response = directoryScanErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
   });
   app.get("/api/multiremi/runtimes/:id/directory-scans/:requestId", (c) => {
     const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
@@ -5860,6 +5872,12 @@ function runtimeLocalSkillListRequestCompatibilityResponse(request: MultiremiRun
   return response;
 }
 
+function directoryScanErrorResponse(c: Context, err: unknown): Response | null {
+  if (!(err instanceof Error)) return null;
+  if (err.message === 'directory scan mode must be "scan" or "browse"') return c.json({ error: err.message }, 400);
+  return null;
+}
+
 function runtimeDirectoryCandidateCompatibilityResponse(candidate: MultiremiRuntimeDirectoryCandidate): Record<string, unknown> {
   return {
     path: candidate.path,
@@ -5867,6 +5885,7 @@ function runtimeDirectoryCandidateCompatibilityResponse(candidate: MultiremiRunt
     remote_url: candidate.remoteUrl,
     current_branch: candidate.currentBranch,
     is_dirty: candidate.isDirty,
+    is_git_repo: candidate.isGitRepo ?? null,
   };
 }
 
@@ -5874,6 +5893,8 @@ function runtimeDirectoryScanRequestCompatibilityResponse(request: MultiremiRunt
   const params: Record<string, unknown> = {};
   if (request.params.root !== undefined) params.root = request.params.root;
   if (request.params.maxDepth !== undefined) params.max_depth = request.params.maxDepth;
+  if (request.params.mode !== undefined) params.mode = request.params.mode;
+  if (request.params.resolvedRoot !== undefined) params.resolved_root = request.params.resolvedRoot;
   return {
     id: request.id,
     runtime_id: request.runtimeId,

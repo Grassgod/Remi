@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { CreateProjectResourceRequest } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -124,7 +125,9 @@ function renderPopover(
 
 async function openFleetTabAndScan() {
   fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
-  const scanButton = await screen.findByRole("button", { name: /^Scan$/i });
+  const scanButton = await screen.findByRole("button", {
+    name: /Scan this directory/i,
+  });
   await waitFor(() => expect(scanButton).not.toBeDisabled());
   fireEvent.click(scanButton);
 }
@@ -299,6 +302,198 @@ describe("RepoSourcePopover — fleet import tab", () => {
         "The scan timed out. The fleet daemon may need updating to the latest version.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("collapses a computer's runtimes into one option and scans its online runtime", async () => {
+    // Two runtimes, same daemon (one machine): the offline one would be picked
+    // first by id order, but the scan must target the online runtime.
+    const offlineClaude = {
+      ...MOCK_RUNTIME,
+      id: "rt-claude",
+      status: "offline",
+      name: "claude (n37-206-133-hehuajie)",
+    };
+    const onlineCodex = {
+      ...MOCK_RUNTIME,
+      id: "rt-codex",
+      provider: "codex",
+      status: "online",
+      name: "codex (n37-206-133-hehuajie)",
+    };
+    mockRuntimeListOptions.mockReturnValue({
+      queryKey: ["runtimes", "ws-1", "list"],
+      queryFn: () => Promise.resolve([offlineClaude, onlineCodex]),
+    });
+    const user = userEvent.setup();
+    renderPopover();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+
+    // The picker lists the machine by its parsed device name, exactly once.
+    const trigger = await screen.findByRole("combobox");
+    expect(trigger.textContent).toContain("n37-206-133-hehuajie");
+    await user.click(trigger);
+    expect(await screen.findAllByRole("option")).toHaveLength(1);
+    // Close the popup before interacting with the scan button.
+    await user.keyboard("{Escape}");
+
+    const scanButton = await screen.findByRole("button", {
+      name: /Scan this directory/i,
+    });
+    await waitFor(() => expect(scanButton).not.toBeDisabled());
+    fireEvent.click(scanButton);
+
+    await waitFor(() =>
+      expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("rt-codex", {
+        root: "~",
+      }),
+    );
+  });
+
+  it("browses child directories and descends into a subdirectory", async () => {
+    mockResolveRuntimeDirectoryScan.mockImplementation(
+      (_id: string, params?: { root?: string; mode?: string }) => {
+        if (params?.mode === "browse") {
+          const base = params.root === "~" || !params.root ? "/home/dev" : params.root;
+          return Promise.resolve({
+            id: "rds-b",
+            runtime_id: "runtime-1",
+            status: "completed",
+            params: { root: params.root, mode: "browse" },
+            candidates: [
+              {
+                path: `${base}/projects`,
+                name: "projects",
+                remote_url: null,
+                current_branch: null,
+                is_dirty: null,
+                is_git_repo: false,
+              },
+              {
+                path: `${base}/api`,
+                name: "api",
+                remote_url: "git@github.com:org/api.git",
+                current_branch: "main",
+                is_dirty: null,
+                is_git_repo: true,
+              },
+            ],
+            supported: true,
+            error: null,
+            run_started_at: null,
+            created_at: "2026-04-16T00:00:00Z",
+            updated_at: "2026-04-16T00:00:00Z",
+          });
+        }
+        return Promise.resolve({
+          id: "rds-s",
+          runtime_id: "runtime-1",
+          status: "completed",
+          params: {},
+          candidates: [],
+          supported: true,
+          error: null,
+          run_started_at: null,
+          created_at: "2026-04-16T00:00:00Z",
+          updated_at: "2026-04-16T00:00:00Z",
+        });
+      },
+    );
+    renderPopover();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+    const browseButton = await screen.findByRole("button", { name: /^Browse$/i });
+    await waitFor(() => expect(browseButton).not.toBeDisabled());
+    fireEvent.click(browseButton);
+
+    // Both a plain directory and a git repo child show up.
+    expect(await screen.findByText("/home/dev/projects")).toBeInTheDocument();
+    expect(screen.getByText("/home/dev/api")).toBeInTheDocument();
+    expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
+      root: "~",
+      mode: "browse",
+    });
+
+    // Clicking the plain directory descends into it and re-browses.
+    fireEvent.click(screen.getByText("/home/dev/projects").closest("button")!);
+    await waitFor(() =>
+      expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
+        root: "/home/dev/projects",
+        mode: "browse",
+      }),
+    );
+  });
+
+  it("shows the resolved absolute dir and an Up button on an empty browse listing", async () => {
+    // An empty listing (e.g. a home dir with only dot-dirs) must still render
+    // the expanded absolute root and let the user ascend — the candidates array
+    // is empty, so the current dir has to come from params.resolved_root.
+    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+      id: "rds-b",
+      runtime_id: "runtime-1",
+      status: "completed",
+      params: { root: "~", mode: "browse", resolved_root: "/home/svc" },
+      candidates: [],
+      supported: true,
+      error: null,
+      run_started_at: null,
+      created_at: "2026-04-16T00:00:00Z",
+      updated_at: "2026-04-16T00:00:00Z",
+    });
+    renderPopover();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+    const browseButton = await screen.findByRole("button", { name: /^Browse$/i });
+    await waitFor(() => expect(browseButton).not.toBeDisabled());
+    fireEvent.click(browseButton);
+
+    // The expanded absolute path is shown, not the literal "~".
+    expect(await screen.findByText("/home/svc")).toBeInTheDocument();
+    expect(
+      screen.getByText("This directory has no subdirectories."),
+    ).toBeInTheDocument();
+    // The Up button ascends to the parent of the resolved root.
+    fireEvent.click(screen.getByRole("button", { name: /Up one level/i }));
+    await waitFor(() =>
+      expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
+        root: "/home",
+        mode: "browse",
+      }),
+    );
+  });
+
+  it("imports a git repo directly from browse results", async () => {
+    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+      id: "rds-b",
+      runtime_id: "runtime-1",
+      status: "completed",
+      params: { root: "~", mode: "browse" },
+      candidates: [
+        {
+          path: "/home/dev/api",
+          name: "api",
+          remote_url: "git@github.com:org/api.git",
+          current_branch: "main",
+          is_dirty: null,
+          is_git_repo: true,
+        },
+      ],
+      supported: true,
+      error: null,
+      run_started_at: null,
+      created_at: "2026-04-16T00:00:00Z",
+      updated_at: "2026-04-16T00:00:00Z",
+    });
+    const { onAdd } = renderPopover();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+    const browseButton = await screen.findByRole("button", { name: /^Browse$/i });
+    await waitFor(() => expect(browseButton).not.toBeDisabled());
+    fireEvent.click(browseButton);
+
+    const checkbox = await screen.findByRole("checkbox", { name: "api" });
+    fireEvent.click(checkbox);
+
+    expect(onAdd).toHaveBeenCalledWith({
+      resource_type: "github_repo",
+      resource_ref: { url: "git@github.com:org/api.git" },
+    });
   });
 });
 

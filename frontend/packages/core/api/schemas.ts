@@ -903,6 +903,8 @@ const RuntimeDirectoryCandidateSchema = z.object({
   remote_url: z.string().nullable().default(null),
   current_branch: z.string().nullable().default(null),
   is_dirty: z.boolean().nullable().default(null),
+  // Present in browse-mode responses; absent/null for scan-mode candidates.
+  is_git_repo: z.boolean().nullable().optional(),
 }).loose();
 
 export const RuntimeDirectoryScanRequestSchema = z.object({
@@ -912,6 +914,8 @@ export const RuntimeDirectoryScanRequestSchema = z.object({
   params: z.object({
     root: z.string().optional(),
     max_depth: z.number().optional(),
+    // Browse mode echoes the expanded absolute root for the folder-picker.
+    resolved_root: z.string().optional(),
   }).loose().default({}),
   candidates: z.array(RuntimeDirectoryCandidateSchema).default([]),
   supported: z.boolean().default(true),

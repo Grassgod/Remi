@@ -685,6 +685,9 @@ export interface RuntimeDirectoryCandidate {
   remote_url: string | null;
   current_branch: string | null;
   is_dirty: boolean | null;
+  // Set in "browse" mode to distinguish git repos from plain child dirs.
+  // Scan-mode candidates are always repos and may omit it.
+  is_git_repo?: boolean | null;
 }
 
 // Snake_case wire shape returned by the `/api/runtimes/:id/directory-scans`
@@ -693,7 +696,10 @@ export interface RuntimeDirectoryScanRequest {
   id: string;
   runtime_id: string;
   status: RuntimeDirectoryScanStatus;
-  params: { root?: string; max_depth?: number };
+  // `resolved_root` is the expanded absolute root the daemon browsed (browse
+  // mode only) — the folder-picker's current-dir source, present even when the
+  // listing is empty. `root` stays as-requested (may be "~" or relative).
+  params: { root?: string; max_depth?: number; resolved_root?: string };
   candidates: RuntimeDirectoryCandidate[];
   supported: boolean;
   error: string | null;
@@ -705,4 +711,7 @@ export interface RuntimeDirectoryScanRequest {
 export interface CreateRuntimeDirectoryScanRequest {
   root?: string;
   max_depth?: number;
+  // "scan" (default/absent) walks the tree for git repos; "browse" lists the
+  // immediate child directories of `root` for folder navigation.
+  mode?: "scan" | "browse";
 }

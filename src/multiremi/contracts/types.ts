@@ -249,11 +249,20 @@ export interface MultiremiRuntimeDirectoryCandidate {
   remoteUrl: string | null;
   currentBranch: string | null;
   isDirty: boolean | null;
+  // Present in browse mode (true for git working trees, false for plain dirs);
+  // scan-mode candidates may omit it.
+  isGitRepo?: boolean;
 }
 
 export interface MultiremiRuntimeDirectoryScanParams {
   root?: string;
   maxDepth?: number;
+  // "scan" (default) hunts for git working trees; "browse" lists immediate child dirs.
+  mode?: "scan" | "browse";
+  // Browse mode echoes the expanded absolute root back (e.g. "~" -> "/home/dev")
+  // so the folder-picker UI can show the current dir and ascend even when the
+  // listing is empty. Absent for scan mode / as-requested params.
+  resolvedRoot?: string;
 }
 
 export interface MultiremiRuntimeDirectoryScanRequest {
@@ -308,6 +317,7 @@ export interface MultiremiDaemonHeartbeatAck {
     id: string;
     root?: string;
     max_depth?: number;
+    mode?: string;
   };
   pending_local_skill_import?: {
     id: string;
@@ -1465,6 +1475,7 @@ export interface CreateRuntimeDirectoryScanInput {
   root?: string;
   maxDepth?: number;
   max_depth?: number;
+  mode?: "scan" | "browse";
 }
 
 export interface ReportRuntimeDirectoryScanInput {
@@ -1472,6 +1483,8 @@ export interface ReportRuntimeDirectoryScanInput {
   candidates?: MultiremiRuntimeDirectoryCandidate[];
   supported?: boolean;
   error?: string;
+  // Expanded absolute root the daemon browsed (browse mode); merged into params.
+  resolvedRoot?: string;
 }
 
 export interface ReportRuntimeLocalSkillImportInput {

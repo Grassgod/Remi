@@ -414,7 +414,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 </PillButton>
               }
             />
-            <PopoverContent side="top" align="start" className="w-72 p-2">
+            <PopoverContent side="top" align="start" className="w-auto p-2">
               <RepoSourcePopover
                 resources={pendingResources}
                 onAdd={addResource}

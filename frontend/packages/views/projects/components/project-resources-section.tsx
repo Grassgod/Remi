@@ -196,7 +196,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 </Button>
               }
             />
-            <PopoverContent align="start" className="w-72 p-2">
+            <PopoverContent align="start" className="w-auto p-2">
               <RepoSourcePopover
                 resources={pendingResources}
                 onAdd={handleAdd}

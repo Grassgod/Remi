@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMultiremiApp } from "../../../src/multiremi/api.js";
 import { MultiremiStore } from "../../../src/multiremi/store.js";
-import { scanRuntimeDirectories } from "../../../src/multiremi/daemon.js";
+import { browseRuntimeDirectory, scanRuntimeDirectories } from "../../../src/multiremi/daemon.js";
 
 let db: Database | null = null;
 
@@ -258,8 +258,8 @@ describe("Bun Multiremi runtime directory scan", () => {
     const compatFinalBody = await compatFinal.json();
     expect(compatFinalBody.status).toBe("completed");
     expect(compatFinalBody.candidates).toEqual([
-      { path: "/home/dev/code/app", name: "app", remote_url: "git@github.com:acme/app.git", current_branch: "main", is_dirty: null },
-      { path: "/home/dev/code/notes", name: "notes", remote_url: null, current_branch: null, is_dirty: null },
+      { path: "/home/dev/code/app", name: "app", remote_url: "git@github.com:acme/app.git", current_branch: "main", is_dirty: null, is_git_repo: null },
+      { path: "/home/dev/code/notes", name: "notes", remote_url: null, current_branch: null, is_dirty: null, is_git_repo: null },
     ]);
 
     // A late report once terminal is a no-op that still returns ok.
@@ -315,6 +315,86 @@ describe("Bun Multiremi runtime directory scan", () => {
     });
     expect(forbiddenCompat.status).toBe(403);
   });
+
+  it("embeds the browse mode in params and the heartbeat ack", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_dirscan_mode", name: "Scan runtime", provider: "codex" });
+    const request = store.createRuntimeDirectoryScanRequest(runtime.id, { root: "~/code", mode: "browse" });
+    expect(request.params).toEqual({ root: "~/code", mode: "browse" });
+
+    const ack = store.heartbeatRuntime(runtime.id, { supportsDirectoryScan: true });
+    expect(ack.pending_directory_scan).toEqual({ id: request.id, root: "~/code", mode: "browse" });
+  });
+
+  it("rejects an unknown scan mode", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_dirscan_bad_mode", name: "Scan runtime", provider: "codex" });
+    expect(() => store.createRuntimeDirectoryScanRequest(runtime.id, { mode: "sideways" as "scan" | "browse" }))
+      .toThrow('directory scan mode must be "scan" or "browse"');
+  });
+
+  it("rejects an unknown scan mode over HTTP with 400 on both URL variants", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_dirscan_bad_mode_http", name: "Scan runtime", provider: "codex" });
+    const app = createMultiremiApp({ store });
+
+    for (const path of [`/api/multiremi/runtimes/${runtime.id}/directory-scans`, `/api/runtimes/${runtime.id}/directory-scans`]) {
+      const res = await app.request(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "sideways" }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'directory scan mode must be "scan" or "browse"' });
+    }
+  });
+
+  it("passes browse mode through the compat rail and emits is_git_repo", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_dirscan_browse_http", name: "Scan runtime", provider: "codex" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request(`/api/runtimes/${runtime.id}/directory-scans`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: "~/code", mode: "browse" }),
+    });
+    expect(created.status).toBe(200);
+    const createdBody = await created.json();
+    expect(createdBody.params).toEqual({ root: "~/code", mode: "browse" });
+
+    // Daemon claims then reports a git child and a plain child, echoing the
+    // expanded absolute root it browsed.
+    await app.request(`/api/daemon/runtimes/${runtime.id}/directory-scans/claim`, { method: "POST" });
+    await app.request(`/api/daemon/runtimes/${runtime.id}/directory-scans/${createdBody.id}/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        resolvedRoot: "/home/dev/code",
+        candidates: [
+          { path: "/home/dev/code/app", name: "app", remoteUrl: "git@github.com:acme/app.git", currentBranch: "main", isDirty: null, isGitRepo: true },
+          { path: "/home/dev/code/scratch", name: "scratch", remoteUrl: null, currentBranch: null, isDirty: null, isGitRepo: false },
+        ],
+      }),
+    });
+
+    // Compat detail echoes mode + the resolved root and maps is_git_repo to snake_case.
+    const compat = await app.request(`/api/runtimes/${runtime.id}/directory-scans/${createdBody.id}`);
+    const compatBody = await compat.json();
+    expect(compatBody.params).toEqual({ root: "~/code", mode: "browse", resolved_root: "/home/dev/code" });
+    expect(compatBody.candidates).toEqual([
+      { path: "/home/dev/code/app", name: "app", remote_url: "git@github.com:acme/app.git", current_branch: "main", is_dirty: null, is_git_repo: true },
+      { path: "/home/dev/code/scratch", name: "scratch", remote_url: null, current_branch: null, is_dirty: null, is_git_repo: false },
+    ]);
+
+    // Native detail carries the camelCase isGitRepo + resolvedRoot through.
+    const native = await app.request(`/api/multiremi/runtimes/${runtime.id}/directory-scans/${createdBody.id}`);
+    const nativeBody = await native.json();
+    expect(nativeBody.params).toEqual({ root: "~/code", mode: "browse", resolvedRoot: "/home/dev/code" });
+    expect(nativeBody.candidates[0].isGitRepo).toBe(true);
+    expect(nativeBody.candidates[1].isGitRepo).toBe(false);
+  });
 });
 
 describe("scanRuntimeDirectories git metadata", () => {
@@ -346,5 +426,49 @@ describe("scanRuntimeDirectories git metadata", () => {
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("browseRuntimeDirectory", () => {
+  it("lists immediate child dirs with git metadata, hiding junk and dot-dirs", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "remi-dirbrowse-"));
+    try {
+      // A git repo child: real `.git` dir with a remote + HEAD.
+      const repoGit = join(tmpRoot, "app", ".git");
+      mkdirSync(repoGit, { recursive: true });
+      writeFileSync(join(repoGit, "config"), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
+      writeFileSync(join(repoGit, "HEAD"), "ref: refs/heads/main\n");
+      // A plain (non-git) child dir.
+      mkdirSync(join(tmpRoot, "notes"), { recursive: true });
+      // A hidden dir and a junk dir that must both stay out of the listing.
+      mkdirSync(join(tmpRoot, ".secret"), { recursive: true });
+      mkdirSync(join(tmpRoot, "node_modules"), { recursive: true });
+      // A top-level file is not a directory and must be ignored.
+      writeFileSync(join(tmpRoot, "README.md"), "hi\n");
+
+      const { candidates, resolvedRoot } = await browseRuntimeDirectory(tmpRoot);
+      // The expanded absolute root is echoed back for the folder-picker UI.
+      expect(resolvedRoot).toBe(tmpRoot);
+      // Exactly the two visible directories, sorted by name.
+      expect(candidates.map((c) => c.name)).toEqual(["app", "notes"]);
+
+      const app = candidates.find((c) => c.name === "app")!;
+      expect(app.path).toBe(join(tmpRoot, "app"));
+      expect(app.isGitRepo).toBe(true);
+      expect(app.remoteUrl).toBe("git@github.com:acme/app.git");
+      expect(app.currentBranch).toBe("main");
+      expect(app.isDirty).toBeNull();
+
+      const notes = candidates.find((c) => c.name === "notes")!;
+      expect(notes.isGitRepo).toBe(false);
+      expect(notes.remoteUrl).toBeNull();
+      expect(notes.currentBranch).toBeNull();
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when the browse root does not exist", async () => {
+    await expect(browseRuntimeDirectory("/no/such/dir/remi-browse")).rejects.toThrow("directory does not exist:");
   });
 });

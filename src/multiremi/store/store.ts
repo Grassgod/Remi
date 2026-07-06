@@ -2141,7 +2141,7 @@ export class MultiremiStore {
     return this.getRuntimeModelListRequest(runtimeId, requestId)!;
   }
 
-  createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number } = {}): MultiremiRuntimeDirectoryScanRequest {
+  createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number; mode?: "scan" | "browse" } = {}): MultiremiRuntimeDirectoryScanRequest {
     const runtime = this.getRuntime(runtimeId);
     if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
     if (runtime.status !== "online") throw new Error("runtime is offline");
@@ -2207,11 +2207,15 @@ export class MultiremiStore {
     const status = normalizeRuntimeDirectoryScanStatus(input.status);
     const now = nowIso();
     if (status === "completed") {
+      // Browse mode echoes the expanded absolute root back; merge it into the
+      // request params so the folder-picker can render/ascend on empty listings.
+      const resolvedRoot = typeof input.resolvedRoot === "string" && input.resolvedRoot.trim() ? input.resolvedRoot.trim() : null;
+      const params = resolvedRoot ? { ...current.params, resolvedRoot } : current.params;
       this.db.run(
         `UPDATE multiremi_runtime_directory_scan_requests
-         SET status = 'completed', candidates = ?, supported = ?, error = NULL, updated_at = ?
+         SET status = 'completed', params = ?, candidates = ?, supported = ?, error = NULL, updated_at = ?
          WHERE id = ?`,
-        [toJson(normalizeRuntimeDirectoryCandidates(input.candidates ?? [])), input.supported === false ? 0 : 1, now, requestId],
+        [toJson(params), toJson(normalizeRuntimeDirectoryCandidates(input.candidates ?? [])), input.supported === false ? 0 : 1, now, requestId],
       );
     } else {
       this.db.run(
@@ -2737,6 +2741,7 @@ export class MultiremiStore {
           id: pendingDirectoryScan.id,
           root: pendingDirectoryScan.params.root,
           max_depth: pendingDirectoryScan.params.maxDepth,
+          mode: pendingDirectoryScan.params.mode,
         };
       }
     }
@@ -8952,7 +8957,17 @@ function normalizeRuntimeDirectoryScanParams(raw: unknown): MultiremiRuntimeDire
   if (root) params.root = root;
   const maxDepth = Number(raw.maxDepth ?? raw.max_depth);
   if (Number.isFinite(maxDepth) && maxDepth > 0) params.maxDepth = Math.floor(maxDepth);
+  const mode = normalizeRuntimeDirectoryScanMode(raw.mode);
+  if (mode) params.mode = mode;
+  const resolvedRoot = firstNonEmptyString(raw.resolvedRoot, raw.resolved_root);
+  if (resolvedRoot) params.resolvedRoot = resolvedRoot;
   return params;
+}
+
+function normalizeRuntimeDirectoryScanMode(value: unknown): "scan" | "browse" | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "scan" || value === "browse") return value;
+  throw new Error('directory scan mode must be "scan" or "browse"');
 }
 
 function normalizeRuntimeDirectoryCandidates(value: unknown): MultiremiRuntimeDirectoryCandidate[] {
@@ -8968,7 +8983,12 @@ function normalizeRuntimeDirectoryCandidates(value: unknown): MultiremiRuntimeDi
     const isDirty = typeof item.isDirty === "boolean"
       ? item.isDirty
       : typeof item.is_dirty === "boolean" ? item.is_dirty : null;
-    candidates.push({ path, name, remoteUrl, currentBranch, isDirty });
+    const candidate: MultiremiRuntimeDirectoryCandidate = { path, name, remoteUrl, currentBranch, isDirty };
+    const isGitRepo = typeof item.isGitRepo === "boolean"
+      ? item.isGitRepo
+      : typeof item.is_git_repo === "boolean" ? item.is_git_repo : undefined;
+    if (isGitRepo !== undefined) candidate.isGitRepo = isGitRepo;
+    candidates.push(candidate);
   }
   return candidates;
 }
