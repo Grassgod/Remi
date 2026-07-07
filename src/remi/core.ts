@@ -19,7 +19,7 @@ import { MEMORY_DIR, SESSIONS_FILE } from "@shared/config.js";
 import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
-import type { Connector, IncomingMessage } from "../connectors/base.js";
+import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "../daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
@@ -27,8 +27,8 @@ import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
 import { AgentRuntime } from "../daemon/agent-runtime/runtime.js";
 import { AgentSession } from "../daemon/agent-runtime/session.js";
 import type { AgentRunResult } from "../daemon/agent-runtime/types.js";
-import { FeishuConnector } from "../connectors/feishu/index.js";
-import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
+import { FeishuConnector } from "@connectors/feishu/index.js";
+import { flushDedupCacheSync, MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
@@ -127,7 +127,7 @@ export class Remi {
   }
 
   /** Get the Feishu connector (for mission pipeline streaming). */
-  getFeishuConnector(): import("../connectors/feishu/index.js").FeishuConnector | null {
+  getFeishuConnector(): import("@connectors/feishu/index.js").FeishuConnector | null {
     return (this._connectors.find((c) => c.name === "feishu") as any) ?? null;
   }
 
@@ -178,7 +178,7 @@ export class Remi {
 
   async handleMessageStream(
     msg: IncomingMessage,
-    consumer: (stream: AsyncIterable<ProviderEvent>, meta: import("../connectors/base.js").StreamMeta) => Promise<void>,
+    consumer: (stream: AsyncIterable<ProviderEvent>, meta: import("@connectors/base.js").StreamMeta) => Promise<void>,
   ): Promise<void> {
     const sessionKey = this._resolveSessionKey(msg);
     await this._scheduler.run(sessionKey, async () => {

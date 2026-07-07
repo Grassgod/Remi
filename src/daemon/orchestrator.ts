@@ -12,7 +12,7 @@
  * characterization tests (see DIR-REDESIGN 铁律#5).
  */
 
-import type { IncomingMessage } from "../connectors/base.js";
+import type { IncomingMessage } from "@connectors/base.js";
 
 /** Simple promise-based mutex for per-lane serialization. */
 export class AsyncLock {

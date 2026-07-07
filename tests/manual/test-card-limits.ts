@@ -9,9 +9,9 @@
  * Usage: bun run tests/manual/test-card-limits.ts
  */
 
-import { createFeishuClient } from "../../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
-import { buildStepDiv } from "../../src/connectors/feishu/tool-formatters.js";
+import { createFeishuClient } from "@connectors/feishu/client.js";
+import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
+import { buildStepDiv } from "@connectors/feishu/tool-formatters.js";
 import { loadConfig } from "./_load-config.js";
 
 async function getToken(config: ReturnType<typeof loadConfig>): Promise<string> {

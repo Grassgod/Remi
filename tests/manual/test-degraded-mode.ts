@@ -8,8 +8,8 @@
  * Usage: bun run tests/manual/test-degraded-mode.ts
  */
 
-import { createFeishuClient } from "../../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
+import { createFeishuClient } from "@connectors/feishu/client.js";
+import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { loadConfig } from "./_load-config.js";
 
 async function main() {

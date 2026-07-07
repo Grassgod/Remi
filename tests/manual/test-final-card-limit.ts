@@ -4,9 +4,9 @@
  * with 50, 80, 100+ tool step divs.
  */
 
-import { createFeishuClient } from "../../src/connectors/feishu/client.js";
-import { FeishuStreamingSession, buildFinalCard } from "../../src/connectors/feishu/streaming.js";
-import type { ToolEntry } from "../../src/connectors/feishu/tool-formatters.js";
+import { createFeishuClient } from "@connectors/feishu/client.js";
+import { FeishuStreamingSession, buildFinalCard } from "@connectors/feishu/streaming.js";
+import type { ToolEntry } from "@connectors/feishu/tool-formatters.js";
 import { loadConfig } from "./_load-config.js";
 
 function makeEntries(count: number): ToolEntry[] {

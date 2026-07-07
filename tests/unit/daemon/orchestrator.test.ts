@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import { AsyncLock, LaneScheduler, resolveSessionKey } from "../../../src/daemon/orchestrator.js";
-import type { IncomingMessage } from "../../../src/connectors/base.js";
+import type { IncomingMessage } from "@connectors/base.js";
 
 /** A promise plus its resolve handle, for building controllable barriers. */
 function deferred(): { promise: Promise<void>; resolve: () => void } {

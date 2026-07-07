@@ -3,7 +3,7 @@
  * Usage: bun run tests/manual/test-permission-ui.ts
  */
 
-import { createFeishuClient } from "../../src/connectors/feishu/client.js";
+import { createFeishuClient } from "@connectors/feishu/client.js";
 import { loadConfig } from "./_load-config.js";
 
 async function sendCard(client: any, chatId: string, card: Record<string, unknown>, title: string) {

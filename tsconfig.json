@@ -23,7 +23,7 @@
       "@acp/*": ["./packages/acp/src/*"],
       "@memory/*": ["./packages/memory/src/*"],
       "@queue/*": ["./src/queue/*"],
-      "@connectors/*": ["./src/connectors/*"],
+      "@connectors/*": ["./packages/connectors/src/*"],
       "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./src/daemon/*"],
       "@remi/*": ["./src/remi/*"],

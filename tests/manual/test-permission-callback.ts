@@ -8,11 +8,11 @@
  * Usage: pm2 stop remi && bun run tests/manual/test-permission-callback.ts
  */
 
-import { createFeishuClient } from "../../src/connectors/feishu/client.js";
-import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
-import { registerPendingAction } from "../../src/connectors/feishu/card-actions.js";
-import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../../src/connectors/feishu/permission-ui.js";
-import { startWebSocketListener } from "../../src/connectors/feishu/receive.js";
+import { createFeishuClient } from "@connectors/feishu/client.js";
+import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
+import { registerPendingAction } from "@connectors/feishu/card-actions.js";
+import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "@connectors/feishu/permission-ui.js";
+import { startWebSocketListener } from "@connectors/feishu/receive.js";
 import { loadConfig } from "./_load-config.js";
 
 function waitForAction(questions?: Array<{ question: string; options: Array<{ label: string }> }>, chatId?: string): { actionId: string; promise: Promise<unknown> } {

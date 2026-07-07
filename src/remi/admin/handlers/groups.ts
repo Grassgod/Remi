@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { GroupConfigStore } from "../../group/store.js";
-import { getChatName, transferChatOwner, updateChat } from "../../../connectors/feishu/sdk.js";
+import { getChatName, transferChatOwner, updateChat } from "@connectors/feishu/sdk.js";
 import { invalidateGroupNameCache } from "./conversations.js";
 import { createLogger } from "@shared/logger.js";
 import { ConfigStore } from "@shared/db/config-store.js";

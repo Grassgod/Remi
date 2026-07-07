@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { handleButtonClick, handleFormSubmission, registerPendingAction } from "../../../src/connectors/feishu/sdk.js";
-import { approvePlanOption, isPlanApproval, rejectPermissionOption } from "../../../src/connectors/feishu/index.js";
-import { buildPlanReviewForm, buildToolApprovalForm, buildFinalCard, FeishuStreamingSession } from "../../../src/connectors/feishu/sdk.js";
+import { handleButtonClick, handleFormSubmission, registerPendingAction } from "@connectors/feishu/sdk.js";
+import { approvePlanOption, isPlanApproval, rejectPermissionOption } from "@connectors/feishu/index.js";
+import { buildPlanReviewForm, buildToolApprovalForm, buildFinalCard, FeishuStreamingSession } from "@connectors/feishu/sdk.js";
 
 describe("Feishu final card", () => {
   it("preserves final content and stats", () => {
