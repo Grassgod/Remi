@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { MemoryStore } from "../../../src/memory/store.js";
+import { MemoryStore } from "@memory/store.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-mem-${Date.now()}-${Math.random().toString(36).slice(2)}`);

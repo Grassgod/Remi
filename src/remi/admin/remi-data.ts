@@ -17,7 +17,7 @@ import { extractToolCalls, type ToolCallData } from "../conversation/tool-calls.
 import { stripContextTags } from "../conversation/parser.js";
 import { getDb } from "@shared/db/index.js";
 import { readLogEntries, type LogEntry } from "@shared/logger.js";
-import { MemoryStore, type RecallDebugResult } from "../../memory/store.js";
+import { MemoryStore, type RecallDebugResult } from "@memory/store.js";
 import { ProjectStore } from "../project/store.js";
 import { Cron } from "croner";
 
@@ -62,7 +62,7 @@ export interface SearchResult {
   path: string;
 }
 
-export type { RecallDebugResult } from "../../memory/store.js";
+export type { RecallDebugResult } from "@memory/store.js";
 
 // ── Helpers ────────────────────────────────────────────
 

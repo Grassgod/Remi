@@ -33,7 +33,7 @@ import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
 import { AuthStore, FeishuAuthAdapter } from "../auth/index.js";
 import type { TokenSyncRule } from "../auth/token-sync.js";
 import { PluginRegistry } from "../daemon/agent-runtime/plugins/registry.js";
-import { MemoryStore } from "../memory/store.js";
+import { MemoryStore } from "@memory/store.js";
 import { RemiQueueManager } from "../queue/index.js";
 import { MetricsCollector } from "@shared/metrics/collector.js";
 import { insertConversationProcessing, completeConversation, failConversation, getDb } from "@shared/db/index.js";

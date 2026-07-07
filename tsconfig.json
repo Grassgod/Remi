@@ -21,7 +21,7 @@
       "@shared/contracts/*": ["./packages/contracts/src/*"],
       "@shared/*": ["./packages/shared/src/*"],
       "@acp/*": ["./packages/acp/src/*"],
-      "@memory/*": ["./src/memory/*"],
+      "@memory/*": ["./packages/memory/src/*"],
       "@queue/*": ["./src/queue/*"],
       "@connectors/*": ["./src/connectors/*"],
       "@auth/*": ["./src/auth/*"],
