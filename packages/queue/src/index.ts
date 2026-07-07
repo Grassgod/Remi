@@ -3,9 +3,8 @@
  */
 
 import { Queue, Worker } from "bunqueue/client";
-import { QUEUES, type CronJobData } from "./queues.js";
+import { QUEUES, type CronJobData, type QueueHost } from "./queues.js";
 import { handleCronJob } from "./handlers/cron-bridge.js";
-import type { Remi } from "../remi/core.js";
 import type { CronJobConfig } from "@shared/config.js";
 import { createLogger } from "@shared/logger.js";
 
@@ -23,7 +22,7 @@ export class RemiQueueManager {
   private pushCountResetAt = Date.now();
 
   // ── Remi ref for cron handlers ──
-  private remi: Remi | null = null;
+  private remi: QueueHost | null = null;
 
   constructor() {
     this.cronQueue = new Queue<CronJobData>(QUEUES.CRON, {
@@ -65,7 +64,7 @@ export class RemiQueueManager {
    * Register cron jobs from config using BunQueue's upsertJobScheduler.
    * Replaces CronTimer + JobStore + JobRunner.
    */
-  async setupSchedulers(cronJobs: CronJobConfig[], remi: Remi): Promise<void> {
+  async setupSchedulers(cronJobs: CronJobConfig[], remi: QueueHost): Promise<void> {
     this.remi = remi;
 
     for (const job of cronJobs) {

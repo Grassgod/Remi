@@ -20,27 +20,27 @@ import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "@connectors/base.js";
-import { LaneScheduler, resolveSessionKey } from "../daemon/orchestrator.js";
+import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
-import { AgentRuntime } from "../daemon/agent-runtime/runtime.js";
-import { AgentSession } from "../daemon/agent-runtime/session.js";
-import type { AgentRunResult } from "../daemon/agent-runtime/types.js";
+import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
+import { AgentSession } from "@daemon/agent-runtime/session.js";
+import type { AgentRunResult } from "@daemon/agent-runtime/types.js";
 import { FeishuConnector } from "@connectors/feishu/index.js";
 import { flushDedupCacheSync, MenuSyncer } from "@connectors/feishu/sdk.js";
 
 import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
 import type { TokenSyncRule } from "@auth/token-sync.js";
-import { PluginRegistry } from "../daemon/agent-runtime/plugins/registry.js";
+import { PluginRegistry } from "@daemon/agent-runtime/plugins/registry.js";
 import { MemoryStore } from "@memory/store.js";
-import { RemiQueueManager } from "../queue/index.js";
+import { RemiQueueManager } from "@queue/index.js";
 import { MetricsCollector } from "@shared/metrics/collector.js";
 import { insertConversationProcessing, completeConversation, failConversation, getDb } from "@shared/db/index.js";
 import * as sessDb from "@shared/db/sessions.js";
 import { createLogger, flushLogs } from "@shared/logger.js";
 import { TraceCollector, type TraceContext, type Span } from "@shared/tracing.js";
-import { writeEcosystem, runBuildsSync, getEcosystemPath } from "../daemon/pm2.js";
+import { writeEcosystem, runBuildsSync, getEcosystemPath } from "@daemon/pm2.js";
 import {
   availableSwitchModes,
   buildSwitchTarget,
@@ -292,7 +292,7 @@ export class Remi {
     this._activeAborts.set(sessionKey, abortController);
 
     // Assemble config via AgentRuntime
-    const runtimeCtx: import("../daemon/agent-runtime/types.js").PersistentContext = {
+    const runtimeCtx: import("@daemon/agent-runtime/types.js").PersistentContext = {
       kind: "persistent",
       message: msg,
       config: this.config,

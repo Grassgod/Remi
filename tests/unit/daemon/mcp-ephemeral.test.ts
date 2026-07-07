@@ -8,8 +8,8 @@
  */
 
 import { test, expect } from "bun:test";
-import { buildTaskMcpServers } from "../../../src/daemon/agent-runtime/mcp/ephemeral.js";
-import type { AgentTask } from "../../../src/daemon/contracts/types.js";
+import { buildTaskMcpServers } from "@daemon/agent-runtime/mcp/ephemeral.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
 
 function taskWithMcpConfig(mcpConfig: unknown): AgentTask {
   return {

@@ -10,7 +10,7 @@
 import { test, expect } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { generateEcosystem } from "../../../src/daemon/pm2.js";
+import { generateEcosystem } from "@daemon/pm2.js";
 import type { RemiConfig } from "@shared/config.js";
 
 test("pm2 ecosystem: remi app cwd resolves to the repo root (contains src/main.ts)", () => {

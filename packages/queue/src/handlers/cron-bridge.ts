@@ -6,8 +6,7 @@
  */
 
 import type { Job } from "bunqueue/client";
-import type { CronJobData } from "../queues.js";
-import type { Remi } from "../../remi/core.js";
+import type { CronJobData, QueueHost } from "../queues.js";
 import type { Connector } from "@connectors/base.js";
 import { createLogger } from "@shared/logger.js";
 import {
@@ -22,7 +21,7 @@ import { homedir } from "node:os";
 
 const log = createLogger("cron:handler");
 
-type HandlerFn = (remi: Remi, config?: Record<string, any>) => Promise<void>;
+type HandlerFn = (remi: QueueHost, config?: Record<string, any>) => Promise<void>;
 
 const handlers = new Map<string, HandlerFn>();
 
@@ -281,7 +280,7 @@ handlers.set("skill:push", async (remi, config) => {
 
 // ── Dispatcher (BunQueue Worker handler) ─────────────────────────
 
-export async function handleCronJob(job: Job<CronJobData>, remi: Remi): Promise<void> {
+export async function handleCronJob(job: Job<CronJobData>, remi: QueueHost): Promise<void> {
   const { jobId, handler, handlerConfig } = job.data;
   const fn = handlers.get(handler);
   if (!fn) {

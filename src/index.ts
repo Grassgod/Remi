@@ -28,4 +28,4 @@ export { type Connector, type IncomingMessage, type MessageHandler } from "@conn
 export { MemoryStore } from "@memory/store.js";
 
 // Queue (replaced CronTimer)
-export { RemiQueueManager } from "./queue/index.js";
+export { RemiQueueManager } from "@queue/index.js";

@@ -40,7 +40,7 @@ import { registerMcpHandlers } from "./handlers/mcp.js";
 import { registerProjectInitHandlers } from "./handlers/project-init.js";
 import { registerGroupHandlers } from "./handlers/groups.js";
 import { ProjectStore } from "../project/store.js";
-import { PluginRegistry } from "../../daemon/agent-runtime/plugins/registry.js";
+import { PluginRegistry } from "@daemon/agent-runtime/plugins/registry.js";
 
 // ── Exported start/stop ────────────────────────────────
 

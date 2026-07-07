@@ -3,7 +3,7 @@ import type { MediaAttachment, RequestPermissionParams, PermissionOutcome, Elici
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { RemiConfig } from "@shared/config.js";
 import type { SessionRow } from "@shared/db/sessions.js";
-import type { GroupConfig } from "@remi/group/model.js";
+import type { GroupConfig } from "@shared/group-config.js";
 import type { MemoryStore } from "@memory/store.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { LocalPathLocker } from "./workspace/ephemeral.js";

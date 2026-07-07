@@ -14,8 +14,8 @@ import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("pm2");
 
-// src/daemon/pm2.ts → repo root is two levels up (daemon → src → root).
-const REMI_ROOT = resolve(import.meta.dir, "..", "..");
+// packages/daemon/src/pm2.ts → repo root is three levels up (src → daemon → packages → root).
+const REMI_ROOT = resolve(import.meta.dir, "..", "..", "..");
 const ECOSYSTEM_PATH = join(homedir(), ".remi", "ecosystem.config.cjs");
 
 /** Build proxy environment variables from config. */

@@ -4,7 +4,7 @@
  */
 
 import { loadConfig } from "@shared/config.js";
-import { pm2Start, pm2Stop } from "../daemon/pm2.js";
+import { pm2Start, pm2Stop } from "@daemon/pm2.js";
 import { setLogLevel, createLogger } from "@shared/logger.js";
 
 const log = createLogger("pm2");

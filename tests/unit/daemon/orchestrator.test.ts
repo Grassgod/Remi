@@ -5,7 +5,7 @@
  */
 
 import { test, expect } from "bun:test";
-import { AsyncLock, LaneScheduler, resolveSessionKey } from "../../../src/daemon/orchestrator.js";
+import { AsyncLock, LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import type { IncomingMessage } from "@connectors/base.js";
 
 /** A promise plus its resolve handle, for building controllable barriers. */

@@ -22,10 +22,10 @@
       "@shared/*": ["./packages/shared/src/*"],
       "@acp/*": ["./packages/acp/src/*"],
       "@memory/*": ["./packages/memory/src/*"],
-      "@queue/*": ["./src/queue/*"],
+      "@queue/*": ["./packages/queue/src/*"],
       "@connectors/*": ["./packages/connectors/src/*"],
       "@auth/*": ["./packages/auth/src/*"],
-      "@daemon/*": ["./src/daemon/*"],
+      "@daemon/*": ["./packages/daemon/src/*"],
       "@remi/*": ["./src/remi/*"],
       "@multiremi/*": ["./src/multiremi/*"]
     }
