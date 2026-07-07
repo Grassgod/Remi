@@ -18,7 +18,7 @@ export {
   type AgentResponse,
   type ToolDefinition,
   createAgentResponse,
-} from "./shared/contracts/provider-types.js";
+} from "@shared/contracts/provider-types.js";
 export { AcpProvider } from "./acp/index.js";
 
 // Connectors

@@ -7,8 +7,8 @@
  * agent turn.
  */
 
-import type { Provider, AgentResponse, ProviderEvent, SendOptions } from "../../shared/contracts/provider-types.js";
-import { createAgentResponse } from "../../shared/contracts/provider-types.js";
+import type { Provider, AgentResponse, ProviderEvent, SendOptions } from "@shared/contracts/provider-types.js";
+import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import type { AgentSessionConfig, AgentRunResult } from "./types.js";
 
 export class AgentSession {

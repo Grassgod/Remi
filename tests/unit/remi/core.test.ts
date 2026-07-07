@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import type { RemiConfig } from "../../../src/shared/config.js";
 import { SESSIONS_FILE } from "../../../src/shared/config.js";
 import type { IncomingMessage } from "../../../src/connectors/base.js";
-import type { AgentResponse, Provider, ProviderEvent } from "../../../src/shared/contracts/provider-types.js";
-import { createAgentResponse } from "../../../src/shared/contracts/provider-types.js";
+import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
+import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { Remi } from "../../../src/remi/core.js";
 import * as sessDb from "../../../src/shared/db/sessions.js";
 

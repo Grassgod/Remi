@@ -1,0 +1,13 @@
+{
+  "name": "@multiremi/contracts",
+  "version": "0.1.0",
+  "description": "Remi/Multiremi 协议单源: API 类型 + ACP 协议 + provider 类型",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {}
+}
