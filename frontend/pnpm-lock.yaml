@@ -438,6 +438,9 @@ importers:
       '@formatjs/intl-localematcher':
         specifier: 'catalog:'
         version: 0.8.4
+      '@multiremi/contracts':
+        specifier: link:../../../packages/contracts
+        version: link:../../../packages/contracts
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.96.2(react@19.2.3)

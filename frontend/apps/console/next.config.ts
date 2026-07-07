@@ -26,7 +26,7 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: resolve(__dirname, "../.."),
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   // Shared internal packages export raw .ts/.tsx — Next must transpile them.
-  transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views"],
+  transpilePackages: ["@multiremi/core", "@multiremi/ui", "@multiremi/views", "@multiremi/contracts"],
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),

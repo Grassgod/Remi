@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { MultiremiTaskStatus } from "@multiremi/contracts";
 import type {
   Agent,
   AgentTemplate,
@@ -22,6 +23,10 @@ import type {
   WebhookDelivery,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
+
+// Canary: prove the frontend can consume the shared @multiremi/contracts
+// protocol package (see A1). Pure type re-export — zero runtime footprint.
+export type ServerTaskStatus = MultiremiTaskStatus;
 
 export interface AppConfigResponse {
   cdn_domain: string;
