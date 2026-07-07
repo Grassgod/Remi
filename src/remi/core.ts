@@ -30,8 +30,8 @@ import type { AgentRunResult } from "../daemon/agent-runtime/types.js";
 import { FeishuConnector } from "../connectors/feishu/index.js";
 import { flushDedupCacheSync, MenuSyncer } from "../connectors/feishu/sdk.js";
 
-import { AuthStore, FeishuAuthAdapter } from "../auth/index.js";
-import type { TokenSyncRule } from "../auth/token-sync.js";
+import { AuthStore, FeishuAuthAdapter } from "@auth/index.js";
+import type { TokenSyncRule } from "@auth/token-sync.js";
 import { PluginRegistry } from "../daemon/agent-runtime/plugins/registry.js";
 import { MemoryStore } from "@memory/store.js";
 import { RemiQueueManager } from "../queue/index.js";

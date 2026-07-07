@@ -24,7 +24,7 @@
       "@memory/*": ["./packages/memory/src/*"],
       "@queue/*": ["./src/queue/*"],
       "@connectors/*": ["./src/connectors/*"],
-      "@auth/*": ["./src/auth/*"],
+      "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./src/daemon/*"],
       "@remi/*": ["./src/remi/*"],
       "@multiremi/*": ["./src/multiremi/*"]

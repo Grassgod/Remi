@@ -2,7 +2,7 @@
  * `remi auth` — Legacy Feishu OAuth CLI command.
  */
 
-import { runAuth } from "../auth/oauth-cli.js";
+import { runAuth } from "@auth/oauth-cli.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("auth-cmd");
