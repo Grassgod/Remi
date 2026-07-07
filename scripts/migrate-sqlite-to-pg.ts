@@ -9,7 +9,7 @@
  * (same multiremi_* tables, Postgres-translated). Every `multiremi_*` table is
  * copied row-for-row. Existing target rows in each copied table are replaced.
  */
-import "../src/shared/db/sqlite-custom.js";
+import "@shared/db/sqlite-custom.js";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { homedir } from "node:os";

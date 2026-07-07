@@ -8,7 +8,7 @@
  */
 
 // Must be first import -- swaps macOS system SQLite before any Database instance is created.
-import "./shared/db/sqlite-custom.js";
+import "@shared/db/sqlite-custom.js";
 
 import { runMultiremi } from "./cli/multiremi.js";
 

@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RemiConfig } from "../../../src/shared/config.js";
-import { SESSIONS_FILE } from "../../../src/shared/config.js";
+import type { RemiConfig } from "@shared/config.js";
+import { SESSIONS_FILE } from "@shared/config.js";
 import type { IncomingMessage } from "../../../src/connectors/base.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { Remi } from "../../../src/remi/core.js";
-import * as sessDb from "../../../src/shared/db/sessions.js";
+import * as sessDb from "@shared/db/sessions.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-core-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -140,12 +140,12 @@ beforeEach(() => {
   tmpDir = makeTmpDir();
   config = makeConfig(tmpDir);
   // Isolate tests from production DB — use a temp DB file
-  const { setDbPath } = require("../../../src/shared/db/index.js");
+  const { setDbPath } = require("@shared/db/index.js");
   setDbPath(join(tmpDir, "test.db"));
 });
 
 afterEach(() => {
-  const { closeDb } = require("../../../src/shared/db/index.js");
+  const { closeDb } = require("@shared/db/index.js");
   closeDb();
   rmSync(tmpDir, { recursive: true, force: true });
 });

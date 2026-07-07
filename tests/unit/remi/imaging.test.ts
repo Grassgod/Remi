@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "bun:test";
-import { loadConfig } from "../../../src/shared/config.js";
+import { loadConfig } from "@shared/config.js";
 import { initImaging, isImagingEnabled, generateImage } from "../../../src/remi/imaging/index.js";
 
 describe("Imaging Module", () => {

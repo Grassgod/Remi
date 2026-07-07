@@ -10,13 +10,13 @@ import { execSync } from "node:child_process";
 import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 import matter from "gray-matter";
-import { ConfigStore } from "../../shared/db/config-store.js";
-import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "../../shared/metrics/collector.js";
-import { type TraceData, type SpanData, rowToTraceData } from "../../shared/tracing.js";
+import { ConfigStore } from "@shared/db/config-store.js";
+import { MetricsCollector, type AnalyticsSummary, type DailySummary, type TokenMetricEntry } from "@shared/metrics/collector.js";
+import { type TraceData, type SpanData, rowToTraceData } from "@shared/tracing.js";
 import { extractToolCalls, type ToolCallData } from "../conversation/tool-calls.js";
 import { stripContextTags } from "../conversation/parser.js";
-import { getDb } from "../../shared/db/index.js";
-import { readLogEntries, type LogEntry } from "../../shared/logger.js";
+import { getDb } from "@shared/db/index.js";
+import { readLogEntries, type LogEntry } from "@shared/logger.js";
 import { MemoryStore, type RecallDebugResult } from "../../memory/store.js";
 import { ProjectStore } from "../project/store.js";
 import { Cron } from "croner";
@@ -449,7 +449,7 @@ export class RemiData {
         const config = this._getConfigStore().load();
         const apiKey = config.embedding?.apiKey;
         if (apiKey) {
-          const { VectorStore } = require("../../shared/db/vector-store.js");
+          const { VectorStore } = require("@shared/db/vector-store.js");
           vectorStore = new VectorStore({ provider: "voyage", apiKey });
         }
       } catch { /* VectorStore unavailable */ }

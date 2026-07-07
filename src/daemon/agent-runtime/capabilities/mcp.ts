@@ -1,7 +1,7 @@
 import type { CapabilityBlock, PersistentContext, EphemeralContext } from "../types.js";
 import type { AcpMcpServer } from "../mcp/ephemeral.js";
 import { buildTaskMcpServers } from "../mcp/ephemeral.js";
-import type { McpServerEntry } from "../../../shared/config.js";
+import type { McpServerEntry } from "@shared/config.js";
 
 export const mcpBlock: CapabilityBlock = {
   name: "mcp",

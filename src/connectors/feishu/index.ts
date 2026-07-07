@@ -2,12 +2,12 @@
  * FeishuConnector — thin adapter that bridges the Feishu channel SDK (./sdk.js) to the Remi Connector interface.
  */
 
-import type { FeishuConfig } from "../../shared/config.js";
+import type { FeishuConfig } from "@shared/config.js";
 import type { GroupPolicy } from "./config.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { Connector, MessageHandler, StreamingHandler, IncomingMessage } from "../base.js";
 import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
-import { createLogger } from "../../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";

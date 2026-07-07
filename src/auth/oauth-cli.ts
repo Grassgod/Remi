@@ -7,7 +7,7 @@
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { loadConfig } from "../shared/config.js";
+import { loadConfig } from "@shared/config.js";
 import { TokenPersistence, type PersistedTokens } from "./persistence.js";
 import type { TokenEntry } from "./types.js";
 

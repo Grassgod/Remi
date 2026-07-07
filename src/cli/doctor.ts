@@ -11,7 +11,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { VERSION } from "../shared/version.js";
+import { VERSION } from "@shared/version.js";
 import * as ui from "./ui.js";
 
 interface CheckResult {
@@ -64,8 +64,8 @@ function checkClaudeCLI(): CheckResult {
 
 function checkConfigStore(): CheckResult {
   try {
-    const { ConfigStore } = require("../shared/db/config-store.js");
-    const { getDb } = require("../shared/db/index.js");
+    const { ConfigStore } = require("@shared/db/config-store.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     if (store.isEmpty()) {
       return { status: "fail", message: "Config DB is empty — run: remi login" };
@@ -78,8 +78,8 @@ function checkConfigStore(): CheckResult {
 
 function checkFeishuConfig(): CheckResult {
   try {
-    const { ConfigStore } = require("../shared/db/config-store.js");
-    const { getDb } = require("../shared/db/index.js");
+    const { ConfigStore } = require("@shared/db/config-store.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const feishu = store.getSection("feishu") as Record<string, unknown> | undefined;
 
@@ -153,8 +153,8 @@ function checkFeishuTokens(): CheckResult {
 
 function checkGeminiKey(): CheckResult {
   try {
-    const { ConfigStore } = require("../shared/db/config-store.js");
-    const { getDb } = require("../shared/db/index.js");
+    const { ConfigStore } = require("@shared/db/config-store.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const google = store.getSection("google") as Record<string, unknown> | undefined;
     if (google?.apiKey) {
@@ -166,8 +166,8 @@ function checkGeminiKey(): CheckResult {
 
 function checkEmbeddingKey(): CheckResult {
   try {
-    const { ConfigStore } = require("../shared/db/config-store.js");
-    const { getDb } = require("../shared/db/index.js");
+    const { ConfigStore } = require("@shared/db/config-store.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const embedding = store.getSection("embedding") as Record<string, unknown> | undefined;
     if (embedding?.apiKey) {

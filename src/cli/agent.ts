@@ -11,7 +11,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createLogger } from "../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("agent");
 
@@ -25,7 +25,7 @@ export function feishuConfigured(): boolean {
   const dbPath = join(homedir(), ".remi", "remi.db");
   if (!existsSync(dbPath)) return false;
   try {
-    const { loadConfig } = require("../shared/config.js");
+    const { loadConfig } = require("@shared/config.js");
     const cfg = loadConfig();
     return Boolean(cfg.feishu?.appId && cfg.feishu?.appSecret);
   } catch {
@@ -48,7 +48,7 @@ export interface FeishuChannelHandle {
 export async function bootFeishuChannel(): Promise<FeishuChannelHandle | null> {
   if (!feishuConfigured()) return null;
   const { Remi } = await import("../remi/core.js");
-  const { loadConfig } = await import("../shared/config.js");
+  const { loadConfig } = await import("@shared/config.js");
   const remi = Remi.boot(loadConfig());
   log.info("Starting Feishu channel");
   return { start: remi.start(), stop: () => remi.stop() };

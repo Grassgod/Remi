@@ -3,7 +3,7 @@
  */
 
 import { runAuth } from "../auth/oauth-cli.js";
-import { createLogger } from "../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("auth-cmd");
 

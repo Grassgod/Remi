@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { symlinkManager } from "../../../shared/infra/symlink-manager.js";
+import { symlinkManager } from "@shared/infra/symlink-manager.js";
 
 export function registerSymlinkHandlers(app: Hono, data: RemiData) {
   app.get("/api/v1/symlinks/status", (c) => {

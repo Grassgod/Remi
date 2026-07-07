@@ -6,8 +6,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ConfigStore } from "../shared/db/config-store.js";
-import { getDb } from "../shared/db/index.js";
+import { ConfigStore } from "@shared/db/config-store.js";
+import { getDb } from "@shared/db/index.js";
 
 const CONFIG_DIR = join(homedir(), ".remi");
 

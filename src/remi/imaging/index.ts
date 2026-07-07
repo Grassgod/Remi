@@ -9,8 +9,8 @@
  *   // result.mimeType — "image/png" etc.
  */
 
-import type { GoogleConfig } from "../../shared/config.js";
-import { createLogger } from "../../shared/logger.js";
+import type { GoogleConfig } from "@shared/config.js";
+import { createLogger } from "@shared/logger.js";
 import { geminiGenerateImage } from "./gemini-client.js";
 import type { ImageGenerateOptions, ImageResult } from "./types.js";
 

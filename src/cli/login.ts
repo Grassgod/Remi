@@ -12,7 +12,7 @@
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { VERSION } from "../shared/version.js";
+import { VERSION } from "@shared/version.js";
 import { TokenPersistence, type PersistedTokens } from "../auth/persistence.js";
 import type { TokenEntry } from "../auth/types.js";
 import { createBot, authorizeUser, DEFAULT_SCOPES } from "./feishu-bot-creator.js";

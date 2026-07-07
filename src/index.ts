@@ -7,7 +7,7 @@
 export const VERSION = "0.1.0";
 
 // Config
-export { loadConfig, type RemiConfig, type ProviderConfig } from "./shared/config.js";
+export { loadConfig, type RemiConfig, type ProviderConfig } from "@shared/config.js";
 
 // Core
 export { Remi } from "./remi/core.js";

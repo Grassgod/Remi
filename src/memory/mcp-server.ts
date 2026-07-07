@@ -47,13 +47,13 @@ let store: MemoryStore;
 try {
   let vectorStore = null;
   try {
-    const { ConfigStore } = require("../shared/db/config-store.js");
-    const { getDb } = require("../shared/db/index.js");
+    const { ConfigStore } = require("@shared/db/config-store.js");
+    const { getDb } = require("@shared/db/index.js");
     const cs = new ConfigStore(getDb());
     const embedding = cs.getSection("embedding") as Record<string, unknown> | undefined;
     const apiKey = embedding?.apiKey as string | undefined;
     if (apiKey) {
-      const { VectorStore } = require("../shared/db/vector-store.js");
+      const { VectorStore } = require("@shared/db/vector-store.js");
       vectorStore = new VectorStore({
         provider: (embedding?.provider as string) ?? "voyage",
         apiKey,

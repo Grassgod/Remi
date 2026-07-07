@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { defaultRemiConfig } from "../../../src/shared/config.js";
-import { ConfigStore } from "../../../src/shared/db/config-store.js";
+import { defaultRemiConfig } from "@shared/config.js";
+import { ConfigStore } from "@shared/db/config-store.js";
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `remi-test-config-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -22,12 +22,12 @@ describe("Config", () => {
       savedEnv[key] = process.env[key];
       delete process.env[key];
     }
-    const { setDbPath } = require("../../../src/shared/db/index.js");
+    const { setDbPath } = require("@shared/db/index.js");
     setDbPath(join(tmpDir, "test.db"));
   });
 
   afterEach(() => {
-    const { closeDb } = require("../../../src/shared/db/index.js");
+    const { closeDb } = require("@shared/db/index.js");
     closeDb();
     rmSync(tmpDir, { recursive: true, force: true });
     for (const key of envKeys) {
@@ -40,7 +40,7 @@ describe("Config", () => {
   });
 
   it("loads defaults from empty DB", () => {
-    const { getDb } = require("../../../src/shared/db/index.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const config = store.load();
     expect(config.provider.default).toBe("claude");
@@ -52,7 +52,7 @@ describe("Config", () => {
     process.env.REMI_PROVIDER = "codex";
     process.env.REMI_TIMEOUT = "60";
 
-    const { getDb } = require("../../../src/shared/db/index.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const config = store.load();
     expect(config.provider.default).toBe("codex");
@@ -60,7 +60,7 @@ describe("Config", () => {
   });
 
   it("round-trips through save/load", () => {
-    const { getDb } = require("../../../src/shared/db/index.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const original = defaultRemiConfig();
     original.provider.default = "codex";
@@ -79,7 +79,7 @@ describe("Config", () => {
   it("env overrides DB values", () => {
     process.env.REMI_PROVIDER = "codex";
 
-    const { getDb } = require("../../../src/shared/db/index.js");
+    const { getDb } = require("@shared/db/index.js");
     const store = new ConfigStore(getDb());
     const original = defaultRemiConfig();
     original.provider.default = "claude";

@@ -9,7 +9,7 @@ import type { Job } from "bunqueue/client";
 import type { CronJobData } from "../queues.js";
 import type { Remi } from "../../remi/core.js";
 import type { Connector } from "../../connectors/base.js";
-import { createLogger } from "../../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 import {
   existsSync,
   readFileSync,

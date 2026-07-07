@@ -14,8 +14,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import type { RemiConfig } from "../shared/config.js";
-import { MEMORY_DIR, SESSIONS_FILE } from "../shared/config.js";
+import type { RemiConfig } from "@shared/config.js";
+import { MEMORY_DIR, SESSIONS_FILE } from "@shared/config.js";
 import { GroupConfigStore } from "./group/store.js";
 import type { GroupConfig } from "./group/model.js";
 import { ProjectStore } from "./project/store.js";
@@ -35,11 +35,11 @@ import type { TokenSyncRule } from "../auth/token-sync.js";
 import { PluginRegistry } from "../daemon/agent-runtime/plugins/registry.js";
 import { MemoryStore } from "../memory/store.js";
 import { RemiQueueManager } from "../queue/index.js";
-import { MetricsCollector } from "../shared/metrics/collector.js";
-import { insertConversationProcessing, completeConversation, failConversation, getDb } from "../shared/db/index.js";
-import * as sessDb from "../shared/db/sessions.js";
-import { createLogger, flushLogs } from "../shared/logger.js";
-import { TraceCollector, type TraceContext, type Span } from "../shared/tracing.js";
+import { MetricsCollector } from "@shared/metrics/collector.js";
+import { insertConversationProcessing, completeConversation, failConversation, getDb } from "@shared/db/index.js";
+import * as sessDb from "@shared/db/sessions.js";
+import { createLogger, flushLogs } from "@shared/logger.js";
+import { TraceCollector, type TraceContext, type Span } from "@shared/tracing.js";
 import { writeEcosystem, runBuildsSync, getEcosystemPath } from "../daemon/pm2.js";
 import {
   availableSwitchModes,
@@ -80,10 +80,10 @@ export class Remi {
   constructor(config: RemiConfig) {
     this.config = config;
     // Initialize VectorStore if embedding config is available
-    let vectorStore: InstanceType<typeof import("../shared/db/vector-store.js").VectorStore> | null = null;
+    let vectorStore: InstanceType<typeof import("@shared/db/vector-store.js").VectorStore> | null = null;
     if (config.embedding?.apiKey) {
       try {
-        const { VectorStore } = require("../shared/db/vector-store.js");
+        const { VectorStore } = require("@shared/db/vector-store.js");
         vectorStore = new VectorStore(config.embedding);
       } catch { /* vector search unavailable */ }
     }
@@ -267,7 +267,7 @@ export class Remi {
     });
   }
 
-  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("../shared/logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
+  private async *_processStream(msg: IncomingMessage, traceCtx?: TraceContext, convId?: number | null, startMs?: number, rlog?: import("@shared/logger.js").Logger): AsyncGenerator<ProviderEvent, AgentResponse | null, unknown> {
     const _log = rlog ?? log; // request-scoped logger (with traceId) or fallback to global
 
     let resultResponse: AgentResponse | null = null;
@@ -851,7 +851,7 @@ export class Remi {
     }
 
     // 4. ConfigManager — symlinks
-    const { configManager } = require("../shared/infra/config-manager");
+    const { configManager } = require("@shared/infra/config-manager");
     remi._configManager = configManager;
     configManager.ensureAllProjects();
     configManager.ensureGlobals();

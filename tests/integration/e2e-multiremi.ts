@@ -13,11 +13,11 @@
  *
  * Usage: bun run tests/integration/e2e-multiremi.ts [--provider=claude|codex] [--port=6191]
  */
-import "../../src/shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
+import "@shared/db/sqlite-custom.js"; // must be first: swaps sqlite before any Database
 import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { setDbPath } from "../../src/shared/db/index.js";
+import { setDbPath } from "@shared/db/index.js";
 import { startMultiremiServer } from "../../src/multiremi/api.js";
 import { MultiremiStore } from "../../src/multiremi/store.js";
 import { MultiremiDaemon } from "../../src/multiremi/daemon.js";

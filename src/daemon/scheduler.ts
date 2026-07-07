@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { createLogger } from "../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   AutopilotStore,
   AutopilotFailureThresholdCandidate,

@@ -10,8 +10,8 @@ export function loadConfig(chatIdOverride?: string): {
   verificationToken: string;
   encryptKey: string;
 } {
-  const { ConfigStore } = require("../../src/shared/db/config-store.js");
-  const { getDb } = require("../../src/shared/db/index.js");
+  const { ConfigStore } = require("@shared/db/config-store.js");
+  const { getDb } = require("@shared/db/index.js");
   const store = new ConfigStore(getDb());
   const config = store.load();
 

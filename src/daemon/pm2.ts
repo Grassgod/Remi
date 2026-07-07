@@ -9,8 +9,8 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { RemiConfig } from "../shared/config.js";
-import { createLogger } from "../shared/logger.js";
+import type { RemiConfig } from "@shared/config.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("pm2");
 

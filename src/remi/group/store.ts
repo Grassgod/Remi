@@ -3,7 +3,7 @@
  */
 
 import type { Database, SQLQueryBindings } from "bun:sqlite";
-import { getDb } from "../../shared/db/index.js";
+import { getDb } from "@shared/db/index.js";
 import type { GroupConfig, GroupConfigInput } from "./model.js";
 
 export class GroupConfigStore {

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
-import { ConfigStore } from "../../../../src/shared/db/config-store.js";
-import { defaultRemiConfig } from "../../../../src/shared/config.js";
-import type { RemiConfig } from "../../../../src/shared/config.js";
+import { ConfigStore } from "@shared/db/config-store.js";
+import { defaultRemiConfig } from "@shared/config.js";
+import type { RemiConfig } from "@shared/config.js";
 
 let db: Database;
 let store: ConfigStore;

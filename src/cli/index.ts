@@ -5,7 +5,7 @@
  * Each handler exports: async run(args: string[]): Promise<void>
  */
 
-import { VERSION } from "../shared/version.js";
+import { VERSION } from "@shared/version.js";
 
 interface Command {
   run: (args: string[]) => Promise<void>;
@@ -104,7 +104,7 @@ function showHelp(): void {
 /** Register CLI subcommands contributed by plugins (in-tree + external). Best-effort. */
 function loadPluginCommands(): void {
   try {
-    const { loadConfig } = require("../shared/config.js");
+    const { loadConfig } = require("@shared/config.js");
     const { PluginRegistry } = require("../daemon/agent-runtime/plugins/registry.js");
     const builtins = new Set(Object.keys(COMMANDS));
     // Guard: a plugin must not shadow a built-in command.

@@ -6,8 +6,8 @@ import { Queue, Worker } from "bunqueue/client";
 import { QUEUES, type CronJobData } from "./queues.js";
 import { handleCronJob } from "./handlers/cron-bridge.js";
 import type { Remi } from "../remi/core.js";
-import type { CronJobConfig } from "../shared/config.js";
-import { createLogger } from "../shared/logger.js";
+import type { CronJobConfig } from "@shared/config.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("queue");
 

@@ -1,4 +1,4 @@
-import { VERSION } from "../shared/version.js";
+import { VERSION } from "@shared/version.js";
 
 declare const MULTIREMI_VERSION: string | undefined;
 

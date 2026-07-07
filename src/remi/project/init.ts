@@ -20,7 +20,7 @@ import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
 import { createProjectChat, setupProjectChat } from "../../connectors/feishu/sdk.js";
 import { GroupConfigStore } from "../group/store.js";
-import { loadConfig } from "../../shared/config.js";
+import { loadConfig } from "@shared/config.js";
 
 /** Resolve the project owner's Feishu open_id from config. */
 function getOwnerOpenId(): string {

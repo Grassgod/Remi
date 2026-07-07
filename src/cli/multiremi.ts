@@ -4,7 +4,7 @@ import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "../multiremi/index.js";
 import { AcpProvider } from "@acp/index.js";
-import { setLogLevel } from "../shared/logger.js";
+import { setLogLevel } from "@shared/logger.js";
 import { multiremiVersion } from "../multiremi/version.js";
 import {
   loadMultiremiConfig,

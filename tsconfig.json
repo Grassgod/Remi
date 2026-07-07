@@ -19,7 +19,7 @@
       "@multiremi/contracts": ["./packages/contracts/src/index.ts"],
       "@multiremi/contracts/*": ["./packages/contracts/src/*"],
       "@shared/contracts/*": ["./packages/contracts/src/*"],
-      "@shared/*": ["./src/shared/*"],
+      "@shared/*": ["./packages/shared/src/*"],
       "@acp/*": ["./src/acp/*"],
       "@memory/*": ["./src/memory/*"],
       "@queue/*": ["./src/queue/*"],

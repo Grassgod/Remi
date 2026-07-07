@@ -3,7 +3,7 @@
  * Uses native fetch — Bun respects HTTP_PROXY/HTTPS_PROXY env vars.
  */
 
-import { createLogger } from "../../shared/logger.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   GeminiGenerateContentRequest,
   GeminiGenerateContentResponse,

@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { RemiData } from "../remi-data.js";
-import { ConfigStore } from "../../../shared/db/config-store.js";
-import { getDb } from "../../../shared/db/index.js";
+import { ConfigStore } from "@shared/db/config-store.js";
+import { getDb } from "@shared/db/index.js";
 import { MenuSyncer } from "../../../connectors/feishu/sdk.js";
 
 export function registerBotMenuHandlers(app: Hono, data: RemiData) {
