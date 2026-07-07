@@ -20,7 +20,7 @@
       "@multiremi/contracts/*": ["./packages/contracts/src/*"],
       "@shared/contracts/*": ["./packages/contracts/src/*"],
       "@shared/*": ["./packages/shared/src/*"],
-      "@acp/*": ["./src/acp/*"],
+      "@acp/*": ["./packages/acp/src/*"],
       "@memory/*": ["./src/memory/*"],
       "@queue/*": ["./src/queue/*"],
       "@connectors/*": ["./src/connectors/*"],

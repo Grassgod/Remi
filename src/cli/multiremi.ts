@@ -14,7 +14,7 @@ import {
   type MultiremiCliConfig,
 } from "../multiremi/config.js";
 import { bootFeishuChannel } from "./agent.js";
-import { ensureAcpBridges, type ProvisionProvider } from "../acp/provision.js";
+import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 
 interface ParsedArgs {
   command: string;

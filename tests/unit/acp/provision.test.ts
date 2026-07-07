@@ -2,7 +2,7 @@ import { test, expect, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { locateBridgePackage, bridgeVersion } from "../../../src/acp/provision.js";
+import { locateBridgePackage, bridgeVersion } from "@acp/provision.js";
 
 let dir: string | null = null;
 const savedHome = process.env.REMI_HOME;

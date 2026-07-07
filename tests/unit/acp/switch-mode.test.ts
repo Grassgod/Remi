@@ -4,7 +4,7 @@ import {
   defaultSwitchMode,
   parseSwitchArgs,
   resolveSwitchProviderAlias,
-} from "../../../src/acp/switch-mode.js";
+} from "@acp/switch-mode.js";
 
 describe("switch mode helpers", () => {
   it("routes claude switches to ACP Claude by default", () => {

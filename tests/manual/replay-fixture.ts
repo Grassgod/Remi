@@ -15,10 +15,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createFeishuClient } from "../../src/connectors/feishu/client.js";
 import { FeishuStreamingSession } from "../../src/connectors/feishu/streaming.js";
-import { createAdapter } from "../../src/acp/index.js";
+import { createAdapter } from "@acp/index.js";
 import { formatToolInputSummary } from "../../src/connectors/feishu/tool-formatters.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../../src/connectors/feishu/permission-ui.js";
-import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "../../src/acp/protocol.js";
+import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
 import { loadConfig as loadFeishuConfig } from "./_load-config.js";
 
 // ── Parse args ──────────────────────────────────────────────

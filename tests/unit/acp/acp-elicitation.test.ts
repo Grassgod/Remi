@@ -3,8 +3,8 @@ import { describe, it, expect } from "bun:test";
 import {
   elicitationToQuestions,
   answersToElicitationContent,
-} from "../../../src/acp/index.js";
-import type { ElicitationCreateParams } from "../../../src/acp/index.js";
+} from "@acp/index.js";
+import type { ElicitationCreateParams } from "@acp/index.js";
 
 // Mirrors the request shape the Claude ACP agent (>= 0.44.0) builds from the
 // AskUserQuestion tool in askUserQuestionsToCreateRequest().

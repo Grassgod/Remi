@@ -49,7 +49,7 @@ import {
   parseSwitchArgs,
   providerLabel,
   resolveSwitchProviderAlias,
-} from "../acp/switch-mode.js";
+} from "@acp/switch-mode.js";
 
 const log = createLogger("core");
 

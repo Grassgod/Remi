@@ -6,8 +6,8 @@ import {
   resolveAcpPermissionMode,
   resolveAvailableAcpPermissionMode,
   ClaudeAdapter,
-} from "../../../src/acp/index.js";
-import { CodexAdapter } from "../../../src/acp/index.js";
+} from "@acp/index.js";
+import { CodexAdapter } from "@acp/index.js";
 import { isAbsolute } from "node:path";
 
 /**

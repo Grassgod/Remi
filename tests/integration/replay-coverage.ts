@@ -8,9 +8,9 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { createAdapter } from "../../src/acp/index.js";
+import { createAdapter } from "@acp/index.js";
 import { formatToolInputSummary } from "../../src/connectors/feishu/sdk.js";
-import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "../../src/acp/protocol.js";
+import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "@acp/protocol.js";
 
 const FIXTURE_DIR = join(import.meta.dir, "..", "fixtures", "acp");
 const adapter = createAdapter("claude");

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { AcpProviderOptions } from "../../src/acp/index.js";
+import type { AcpProviderOptions } from "@acp/index.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "../../src/multiremi/api.js";
 import {
