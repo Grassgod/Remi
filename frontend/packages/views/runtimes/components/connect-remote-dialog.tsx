@@ -200,6 +200,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
       .createPersonalAccessToken({
         name: `Remi daemon ${new Date().toISOString().slice(0, 10)}`,
         expires_in_days: 365,
+        ...(wsId ? { workspace_id: wsId } : {}),
       })
       .then((result) => {
         if (!cancelled) setSetupToken(result.token);

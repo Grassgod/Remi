@@ -50,6 +50,10 @@ export type {
   RuntimeLocalSkillImportRequest,
   RuntimeLocalSkillsResult,
   RuntimeLocalSkillImportResult,
+  RuntimeDirectoryScanStatus,
+  RuntimeDirectoryCandidate,
+  RuntimeDirectoryScanRequest,
+  CreateRuntimeDirectoryScanRequest,
   IssueUsageSummary,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
@@ -79,6 +83,7 @@ export type {
   ProjectResourceRef,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
+  ProjectRefResourceRef,
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,

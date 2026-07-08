@@ -190,6 +190,14 @@ export function RuntimesPage({
   // "register a runtime" empty state would hide the Start button.
   const showEmpty = totalCount === 0 && !bootstrapping && !hasLocalMachine;
 
+  // A modal dialog painting over the populated runtimes list drives a Chromium
+  // compositor runaway that starves the main thread under interaction — the
+  // "computer connected" success step froze here, its buttons dead and the
+  // dialog unclosable. While a runtime dialog is open it fully covers the page,
+  // so skip painting the list/detail beneath it; they reappear on close.
+  const runtimeDialogOpen =
+    showConnectDialog || (cloudRuntimeEnabled && showCloudRuntimeDialog);
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <PageHeaderBar
@@ -199,7 +207,9 @@ export function RuntimesPage({
         onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
       />
 
-      {showEmpty ? (
+      {runtimeDialogOpen ? (
+        <div className="min-h-0 flex-1 border-t bg-background" />
+      ) : showEmpty ? (
         <div className="flex flex-1 items-center justify-center p-6">
           <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
         </div>

@@ -55,6 +55,8 @@ import type {
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
+  RuntimeDirectoryScanRequest,
+  CreateRuntimeDirectoryScanRequest,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -175,6 +177,8 @@ import {
   TimelineEntriesSchema,
   UserSchema,
   WebhookDeliveryResponseSchema,
+  RuntimeDirectoryScanRequestSchema,
+  EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   BillingBalanceSchema,
   BillingTransactionsPageSchema,
   BillingBatchesPageSchema,
@@ -436,19 +440,6 @@ export class ApiClient {
     });
     return parseWithFallback(raw, UserSchema, EMPTY_USER, {
       endpoint: "POST /api/me/onboarding/complete",
-    });
-  }
-
-  async joinCloudWaitlist(payload: {
-    email: string;
-    reason?: string;
-  }): Promise<User> {
-    const raw = await this.fetch<unknown>("/api/me/onboarding/cloud-waitlist", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    return parseWithFallback(raw, UserSchema, EMPTY_USER, {
-      endpoint: "POST /api/me/onboarding/cloud-waitlist",
     });
   }
 
@@ -1275,6 +1266,37 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeLocalSkillImportRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/local-skills/import/${requestId}`);
+  }
+
+  async initiateDirectoryScan(
+    runtimeId: string,
+    body?: CreateRuntimeDirectoryScanRequest,
+  ): Promise<RuntimeDirectoryScanRequest> {
+    const raw = await this.fetch<unknown>(`/api/runtimes/${runtimeId}/directory-scans`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    });
+    return parseWithFallback<RuntimeDirectoryScanRequest>(
+      raw,
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      { endpoint: "POST /api/runtimes/:id/directory-scans" },
+    );
+  }
+
+  async getDirectoryScanResult(
+    runtimeId: string,
+    requestId: string,
+  ): Promise<RuntimeDirectoryScanRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/directory-scans/${requestId}`,
+    );
+    return parseWithFallback<RuntimeDirectoryScanRequest>(
+      raw,
+      RuntimeDirectoryScanRequestSchema,
+      EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+      { endpoint: "GET /api/runtimes/:id/directory-scans/:requestId" },
+    );
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

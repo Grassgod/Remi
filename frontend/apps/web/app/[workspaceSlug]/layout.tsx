@@ -8,7 +8,6 @@ import { workspaceBySlugOptions } from "@multiremi/core/workspace";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { useAuthStore } from "@multiremi/core/auth";
 import { NoAccessPage } from "@multiremi/views/workspace/no-access-page";
-import { WelcomeAfterOnboarding } from "@multiremi/views/workspace/welcome-after-onboarding";
 import { MultiremiIcon } from "@multiremi/ui/components/common/multimira-icon";
 import { useWorkspaceSeen } from "@multiremi/views/workspace/use-workspace-seen";
 
@@ -92,11 +91,6 @@ export default function WorkspaceLayout({
   return (
     <WorkspaceSlugProvider slug={workspaceSlug}>
       {children}
-      {/* Reads the welcome-store transient signal parked by
-       *  OnboardingFlow.handleRuntimeNext. Runtime path → loading veil →
-       *  blocking Modal with Helper + starter cards. Skip path → Modal
-       *  with two seeded issues. No signal → null. */}
-      <WelcomeAfterOnboarding />
     </WorkspaceSlugProvider>
   );
 }

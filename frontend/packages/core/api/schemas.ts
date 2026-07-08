@@ -17,6 +17,7 @@ import type {
   GroupedIssuesResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
+  RuntimeDirectoryScanRequest,
   Squad,
   TimelineEntry,
   User,
@@ -890,4 +891,57 @@ export type CliLatestVersionResponse = z.infer<typeof CliLatestVersionResponseSc
 
 export const EMPTY_CLI_LATEST_VERSION: CliLatestVersionResponse = {
   version: null,
+};
+
+// ---------------------------------------------------------------------------
+// Runtime directory scan — `POST/GET /api/runtimes/:id/directory-scans`. The
+// daemon walks a directory tree for git repos while the UI polls the request
+// row until it terminates. Lenient by the same rules as the other request
+// schemas: `status` stays `z.string()` so an unknown terminal state degrades
+// instead of crashing the poll loop, `candidates` defaults to `[]`, and the
+// per-candidate metadata fields tolerate null/absent.
+// ---------------------------------------------------------------------------
+
+const RuntimeDirectoryCandidateSchema = z.object({
+  path: z.string(),
+  name: z.string().default(""),
+  remote_url: z.string().nullable().default(null),
+  current_branch: z.string().nullable().default(null),
+  is_dirty: z.boolean().nullable().default(null),
+  // Present in browse-mode responses; absent/null for scan-mode candidates.
+  is_git_repo: z.boolean().nullable().optional(),
+}).loose();
+
+export const RuntimeDirectoryScanRequestSchema = z.object({
+  id: z.string(),
+  runtime_id: z.string().default(""),
+  status: z.string(),
+  params: z.object({
+    root: z.string().optional(),
+    max_depth: z.number().optional(),
+    // Browse mode echoes the expanded absolute root for the folder-picker.
+    resolved_root: z.string().optional(),
+  }).loose().default({}),
+  candidates: z.array(RuntimeDirectoryCandidateSchema).default([]),
+  supported: z.boolean().default(true),
+  error: z.string().nullable().default(null),
+  run_started_at: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+// Fallback for a malformed scan response. `status: "failed"` makes the poll
+// loop terminate immediately (rather than spin) and surfaces a generic error
+// to the caller instead of pretending the scan succeeded with no candidates.
+export const EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST: RuntimeDirectoryScanRequest = {
+  id: "",
+  runtime_id: "",
+  status: "failed",
+  params: {},
+  candidates: [],
+  supported: true,
+  error: null,
+  run_started_at: null,
+  created_at: "",
+  updated_at: "",
 };

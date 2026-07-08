@@ -5,10 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRight,
   FolderGit,
+  FolderKanban,
   FolderOpen,
   Pencil,
   Plus,
-  Search,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -18,11 +18,14 @@ import {
   useDeleteProjectResource,
   useUpdateProjectResource,
 } from "@multiremi/core/projects";
+import { projectListOptions } from "@multiremi/core/projects/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useCurrentWorkspace } from "@multiremi/core/paths";
+import { useWorkspacePaths } from "@multiremi/core/paths";
 import type {
+  CreateProjectResourceRequest,
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
+  ProjectRefResourceRef,
   ProjectResource,
 } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -36,13 +39,10 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from "@multiremi/ui/components/ui/tooltip";
-import {
-  isDesktopShell,
-  pickDirectory,
-  useLocalDaemonStatus,
-  validateLocalDirectory,
-  type ValidateLocalDirectoryResult,
-} from "../../platform";
+import { isDesktopShell, useLocalDaemonStatus } from "../../platform";
+import { AppLink } from "../../navigation";
+import { RepoSourcePopover } from "./repo-source-popover";
+import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 
 // Project Resources sidebar section.
@@ -63,15 +63,18 @@ function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
   return r.resource_type === "local_directory";
 }
 
+function isProjectRef(r: ProjectResource): r is ProjectResource & {
+  resource_ref: ProjectRefResourceRef;
+} {
+  return r.resource_type === "project_ref";
+}
+
 export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
-  const workspace = useCurrentWorkspace();
   const daemonStatus = useLocalDaemonStatus();
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
-  const [repoSearch, setRepoSearch] = useState("");
-  const [picking, setPicking] = useState(false);
 
   const { data: resources = [] } = useQuery(
     projectResourcesOptions(wsId, projectId),
@@ -80,112 +83,30 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const updateResource = useUpdateProjectResource(wsId, projectId);
   const deleteResource = useDeleteProjectResource(wsId, projectId);
 
-  // Desktop-only entry points. We hide (not just disable) on web so users
-  // there don't see an action they can never complete — the spec calls for
-  // read-only on web because the daemon-id check can't be performed in the
-  // browser.
+  // Rename against the owning daemon is desktop-only; localDaemonId also lets
+  // the rows tell "this machine" apart from a foreign daemon.
   const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
-  const attachedUrls = new Set(
-    resources.filter(isGithubRef).map((r) => r.resource_ref.url),
+  // The shared popover is controlled by the attached set (mapped to the
+  // create-request shape), so it marks already-attached repos, excludes
+  // referenced projects, and enforces the per-daemon local_directory cap.
+  const pendingResources: CreateProjectResourceRequest[] = resources.map(
+    (r) => ({ resource_type: r.resource_type, resource_ref: r.resource_ref }),
   );
-  const attachedLocalPaths = new Set(
-    resources
-      .filter(isLocalDirectoryRef)
-      .filter((r) => r.resource_ref.daemon_id === localDaemonId)
-      .map((r) => r.resource_ref.local_path),
-  );
-  // Per (project, daemon) we allow at most one local_directory — the
-  // daemon-side resolver picks the first match by daemon_id, so two rows
-  // on the same daemon would silently route the agent into one of them.
-  // The server enforces this at the API boundary; the UI mirrors the
-  // restriction by hiding the "Add" affordance once a row exists for the
-  // current daemon, otherwise users would only discover the limit on a
-  // 409 toast.
-  const hasLocalDirectoryForCurrentDaemon =
-    localDaemonId !== null && attachedLocalPaths.size > 0;
 
-  const repoQuery = repoSearch.trim().toLowerCase();
-  const filteredRepos =
-    workspace?.repos?.filter((repo) => repo.url.toLowerCase().includes(repoQuery)) ?? [];
-
-  const handleAttach = async (url: string) => {
+  // Detail-view add commits immediately, one resource per selection. A 409
+  // (duplicate / per-daemon conflict) surfaces as a toast.
+  const handleAdd = async (resource: CreateProjectResourceRequest) => {
     try {
-      await createResource.mutateAsync({
-        resource_type: "github_repo",
-        resource_ref: { url },
-      });
+      await createResource.mutateAsync(resource);
       toast.success(t(($) => $.resources.toast_attached));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t(($) => $.resources.toast_attach_failed);
-      toast.error(msg);
-    }
-  };
-
-  const handleAttachLocalDirectory = async () => {
-    if (picking) return;
-    setPicking(true);
-    try {
-      if (!localDaemonId || !daemonStatus.running) {
-        toast.error(t(($) => $.resources.toast_local_daemon_not_running));
-        return;
-      }
-      // Race guard: the button gates on this already, but if the picker
-      // is opened while a concurrent resource-create lands the user
-      // would otherwise see a 409. Surface a clearer message instead.
-      if (attachedLocalPaths.size > 0) {
-        toast.error(t(($) => $.resources.toast_local_daemon_already_attached));
-        return;
-      }
-      const picked = await pickDirectory();
-      if (!picked.ok) {
-        if (picked.reason && picked.reason !== "cancelled") {
-          toast.error(
-            picked.error ?? t(($) => $.resources.toast_local_pick_failed),
-          );
-        }
-        return;
-      }
-      const path = picked.path ?? "";
-      const fallbackLabel = picked.basename ?? path;
-      if (attachedLocalPaths.has(path)) {
-        toast.error(t(($) => $.resources.toast_local_already_attached));
-        return;
-      }
-      const validation = await validateLocalDirectory(path);
-      if (!validation.ok) {
-        toast.error(
-          localValidationMessage(validation, {
-            not_absolute: t(($) => $.resources.local_validate_not_absolute),
-            not_found: t(($) => $.resources.local_validate_not_found),
-            not_a_directory: t(($) => $.resources.local_validate_not_a_directory),
-            not_readable: t(($) => $.resources.local_validate_not_readable),
-            not_writable: t(($) => $.resources.local_validate_not_writable),
-            unsupported: t(($) => $.resources.local_validate_unsupported),
-            fallback: t(($) => $.resources.toast_local_pick_failed),
-          }),
-        );
-        return;
-      }
-      await createResource.mutateAsync({
-        resource_type: "local_directory",
-        resource_ref: {
-          local_path: path,
-          daemon_id: localDaemonId,
-          label: fallbackLabel,
-        },
-      });
-      toast.success(t(($) => $.resources.toast_local_attached));
-      setAddOpen(false);
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
-          : t(($) => $.resources.toast_local_pick_failed);
+          : t(($) => $.resources.toast_attach_failed);
       toast.error(msg);
-    } finally {
-      setPicking(false);
     }
   };
 
@@ -262,13 +183,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               ))}
             </div>
           )}
-          <Popover
-            open={addOpen}
-            onOpenChange={(v) => {
-              setAddOpen(v);
-              if (!v) setRepoSearch("");
-            }}
-          >
+          <Popover open={addOpen} onOpenChange={setAddOpen}>
             <PopoverTrigger
               render={
                 <Button
@@ -281,106 +196,15 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
                 </Button>
               }
             />
-            <PopoverContent align="start" className="w-72 p-2 space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">
-                {t(($) => $.resources.popover_title)}
-              </div>
-              {workspace?.repos && workspace.repos.length > 0 && (
-                <>
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="text"
-                      value={repoSearch}
-                      onChange={(e) => setRepoSearch(e.target.value)}
-                      aria-label={t(($) => $.resources.repos_search_placeholder)}
-                      placeholder={t(($) => $.resources.repos_search_placeholder)}
-                      className="h-8 w-full rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                  </div>
-                  <div className="max-h-48 space-y-1 overflow-y-auto">
-                    {filteredRepos.length === 0 && repoQuery && (
-                      <p className="py-2 text-center text-xs text-muted-foreground">
-                        {t(($) => $.resources.repos_search_empty)}
-                      </p>
-                    )}
-                    {filteredRepos.map((repo) => {
-                      const isAttached = attachedUrls.has(repo.url);
-                      const isDisabled = isAttached || createResource.isPending;
-                      return (
-                        // Use aria-disabled instead of the native `disabled` attribute so
-                        // hover events still reach the tooltip trigger on attached rows
-                        // (browsers suppress pointer events on disabled form controls).
-                        <button
-                          key={repo.url}
-                          type="button"
-                          aria-disabled={isDisabled}
-                          onClick={async () => {
-                            if (isDisabled) return;
-                            await handleAttach(repo.url);
-                            setAddOpen(false);
-                          }}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left hover:bg-accent transition-colors aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
-                        >
-                          <FolderGit className="size-3.5" />
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <span className="truncate flex-1">{repo.url}</span>
-                              }
-                            />
-                            <TooltipContent side="top">{repo.url}</TooltipContent>
-                          </Tooltip>
-                          {isAttached && (
-                            <span className="text-[10px] text-muted-foreground">
-                              {t(($) => $.resources.attached_badge)}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-              <CustomRepoForm
-                onSubmit={async (url) => {
-                  await handleAttach(url);
-                  setAddOpen(false);
-                }}
+            <PopoverContent align="start" className="w-auto p-2">
+              <RepoSourcePopover
+                resources={pendingResources}
+                onAdd={handleAdd}
+                currentProjectId={projectId}
+                onClose={() => setAddOpen(false)}
               />
             </PopoverContent>
           </Popover>
-          {desktopMode && (
-            <div className="flex flex-col">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 justify-start px-2 text-xs text-muted-foreground hover:text-foreground"
-                disabled={
-                  picking ||
-                  createResource.isPending ||
-                  !daemonStatus.running ||
-                  hasLocalDirectoryForCurrentDaemon
-                }
-                onClick={() => {
-                  void handleAttachLocalDirectory();
-                }}
-              >
-                <FolderOpen className="size-3" />
-                {t(($) => $.resources.add_local_directory_button)}
-              </Button>
-              {!daemonStatus.running && (
-                <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">
-                  {t(($) => $.resources.local_daemon_offline_hint)}
-                </p>
-              )}
-              {daemonStatus.running && hasLocalDirectoryForCurrentDaemon && (
-                <p className="px-2 pt-0.5 text-[10px] text-muted-foreground">
-                  {t(($) => $.resources.local_daemon_already_attached_hint)}
-                </p>
-              )}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -450,6 +274,10 @@ function ResourceRow({
     );
   }
 
+  if (isProjectRef(resource)) {
+    return <ProjectRefRow resource={resource} onRemove={onRemove} />;
+  }
+
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <span className="truncate flex-1">
@@ -462,6 +290,63 @@ function ResourceRow({
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3" />
+      </button>
+    </div>
+  );
+}
+
+function ProjectRefRow({
+  resource,
+  onRemove,
+}: {
+  resource: ProjectResource & { resource_ref: ProjectRefResourceRef };
+  onRemove: () => void;
+}) {
+  const { t } = useT("projects");
+  const wsId = useWorkspaceId();
+  const wsPaths = useWorkspacePaths();
+  const { data: projects = [], isSuccess } = useQuery(projectListOptions(wsId));
+  const target = projects.find((p) => p.id === resource.resource_ref.project_id);
+
+  return (
+    <div className="flex items-center gap-2 text-xs group">
+      {target ? (
+        <>
+          <ProjectIcon project={target} size="sm" />
+          <AppLink
+            href={wsPaths.projectDetail(target.id)}
+            className="truncate flex-1 hover:underline"
+          >
+            {target.title}
+          </AppLink>
+        </>
+      ) : isSuccess ? (
+        // Query resolved and the id is genuinely absent — the target project
+        // was deleted.
+        <>
+          <FolderKanban className="size-3.5 text-muted-foreground shrink-0" />
+          <span className="truncate flex-1 text-muted-foreground">
+            {t(($) => $.resources.project_ref_deleted)}
+          </span>
+        </>
+      ) : (
+        // Still loading (or the list query errored) — don't flash the deleted
+        // label for a live ref before the list resolves.
+        <>
+          <FolderKanban className="size-3.5 text-muted-foreground/40 shrink-0" />
+          <span
+            data-testid="project-ref-loading"
+            className="h-3 flex-1 animate-pulse rounded bg-muted/60"
+          />
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+        title={t(($) => $.resources.remove_tooltip)}
+      >
+        <Trash2 className="size-3 text-muted-foreground" />
       </button>
     </div>
   );
@@ -580,77 +465,4 @@ function LocalDirectoryRow({
       </button>
     </div>
   );
-}
-
-function CustomRepoForm({
-  onSubmit,
-}: {
-  onSubmit: (url: string) => Promise<void> | void;
-}) {
-  const { t } = useT("projects");
-  const [url, setUrl] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const handle = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setSubmitting(true);
-    try {
-      await onSubmit(trimmed);
-      setUrl("");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-  return (
-    <form onSubmit={handle} className="flex items-center gap-1.5 pt-1 border-t">
-      <input
-        type="text"
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder={t(($) => $.resources.url_placeholder)}
-        className="flex-1 bg-transparent text-xs px-2 py-1 outline-none placeholder:text-muted-foreground"
-      />
-      <Button
-        type="submit"
-        size="sm"
-        variant="ghost"
-        className="h-6 px-2 text-xs"
-        disabled={!url.trim() || submitting}
-      >
-        {t(($) => $.resources.url_submit)}
-      </Button>
-    </form>
-  );
-}
-
-function localValidationMessage(
-  result: ValidateLocalDirectoryResult,
-  strings: {
-    not_absolute: string;
-    not_found: string;
-    not_a_directory: string;
-    not_readable: string;
-    not_writable: string;
-    unsupported: string;
-    fallback: string;
-  },
-): string {
-  switch (result.reason) {
-    case "not_absolute":
-      return strings.not_absolute;
-    case "not_found":
-      return strings.not_found;
-    case "not_a_directory":
-      return strings.not_a_directory;
-    case "not_readable":
-      return strings.not_readable;
-    case "not_writable":
-      return strings.not_writable;
-    case "unsupported":
-      return strings.unsupported;
-    case "error":
-    default:
-      return result.error ?? strings.fallback;
-  }
 }

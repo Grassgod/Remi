@@ -189,6 +189,7 @@ export interface PersonalAccessToken {
 export interface CreatePersonalAccessTokenRequest {
   name: string;
   expires_in_days?: number;
+  workspace_id?: string;
 }
 
 export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {

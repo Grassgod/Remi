@@ -55,7 +55,9 @@ export interface ListProjectsResponse {
 //   - github_repo: cloud-side git checkout, ref = { url, default_branch_hint? }
 //   - local_directory: in-place agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label? }
-export type ProjectResourceType = "github_repo" | "local_directory";
+//   - project_ref: composes another project, ref = { project_id }; its
+//     github_repos are recursively expanded when resolving a task's repos.
+export type ProjectResourceType = "github_repo" | "local_directory" | "project_ref";
 
 export interface GithubRepoResourceRef {
   url: string;
@@ -68,9 +70,14 @@ export interface LocalDirectoryResourceRef {
   label?: string;
 }
 
+export interface ProjectRefResourceRef {
+  project_id: string;
+}
+
 export type ProjectResourceRef =
   | GithubRepoResourceRef
   | LocalDirectoryResourceRef
+  | ProjectRefResourceRef
   | Record<string, unknown>;
 
 export interface ProjectResource {

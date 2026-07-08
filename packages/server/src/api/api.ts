@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
@@ -10,6 +10,13 @@ import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgen
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import {
+  agentSkillCompatibilitySummary,
+  skillCompatibilityResponse,
+  skillFileCompatibilityResponse,
+  skillSummaryCompatibilityResponse,
+  skillWithFilesCompatibilityResponse,
+} from "./serializers/skills.js";
 import type {
   AddSquadMemberInput,
   AssignIssueInput,
@@ -33,6 +40,7 @@ import type {
   CreatePinnedItemInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  CreateRuntimeDirectoryScanInput,
   CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
@@ -44,6 +52,7 @@ import type {
   ListIssuesInput,
   QuickCreateIssueInput,
   RegisterRuntimeInput,
+  ReportRuntimeDirectoryScanInput,
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
@@ -86,6 +95,8 @@ import type {
   MultiremiTaskTriggerMetadata,
   TaskUsageEntry,
   MultiremiRuntime,
+  MultiremiRuntimeDirectoryCandidate,
+  MultiremiRuntimeDirectoryScanRequest,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillSummary,
@@ -118,16 +129,44 @@ import type {
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
 
+// Request-scoped authentication identity, resolved ONCE by the auth middleware
+// (see createMultiremiApp) and read by every gating helper via currentAuth(c).
+// Workspace + role are intentionally NOT part of this object: each route addresses
+// its own workspace (header/query/body/param/resource), so they remain per-resource
+// helpers (currentWorkspaceRole(c, store, workspaceId)) that read this identity.
+interface MultiremiRequestAuth {
+  /** Verified access token (pat/task/daemon); null for JWT, master-token, or open mode. */
+  readonly accessToken: MultiremiAccessToken | null;
+  /** Verified JWT subject; null otherwise. */
+  readonly jwtUserId: string | null;
+  /** Authenticated identity (access-token user or JWT user); null in master-token / open mode. */
+  readonly userId: string | null;
+  /** Authenticated identity with the synthetic "local" admin fallback. */
+  readonly requestUserId: string;
+}
+
 // Declare the request-scoped context variables set via c.set()/read via c.get()
 // so Hono's typed context accepts these keys.
 declare module "hono" {
   interface ContextVariableMap {
-    multiremiJwtUserId: string;
-    multiremiAccessToken: MultiremiAccessToken;
+    multiremiAuth: MultiremiRequestAuth;
   }
 }
 
+// Anonymous identity: no verified token and no JWT. Used for the master token and
+// open (auth-disabled) mode, both of which act as the synthetic "local" admin.
+const ANON_REQUEST_AUTH: MultiremiRequestAuth = { accessToken: null, jwtUserId: null, userId: null, requestUserId: "local" };
+
+// Resolve the request identity into a single typed object. Mirrors the historical
+// currentJwtUserId (cleanString) / currentRequestUserId / authenticatedRequestUserId logic.
+function buildRequestAuth(accessToken: MultiremiAccessToken | null, jwtUserId: string | null): MultiremiRequestAuth {
+  const cleanJwt = cleanString(jwtUserId);
+  const userId = accessToken?.userId ?? cleanJwt ?? null;
+  return { accessToken, jwtUserId: cleanJwt, userId, requestUserId: userId ?? "local" };
+}
+
 const log = createLogger("multiremi-api");
+let authDisabledWarningEmitted = false;
 const SUBSCRIPTION_REASONS: MultiremiSubscriptionReason[] = ["created", "assigned", "commented", "mentioned", "manual"];
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
 const LOCAL_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
@@ -348,7 +387,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       if (!accessToken) {
         const jwt = verifyJwtToken(token);
         if (!jwt) return c.json({ error: "unauthorized" }, 401);
-        c.set("multiremiJwtUserId", jwt.userId);
+        c.set("multiremiAuth", buildRequestAuth(null, jwt.userId));
         await next();
         return;
       }
@@ -358,9 +397,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       if (accessToken.type === "task" && isTaskTokenForbiddenRequest(c.req.raw)) {
         return c.json({ error: "forbidden for task token" }, 403);
       }
-      c.set("multiremiAccessToken", accessToken);
+      c.set("multiremiAuth", buildRequestAuth(accessToken, null));
       await next();
     });
+  } else if (!authDisabledWarningEmitted) {
+    authDisabledWarningEmitted = true;
+    log.warn(
+      "dashboard auth is DISABLED (MULTIREMI_TOKEN is unset): all requests are unauthenticated and act as the local admin with full access",
+    );
   }
 
   app.onError((err, c) => {
@@ -523,6 +567,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       daemon_id?: string | null;
     }>(c);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     let token = body.token ?? c.req.query("token");
     let tokenId: string | null = null;
     const shouldCreateToken = (body.createToken ?? body.create_token ?? true) !== false;
@@ -606,7 +652,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ status: "ok" });
   });
   app.post("/api/daemon/heartbeat", async (c) => {
-    const body = await readJsonStrict<{ runtime_id?: string; supports_batch_import?: boolean }>(c);
+    const body = await readJsonStrict<{ runtime_id?: string; supports_batch_import?: boolean; supports_directory_scan?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const runtimeId = body.runtime_id ?? "";
     if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
@@ -614,6 +660,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: body.supports_batch_import ?? false,
+      supportsDirectoryScan: body.supports_directory_scan ?? false,
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(daemonHeartbeatHttpResponse(ack));
@@ -764,7 +811,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/workspaces", async (c) => {
     const body = await readJson<any>(c);
-    const result = safeCreateWorkspace(store, body);
+    const result = safeCreateWorkspace(store, body, authenticatedRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result, 201);
   });
@@ -1177,25 +1224,43 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result, 201);
   });
   app.get("/api/multiremi/agent-task-snapshot", (c) => {
-    const tasks = store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tasks = store.listWorkspaceAgentTaskSnapshot(workspaceId);
     return c.json({ tasks, total: tasks.length });
   });
   app.get("/api/agent-task-snapshot", (c) => {
-    return c.json(store.listWorkspaceAgentTaskSnapshot(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentTaskSnapshot(workspaceId));
   });
   app.get("/api/multiremi/agent-run-counts", (c) => {
-    const counts = store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const counts = store.listWorkspaceAgentRunCounts(workspaceId);
     return c.json({ counts, total: counts.length });
   });
   app.get("/api/agent-run-counts", (c) => {
-    return c.json(store.listWorkspaceAgentRunCounts(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentRunCounts(workspaceId));
   });
   app.get("/api/multiremi/agent-activity-30d", (c) => {
-    const activity = store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const activity = store.listWorkspaceAgentActivity30d(workspaceId);
     return c.json({ activity, total: activity.length });
   });
   app.get("/api/agent-activity-30d", (c) => {
-    return c.json(store.listWorkspaceAgentActivity30d(c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.listWorkspaceAgentActivity30d(workspaceId));
   });
   app.get("/api/multiremi/agent-templates", (c) => {
     const templates = listAgentTemplates();
@@ -1417,11 +1482,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/members", (c) => {
-    const members = store.listWorkspaceMembers(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const members = store.listWorkspaceMembers(workspaceId);
     return c.json({ members, total: members.length });
   });
   app.post("/api/multiremi/members", async (c) => {
     const body = await readJson<CreateWorkspaceMemberInput>(c);
+    const workspaceId = body.workspaceId ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json({ member: store.createWorkspaceMember(body) }, 201);
   });
   app.get("/api/multiremi/members/:id", (c) => {
@@ -1442,12 +1513,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/tokens", (c) => {
-    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tokens = store.listAccessTokens(workspaceId);
     return c.json({ tokens, total: tokens.length });
   });
   app.post("/api/multiremi/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json({ token: await store.createAccessToken(body) }, 201);
   });
   app.delete("/api/multiremi/tokens/:id", (c) => {
@@ -1455,52 +1532,76 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json({ token, ok: true });
   });
   app.get("/api/multiremi/notification-preferences", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.getNotificationPreferences({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       memberId: c.req.query("memberId") ?? c.req.query("member_id"),
     }));
   });
   app.put("/api/multiremi/notification-preferences", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MultiremiNotificationPreferences }>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.updateNotificationPreferences({
-      workspaceId: body.workspaceId ?? body.workspace_id,
+      workspaceId,
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? {},
     }));
   });
   app.get("/api/notification-preferences", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.getNotificationPreferences({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       memberId: c.req.query("memberId") ?? c.req.query("member_id"),
     }));
   });
   app.put("/api/notification-preferences", async (c) => {
     const body = await readJson<MultiremiNotificationPreferences & { workspaceId?: string | null; workspace_id?: string | null; memberId?: string | null; member_id?: string | null; preferences?: MultiremiNotificationPreferences }>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.updateNotificationPreferences({
-      workspaceId: body.workspaceId ?? body.workspace_id,
+      workspaceId,
       memberId: body.memberId ?? body.member_id,
       preferences: body.preferences ?? body,
     }));
   });
   app.post("/api/multiremi/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
     return c.json({ feedback }, 201);
   });
   app.get("/api/multiremi/feedback", (c) => {
-    const feedback = store.listFeedback(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const feedback = store.listFeedback(workspaceId);
     return c.json({ feedback, total: feedback.length });
   });
   app.post("/api/feedback", async (c) => {
     const body = await readJson<CreateFeedbackInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const feedback = createFeedbackOrApiError(store, withFeedbackRequestMetadata(body, c));
     return c.json({ id: feedback.id, created_at: feedback.createdAt }, 201);
   });
   app.get("/api/multiremi/github/settings", (c) => {
-    return c.json({ settings: store.getGitHubSettings(c.req.query("workspaceId") ?? "local") });
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json({ settings: store.getGitHubSettings(workspaceId) });
   });
   app.put("/api/multiremi/github/settings", async (c) => {
     const body = await readJson<{ workspaceId?: string | null; workspace_id?: string | null; enabled?: boolean; prSidebar?: boolean; pr_sidebar?: boolean; coAuthor?: boolean; co_author?: boolean; autoLinkPRs?: boolean; auto_link_prs?: boolean }>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({
       settings: store.updateGitHubSettings({
         workspaceId: body.workspaceId ?? body.workspace_id,
@@ -1512,8 +1613,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     });
   });
   app.get("/api/multiremi/github/pull-requests", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const pullRequests = store.listGitHubPullRequests({
-      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      workspaceId,
       issueId: c.req.query("issueId") ?? c.req.query("issue_id"),
     });
     return c.json({ pullRequests, total: pullRequests.length });
@@ -1530,20 +1634,38 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/github/pull-requests", async (c) => {
     const body = await readJson<any>(c);
-    return c.json({ pullRequest: store.upsertGitHubPullRequest(normalizeGitHubPullRequestBody(body)) }, 201);
+    const normalized = normalizeGitHubPullRequestBody(body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, normalized.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json({ pullRequest: store.upsertGitHubPullRequest(normalized) }, 201);
   });
   app.post("/api/multiremi/github/webhook", async (c) => {
     const body = await readJson<any>(c);
     return c.json(handleGitHubWebhook(store, body), 202);
   });
   app.get("/api/tokens", (c) => {
-    const tokens = store.listAccessTokens(c.req.query("workspaceId") ?? c.req.query("workspace_id"));
+    const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const tokens = store.listAccessTokens(workspaceId);
     return c.json(tokens);
   });
   app.post("/api/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
-    return c.json(await store.createAccessToken(body), 201);
+    // The dashboard "add computer" dialog posts no workspace in the body; fall
+    // back to the X-Workspace-Slug header the web client sends on every request,
+    // so the token is minted (and access-checked) for the workspace the user is
+    // actually in — not the "local" default they may not be a member of.
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? workspaceIdFromSlugHeader(c, store) ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    // A human requester always mints for themselves: bind the token to the
+    // resolved workspace and their own user id, so they can't mint a user-less
+    // "local" admin credential. Master token / open mode keeps body semantics.
+    const userId = authenticatedRequestUserId(c);
+    const input = userId && userId !== "local" ? { ...body, workspaceId, userId } : body;
+    return c.json(await store.createAccessToken(input), 201);
   });
   app.post("/api/tokens/current/renew", async (c) => {
     const current = currentAccessToken(c);
@@ -1808,6 +1930,62 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store.reportRuntimeLocalSkillImportResult(runtimeId, requestId, daemonLocalSkillImportReportBody(body));
     return c.json({ status: "ok" });
   });
+  app.post("/api/multiremi/runtimes/:id/directory-scans", async (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
+    const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth, mode: body.mode }));
+    } catch (err) {
+      const response = directoryScanErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/runtimes/:id/directory-scans", async (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    if (loaded.runtime.status !== "online") return c.json({ error: "runtime is offline" }, 503);
+    const body = await readJsonStrict<CreateRuntimeDirectoryScanInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json(runtimeDirectoryScanRequestCompatibilityResponse(store.createRuntimeDirectoryScanRequest(loaded.runtime.id, { root: body.root, maxDepth: body.maxDepth ?? body.max_depth, mode: body.mode })));
+    } catch (err) {
+      const response = directoryScanErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.get("/api/multiremi/runtimes/:id/directory-scans/:requestId", (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    const request = store.getRuntimeDirectoryScanRequest(loaded.runtime.id, c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(request);
+  });
+  app.get("/api/runtimes/:id/directory-scans/:requestId", (c) => {
+    const loaded = loadRuntimeForCurrentOwner(c, store, c.req.param("id"), "directory scans");
+    if (loaded instanceof Response) return loaded;
+    const request = store.getRuntimeDirectoryScanRequest(loaded.runtime.id, c.req.param("requestId"));
+    if (!request) return c.json({ error: "request not found" }, 404);
+    return c.json(runtimeDirectoryScanRequestCompatibilityResponse(request));
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/directory-scans/claim", (c) => {
+    return c.json({ request: store.claimRuntimeDirectoryScanRequest(c.req.param("runtimeId")) });
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const requestId = c.req.param("requestId");
+    const request = store.getRuntimeDirectoryScanRequest(runtimeId, requestId);
+    if (!request) return c.json({ error: "request not found" }, 404);
+    if (isTerminalRuntimeRequestForDaemon(request.status)) return c.json({ status: "ok" });
+    const body = await readJsonStrict<ReportRuntimeDirectoryScanInput>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    store.reportRuntimeDirectoryScanResult(runtimeId, requestId, body);
+    return c.json({ status: "ok" });
+  });
   app.get("/api/multiremi/runtimes/:id/usage", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
@@ -1930,24 +2108,51 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const ack = store.heartbeatRuntime(c.req.param("id"), {
       supportsBatchImport: c.req.query("supports_batch_import") === "true" || c.req.query("supportsBatchImport") === "true",
+      supportsDirectoryScan: c.req.query("supports_directory_scan") === "true" || c.req.query("supportsDirectoryScan") === "true",
     });
     if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
     return c.json(ack);
   });
 
-  app.get("/api/dashboard/usage/daily", (c) => c.json(store.listUsageDaily(usageQuery(c))));
-  app.get("/api/dashboard/usage/by-agent", (c) => c.json(store.listUsageByAgent(usageQuery(c))));
-  app.get("/api/dashboard/agent-runtime", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
-  app.get("/api/dashboard/runtime/daily", (c) => c.json(store.listRuntimeDaily(usageQuery(c))));
+  app.get("/api/dashboard/usage/daily", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listUsageDaily(query));
+  });
+  app.get("/api/dashboard/usage/by-agent", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listUsageByAgent(query));
+  });
+  app.get("/api/dashboard/agent-runtime", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listRuntimeDaily(query));
+  });
+  app.get("/api/dashboard/runtime/daily", (c) => {
+    const query = usageQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listRuntimeDaily(query));
+  });
 
   app.get("/api/multiremi/projects", (c) => {
-    const projects = store.listProjects(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const projects = store.listProjects(workspaceId);
     return c.json({ projects, total: projects.length });
   });
   app.get("/api/multiremi/projects/search", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const result = store.searchProjects({
       q: c.req.query("q") ?? "",
-      workspaceId: c.req.query("workspaceId"),
+      workspaceId,
       includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
@@ -1955,10 +2160,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result);
   });
   app.get("/api/projects/search", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     try {
       const result = store.searchProjects({
         q: c.req.query("q") ?? "",
-        workspaceId: c.req.query("workspace_id"),
+        workspaceId,
         includeClosed: c.req.query("include_closed") === "true",
         limit: parseOptionalInt(c.req.query("limit")),
         offset: parseOptionalInt(c.req.query("offset")),
@@ -1975,16 +2183,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.get("/api/projects", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const projects = store
-      .listProjects(c.req.query("workspace_id") ?? "local")
+      .listProjects(workspaceId)
       .map(projectCompatibilityResponse);
     return c.json({ projects, total: projects.length });
   });
   app.post("/api/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const projectInput = projectCreateCompatibilityInput(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
+    if (denied) return denied;
     try {
-      const project = store.createProject(projectCreateCompatibilityInput(c, body));
+      const project = store.createProject(projectInput);
       const response = projectCompatibilityResponse(project);
       publishProjectCreated(c, store, project, response);
       return c.json(response, 201);
@@ -1997,6 +2211,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/projects", async (c) => {
     const body = await readJsonStrict<CreateProjectInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({ project: store.createProject(body) }, 201);
   });
   app.get("/api/multiremi/projects/:id", (c) => {
@@ -2116,11 +2332,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/squads", (c) => {
-    const squads = store.listSquads(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const squads = store.listSquads(workspaceId);
     return c.json({ squads, total: squads.length });
   });
   app.get("/api/squads", (c) => {
     const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     return c.json(store.listSquads(workspaceId).map((squad) => squadCompatibilityResponse(store, squad)));
   });
   app.post("/api/squads", async (c) => {
@@ -2136,6 +2357,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const squadCreateDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (squadCreateDenied) return squadCreateDenied;
     const leaderId = cleanString(body.leader_id);
     const name = cleanString(body.name);
     if (!name) return c.json({ error: "name is required" }, 400);
@@ -2160,6 +2383,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/squads", async (c) => {
     const body = await readJson<CreateSquadInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? "local");
+    if (denied) return denied;
     return c.json({ squad: store.createSquad(body) }, 201);
   });
   app.get("/api/multiremi/squads/:id", (c) => {
@@ -2195,11 +2420,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!squad) return c.json({ error: "squad not found" }, 404);
     const workspaceId = compatibilityWorkspaceId(c);
     if (squad.workspaceId !== workspaceId) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(squadCompatibilityResponse(store, squad));
   });
   app.put("/api/squads/:id", async (c) => {
     const existing = store.getSquad(c.req.param("id"));
     if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{
       name?: string;
       description?: string | null;
@@ -2227,22 +2456,30 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/squads/:id", (c) => {
     const existing = store.getSquad(c.req.param("id"));
     if (!existing || existing.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, existing.workspaceId);
+    if (denied) return denied;
     store.archiveSquad(c.req.param("id"));
     return c.body(null, 204);
   });
   app.get("/api/squads/:id/members", (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(store.listSquadMembers(c.req.param("id")).map(squadMemberCompatibilityResponse));
   });
   app.get("/api/squads/:id/members/status", (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     return c.json(squadMemberStatusResponse(store, c.req.param("id")));
   });
   app.post("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2263,6 +2500,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.patch("/api/squads/:id/members/role", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string; role?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2283,6 +2522,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/squads/:id/members", async (c) => {
     const squad = store.getSquad(c.req.param("id"));
     if (!squad || squad.workspaceId !== compatibilityWorkspaceId(c)) return c.json({ error: "squad not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, squad.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ member_type?: string; member_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const memberType = cleanString(body.member_type);
@@ -2297,12 +2538,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/autopilots", (c) => {
-    const autopilots = store.listAutopilots(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const autopilots = store.listAutopilots(workspaceId);
     return c.json({ autopilots, total: autopilots.length });
   });
   app.get("/api/autopilots", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const status = cleanString(c.req.query("status"));
-    let autopilots = store.listAutopilots(c.req.query("workspace_id") ?? "local");
+    let autopilots = store.listAutopilots(workspaceId);
     if (status) autopilots = autopilots.filter((autopilot) => autopilot.status === status);
     const response = autopilots.map(autopilotCompatibilityResponse);
     return c.json({ autopilots: response, total: response.length });
@@ -2312,6 +2559,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = autopilotCreateCompatibilityInput(c, body);
     if (isJsonApiError(input)) return c.json({ error: input.apiError }, input.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
+    if (denied) return denied;
     try {
       const autopilot = store.createAutopilot(input);
       scheduler?.sync();
@@ -2324,7 +2573,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/autopilots", async (c) => {
     const body = await readJson<CreateAutopilotInput>(c);
-    const autopilot = store.createAutopilot(autopilotCreateInput(c, body));
+    const input = autopilotCreateInput(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? "local");
+    if (denied) return denied;
+    const autopilot = store.createAutopilot(input);
     scheduler?.sync();
     return c.json({ autopilot }, 201);
   });
@@ -2553,11 +2805,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/labels", (c) => {
-    const labels = store.listLabels(c.req.query("workspaceId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const labels = store.listLabels(workspaceId);
     return c.json({ labels, total: labels.length });
   });
   app.post("/api/multiremi/labels", async (c) => {
     const body = await readJson<CreateLabelInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     return c.json({ label: store.createLabel(body) }, 201);
   });
   app.get("/api/multiremi/labels/:id", (c) => {
@@ -2578,12 +2835,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/labels", (c) => {
-    const labels = store.listLabels(c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const labels = store.listLabels(workspaceId);
     return c.json({ labels: labels.map(labelCompatibilityResponse), total: labels.length });
   });
   app.post("/api/labels", async (c) => {
     const body = await readJsonStrict<CreateLabelInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "local");
+    if (denied) return denied;
     try {
       return c.json(labelCompatibilityResponse(store.createLabel(labelCreateCompatibilityInput(body))), 201);
     } catch (error) {
@@ -2614,34 +2876,70 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/pins", (c) => {
-    const pins = store.listPinnedItems(c.req.query("workspaceId"), c.req.query("userId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = c.req.query("userId") ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.listPinnedItems(workspaceId, userId);
     return c.json({ pins, total: pins.length });
   });
   app.post("/api/multiremi/pins", async (c) => {
     const body = await readJson<CreatePinnedItemInput>(c);
-    return c.json({ pin: store.createPinnedItem(body) }, 201);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    return c.json({ pin: store.createPinnedItem({ ...body, workspaceId, userId }) }, 201);
   });
   app.put("/api/multiremi/pins/reorder", async (c) => {
     const body = await readJson<{ workspaceId?: string; workspace_id?: string; userId?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
-    const pins = store.reorderPinnedItems(body.workspaceId ?? body.workspace_id, body.userId ?? body.user_id, body.items ?? []);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.userId ?? body.user_id ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.reorderPinnedItems(workspaceId, userId, body.items ?? []);
     return c.json({ pins, total: pins.length });
   });
   app.delete("/api/multiremi/pins/:itemType/:itemId", (c) => {
-    store.deletePinnedItem(c.req.query("workspaceId"), c.req.query("userId"), c.req.param("itemType"), c.req.param("itemId"));
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = c.req.query("userId") ?? currentRequestUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    store.deletePinnedItem(workspaceId, userId, c.req.param("itemType"), c.req.param("itemId"));
     return c.json({ ok: true });
   });
 
   app.get("/api/pins", (c) => {
-    return c.json(store.listPinnedItems(compatibilityWorkspaceId(c), compatibilityUserId(c)).map(pinCompatibilityResponse));
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    return c.json(store.listPinnedItems(workspaceId, userId).map(pinCompatibilityResponse));
   });
   app.post("/api/pins", async (c) => {
     const body = await readJsonStrict<{ id?: string; workspace_id?: string | null; user_id?: string | null; item_type?: string; item_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = cleanString(body.user_id) ?? compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
     try {
       const pin = store.createPinnedItem({
         id: body.id,
-        workspace_id: cleanString(body.workspace_id) ?? compatibilityWorkspaceId(c),
-        user_id: cleanString(body.user_id) ?? compatibilityUserId(c),
+        workspace_id: workspaceId,
+        user_id: userId,
         item_type: body.item_type,
         item_id: body.item_id,
       });
@@ -2653,11 +2951,23 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.put("/api/pins/reorder", async (c) => {
     const body = await readJsonStrict<{ workspace_id?: string; user_id?: string; items?: ReorderPinnedItemInput[] }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const pins = store.reorderPinnedItems(body.workspace_id ?? compatibilityWorkspaceId(c), body.user_id ?? compatibilityUserId(c), body.items ?? []);
+    const workspaceId = body.workspace_id ?? compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = body.user_id ?? compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    const pins = store.reorderPinnedItems(workspaceId, userId, body.items ?? []);
     return c.json(pins.map(pinCompatibilityResponse));
   });
   app.delete("/api/pins/:itemType/:itemId", (c) => {
-    store.deletePinnedItem(compatibilityWorkspaceId(c), compatibilityUserId(c), c.req.param("itemType"), c.req.param("itemId"));
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const userId = compatibilityUserId(c);
+    const ownerDenied = denyPinOwnerAccess(c, userId);
+    if (ownerDenied) return ownerDenied;
+    store.deletePinnedItem(workspaceId, userId, c.req.param("itemType"), c.req.param("itemId"));
     return c.body(null, 204);
   });
 
@@ -2675,21 +2985,50 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   };
 
   app.get("/api/multiremi/issues", (c) => {
-    const { issues } = listIssuesResponse(issueListQuery(store, c));
+    const query = issueListQuery(store, c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    const { issues } = listIssuesResponse(query);
     return c.json({ issues });
   });
   app.get("/api/issues", (c) => {
-    const issues = store.listIssues(issueListQuery(store, c, "compat")).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
+    const query = issueListQuery(store, c, "compat");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    const issues = store.listIssues(query).map((issue) => issueCompatibilityResponse(issue, { includeLabels: true }));
     return c.json({ issues, total: issues.length });
   });
-  app.get("/api/multiremi/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(store, c))));
-  app.get("/api/issues/grouped", (c) => c.json(store.listGroupedIssues(issueListQuery(store, c, "compat"))));
-  app.get("/api/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
-  app.get("/api/multiremi/assignee-frequency", (c) => c.json(store.listAssigneeFrequency(assigneeFrequencyQuery(c))));
+  app.get("/api/multiremi/issues/grouped", (c) => {
+    const query = issueListQuery(store, c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listGroupedIssues(query));
+  });
+  app.get("/api/issues/grouped", (c) => {
+    const query = issueListQuery(store, c, "compat");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listGroupedIssues(query));
+  });
+  app.get("/api/assignee-frequency", (c) => {
+    const query = assigneeFrequencyQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listAssigneeFrequency(query));
+  });
+  app.get("/api/multiremi/assignee-frequency", (c) => {
+    const query = assigneeFrequencyQuery(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, query.workspaceId ?? "local");
+    if (denied) return denied;
+    return c.json(store.listAssigneeFrequency(query));
+  });
   app.get("/api/multiremi/issues/search", (c) => {
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     const result = store.searchIssues({
       q: c.req.query("q") ?? "",
-      workspaceId: c.req.query("workspaceId"),
+      workspaceId,
       includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
@@ -2697,10 +3036,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(result);
   });
   app.get("/api/issues/search", (c) => {
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
     try {
       const result = store.searchIssues({
         q: c.req.query("q") ?? "",
-        workspaceId: c.req.query("workspace_id"),
+        workspaceId,
         includeClosed: c.req.query("include_closed") === "true",
         limit: parseOptionalInt(c.req.query("limit")),
         offset: parseOptionalInt(c.req.query("offset")),
@@ -2717,11 +3059,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.get("/api/multiremi/issues/child-progress", (c) => {
-    const progress = store.listChildIssueProgress(c.req.query("workspaceId") ?? "local");
+    const workspaceId = c.req.query("workspaceId") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const progress = store.listChildIssueProgress(workspaceId);
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/child-progress", (c) => {
-    const progress = store.listChildIssueProgress(c.req.query("workspace_id") ?? "local");
+    const workspaceId = c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const progress = store.listChildIssueProgress(workspaceId);
     return c.json({ progress, total: progress.length });
   });
   app.get("/api/issues/children", (c) => {
@@ -2763,6 +3111,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/issues", async (c) => {
     const body = await readJson<CreateIssueWithTaskInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const assigneeType = body.assigneeType ?? body.assignee_type ?? (body.agentId ? "agent" : null);
     const assigneeId = body.assigneeId ?? body.assignee_id ?? body.agentId ?? null;
     const issue = store.createIssue({
@@ -2787,8 +3137,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
+    const issueInput = withIssueCreateRequestContext(c, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
+    if (denied) return denied;
     try {
-      const issue = store.createIssue(withIssueCreateRequestContext(c, body));
+      const issue = store.createIssue(issueInput);
       let response = issueCompatibilityResponse(issue);
       publishIssueCreated(c, store, issue, response);
       // go-compat (maybeEnqueueOnAssign): creating an issue assigned to an agent/squad
@@ -2815,6 +3168,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/issues/quick-create", async (c) => {
     const body = await readJson<QuickCreateIssueInput>(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
+    if (denied) return denied;
     const result = safeQuickCreateIssue(store, body);
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({
@@ -2826,7 +3181,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/issues/quick-create", async (c) => {
     const body = await readJson<QuickCreateIssueInput>(c);
-    const result = safeQuickCreateIssue(store, issueQuickCreateCompatibilityInput(body));
+    const input = issueQuickCreateCompatibilityInput(body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, input.workspaceId ?? input.workspace_id ?? "local");
+    if (denied) return denied;
+    const result = safeQuickCreateIssue(store, input);
     if ("error" in result) return c.json({ error: result.error }, 400);
     return c.json({ task_id: result.task.id }, 202);
   });
@@ -2858,19 +3216,27 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.get("/api/multiremi/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c);
-    const response = issue ? issueTimelineResponse(store, issue.id, c) : null;
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const response = issueTimelineResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
   app.get("/api/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
-    const response = issue ? issueTimelineCompatibilityResponse(store, issue.id, c) : null;
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const response = issueTimelineCompatibilityResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
   });
   app.get("/api/issues/:id/active-task", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const tasks = store.listTasksForIssue(issue.id)
       .filter((task) => isActiveTaskStatus(task.status))
       .map((task) => taskCompatibilityResponse(task));
@@ -2879,16 +3245,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/issues/:id/task-runs", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listTasksForIssue(issue.id).map((task) => taskCompatibilityResponse(task)));
   });
   app.get("/api/issues/:id/usage", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(issueUsageResponse(store, issue));
   });
   app.post("/api/issues/:id/rerun", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
     const result = safeRerunIssue(store, issue.id, body);
     if ("error" in result) return c.json({ error: result.error }, result.status);
@@ -2898,6 +3270,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const issue = issueFromParam(store, c, "id", "compat");
     const task = issue ? store.getTaskByRef(c.req.param("taskId"), { issueId: issue.id }) : null;
     if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.post("/api/issues/:id/squad-evaluated", async (c) => {
@@ -2912,6 +3286,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     try {
       const issue = issueFromParam(store, c, "id", "compat");
       if (!issue) return c.json({ error: "issue not found" }, 404);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+      if (denied) return denied;
       const taskToken = currentTaskAccessToken(c);
       const activity = store.recordSquadLeaderEvaluation(issue.id, {
         outcome: body.outcome ?? "",
@@ -2937,36 +3313,48 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const children = store.listChildIssues(issue.id);
     return c.json({ issues: children, total: children.length });
   });
   app.get("/api/issues/:id/children", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const children = store.listChildIssues(issue.id);
     return c.json({ issues: children, total: children.length });
   });
   app.get("/api/multiremi/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const dependencies = store.listIssueDependencies(issue.id);
     return c.json({ dependencies, total: dependencies.length });
   });
   app.get("/api/issues/:id/dependencies", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const dependencies = store.listIssueDependencies(issue.id).map(issueDependencyCompatibilityResponse);
     return c.json({ dependencies, total: dependencies.length });
   });
   app.post("/api/multiremi/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateIssueDependencyInput>(c);
     return c.json({ dependency: store.createIssueDependency(issue.id, body) }, 201);
   });
   app.post("/api/issues/:id/dependencies", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateIssueDependencyInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -2980,12 +3368,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/dependencies/:dependencyId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id/dependencies/:dependencyId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     try {
       store.deleteIssueDependency(issue.id, c.req.param("dependencyId"));
       return c.json({ status: "ok" });
@@ -2998,12 +3390,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.patch("/api/multiremi/issues/:id", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
     return c.json({ issue: store.updateIssue(issue.id, body) });
   });
-  const updateIssueCompatibilityRoute = async (c: any) => {
+  const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = issueUpdateCompatibilityInput(body);
@@ -3022,25 +3418,33 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.put("/api/issues/:id", updateIssueCompatibilityRoute);
   app.delete("/api/multiremi/issues/:id", (c) => {
     const issue = issueFromParam(store, c);
-    const deleted = issue ? store.deleteIssue(issue.id) : false;
-    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.deleteIssue(issue.id)) return c.json({ error: "issue not found" }, 404);
     return c.json({ ok: true });
   });
   app.delete("/api/issues/:id", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
-    const deleted = issue ? store.deleteIssue(issue.id) : false;
-    if (!deleted) return c.json({ error: "issue not found" }, 404);
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (!store.deleteIssue(issue.id)) return c.json({ error: "issue not found" }, 404);
     return c.body(null, 204);
   });
   app.post("/api/multiremi/issues/:id/assign", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<AssignIssueInput>(c);
     return c.json(store.assignIssue(issue.id, body));
   });
   app.get("/api/multiremi/issues/:id/comments", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const input = parseIssueCommentListQuery(c);
     if ("error" in input) return c.json({ error: input.error }, input.status);
     try {
@@ -3054,6 +3458,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/issues/:id/comments", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const input = parseIssueCommentListQuery(c);
     if ("error" in input) return c.json({ error: input.error }, input.status);
     try {
@@ -3067,12 +3473,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateIssueCommentInput>(c);
     return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body)) }, 201);
   });
   app.post("/api/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateIssueCommentInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -3084,22 +3494,30 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/reactions", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ reactions: store.listIssueReactions(issue.id) });
   });
   app.get("/api/issues/:id/reactions", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueReactions(issue.id).map(issueReactionCompatibilityResponse));
   });
   app.post("/api/multiremi/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     return c.json({ reaction: store.addIssueReaction(issue.id, normalizeReactionInput(body)) }, 201);
   });
   app.post("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3109,6 +3527,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     store.removeIssueReaction(issue.id, normalizeReactionInput(body));
     return c.json({ ok: true });
@@ -3116,6 +3536,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/issues/:id/reactions", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3140,6 +3562,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/multiremi/issues/:id/attachments", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<CreateAttachmentInput>(c);
     const attachment = store.createAttachment({ ...body, issueId: issue.id });
     return c.json({ attachment }, 201);
@@ -3147,12 +3571,16 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/labels", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.listLabelsForIssue(issue.id);
     return c.json({ labels, total: labels.length });
   });
   app.post("/api/multiremi/issues/:id/labels", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ labelId?: string; label_id?: string }>(c);
     const labels = store.attachLabelToIssue(issue.id, body.labelId ?? body.label_id ?? "");
     return c.json({ labels, total: labels.length }, 201);
@@ -3160,18 +3588,24 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/labels/:labelId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
     return c.json({ labels, total: labels.length });
   });
   app.get("/api/issues/:id/labels", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const labels = store.listLabelsForIssue(issue.id);
     return c.json({ labels: labels.map(labelCompatibilityResponse) });
   });
   app.post("/api/issues/:id/labels", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJsonStrict<{ label_id?: string }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const labelId = body.label_id ?? "";
@@ -3186,6 +3620,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/issues/:id/labels/:labelId", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     try {
       const labels = store.detachLabelFromIssue(issue.id, c.req.param("labelId"));
       return c.json({ labels: labels.map(labelCompatibilityResponse) });
@@ -3196,16 +3632,22 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/issues/:id/subscribers", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ subscribers: store.listIssueSubscribers(issue.id) });
   });
   app.get("/api/issues/:id/subscribers", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueSubscribers(issue.id).map(issueSubscriberCompatibilityResponse));
   });
   app.post("/api/multiremi/issues/:id/subscribers", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ memberId?: string; reason?: unknown }>(c);
     return c.json({
       subscriber: store.addIssueSubscriber(issue.id, body.memberId ?? "", normalizeSubscriptionReason(body.reason)),
@@ -3214,6 +3656,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/issues/:id/subscribe", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ member_id?: string; user_id?: string; user_type?: string; reason?: unknown }>(c);
     const target = issueSubscriberTarget(c, body);
     if ("error" in target) return c.json({ error: target.error }, target.status);
@@ -3239,6 +3683,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/issues/:id/unsubscribe", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ member_id?: string; user_id?: string; user_type?: string }>(c);
     const target = issueSubscriberTarget(c, body);
     if ("error" in target) return c.json({ error: target.error }, target.status);
@@ -3264,39 +3710,53 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.delete("/api/multiremi/issues/:id/subscribers/:memberId", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     store.removeIssueSubscriber(issue.id, c.req.param("memberId"));
     return c.json({ ok: true });
   });
   app.get("/api/multiremi/issues/:id/metadata", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ metadata: store.listIssueMetadata(issue.id) });
   });
   app.get("/api/issues/:id/metadata", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.listIssueMetadata(issue.id));
   });
   app.put("/api/multiremi/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     return c.json({ metadata: store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value) });
   });
   app.put("/api/issues/:id/metadata/:key", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     const body = await readJson<{ value?: unknown }>(c);
     return c.json(store.setIssueMetadataKey(issue.id, c.req.param("key"), body.value));
   });
   app.delete("/api/multiremi/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json({ metadata: store.deleteIssueMetadataKey(issue.id, c.req.param("key")) });
   });
   app.delete("/api/issues/:id/metadata/:key", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
     if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
     return c.json(store.deleteIssueMetadataKey(issue.id, c.req.param("key")));
   });
 
@@ -4027,6 +4487,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           ws.data.runtimeId = heartbeat.runtimeId;
           const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
             supportsBatchImport: heartbeat.supportsBatchImport,
+            supportsDirectoryScan: heartbeat.supportsDirectoryScan,
           });
           ws.sendText(JSON.stringify({
             type: "daemon:heartbeat_ack",
@@ -4179,49 +4640,62 @@ function isTaskTokenCreateInput(input: Pick<CreateAccessTokenInput, "type">): bo
   return String(input.type ?? "pat").trim().toLowerCase() === "task";
 }
 
-function currentAccessToken(c: { get: (key: string) => unknown }): MultiremiAccessToken | null {
-  const token = c.get("multiremiAccessToken");
-  return token && typeof token === "object" && "type" in token ? token as MultiremiAccessToken : null;
+// The request identity resolved once by the auth middleware. Falls back to the
+// anonymous "local" admin when unset (open mode, or routes registered before the
+// auth middleware) — identical to the historical "no context key set" behaviour.
+function currentAuth(c: Context): MultiremiRequestAuth {
+  return c.get("multiremiAuth") ?? ANON_REQUEST_AUTH;
 }
 
-function currentTaskAccessToken(c: { get: (key: string) => unknown }): MultiremiAccessToken | null {
+function currentAccessToken(c: Context): MultiremiAccessToken | null {
+  return currentAuth(c).accessToken;
+}
+
+function currentTaskAccessToken(c: Context): MultiremiAccessToken | null {
   const token = currentAccessToken(c);
   return token?.type === "task" ? token : null;
 }
 
-function currentJwtUserId(c: { get: (key: string) => unknown }): string | null {
-  const userId = c.get("multiremiJwtUserId");
-  return cleanString(typeof userId === "string" ? userId : null);
+function currentJwtUserId(c: Context): string | null {
+  return currentAuth(c).jwtUserId;
 }
 
-function currentRequestUserId(c: { get: (key: string) => unknown }): string {
-  return currentAccessToken(c)?.userId ?? currentJwtUserId(c) ?? "local";
+function currentRequestUserId(c: Context): string {
+  return currentAuth(c).requestUserId;
 }
 
-function authenticatedRequestUserId(c: { get: (key: string) => unknown }): string | null {
-  return currentAccessToken(c)?.userId ?? currentJwtUserId(c);
+function authenticatedRequestUserId(c: Context): string | null {
+  return currentAuth(c).userId;
 }
 
-function compatibilityWorkspaceId(c: any): string {
+function compatibilityWorkspaceId(c: Context): string {
   return cleanString(c.req.header("X-Workspace-ID")) ??
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
     "local";
 }
 
-function compatibilityUserId(c: any): string {
+// The web client tags every request with the slug of the workspace the user is
+// viewing (client.ts authHeaders). Null when absent or not a known workspace.
+function workspaceIdFromSlugHeader(c: Context, store: MultiremiStore): string | null {
+  const slug = cleanString(c.req.header("X-Workspace-Slug"));
+  if (!slug) return null;
+  return store.listWorkspaces().find((workspace) => workspace.slug === slug)?.id ?? null;
+}
+
+function compatibilityUserId(c: Context): string {
   return authenticatedRequestUserId(c) ??
     cleanString(c.req.query("user_id")) ??
     "local";
 }
 
-function compatibilityInboxMemberId(c: any): string {
+function compatibilityInboxMemberId(c: Context): string {
   return authenticatedRequestUserId(c) ??
     cleanString(c.req.query("member_id")) ??
     "local";
 }
 
-function requestedAgentWorkspaceId(c: any, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
+function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
   return cleanString(input?.workspaceId) ??
     cleanString(input?.workspace_id) ??
     cleanString(c.req.query("workspaceId")) ??
@@ -4230,14 +4704,14 @@ function requestedAgentWorkspaceId(c: any, input?: Pick<CreateAgentInput, "works
     "local";
 }
 
-function requestedRuntimeWorkspaceId(c: any): string {
+function requestedRuntimeWorkspaceId(c: Context): string {
   return cleanString(c.req.query("workspaceId")) ??
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
     "local";
 }
 
-function autopilotCreateInput(c: any, input: CreateAutopilotInput): CreateAutopilotInput {
+function autopilotCreateInput(c: Context, input: CreateAutopilotInput): CreateAutopilotInput {
   const workspaceId = cleanString(input.workspaceId) ??
     cleanString(input.workspace_id) ??
     currentAccessToken(c)?.workspaceId ??
@@ -4258,7 +4732,7 @@ function runtimeOwnerId(runtime: MultiremiRuntime): string {
   return runtime.ownerId ?? "local";
 }
 
-function listRuntimesForCurrentUser(c: any, store: MultiremiStore): { runtimes: MultiremiRuntime[] } | Response {
+function listRuntimesForCurrentUser(c: Context, store: MultiremiStore): { runtimes: MultiremiRuntime[] } | Response {
   const workspaceId = requestedRuntimeWorkspaceId(c);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -4270,7 +4744,7 @@ function listRuntimesForCurrentUser(c: any, store: MultiremiStore): { runtimes: 
   return { runtimes };
 }
 
-function loadRuntimeForCurrentUser(c: any, store: MultiremiStore, runtimeId: string): { runtime: MultiremiRuntime } | Response {
+function loadRuntimeForCurrentUser(c: Context, store: MultiremiStore, runtimeId: string): { runtime: MultiremiRuntime } | Response {
   const runtime = store.getRuntime(runtimeId);
   if (!runtime) return c.json({ error: "runtime not found" }, 404);
   const denied = denyCurrentUserRuntimeWorkspaceAccess(c, store, runtime);
@@ -4279,7 +4753,7 @@ function loadRuntimeForCurrentUser(c: any, store: MultiremiStore, runtimeId: str
 }
 
 function loadRuntimeForCurrentEditor(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   runtimeId: string,
   action: "edit" | "delete",
@@ -4293,16 +4767,16 @@ function loadRuntimeForCurrentEditor(
   return loaded;
 }
 
-function loadRuntimeForCurrentOwner(c: any, store: MultiremiStore, runtimeId: string): { runtime: MultiremiRuntime } | Response {
+function loadRuntimeForCurrentOwner(c: Context, store: MultiremiStore, runtimeId: string, feature = "local skills"): { runtime: MultiremiRuntime } | Response {
   const loaded = loadRuntimeForCurrentUser(c, store, runtimeId);
   if (loaded instanceof Response) return loaded;
   if (runtimeOwnerId(loaded.runtime) !== currentRequestUserId(c)) {
-    return c.json({ error: "you can only access local skills from your own runtimes" }, 403);
+    return c.json({ error: `you can only access ${feature} from your own runtimes` }, 403);
   }
   return loaded;
 }
 
-function canCurrentUserEditRuntime(c: { get: (key: string) => unknown }, store: MultiremiStore, runtime: MultiremiRuntime): boolean {
+function canCurrentUserEditRuntime(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): boolean {
   const role = currentWorkspaceRole(c, store, runtimeWorkspaceId(runtime));
   if (role === "owner" || role === "admin") return true;
   return runtimeOwnerId(runtime) === currentRequestUserId(c);
@@ -4378,14 +4852,6 @@ function workspaceAlwaysRedactSecrets(settings: Record<string, unknown> | null |
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
-function agentSkillCompatibilitySummary(skill: MultiremiSkill): Record<string, unknown> {
-  return {
-    id: skill.id ?? "",
-    name: skill.name,
-    description: skill.description ?? "",
-  };
-}
-
 function projectCompatibilityResponse(project: MultiremiProject): Record<string, unknown> {
   return {
     id: project.id,
@@ -4405,7 +4871,7 @@ function projectCompatibilityResponse(project: MultiremiProject): Record<string,
   };
 }
 
-function projectCreateCompatibilityInput(c: any, input: CreateProjectInput): CreateProjectInput {
+function projectCreateCompatibilityInput(c: Context, input: CreateProjectInput): CreateProjectInput {
   return {
     id: input.id,
     title: input.title,
@@ -4464,7 +4930,7 @@ function pinCompatibilityResponse(pin: MultiremiPinnedItem): Record<string, unkn
   };
 }
 
-function pinCompatibilityErrorResponse(c: any, error: unknown): Response {
+function pinCompatibilityErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message === "Item already pinned") return c.json({ error: "item already pinned" }, 409);
   if (message.startsWith("Issue not found")) return c.json({ error: "issue not found" }, 404);
@@ -4506,7 +4972,7 @@ function squadMemberCompatibilityResponse(member: MultiremiSquadMember): Record<
   };
 }
 
-function squadCompatibilityErrorResponse(c: any, error: unknown): Response {
+function squadCompatibilityErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Squad not found")) return c.json({ error: "squad not found" }, 404);
   if (message.startsWith("Agent not found")) return c.json({ error: "agent not found in this workspace" }, 400);
@@ -4548,7 +5014,7 @@ function autopilotCompatibilityResponse(autopilot: MultiremiAutopilot): Record<s
 }
 
 function autopilotCreateCompatibilityInput(
-  c: any,
+  c: Context,
   input: CreateAutopilotInput,
 ): CreateAutopilotInput | { apiError: string; statusCode: 400 } {
   if (!cleanString(input.title)) return { apiError: "title is required", statusCode: 400 };
@@ -4745,7 +5211,7 @@ function autopilotTriggerUpdateCompatibilityInput(input: UpdateAutopilotTriggerI
   return output;
 }
 
-function autopilotCompatibilityErrorResponse(c: any, error: unknown): Response {
+function autopilotCompatibilityErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Autopilot not found")) return c.json({ error: "autopilot not found" }, 404);
   if (message.startsWith("Autopilot trigger not found")) return c.json({ error: "trigger not found" }, 404);
@@ -4814,7 +5280,7 @@ function labelCompatibilityResponse(label: MultiremiLabel): Record<string, unkno
   };
 }
 
-function labelCompatibilityErrorResponse(c: any, error: unknown): Response {
+function labelCompatibilityErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Label not found") || message === "Label belongs to another workspace") {
     return c.json({ error: "label not found" }, 404);
@@ -4909,7 +5375,7 @@ function commentCompatibilityResponse(comment: MultiremiIssueComment): Record<st
   return response;
 }
 
-function issueCommentMutationErrorResponse(c: any, error: unknown): Response {
+function issueCommentMutationErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("Comment not found:")) return c.json({ error: "comment not found" }, 404);
   if (message.startsWith("Parent comment not found:")) return c.json({ error: "invalid parent comment" }, 400);
@@ -4958,7 +5424,7 @@ function issueSubscriberCompatibilityResponse(subscriber: MultiremiIssueSubscrib
   };
 }
 
-function issueSubscriberCaller(c: any): { actorType: "member" | "agent"; actorId: string } {
+function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; actorId: string } {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) return { actorType: "agent", actorId: taskToken.agentId };
   const agentId = cleanString(c.req.header("X-Agent-ID"));
@@ -4966,7 +5432,7 @@ function issueSubscriberCaller(c: any): { actorType: "member" | "agent"; actorId
   return { actorType: "member", actorId: currentRequestUserId(c) };
 }
 
-function issueCommentCreateInput(c: any, input: CreateIssueCommentInput): CreateIssueCommentInput {
+function issueCommentCreateInput(c: Context, input: CreateIssueCommentInput): CreateIssueCommentInput {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) {
     return { ...input, authorType: "agent", authorId: taskToken.agentId };
@@ -4979,7 +5445,7 @@ function issueCommentCreateInput(c: any, input: CreateIssueCommentInput): Create
 }
 
 function issueSubscriberTarget(
-  c: any,
+  c: Context,
   body: { member_id?: string; user_id?: string; user_type?: string },
 ): { userType: "member" | "agent"; userId: string } | { error: string; status: 403 } {
   const caller = issueSubscriberCaller(c);
@@ -4994,7 +5460,7 @@ function issueSubscriberTarget(
   return { userType, userId };
 }
 
-function issueSubscriberTargetErrorResponse(c: any, error: unknown): Response {
+function issueSubscriberTargetErrorResponse(c: Context, error: unknown): Response {
   const message = error instanceof Error ? error.message : String(error);
   if (message === "target user is not a member of this workspace") {
     return c.json({ error: message }, 403);
@@ -5016,13 +5482,13 @@ function issueDependencyCompatibilityResponse(dependency: MultiremiIssueDependen
   };
 }
 
-function issueSearchErrorResponse(c: any, err: unknown): Response | null {
+function issueSearchErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   if (err.message === "q parameter is required") return c.json({ error: "q parameter is required" }, 400);
   return null;
 }
 
-function issueErrorResponse(c: any, err: unknown): Response | null {
+function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Parent issue not found:")) return c.json({ error: "parent issue not found in this workspace" }, 400);
@@ -5042,7 +5508,7 @@ function issueErrorResponse(c: any, err: unknown): Response | null {
   return null;
 }
 
-function issueDependencyErrorResponse(c: any, err: unknown): Response | null {
+function issueDependencyErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   if (err.message.startsWith("Issue not found:")) return c.json({ error: "issue not found" }, 404);
   if (err.message.startsWith("Dependent issue not found:")) return c.json({ error: "dependent issue not found" }, 400);
@@ -5053,7 +5519,7 @@ function issueDependencyErrorResponse(c: any, err: unknown): Response | null {
   return null;
 }
 
-function withIssueCreateRequestContext(c: any, input: CreateIssueWithTaskInput): CreateIssueWithTaskInput {
+function withIssueCreateRequestContext(c: Context, input: CreateIssueWithTaskInput): CreateIssueWithTaskInput {
   const workspaceId = cleanString(input.workspace_id) ??
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
@@ -5120,7 +5586,7 @@ function issueBatchDeleteCompatibilityInput(input: BatchDeleteIssuesInput): Batc
 }
 
 function publishIssueCreated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   issue: MultiremiIssue,
   response: Record<string, unknown> = issueCompatibilityResponse(issue),
@@ -5129,7 +5595,7 @@ function publishIssueCreated(
 }
 
 function publishIssueUpdated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   previous: MultiremiIssue,
   issue: MultiremiIssue,
@@ -5167,7 +5633,7 @@ function publishIssueUpdated(
 }
 
 function publishProjectCreated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   project: MultiremiProject,
   response: Record<string, unknown> = projectCompatibilityResponse(project),
@@ -5176,7 +5642,7 @@ function publishProjectCreated(
 }
 
 function publishProjectUpdated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   project: MultiremiProject,
   response: Record<string, unknown> = projectCompatibilityResponse(project),
@@ -5184,18 +5650,18 @@ function publishProjectUpdated(
   publishWorkspaceEvent(c, store, "project:updated", project.workspaceId, { project: response });
 }
 
-function publishProjectDeleted(c: any, store: MultiremiStore, project: MultiremiProject): void {
+function publishProjectDeleted(c: Context, store: MultiremiStore, project: MultiremiProject): void {
   publishWorkspaceEvent(c, store, "project:deleted", project.workspaceId, { project_id: project.id });
 }
 
-function projectErrorResponse(c: any, err: unknown): Response | null {
+function projectErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   if (err.message === "Project title is required") return c.json({ error: "title is required" }, 400);
   if (err.message.startsWith("Project not found:")) return c.json({ error: "project not found" }, 404);
   return null;
 }
 
-function projectSearchErrorResponse(c: any, err: unknown): Response | null {
+function projectSearchErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   if (err.message === "q parameter is required") return c.json({ error: "q parameter is required" }, 400);
   return null;
@@ -5229,11 +5695,14 @@ function projectResourceRefCompatibilityResponse(resource: MultiremiProjectResou
       ? { local_path: localPath, daemon_id: daemonId, label }
       : { local_path: localPath, daemon_id: daemonId };
   }
+  if (resource.resourceType === "project_ref") {
+    return { project_id: String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "") };
+  }
   return resource.resourceRef;
 }
 
 function loadProjectResourceForMutation(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   projectId: string,
   resourceId: string,
@@ -5245,7 +5714,7 @@ function loadProjectResourceForMutation(
 }
 
 function publishProjectResourceCreated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   resource: MultiremiProjectResource,
   response: Record<string, unknown> = projectResourceCompatibilityResponse(resource),
@@ -5257,7 +5726,7 @@ function publishProjectResourceCreated(
 }
 
 function publishProjectResourceUpdated(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   resource: MultiremiProjectResource,
   response: Record<string, unknown> = projectResourceCompatibilityResponse(resource),
@@ -5269,7 +5738,7 @@ function publishProjectResourceUpdated(
 }
 
 function publishProjectResourceDeleted(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   resource: MultiremiProjectResource,
 ): void {
@@ -5279,12 +5748,12 @@ function publishProjectResourceDeleted(
   });
 }
 
-function projectResourceErrorResponse(c: any, err: unknown): Response | null {
+function projectResourceErrorResponse(c: Context, err: unknown): Response | null {
   if (!(err instanceof Error)) return null;
   const message = err.message;
   if (message.startsWith("Project not found")) return c.json({ error: "project not found" }, 404);
   if (message.startsWith("Project resource not found")) return c.json({ error: "project resource not found" }, 404);
-  if (message.includes("UNIQUE constraint failed")) {
+  if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) {
     return c.json({ error: "this resource is already attached to the project" }, 409);
   }
   if (
@@ -5298,6 +5767,7 @@ function projectResourceErrorResponse(c: any, err: unknown): Response | null {
     || message.includes("unknown resource_type")
     || message.includes("github_repo")
     || message.includes("local_directory")
+    || message.includes("project_ref")
     || message === "position must be an integer"
   ) {
     return c.json({ error: message }, 400);
@@ -5402,6 +5872,43 @@ function runtimeLocalSkillListRequestCompatibilityResponse(request: MultiremiRun
   return response;
 }
 
+function directoryScanErrorResponse(c: Context, err: unknown): Response | null {
+  if (!(err instanceof Error)) return null;
+  if (err.message === 'directory scan mode must be "scan" or "browse"') return c.json({ error: err.message }, 400);
+  return null;
+}
+
+function runtimeDirectoryCandidateCompatibilityResponse(candidate: MultiremiRuntimeDirectoryCandidate): Record<string, unknown> {
+  return {
+    path: candidate.path,
+    name: candidate.name,
+    remote_url: candidate.remoteUrl,
+    current_branch: candidate.currentBranch,
+    is_dirty: candidate.isDirty,
+    is_git_repo: candidate.isGitRepo ?? null,
+  };
+}
+
+function runtimeDirectoryScanRequestCompatibilityResponse(request: MultiremiRuntimeDirectoryScanRequest): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (request.params.root !== undefined) params.root = request.params.root;
+  if (request.params.maxDepth !== undefined) params.max_depth = request.params.maxDepth;
+  if (request.params.mode !== undefined) params.mode = request.params.mode;
+  if (request.params.resolvedRoot !== undefined) params.resolved_root = request.params.resolvedRoot;
+  return {
+    id: request.id,
+    runtime_id: request.runtimeId,
+    status: request.status,
+    params,
+    candidates: request.candidates.map(runtimeDirectoryCandidateCompatibilityResponse),
+    supported: request.supported,
+    error: request.error,
+    run_started_at: request.runStartedAt,
+    created_at: request.createdAt,
+    updated_at: request.updatedAt,
+  };
+}
+
 function runtimeLocalSkillImportRequestCompatibilityResponse(request: MultiremiRuntimeLocalSkillImportRequest): Record<string, unknown> {
   const response: Record<string, unknown> = {
     id: request.id,
@@ -5419,7 +5926,7 @@ function runtimeLocalSkillImportRequestCompatibilityResponse(request: MultiremiR
 }
 
 function requestedSkillWorkspaceId(
-  c: any,
+  c: Context,
   input?: Pick<CreateSkillInput | ImportSkillInput | UpdateSkillInput, "workspaceId" | "workspace_id">,
 ): string {
   return cleanString(input?.workspaceId) ??
@@ -5435,7 +5942,7 @@ function skillWorkspaceId(skill: MultiremiSkill): string {
 }
 
 function withSkillCreateRequestContext(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   input: CreateSkillInput,
 ): CreateSkillInput | Response {
@@ -5453,7 +5960,7 @@ function withSkillCreateRequestContext(
 }
 
 function withSkillImportRequestContext(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   input: ImportSkillInput,
 ): ImportSkillInput | Response {
@@ -5482,7 +5989,7 @@ function withSkillUpdateRequestContext(current: MultiremiSkill, input: UpdateSki
 }
 
 function loadSkillForCurrentUser(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   skillId: string,
 ): { skill: MultiremiSkill } | Response {
@@ -5496,7 +6003,7 @@ function loadSkillForCurrentUser(
 }
 
 function loadSkillForCurrentManager(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   skillId: string,
 ): { skill: MultiremiSkill } | Response {
@@ -5511,7 +6018,7 @@ function loadSkillForCurrentManager(
 }
 
 function loadAgentForCurrentManager(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   agentId: string,
 ): { agent: MultiremiAgent } | Response {
@@ -5527,7 +6034,7 @@ function loadAgentForCurrentManager(
 }
 
 function loadAgentEnvForCurrentAdmin(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   agentId: string,
 ): { agent: MultiremiAgent } | Response {
@@ -5541,7 +6048,7 @@ function loadAgentEnvForCurrentAdmin(
 }
 
 function publishAgentSkillsEvent(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   agent: MultiremiAgent,
   skills: MultiremiSkill[],
@@ -5553,7 +6060,7 @@ function publishAgentSkillsEvent(
 }
 
 function publishAgentLifecycleEvent(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   type: "agent:created" | "agent:status" | "agent:archived" | "agent:restored",
   agent: MultiremiAgent,
@@ -5564,7 +6071,7 @@ function publishAgentLifecycleEvent(
 }
 
 function recordAgentCreatedAnalytics(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   agent: MultiremiAgent,
   runtime: MultiremiRuntime | null,
@@ -5648,7 +6155,7 @@ function cleanRelativeSkillPath(path: string): string {
 }
 
 function skillCompatibilityErrorResponse(
-  c: any,
+  c: Context,
   error: unknown,
   options: {
     invalidPathIncludesPath?: boolean;
@@ -5694,44 +6201,6 @@ function existingSkillIdentityForInput(store: MultiremiStore, input: CreateSkill
   const existing = store.listSkills(workspaceId, { includeFiles: false }).find((skill) => skill.name === name);
   if (!existing?.id) return null;
   return { id: existing.id, name: existing.name };
-}
-
-function skillSummaryCompatibilityResponse(skill: MultiremiSkill): Record<string, unknown> {
-  return {
-    id: skill.id,
-    workspace_id: skill.workspaceId,
-    name: skill.name,
-    description: skill.description ?? "",
-    config: skill.config ?? {},
-    created_by: skill.createdBy ?? null,
-    created_at: skill.createdAt,
-    updated_at: skill.updatedAt,
-  };
-}
-
-function skillCompatibilityResponse(skill: MultiremiSkill): Record<string, unknown> {
-  return {
-    ...skillSummaryCompatibilityResponse(skill),
-    content: skill.content,
-  };
-}
-
-function skillWithFilesCompatibilityResponse(skill: MultiremiSkill): Record<string, unknown> {
-  return {
-    ...skillCompatibilityResponse(skill),
-    files: (skill.files ?? []).map(skillFileCompatibilityResponse),
-  };
-}
-
-function skillFileCompatibilityResponse(file: MultiremiSkillFile): Record<string, unknown> {
-  return {
-    id: file.id,
-    skill_id: file.skillId,
-    path: file.path,
-    content: file.content,
-    created_at: file.createdAt,
-    updated_at: file.updatedAt,
-  };
 }
 
 function runtimeUsageDailyCompatibilityResponse(row: {
@@ -5815,7 +6284,7 @@ function runtimeLaunchHeader(provider: string): string {
   return "";
 }
 
-function parseExpectedActiveAgentIds(c: any, value: unknown): string[] | Response {
+function parseExpectedActiveAgentIds(c: Context, value: unknown): string[] | Response {
   if (!Array.isArray(value)) {
     return c.json({ error: "expected_active_agent_ids must be a list of valid UUIDs" }, 400);
   }
@@ -5828,23 +6297,26 @@ function parseExpectedActiveAgentIds(c: any, value: unknown): string[] | Respons
   return [...ids];
 }
 
-function denyCurrentUserRuntimeWorkspaceAccess(c: any, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
+function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
   const workspaceId = runtimeWorkspaceId(runtime);
   const token = currentAccessToken(c);
   if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
-  if (token?.workspaceId && token.workspaceId !== workspaceId) {
+  const userId = authenticatedRequestUserId(c);
+  // Same rule as denyCurrentUserWorkspaceAccess: a human's login PAT is not
+  // workspace-scoped — membership decides which runtimes they can see.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "runtime not found" }, 404);
   }
   if (token?.type === "task") return null;
   // A logged-in human who is not a member of the runtime's workspace can't see it.
-  const userId = authenticatedRequestUserId(c);
   if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "runtime not found" }, 404);
   }
   return null;
 }
 
-function withAgentRequestContext(c: any, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
+function withAgentRequestContext(c: Context, store: MultiremiStore, input: CreateAgentInput): CreateAgentInput | Response {
   const workspaceId = requestedAgentWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -5881,7 +6353,7 @@ function withAgentRequestContext(c: any, store: MultiremiStore, input: CreateAge
 }
 
 function withAgentUpdateRequestContext(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   current: MultiremiAgent,
   input: UpdateAgentInput,
@@ -5937,7 +6409,7 @@ function withAgentUpdateRequestContext(
 }
 
 function withAgentTemplateRequestContext(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   input: CreateAgentFromTemplateInput,
 ): CreateAgentFromTemplateInput | Response {
@@ -5978,7 +6450,7 @@ function withAgentTemplateRequestContext(
 }
 
 function loadRuntimeForAgentRequest(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   workspaceId: string,
   runtimeId: string | null | undefined,
@@ -5997,7 +6469,7 @@ function loadRuntimeForAgentRequest(
   return runtime;
 }
 
-function canCurrentUserUseRuntime(c: { get: (key: string) => unknown }, store: MultiremiStore, runtime: MultiremiRuntime): boolean {
+function canCurrentUserUseRuntime(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): boolean {
   const workspaceId = runtime.workspaceId ?? "local";
   const role = currentWorkspaceRole(c, store, workspaceId);
   if (role === "owner" || role === "admin") return true;
@@ -6018,7 +6490,7 @@ function safeIdSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "local";
 }
 
-function normalizeAgentRequestDescription(c: any, value: unknown): string | Response {
+function normalizeAgentRequestDescription(c: Context, value: unknown): string | Response {
   const description = String(value ?? "");
   if (Array.from(description).length > MAX_AGENT_DESCRIPTION_LENGTH) {
     return c.json({ error: `description must be ${MAX_AGENT_DESCRIPTION_LENGTH} characters or fewer` }, 400);
@@ -6035,11 +6507,11 @@ function isKnownThinkingValue(provider: string, value: string): boolean {
   return PROVIDER_THINKING_LEVELS[provider]?.has(value) ?? false;
 }
 
-function agentThinkingLevelError(c: any, value: string, provider: string): Response {
+function agentThinkingLevelError(c: Context, value: string, provider: string): Response {
   return c.json({ error: `thinking_level "${value}" is not a recognised value for runtime "${provider}"` }, 400);
 }
 
-function normalizeAgentRequestMaxConcurrentTasks(c: any, value: unknown): number | Response {
+function normalizeAgentRequestMaxConcurrentTasks(c: Context, value: unknown): number | Response {
   const concurrency = Number(value ?? 0);
   if (!concurrency) return 6;
   if (!Number.isFinite(concurrency) || concurrency < 1) {
@@ -6048,7 +6520,7 @@ function normalizeAgentRequestMaxConcurrentTasks(c: any, value: unknown): number
   return Math.trunc(concurrency);
 }
 
-function agentNameConflict(c: any, name: string): Response {
+function agentNameConflict(c: Context, name: string): Response {
   return c.json({ error: `an agent named "${name}" already exists in this workspace` }, 409);
 }
 
@@ -6057,7 +6529,7 @@ function hasRequestField(input: object, ...fields: string[]): boolean {
 }
 
 function loadAgentForCurrentUser(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   agentId: string,
 ): { agent: MultiremiAgent } | Response {
@@ -6071,7 +6543,7 @@ function loadAgentForCurrentUser(
   return { agent };
 }
 
-function canCurrentUserAccessAgent(c: { get: (key: string) => unknown }, store: MultiremiStore, agent: MultiremiAgent): boolean {
+function canCurrentUserAccessAgent(c: Context, store: MultiremiStore, agent: MultiremiAgent): boolean {
   if (agent.visibility !== "private") return true;
   const userId = currentRequestUserId(c);
   if (agent.ownerId === userId) return true;
@@ -6079,7 +6551,7 @@ function canCurrentUserAccessAgent(c: { get: (key: string) => unknown }, store: 
   return role === "owner" || role === "admin";
 }
 
-function currentWorkspaceRole(c: { get: (key: string) => unknown }, store: MultiremiStore, workspaceId: string): string {
+function currentWorkspaceRole(c: Context, store: MultiremiStore, workspaceId: string): string {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;
   // No real member: only the no-identity admin path (master token / open mode)
@@ -6088,7 +6560,7 @@ function currentWorkspaceRole(c: { get: (key: string) => unknown }, store: Multi
   return "member";
 }
 
-function currentWorkspaceRoleStrict(c: { get: (key: string) => unknown }, store: MultiremiStore, workspaceId: string): string | null {
+function currentWorkspaceRoleStrict(c: Context, store: MultiremiStore, workspaceId: string): string | null {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;
   if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
@@ -6096,7 +6568,7 @@ function currentWorkspaceRoleStrict(c: { get: (key: string) => unknown }, store:
 }
 
 function currentWorkspaceMember(
-  c: { get: (key: string) => unknown },
+  c: Context,
   store: MultiremiStore,
   workspaceId: string,
 ): MultiremiWorkspaceMember | null {
@@ -6107,7 +6579,7 @@ function currentWorkspaceMember(
 }
 
 function loadCurrentWorkspaceMember(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   workspaceId: string,
 ): { member: MultiremiWorkspaceMember } | Response {
@@ -6121,7 +6593,7 @@ function loadCurrentWorkspaceMember(
 }
 
 function loadCurrentWorkspaceRole(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   workspaceId: string,
   roles: Array<"owner" | "admin" | "member">,
@@ -6135,14 +6607,14 @@ function loadCurrentWorkspaceRole(
 }
 
 function withChatSessionCreator(
-  c: { get: (key: string) => unknown },
+  c: Context,
   input: CreateChatSessionInput,
 ): CreateChatSessionInput {
   const creatorId = currentRequestUserId(c);
   return { ...input, creatorId, creator_id: creatorId };
 }
 
-function requestedChatWorkspaceId(c: any, input?: Pick<CreateChatSessionInput, "workspaceId" | "workspace_id">): string {
+function requestedChatWorkspaceId(c: Context, input?: Pick<CreateChatSessionInput, "workspaceId" | "workspace_id">): string {
   return cleanString(input?.workspaceId) ??
     cleanString(input?.workspace_id) ??
     cleanString(c.req.query("workspaceId")) ??
@@ -6150,27 +6622,42 @@ function requestedChatWorkspaceId(c: any, input?: Pick<CreateChatSessionInput, "
     "local";
 }
 
-function denyCurrentUserWorkspaceAccess(c: any, store: MultiremiStore, workspaceId: string): Response | null {
+function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
   const token = currentAccessToken(c);
   if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
-  // Tokens bound to one workspace (task tokens, workspace-scoped PATs) can't reach others.
-  if (token?.workspaceId && token.workspaceId !== workspaceId) {
+  const userId = authenticatedRequestUserId(c);
+  // Tokens bound to one workspace (task tokens, user-less workspace PATs) can't
+  // reach others. A human's login PAT is minted under "local" but is a session
+  // credential, not a scope — the membership check below is the authority for
+  // real users, otherwise they could never open a workspace created after login.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
   // Task tokens are scoped by the check above and act on behalf of a task within
   // their workspace — no separate membership row required.
   if (token?.type === "task") return null;
   // Any authenticated human (login PAT or JWT) must be a member of the workspace;
-  // non-members get 404 (existence hidden). No user id => master token / open
-  // mode => full admin access.
-  const userId = authenticatedRequestUserId(c);
-  if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  // non-members get 404 (existence hidden). No user id (or the synthetic "local"
+  // admin identity carried by user-less workspace access tokens) => master token /
+  // open mode => full admin access.
+  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;
 }
 
-function withChatSessionRequestContext(c: any, store: MultiremiStore, input: CreateChatSessionInput): CreateChatSessionInput | Response {
+// Pins are private to their owner. When the request is authenticated as a real
+// user, the pin's user id must equal that user — nobody can read or mutate
+// another person's pins. Master-token / open mode (no authenticated user id)
+// keeps full access.
+function denyPinOwnerAccess(c: Context, userId: string): Response | null {
+  const authUser = authenticatedRequestUserId(c);
+  if (authUser && userId !== authUser) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+function withChatSessionRequestContext(c: Context, store: MultiremiStore, input: CreateChatSessionInput): CreateChatSessionInput | Response {
   const workspaceId = requestedChatWorkspaceId(c, input);
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
   if (denied) return denied;
@@ -6185,7 +6672,7 @@ function withChatSessionRequestContext(c: any, store: MultiremiStore, input: Cre
 }
 
 function loadChatSessionForCurrentUser(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   sessionId: string,
   options: { requireAgentAccess?: boolean } = {},
@@ -6204,7 +6691,7 @@ function loadChatSessionForCurrentUser(
 }
 
 function canCurrentUserAccessChatSessionAgent(
-  c: { get: (key: string) => unknown },
+  c: Context,
   store: MultiremiStore,
   session: MultiremiChatSession,
 ): boolean {
@@ -6216,7 +6703,7 @@ function canCurrentUserAccessChatSessionAgent(
 // attachments are private to the chat creator like the chat session itself; issue,
 // comment, and free-standing attachments are scoped to the attachment workspace.
 // Returns a denial Response when access is forbidden, or null when allowed.
-function denyAttachmentAccess(c: any, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
+function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
   if (attachment.chatSessionId) {
     const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
     return loaded instanceof Response ? loaded : null;
@@ -6224,7 +6711,7 @@ function denyAttachmentAccess(c: any, store: MultiremiStore, attachment: Multire
   return denyCurrentUserWorkspaceAccess(c, store, attachment.workspaceId);
 }
 
-function normalizeSendChatMessageInput(c: any, input: SendChatMessageInput): SendChatMessageInput | Response {
+function normalizeSendChatMessageInput(c: Context, input: SendChatMessageInput): SendChatMessageInput | Response {
   const body = cleanString(input.body ?? input.content);
   if (!body) return c.json({ error: "content is required" }, 400);
   const rawAttachmentIds = input.attachmentIds ?? input.attachment_ids;
@@ -6243,11 +6730,11 @@ type DaemonWorkspaceDenyOptions = {
   hideForbiddenAsNotFound?: boolean;
 };
 
-function isDaemonGcCheckRequest(c: any): boolean {
+function isDaemonGcCheckRequest(c: Context): boolean {
   return new URL(c.req.url).pathname.endsWith("/gc-check");
 }
 
-function denyDaemonTokenWorkspace(c: any, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
+function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
   const token = currentAccessToken(c);
   if (token?.type !== "daemon") return null;
   const targetWorkspaceId = cleanString(workspaceId) ?? "local";
@@ -6257,7 +6744,7 @@ function denyDaemonTokenWorkspace(c: any, workspaceId?: string | null, options: 
 }
 
 function denyDaemonTokenRuntimeWorkspace(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   runtimeId: string,
   options: DaemonWorkspaceDenyOptions = {},
@@ -6275,7 +6762,7 @@ function normalizeRuntimeIds(value: unknown): { runtimeIds: string[] } | { error
   return { runtimeIds };
 }
 
-function deregisterDaemonRuntimes(c: any, store: MultiremiStore, runtimeIds: string[]): void {
+function deregisterDaemonRuntimes(c: Context, store: MultiremiStore, runtimeIds: string[]): void {
   const token = currentAccessToken(c);
   for (const runtimeId of runtimeIds) {
     const runtime = store.getRuntime(runtimeId);
@@ -6294,7 +6781,7 @@ function deregisterDaemonRuntimes(c: any, store: MultiremiStore, runtimeIds: str
 }
 
 function denyDaemonTokenTaskWorkspace(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   taskId: string,
   options: DaemonWorkspaceDenyOptions = {},
@@ -6306,7 +6793,7 @@ function denyDaemonTokenTaskWorkspace(
 }
 
 function denyDaemonTokenIssueWorkspace(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   issueId: string,
   options: DaemonWorkspaceDenyOptions = {},
@@ -6318,7 +6805,7 @@ function denyDaemonTokenIssueWorkspace(
 }
 
 function denyDaemonTokenChatSessionWorkspace(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   sessionId: string,
   options: DaemonWorkspaceDenyOptions = {},
@@ -6330,7 +6817,7 @@ function denyDaemonTokenChatSessionWorkspace(
 }
 
 function denyDaemonTokenAutopilotRunWorkspace(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   runId: string,
   options: DaemonWorkspaceDenyOptions = {},
@@ -6531,6 +7018,7 @@ function daemonHeartbeatHttpResponse(ack: MultiremiDaemonHeartbeatAck): Record<s
   if (ack.pending_update) response.pending_update = ack.pending_update;
   if (ack.pending_model_list) response.pending_model_list = ack.pending_model_list;
   if (ack.pending_local_skills) response.pending_local_skills = ack.pending_local_skills;
+  if (ack.pending_directory_scan) response.pending_directory_scan = ack.pending_directory_scan;
   if (ack.pending_local_skill_import) response.pending_local_skill_import = ack.pending_local_skill_import;
   if (ack.pending_local_skill_imports?.length) response.pending_local_skill_imports = ack.pending_local_skill_imports;
   return response;
@@ -7133,12 +7621,13 @@ function parseDaemonWebSocketMessage(message: string | BufferSource): Record<str
   }
 }
 
-function parseDaemonWebSocketHeartbeat(event: Record<string, any>): { runtimeId: string | null; supportsBatchImport: boolean } {
+function parseDaemonWebSocketHeartbeat(event: Record<string, any>): { runtimeId: string | null; supportsBatchImport: boolean; supportsDirectoryScan: boolean } {
   const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
   const runtimeId = cleanString(payload.runtime_id ?? event.runtime_id);
   return {
     runtimeId,
     supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
+    supportsDirectoryScan: Boolean(payload.supports_directory_scan ?? event.supports_directory_scan),
   };
 }
 
@@ -7243,7 +7732,7 @@ function mergeAgentEnv(current: Record<string, string>, input: Record<string, st
   return next;
 }
 
-function searchSkillsResponse(store: MultiremiStore, c: { req: { query: (name: string) => string | undefined } }): {
+function searchSkillsResponse(store: MultiremiStore, c: Context): {
   skills: Array<{
     name: string;
     description: string;
@@ -7284,12 +7773,12 @@ type CompatibilityQueryMode = "native" | "compat";
 
 function issueFromParam(
   store: MultiremiStore,
-  c: { req: { param: (name: string) => string; query: (name: string) => string | undefined } },
+  c: Context,
   param = "id",
   mode: CompatibilityQueryMode = "native",
 ): MultiremiIssue | null {
   return store.getIssueByRef(
-    c.req.param(param),
+    c.req.param(param) ?? "",
     mode === "compat"
       ? c.req.query("workspace_id") ?? null
       : c.req.query("workspace_id") ?? c.req.query("workspaceId") ?? null,
@@ -7298,10 +7787,10 @@ function issueFromParam(
 
 function taskFromParam(
   store: MultiremiStore,
-  c: { req: { param: (name: string) => string } },
+  c: Context,
   param: string,
 ): MultiremiTask | null {
-  return store.getTaskByRef(c.req.param(param));
+  return store.getTaskByRef(c.req.param(param) ?? "");
 }
 
 function issueListQuery(
@@ -7406,14 +7895,14 @@ function parseIntegerQuery(value: string | undefined, name: string): number | nu
   return Number.parseInt(value, 10);
 }
 
-function setIssueCommentCursorHeaders(c: any, result: { nextBefore?: string | null; nextBeforeId?: string | null }): void {
+function setIssueCommentCursorHeaders(c: Context, result: { nextBefore?: string | null; nextBeforeId?: string | null }): void {
   if (result.nextBefore && result.nextBeforeId) {
     c.header("X-Multiremi-Next-Before", result.nextBefore);
     c.header("X-Multiremi-Next-Before-Id", result.nextBeforeId);
   }
 }
 
-function issueCommentListErrorResponse(c: any, err: unknown): Response {
+function issueCommentListErrorResponse(c: Context, err: unknown): Response {
   const message = err instanceof Error ? err.message : String(err);
   if (message === "thread anchor not found in this issue") {
     return c.json({ error: message }, 404);
@@ -7630,6 +8119,7 @@ function safeUpdateCurrentUser(
 function safeCreateWorkspace(
   store: MultiremiStore,
   input: any,
+  actingUserId: string | null,
 ): ReturnType<MultiremiStore["createWorkspace"]> | { error: string; status: 400 | 409 } {
   try {
     return store.createWorkspace({
@@ -7640,7 +8130,7 @@ function safeCreateWorkspace(
       settings: input.settings,
       repos: input.repos,
       issuePrefix: input.issuePrefix ?? input.issue_prefix,
-    });
+    }, actingUserId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "name and slug are required" || message.startsWith("slug must contain")) {
@@ -7718,7 +8208,7 @@ function workspaceNamePayload(store: MultiremiStore, workspaceId: string): Recor
 }
 
 function publishWorkspaceEvent(
-  c: any,
+  c: Context,
   store: MultiremiStore,
   type: string,
   workspaceId: string,
@@ -8037,7 +8527,7 @@ function registerDaemonRuntimes(
 }
 
 function daemonRegisterOwnerContext(
-  c: { get: (key: string) => unknown },
+  c: Context,
   store: MultiremiStore,
   workspaceId: string | null | undefined,
 ): { ownerId: string | null } | { error: string; status: 403 } {
@@ -8391,7 +8881,7 @@ function handleGitHubWebhook(store: MultiremiStore, body: any): { ok: string } |
   return { pullRequest };
 }
 
-function cloudRuntimeStatusResponse(c: any, store: MultiremiStore, body: any, status: string) {
+function cloudRuntimeStatusResponse(c: Context, store: MultiremiStore, body: any, status: string) {
   const id = body.id ?? body.node_id ?? body.nodeId ?? "";
   const node = id ? store.setCloudRuntimeNodeStatus(id, status) : null;
   if (!node) return c.json({ error: "cloud runtime node not found" }, 404);
@@ -9150,6 +9640,10 @@ function headersToRecord(headers: Headers): Record<string, string> {
 }
 
 function verifyJwtToken(token: string): { userId: string } | null {
+  // No real secret configured (outside development) => reject every JWT rather
+  // than validating against a publicly-known hardcoded default.
+  const secret = jwtSecret();
+  if (!secret) return null;
   const [encodedHeader, encodedClaims, signature, extra] = token.split(".");
   if (!encodedHeader || !encodedClaims || !signature || extra !== undefined) return null;
   const header = decodeBase64UrlJson(encodedHeader);
@@ -9158,15 +9652,21 @@ function verifyJwtToken(token: string): { userId: string } | null {
   const digest = JWT_HMAC_ALGORITHMS[String(header.alg ?? "")];
   if (!digest) return null;
   const signingInput = `${encodedHeader}.${encodedClaims}`;
-  const expected = base64UrlEncode(createHmac(digest, jwtSecret()).update(signingInput).digest());
+  const expected = base64UrlEncode(createHmac(digest, secret).update(signingInput).digest());
   if (!safeEqualText(signature, expected)) return null;
   const userId = cleanString(typeof claims.sub === "string" ? claims.sub : null);
   if (!userId || !jwtTimeClaimsAreValid(claims)) return null;
   return { userId };
 }
 
-function jwtSecret(): string {
-  return process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+// Returns the configured JWT signing secret, or null when none is set. The
+// hardcoded dev default is only allowed in non-production dev/test environments;
+// in production a missing JWT_SECRET means JWTs are rejected outright rather
+// than validated against a publicly-known key.
+function jwtSecret(): string | null {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") return DEFAULT_JWT_SECRET;
+  return null;
 }
 
 function jwtTimeClaimsAreValid(claims: Record<string, unknown>, nowSeconds = Date.now() / 1000): boolean {

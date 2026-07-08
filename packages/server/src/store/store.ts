@@ -1,6 +1,12 @@
 import { Cron } from "croner";
 import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/sql-database.js";
+import { runMigrations } from "@multiremi/store/migrations.js";
+import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
+import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
+import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
+import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { createLogger } from "@shared/logger.js";
 import type {
   AddSquadMemberInput,
   AssignIssueInput,
@@ -86,6 +92,10 @@ import type {
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRepoData,
+  MultiremiRuntimeDirectoryCandidate,
+  MultiremiRuntimeDirectoryScanParams,
+  MultiremiRuntimeDirectoryScanRequest,
+  MultiremiRuntimeDirectoryScanRequestStatus,
   MultiremiRuntimeLocalSkillImportRequest,
   MultiremiRuntimeLocalSkillListRequest,
   MultiremiRuntimeLocalSkillRequestStatus,
@@ -95,6 +105,7 @@ import type {
   MultiremiRuntimeUpdateRequest,
   MultiremiRuntimeUpdateRequestStatus,
   QuickCreateIssueInput,
+  ReportRuntimeDirectoryScanInput,
   ReportRuntimeModelListInput,
   QuickCreateIssueResult,
   ReportRuntimeLocalSkillImportInput,
@@ -149,6 +160,8 @@ import type {
   UpdateWorkspaceMemberInput,
 } from "@multiremi/contracts/types.js";
 
+const log = createLogger("multiremi-store");
+
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
 const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "running", "waiting_local_directory"];
 const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory"];
@@ -163,10 +176,6 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const SYSTEM_AUTHOR_ID = "00000000-0000-0000-0000-000000000000";
-// Stable Feishu open_id of the deployment owner (hehuajie / 贺华杰). The seed
-// `local` user is tagged with this on migration so SSO login re-binds to it
-// instead of creating a duplicate. Overridable via MULTIREMI_OWNER_OPEN_ID.
-const DEFAULT_OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
@@ -174,13 +183,14 @@ const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
 const RUNTIME_UPDATE_RUNNING_TIMEOUT_MS = 150 * 1000;
 const RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
+const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
+const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
+const PROJECT_REF_MAX_DEPTH = 5;
 const AUTOPILOT_FAILURE_MONITOR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTOPILOT_FAILURE_MONITOR_MIN_RUNS = 50;
 const AUTOPILOT_FAILURE_MONITOR_FAIL_RATIO = 0.9;
 const MAX_ISSUE_METADATA_KEYS = 50;
 const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
-const FEEDBACK_MAX_MESSAGE_LENGTH = 10_000;
-const FEEDBACK_HOURLY_RATE_LIMIT = 10;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const COMMENT_HARD_CAP = 2000;
 const COMMENT_SUMMARY_RUNES = 200;
@@ -313,6 +323,9 @@ export interface MultiremiAutopilotFailureThresholdCandidate {
 
 export class MultiremiStore {
   private db: SqlDatabase;
+  private feedback: FeedbackRepo;
+  private accessTokens: AccessTokensRepo;
+  private cloudNodes: CloudRuntimeNodesRepo;
   private taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
   private taskEventListeners = new Set<TaskEventListener>();
   private workspaceEventListeners = new Set<WorkspaceEventListener>();
@@ -321,6 +334,9 @@ export class MultiremiStore {
 
   constructor(db?: SqlDatabase) {
     this.db = db ?? openMultiremiDatabase();
+    this.feedback = new FeedbackRepo(this.db);
+    this.accessTokens = new AccessTokensRepo(this.db);
+    this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.migrate();
   }
 
@@ -397,915 +413,8 @@ export class MultiremiStore {
       }));
   }
 
-  private renameLegacyMulticaObjects(): void {
-    // One-time rebrand migration: pre-existing multica_* tables in the shared
-    // remi.db are renamed to multiremi_* so their data carries over instead of
-    // being orphaned by the CREATE TABLE IF NOT EXISTS statements below. Stale
-    // idx_multica_* indexes are dropped and recreated under idx_multiremi_*.
-    // Idempotent: once renamed there is nothing left to migrate.
-    const objects = this.db
-      .query("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'index')")
-      .all() as Array<{ name: string; type: string }>;
-    for (const { name, type } of objects) {
-      if (type === "table" && name.startsWith("multica_")) {
-        const renamed = "multiremi_" + name.slice("multica_".length);
-        const exists = objects.some((o) => o.type === "table" && o.name === renamed);
-        if (!exists) this.db.exec(`ALTER TABLE "${name}" RENAME TO "${renamed}"`);
-      } else if (type === "index" && name.startsWith("idx_multica_")) {
-        this.db.exec(`DROP INDEX IF EXISTS "${name}"`);
-      }
-    }
-  }
-
   migrate(): void {
-    this.renameLegacyMulticaObjects();
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS multiremi_agents (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        avatar_url TEXT,
-        provider TEXT NOT NULL,
-        owner_id TEXT NOT NULL DEFAULT 'local',
-        visibility TEXT NOT NULL DEFAULT 'private',
-        runtime_id TEXT,
-        instructions TEXT NOT NULL DEFAULT '',
-        skills TEXT NOT NULL DEFAULT '[]',
-        max_concurrent_tasks INTEGER NOT NULL DEFAULT 6,
-        cwd TEXT,
-        executable TEXT,
-        model TEXT,
-        allowed_tools TEXT NOT NULL DEFAULT '[]',
-        custom_env TEXT NOT NULL DEFAULT '{}',
-        custom_args TEXT NOT NULL DEFAULT '[]',
-        mcp_config TEXT,
-        thinking_level TEXT,
-        archived_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_skills (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        content TEXT NOT NULL DEFAULT '',
-        config TEXT NOT NULL DEFAULT '{}',
-        created_by TEXT,
-        archived_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(workspace_id, name)
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_skill_files (
-        id TEXT PRIMARY KEY,
-        skill_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(skill_id, path),
-        FOREIGN KEY(skill_id) REFERENCES multiremi_skills(id) ON DELETE CASCADE
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_agent_skills (
-        agent_id TEXT NOT NULL,
-        skill_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY(agent_id, skill_id),
-        FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id) ON DELETE CASCADE,
-        FOREIGN KEY(skill_id) REFERENCES multiremi_skills(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_skills_workspace ON multiremi_skills(workspace_id, archived_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_skill_files_skill ON multiremi_skill_files(skill_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_agent_skills_agent ON multiremi_agent_skills(agent_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_agent_skills_skill ON multiremi_agent_skills(skill_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtimes (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        daemon_id TEXT,
-        legacy_daemon_id TEXT,
-        runtime_mode TEXT NOT NULL DEFAULT 'local',
-        device_info TEXT NOT NULL DEFAULT '',
-        metadata TEXT NOT NULL DEFAULT '{}',
-        workspace_id TEXT,
-        owner_id TEXT,
-        visibility TEXT NOT NULL DEFAULT 'private',
-        status TEXT NOT NULL DEFAULT 'online',
-        max_concurrency INTEGER NOT NULL DEFAULT 1,
-        last_heartbeat_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_cloud_runtime_nodes (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL DEFAULT 'local',
-        instance_id TEXT NOT NULL,
-        region TEXT NOT NULL DEFAULT 'local',
-        instance_type TEXT NOT NULL,
-        image_id TEXT NOT NULL DEFAULT '',
-        subnet_id TEXT NOT NULL DEFAULT '',
-        name TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'launching',
-        tags TEXT NOT NULL DEFAULT '{}',
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_cloud_runtime_nodes_owner
-        ON multiremi_cloud_runtime_nodes(owner_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtime_models (
-        runtime_id TEXT NOT NULL,
-        model_id TEXT NOT NULL,
-        label TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        is_default INTEGER NOT NULL DEFAULT 0,
-        thinking TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(runtime_id, model_id),
-        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_models_runtime ON multiremi_runtime_models(runtime_id, is_default);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtime_model_list_requests (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        models TEXT NOT NULL DEFAULT '[]',
-        supported INTEGER NOT NULL DEFAULT 1,
-        error TEXT,
-        run_started_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_model_list_runtime ON multiremi_runtime_model_list_requests(runtime_id, status, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtime_update_requests (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        scope TEXT NOT NULL DEFAULT 'cli',
-        target_version TEXT NOT NULL,
-        output TEXT,
-        error TEXT,
-        run_started_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_update_runtime ON multiremi_runtime_update_requests(runtime_id, status, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtime_local_skill_list_requests (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        skills TEXT NOT NULL DEFAULT '[]',
-        supported INTEGER NOT NULL DEFAULT 1,
-        error TEXT,
-        run_started_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_local_skill_list_runtime ON multiremi_runtime_local_skill_list_requests(runtime_id, status, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_runtime_local_skill_import_requests (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT NOT NULL,
-        skill_key TEXT NOT NULL,
-        name TEXT,
-        description TEXT,
-        status TEXT NOT NULL DEFAULT 'pending',
-        skill_id TEXT,
-        skill TEXT,
-        error TEXT,
-        created_by TEXT,
-        run_started_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE,
-        FOREIGN KEY(skill_id) REFERENCES multiremi_skills(id) ON DELETE SET NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_local_skill_import_runtime ON multiremi_runtime_local_skill_import_requests(runtime_id, status, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_users (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        avatar_url TEXT,
-        language TEXT,
-        timezone TEXT,
-        onboarded_at TEXT,
-        onboarding_questionnaire TEXT NOT NULL DEFAULT '{}',
-        starter_content_state TEXT,
-        profile_description TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_workspaces (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL UNIQUE,
-        description TEXT,
-        context TEXT,
-        settings TEXT NOT NULL DEFAULT '{}',
-        repos TEXT NOT NULL DEFAULT '[]',
-        issue_prefix TEXT NOT NULL DEFAULT 'MUL',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_workspace_invitations (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        inviter_id TEXT NOT NULL,
-        invitee_email TEXT NOT NULL,
-        invitee_user_id TEXT,
-        role TEXT NOT NULL DEFAULT 'member',
-        status TEXT NOT NULL DEFAULT 'pending',
-        expires_at TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_invitations_workspace ON multiremi_workspace_invitations(workspace_id, status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_invitations_invitee ON multiremi_workspace_invitations(invitee_email, invitee_user_id, status);
-
-      CREATE TABLE IF NOT EXISTS multiremi_workspace_members (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        name TEXT NOT NULL,
-        email TEXT,
-        role TEXT NOT NULL DEFAULT 'member',
-        archived_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_workspace ON multiremi_workspace_members(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_access_tokens (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        daemon_id TEXT,
-        task_id TEXT,
-        agent_id TEXT,
-        user_id TEXT NOT NULL DEFAULT 'local',
-        name TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'pat',
-        token_hash TEXT NOT NULL UNIQUE,
-        token_prefix TEXT NOT NULL,
-        last_used_at TEXT,
-        expires_at TEXT,
-        revoked_at TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
-
-      CREATE TABLE IF NOT EXISTS multiremi_notification_preferences (
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        member_id TEXT NOT NULL DEFAULT '',
-        preferences TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(workspace_id, member_id)
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_feedback (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        user_id TEXT NOT NULL DEFAULT 'local',
-        member_id TEXT,
-        message TEXT NOT NULL,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_user_created ON multiremi_feedback(user_id, created_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_feedback_workspace_created ON multiremi_feedback(workspace_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_github_settings (
-        workspace_id TEXT PRIMARY KEY,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        pr_sidebar INTEGER NOT NULL DEFAULT 1,
-        co_author INTEGER NOT NULL DEFAULT 1,
-        auto_link_prs INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_github_pull_requests (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT,
-        repo_owner TEXT NOT NULL,
-        repo_name TEXT NOT NULL,
-        number INTEGER NOT NULL,
-        title TEXT NOT NULL,
-        state TEXT NOT NULL,
-        html_url TEXT NOT NULL,
-        branch TEXT,
-        author_login TEXT,
-        author_avatar_url TEXT,
-        merged_at TEXT,
-        closed_at TEXT,
-        pr_created_at TEXT NOT NULL,
-        pr_updated_at TEXT NOT NULL,
-        mergeable_state TEXT,
-        checks_conclusion TEXT,
-        checks_passed INTEGER NOT NULL DEFAULT 0,
-        checks_failed INTEGER NOT NULL DEFAULT 0,
-        checks_pending INTEGER NOT NULL DEFAULT 0,
-        additions INTEGER NOT NULL DEFAULT 0,
-        deletions INTEGER NOT NULL DEFAULT 0,
-        changed_files INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(workspace_id, repo_owner, repo_name, number)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_issue ON multiremi_github_pull_requests(issue_id, pr_updated_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_github_prs_workspace ON multiremi_github_pull_requests(workspace_id, pr_updated_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issues (
-        id TEXT PRIMARY KEY,
-        issue_number INTEGER NOT NULL DEFAULT 0,
-        issue_key TEXT,
-        title TEXT NOT NULL,
-        description TEXT,
-        status TEXT NOT NULL DEFAULT 'todo',
-        priority TEXT NOT NULL DEFAULT 'none',
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        project_id TEXT,
-        parent_issue_id TEXT,
-        assignee_type TEXT,
-        assignee_id TEXT,
-        position REAL NOT NULL DEFAULT 0,
-        start_date TEXT,
-        due_date TEXT,
-        acceptance_criteria TEXT NOT NULL DEFAULT '[]',
-        context_refs TEXT NOT NULL DEFAULT '[]',
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_by TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(parent_issue_id) REFERENCES multiremi_issues(id) ON DELETE SET NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_comments (
-        id TEXT PRIMARY KEY,
-        issue_id TEXT NOT NULL,
-        author_type TEXT NOT NULL DEFAULT 'member',
-        author_id TEXT,
-        parent_id TEXT,
-        body TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'comment',
-        resolved_at TEXT,
-        resolved_by_type TEXT,
-        resolved_by_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(parent_id) REFERENCES multiremi_issue_comments(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_issue ON multiremi_issue_comments(issue_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_activity (
-        id TEXT PRIMARY KEY,
-        issue_id TEXT NOT NULL,
-        actor_type TEXT NOT NULL DEFAULT 'system',
-        actor_id TEXT,
-        type TEXT NOT NULL,
-        body TEXT,
-        data TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_activity_issue ON multiremi_issue_activity(issue_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_dependencies (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT NOT NULL,
-        depends_on_issue_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(issue_id, depends_on_issue_id, type),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(depends_on_issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_dependencies_issue ON multiremi_issue_dependencies(issue_id, type);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_dependencies_depends_on ON multiremi_issue_dependencies(depends_on_issue_id, type);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_dependencies_workspace ON multiremi_issue_dependencies(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_subscribers (
-        id TEXT PRIMARY KEY,
-        issue_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        user_type TEXT NOT NULL DEFAULT 'member',
-        user_id TEXT NOT NULL,
-        reason TEXT NOT NULL DEFAULT 'manual',
-        created_at TEXT NOT NULL,
-        UNIQUE(issue_id, user_type, user_id),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_issue ON multiremi_issue_subscribers(issue_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_member ON multiremi_issue_subscribers(member_id);
-      -- The (user_type, user_id) index is created by ensureIssueSubscriberTypedSchema(),
-      -- which runs after this block and rebuilds pre-typed-column tables first. Creating
-      -- it here would crash on an existing DB whose subscribers table lacks user_type.
-
-      CREATE TABLE IF NOT EXISTS multiremi_inbox_items (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT,
-        member_id TEXT NOT NULL,
-        recipient_type TEXT NOT NULL DEFAULT 'member',
-        recipient_id TEXT,
-        severity TEXT NOT NULL DEFAULT 'info',
-        actor_type TEXT NOT NULL DEFAULT 'system',
-        actor_id TEXT,
-        type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        body TEXT,
-        details TEXT,
-        read INTEGER NOT NULL DEFAULT 0,
-        archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(member_id) REFERENCES multiremi_workspace_members(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member ON multiremi_inbox_items(member_id, archived, read, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_labels (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        name TEXT NOT NULL,
-        color TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_issue_labels_workspace_name
-        ON multiremi_issue_labels(workspace_id, lower(name));
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_labels_workspace
-        ON multiremi_issue_labels(workspace_id, name);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_to_labels (
-        issue_id TEXT NOT NULL,
-        label_id TEXT NOT NULL,
-        PRIMARY KEY(issue_id, label_id),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(label_id) REFERENCES multiremi_issue_labels(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_to_labels_label ON multiremi_issue_to_labels(label_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_issue_reactions (
-        id TEXT PRIMARY KEY,
-        issue_id TEXT NOT NULL,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        actor_type TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        emoji TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(issue_id, actor_type, actor_id, emoji),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_reactions_issue ON multiremi_issue_reactions(issue_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_comment_reactions (
-        id TEXT PRIMARY KEY,
-        comment_id TEXT NOT NULL,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        actor_type TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        emoji TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(comment_id, actor_type, actor_id, emoji),
-        FOREIGN KEY(comment_id) REFERENCES multiremi_issue_comments(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_comment_reactions_comment ON multiremi_comment_reactions(comment_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_attachments (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT,
-        comment_id TEXT,
-        chat_session_id TEXT,
-        chat_message_id TEXT,
-        uploader_type TEXT NOT NULL DEFAULT 'member',
-        uploader_id TEXT NOT NULL,
-        filename TEXT NOT NULL,
-        url TEXT NOT NULL,
-        content_type TEXT NOT NULL,
-        size_bytes INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(comment_id) REFERENCES multiremi_issue_comments(id) ON DELETE CASCADE,
-        FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
-        FOREIGN KEY(chat_message_id) REFERENCES multiremi_chat_messages(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_issue ON multiremi_attachments(issue_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_comment ON multiremi_attachments(comment_id);
-      -- chat_session_id / chat_message_id indexes are created after addColumnIfMissing (below);
-      -- those columns are added by upgrade migrations on pre-existing DBs, so indexing them
-      -- here would crash an old DB whose attachments table predates the columns.
-      CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_workspace ON multiremi_attachments(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_projects (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        icon TEXT,
-        status TEXT NOT NULL DEFAULT 'planned',
-        priority TEXT NOT NULL DEFAULT 'none',
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        lead_type TEXT,
-        lead_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_projects_workspace ON multiremi_projects(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_project_resources (
-        id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        resource_type TEXT NOT NULL,
-        resource_ref TEXT NOT NULL DEFAULT '{}',
-        label TEXT,
-        position INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        created_by TEXT,
-        UNIQUE(project_id, resource_type, resource_ref),
-        FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_project_resources_project ON multiremi_project_resources(project_id, position);
-
-      CREATE TABLE IF NOT EXISTS multiremi_pinned_items (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        user_id TEXT NOT NULL DEFAULT 'local',
-        item_type TEXT NOT NULL,
-        item_id TEXT NOT NULL,
-        position REAL NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        UNIQUE(workspace_id, user_id, item_type, item_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_pinned_items_user_ws
-        ON multiremi_pinned_items(workspace_id, user_id, position, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_squads (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        instructions TEXT NOT NULL DEFAULT '',
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        leader_id TEXT,
-        creator_id TEXT,
-        archived_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_squads_workspace ON multiremi_squads(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_squad_members (
-        id TEXT PRIMARY KEY,
-        squad_id TEXT NOT NULL,
-        member_type TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'member',
-        created_at TEXT NOT NULL,
-        UNIQUE(squad_id, member_type, member_id),
-        FOREIGN KEY(squad_id) REFERENCES multiremi_squads(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_squad_members_squad ON multiremi_squad_members(squad_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_autopilots (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        project_id TEXT,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        assignee_type TEXT NOT NULL DEFAULT 'agent',
-        assignee_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        execution_mode TEXT NOT NULL DEFAULT 'create_issue',
-        issue_title_template TEXT,
-        trigger_kind TEXT NOT NULL DEFAULT 'manual',
-        trigger_label TEXT,
-        cron_expression TEXT,
-        created_by_type TEXT NOT NULL DEFAULT 'member',
-        created_by_id TEXT NOT NULL DEFAULT 'local',
-        last_run_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(project_id) REFERENCES multiremi_projects(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilots_workspace ON multiremi_autopilots(workspace_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilots_assignee ON multiremi_autopilots(assignee_type, assignee_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_autopilot_triggers (
-        id TEXT PRIMARY KEY,
-        autopilot_id TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'webhook',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        cron_expression TEXT,
-        timezone TEXT,
-        next_run_at TEXT,
-        webhook_token TEXT UNIQUE,
-        webhook_url TEXT,
-        provider TEXT,
-        label TEXT,
-        event_filters TEXT,
-        signing_secret_hash TEXT,
-        signing_secret_hint TEXT,
-        last_fired_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(autopilot_id) REFERENCES multiremi_autopilots(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_triggers_autopilot
-        ON multiremi_autopilot_triggers(autopilot_id, enabled, kind);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_triggers_token
-        ON multiremi_autopilot_triggers(webhook_token);
-
-      CREATE TABLE IF NOT EXISTS multiremi_autopilot_runs (
-        id TEXT PRIMARY KEY,
-        autopilot_id TEXT NOT NULL,
-        source TEXT NOT NULL,
-        status TEXT NOT NULL,
-        issue_id TEXT,
-        task_id TEXT,
-        triggered_at TEXT NOT NULL,
-        completed_at TEXT,
-        failure_reason TEXT,
-        payload TEXT,
-        result TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(autopilot_id) REFERENCES multiremi_autopilots(id) ON DELETE CASCADE,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id),
-        FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_autopilot_runs_autopilot ON multiremi_autopilot_runs(autopilot_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_webhook_deliveries (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        autopilot_id TEXT NOT NULL,
-        trigger_id TEXT NOT NULL,
-        provider TEXT NOT NULL DEFAULT 'generic',
-        event TEXT NOT NULL DEFAULT 'webhook.received',
-        dedupe_key TEXT,
-        dedupe_source TEXT,
-        signature_status TEXT NOT NULL DEFAULT 'not_required',
-        status TEXT NOT NULL DEFAULT 'queued',
-        attempt_count INTEGER NOT NULL DEFAULT 1,
-        selected_headers TEXT NOT NULL DEFAULT '{}',
-        content_type TEXT,
-        raw_body TEXT,
-        response_status INTEGER,
-        response_body TEXT,
-        autopilot_run_id TEXT,
-        replayed_from_delivery_id TEXT,
-        error TEXT,
-        received_at TEXT NOT NULL,
-        last_attempt_at TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(autopilot_id) REFERENCES multiremi_autopilots(id) ON DELETE CASCADE,
-        FOREIGN KEY(autopilot_run_id) REFERENCES multiremi_autopilot_runs(id) ON DELETE SET NULL,
-        FOREIGN KEY(replayed_from_delivery_id) REFERENCES multiremi_webhook_deliveries(id) ON DELETE SET NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_webhook_deliveries_autopilot
-        ON multiremi_webhook_deliveries(autopilot_id, created_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_webhook_deliveries_run
-        ON multiremi_webhook_deliveries(autopilot_run_id);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_webhook_deliveries_dedupe
-        ON multiremi_webhook_deliveries(trigger_id, dedupe_key)
-        WHERE dedupe_key IS NOT NULL AND status NOT IN ('rejected', 'failed');
-
-      CREATE TABLE IF NOT EXISTS multiremi_chat_sessions (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        creator_id TEXT,
-        agent_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        session_id TEXT,
-        work_dir TEXT,
-        latest_task_id TEXT,
-        unread_since TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_workspace ON multiremi_chat_sessions(workspace_id, updated_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_chat_sessions_agent ON multiremi_chat_sessions(agent_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_chat_messages (
-        id TEXT PRIMARY KEY,
-        chat_session_id TEXT NOT NULL,
-        task_id TEXT,
-        role TEXT NOT NULL,
-        body TEXT NOT NULL,
-        failure_reason TEXT,
-        elapsed_ms INTEGER,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE CASCADE,
-        FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE SET NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_chat_messages_session ON multiremi_chat_messages(chat_session_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS multiremi_tasks (
-        id TEXT PRIMARY KEY,
-        agent_id TEXT NOT NULL,
-        runtime_id TEXT,
-        issue_id TEXT,
-        chat_session_id TEXT,
-        trigger_comment_id TEXT,
-        trigger_summary TEXT,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        status TEXT NOT NULL DEFAULT 'queued',
-        priority INTEGER NOT NULL DEFAULT 0,
-        prompt TEXT NOT NULL,
-        attempt INTEGER NOT NULL DEFAULT 1,
-        max_attempts INTEGER NOT NULL DEFAULT 3,
-        parent_task_id TEXT,
-        result TEXT,
-        error TEXT,
-        failure_reason TEXT,
-        branch_name TEXT,
-        session_id TEXT,
-        work_dir TEXT,
-        progress_summary TEXT,
-        progress_step INTEGER,
-        progress_total INTEGER,
-        wait_reason TEXT,
-        usage TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        dispatched_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        failed_at TEXT,
-        cancelled_at TEXT,
-        FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id),
-        FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE SET NULL,
-        FOREIGN KEY(trigger_comment_id) REFERENCES multiremi_issue_comments(id) ON DELETE SET NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_status ON multiremi_tasks(status);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_runtime ON multiremi_tasks(runtime_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_issue ON multiremi_tasks(issue_id);
-      -- trigger_comment_id index is created after addColumnIfMissing (below); the column is
-      -- added by an upgrade migration on pre-existing DBs.
-      CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace ON multiremi_tasks(workspace_id);
-
-      CREATE TABLE IF NOT EXISTS multiremi_task_messages (
-        id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        tool TEXT,
-        content TEXT,
-        input TEXT,
-        output TEXT,
-        created_at TEXT NOT NULL,
-        UNIQUE(task_id, seq),
-        FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_multiremi_messages_task ON multiremi_task_messages(task_id, seq);
-    `);
-    this.db.exec(`
-      DELETE FROM multiremi_task_messages
-      WHERE rowid NOT IN (
-        SELECT MAX(rowid)
-        FROM multiremi_task_messages
-        GROUP BY task_id, seq
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_messages_task_seq_unique
-        ON multiremi_task_messages(task_id, seq);
-    `);
-    this.addColumnIfMissing("multiremi_agents", "workspace_id TEXT NOT NULL DEFAULT 'local'");
-    this.addColumnIfMissing("multiremi_agents", "description TEXT NOT NULL DEFAULT ''");
-    this.addColumnIfMissing("multiremi_agents", "avatar_url TEXT");
-    this.addColumnIfMissing("multiremi_agents", "owner_id TEXT NOT NULL DEFAULT 'local'");
-    this.addColumnIfMissing("multiremi_agents", "visibility TEXT NOT NULL DEFAULT 'private'");
-    this.addColumnIfMissing("multiremi_agents", "archived_at TEXT");
-    this.addColumnIfMissing("multiremi_agents", "runtime_id TEXT");
-    this.addColumnIfMissing("multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
-    this.addColumnIfMissing("multiremi_runtimes", "daemon_id TEXT");
-    this.addColumnIfMissing("multiremi_runtimes", "legacy_daemon_id TEXT");
-    this.addColumnIfMissing("multiremi_runtimes", "runtime_mode TEXT NOT NULL DEFAULT 'local'");
-    this.addColumnIfMissing("multiremi_runtimes", "device_info TEXT NOT NULL DEFAULT ''");
-    this.addColumnIfMissing("multiremi_runtimes", "metadata TEXT NOT NULL DEFAULT '{}'");
-    this.addColumnIfMissing("multiremi_runtimes", "owner_id TEXT");
-    this.addColumnIfMissing("multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
-    this.addColumnIfMissing("multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("multiremi_access_tokens", "daemon_id TEXT");
-    this.addColumnIfMissing("multiremi_access_tokens", "task_id TEXT");
-    this.addColumnIfMissing("multiremi_access_tokens", "agent_id TEXT");
-    this.addColumnIfMissing("multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
-    this.addColumnIfMissing("multiremi_issues", "assignee_type TEXT");
-    this.addColumnIfMissing("multiremi_issues", "assignee_id TEXT");
-    this.addColumnIfMissing("multiremi_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
-    this.addColumnIfMissing("multiremi_issues", "issue_number INTEGER NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("multiremi_issues", "issue_key TEXT");
-    this.addColumnIfMissing("multiremi_issues", "priority TEXT NOT NULL DEFAULT 'none'");
-    this.addColumnIfMissing("multiremi_issues", "parent_issue_id TEXT");
-    this.addColumnIfMissing("multiremi_issues", "position REAL NOT NULL DEFAULT 0");
-    this.addColumnIfMissing("multiremi_issues", "start_date TEXT");
-    this.addColumnIfMissing("multiremi_issues", "due_date TEXT");
-    this.addColumnIfMissing("multiremi_issues", "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
-    this.addColumnIfMissing("multiremi_issues", "context_refs TEXT NOT NULL DEFAULT '[]'");
-    this.addColumnIfMissing("multiremi_issue_comments", "parent_id TEXT");
-    this.addColumnIfMissing("multiremi_issue_comments", "type TEXT NOT NULL DEFAULT 'comment'");
-    this.addColumnIfMissing("multiremi_issue_comments", "resolved_at TEXT");
-    this.addColumnIfMissing("multiremi_issue_comments", "resolved_by_type TEXT");
-    this.addColumnIfMissing("multiremi_issue_comments", "resolved_by_id TEXT");
-    this.addColumnIfMissing("multiremi_attachments", "chat_session_id TEXT");
-    this.addColumnIfMissing("multiremi_attachments", "chat_message_id TEXT");
-    this.ensureIssueSubscriberTypedSchema();
-    this.addColumnIfMissing("multiremi_chat_sessions", "creator_id TEXT");
-    this.addColumnIfMissing("multiremi_chat_sessions", "unread_since TEXT");
-    this.addColumnIfMissing("multiremi_chat_messages", "failure_reason TEXT");
-    this.addColumnIfMissing("multiremi_chat_messages", "elapsed_ms INTEGER");
-    this.addColumnIfMissing("multiremi_tasks", "chat_session_id TEXT");
-    this.addColumnIfMissing("multiremi_tasks", "wait_reason TEXT");
-    this.addColumnIfMissing("multiremi_tasks", "failure_reason TEXT");
-    this.addColumnIfMissing("multiremi_tasks", "attempt INTEGER NOT NULL DEFAULT 1");
-    this.addColumnIfMissing("multiremi_tasks", "max_attempts INTEGER NOT NULL DEFAULT 3");
-    this.addColumnIfMissing("multiremi_tasks", "parent_task_id TEXT");
-    this.addColumnIfMissing("multiremi_tasks", "trigger_comment_id TEXT");
-    this.addColumnIfMissing("multiremi_tasks", "trigger_summary TEXT");
-    this.addColumnIfMissing("multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
-    this.addColumnIfMissing("multiremi_inbox_items", "recipient_id TEXT");
-    this.addColumnIfMissing("multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
-    this.addColumnIfMissing("multiremi_inbox_items", "details TEXT");
-    this.ensureInboxGenericSchema();
-    this.addColumnIfMissing("multiremi_autopilots", "created_by_type TEXT NOT NULL DEFAULT 'member'");
-    this.addColumnIfMissing("multiremi_autopilots", "created_by_id TEXT NOT NULL DEFAULT 'local'");
-    this.addColumnIfMissing("multiremi_autopilot_triggers", "event_filters TEXT");
-    this.addColumnIfMissing("multiremi_autopilot_triggers", "provider TEXT");
-    this.addColumnIfMissing("multiremi_autopilot_triggers", "signing_secret_hint TEXT");
-    this.addColumnIfMissing("multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
-    // Multi-user auth: stable external identity (Feishu open_id) on users, and an
-    // explicit user↔member link so membership no longer relies solely on the
-    // legacy `mem_<ws>_<userId>` id convention.
-    this.addColumnIfMissing("multiremi_users", "external_id TEXT");
-    this.addColumnIfMissing("multiremi_workspace_members", "user_id TEXT");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_users_external_id ON multiremi_users(external_id)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
-    this.backfillMemberUserIds();
-    this.backfillOwnerExternalId();
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_parent ON multiremi_issue_comments(parent_id, created_at)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_session ON multiremi_attachments(chat_session_id)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)");
-    this.db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)");
-    this.db.run("UPDATE multiremi_issues SET status = 'todo' WHERE status = 'open'");
-    this.backfillIssueKeys();
+    runMigrations(this.db);
   }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
@@ -1905,15 +1014,24 @@ export class MultiremiStore {
       updates.push("email = ?");
       params.push(identity.email);
     }
-    if (identity.name && user.name !== identity.name) {
+    const newName = identity.name && user.name !== identity.name ? identity.name : null;
+    if (newName) {
       updates.push("name = ?");
-      params.push(identity.name);
+      params.push(newName);
     }
     if (!updates.length) return user;
     updates.push("updated_at = ?");
     params.push(nowIso());
     params.push(user.id);
     this.db.run(`UPDATE multiremi_users SET ${updates.join(", ")} WHERE id = ?`, params);
+    // Member rows denormalize the display name; sync them so pickers/member
+    // lists don't keep showing a stale seed snapshot (e.g. "Local User").
+    if (newName) {
+      this.db.run(
+        "UPDATE multiremi_workspace_members SET name = ?, updated_at = ? WHERE user_id = ? AND name <> ?",
+        [newName, nowIso(), user.id, newName],
+      );
+    }
     return this.getUser(user.id)!;
   }
 
@@ -2011,7 +1129,7 @@ export class MultiremiStore {
     return row ? toWorkspace(row) : null;
   }
 
-  createWorkspace(input: CreateWorkspaceInput): MultiremiWorkspace {
+  createWorkspace(input: CreateWorkspaceInput, actingUserId?: string | null): MultiremiWorkspace {
     const name = String(input.name ?? "").trim();
     const slug = normalizeWorkspaceSlug(input.slug ?? slugifyWorkspaceName(name));
     if (!name || !slug) throw new Error("name and slug are required");
@@ -2035,7 +1153,9 @@ export class MultiremiStore {
         now,
       ],
     );
-    const user = this.getCurrentUser();
+    // The authenticated creator (not the legacy "local" user) becomes the owner,
+    // otherwise a new user could create a workspace they cannot access.
+    const user = this.resolveActingUser(actingUserId);
     const memberId = `mem_${id}_${user.id}`;
     if (!this.getWorkspaceMember(memberId)) {
       this.createWorkspaceMember({
@@ -2047,7 +1167,7 @@ export class MultiremiStore {
         role: "owner",
       });
     }
-    this.markCurrentUserOnboarded();
+    this.db.run("UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?", [now, now, user.id]);
     return this.getWorkspace(id)!;
   }
 
@@ -2296,48 +1416,19 @@ export class MultiremiStore {
   }
 
   createFeedback(input: CreateFeedbackInput): MultiremiFeedback {
-    const message = String(input.message ?? "").trim();
-    if (!message) throw new Error("message is required");
-    if (message.length > FEEDBACK_MAX_MESSAGE_LENGTH) throw new Error("message too long");
-    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
-    const memberId = cleanOptionalString(input.memberId ?? input.member_id);
-    const userId = cleanOptionalString(input.userId ?? input.user_id) ?? memberId ?? "local";
-    const recentCount = this.countRecentFeedbackByUser(userId);
-    if (recentCount >= FEEDBACK_HOURLY_RATE_LIMIT) {
-      throw new Error("too many feedback submissions, please try again later");
-    }
-    const metadata = normalizeFeedbackMetadata({
-      ...(input.metadata ?? {}),
-      ...(input.url != null ? { url: input.url } : {}),
-    });
-    const id = input.id ?? createId("fdb");
-    const now = nowIso();
-    this.db.run(
-      `INSERT INTO multiremi_feedback (
-        id, workspace_id, user_id, member_id, message, metadata, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, workspaceId, userId, memberId, message, toJson(metadata), now],
-    );
-    return this.getFeedback(id)!;
+    return this.feedback.createFeedback(input);
   }
 
   getFeedback(id: string): MultiremiFeedback | null {
-    const row = this.db.query("SELECT * FROM multiremi_feedback WHERE id = ?").get(id) as Row | null;
-    return row ? toFeedback(row) : null;
+    return this.feedback.getFeedback(id);
   }
 
   listFeedback(workspaceId?: string | null): MultiremiFeedback[] {
-    const rows = workspaceId
-      ? this.db.query("SELECT * FROM multiremi_feedback WHERE workspace_id = ? ORDER BY created_at DESC").all(workspaceId) as Row[]
-      : this.db.query("SELECT * FROM multiremi_feedback ORDER BY created_at DESC").all() as Row[];
-    return rows.map(toFeedback);
+    return this.feedback.listFeedback(workspaceId);
   }
 
   countRecentFeedbackByUser(userId: string, since = new Date(Date.now() - 60 * 60 * 1000).toISOString()): number {
-    const row = this.db.query(
-      "SELECT COUNT(*) AS count FROM multiremi_feedback WHERE user_id = ? AND created_at >= ?",
-    ).get(userId, since) as Row | null;
-    return Number(row?.count ?? 0);
+    return this.feedback.countRecentFeedbackByUser(userId, since);
   }
 
   getGitHubSettings(workspaceId = "local"): MultiremiGitHubSettings {
@@ -2507,122 +1598,41 @@ export class MultiremiStore {
   }
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {
-    const name = input.name?.trim();
-    if (!name) throw new Error("Token name is required");
-    const type = normalizeAccessTokenType(input.type);
-    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
-    const daemonId = type === "daemon" ? cleanOptionalString(input.daemonId ?? input.daemon_id) : null;
-    const taskId = type === "task" ? cleanOptionalString(input.taskId ?? input.task_id) : null;
-    const agentId = type === "task" ? cleanOptionalString(input.agentId ?? input.agent_id) : null;
-    if (type === "task" && (!taskId || !agentId)) throw new Error("task tokens require taskId and agentId");
-    const userId = cleanOptionalString(input.userId ?? input.user_id) ?? "local";
-    const token = generateAccessToken(type);
-    const hash = await hashAccessToken(token);
-    const id = input.id ?? createId(type === "daemon" ? "dtk" : type === "task" ? "atk" : "pat");
-    const now = nowIso();
-    const expiresAt = normalizeAccessTokenExpiry(input.expiresInDays ?? input.expires_in_days ?? null);
-    this.db.run(
-      `INSERT INTO multiremi_access_tokens (
-        id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, token_hash, token_prefix, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, workspaceId, daemonId, taskId, agentId, userId, name, type, hash, token.slice(0, 12), expiresAt, now],
-    );
-    return {
-      ...this.getAccessToken(id)!,
-      token,
-    };
+    return this.accessTokens.createAccessToken(input);
   }
 
   async createTaskAccessToken(
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,
   ): Promise<MultiremiCreatedAccessToken> {
-    return this.createAccessToken({
-      workspaceId: task.workspaceId,
-      taskId: task.id,
-      agentId: task.agentId,
-      userId,
-      name: `Task ${task.id}`,
-      type: "task",
-      expiresInDays: 1,
-    });
+    return this.accessTokens.createTaskAccessToken(task, userId);
   }
 
   listAccessTokens(workspaceId?: string | null): MultiremiAccessToken[] {
-    const rows = workspaceId
-      ? this.db.query("SELECT * FROM multiremi_access_tokens WHERE workspace_id = ? AND type != 'task' ORDER BY created_at DESC").all(workspaceId) as Row[]
-      : this.db.query("SELECT * FROM multiremi_access_tokens WHERE type != 'task' ORDER BY created_at DESC").all() as Row[];
-    return rows.map(toAccessToken);
+    return this.accessTokens.listAccessTokens(workspaceId);
   }
 
   getAccessToken(id: string): MultiremiAccessToken | null {
-    const row = this.db.query("SELECT * FROM multiremi_access_tokens WHERE id = ?").get(id) as Row | null;
-    return row ? toAccessToken(row) : null;
+    return this.accessTokens.getAccessToken(id);
   }
 
   revokeAccessToken(id: string): MultiremiAccessToken | null {
-    const current = this.getAccessToken(id);
-    if (!current) return null;
-    if (!current.revokedAt) {
-      this.db.run("UPDATE multiremi_access_tokens SET revoked_at = ? WHERE id = ?", [nowIso(), id]);
-    }
-    return this.getAccessToken(id);
+    return this.accessTokens.revokeAccessToken(id);
   }
 
   revokeTaskAccessTokens(taskId: string): number {
-    const result = this.db.run(
-      "UPDATE multiremi_access_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE type = 'task' AND task_id = ? AND revoked_at IS NULL",
-      [nowIso(), taskId],
-    );
-    return result.changes;
+    return this.accessTokens.revokeTaskAccessTokens(taskId);
   }
 
   async renewAccessTokenExpiry(
     id: string,
     options: { thresholdDays?: number; extensionDays?: number } = {},
   ): Promise<{ token: MultiremiAccessToken; renewed: boolean; rawToken?: string } | null> {
-    const nowMs = Date.now();
-    const thresholdDays = options.thresholdDays ?? 7;
-    const extensionDays = options.extensionDays ?? 90;
-    const now = new Date(nowMs).toISOString();
-    const renewThresholdAt = new Date(nowMs + thresholdDays * 24 * 60 * 60 * 1000).toISOString();
-    const newExpiresAt = new Date(nowMs + extensionDays * 24 * 60 * 60 * 1000).toISOString();
-    const current = this.getAccessToken(id);
-    if (!current || current.revokedAt) return null;
-    if (current.expiresAt && Date.parse(current.expiresAt) <= nowMs) return null;
-    if (!current.expiresAt || Date.parse(current.expiresAt) > Date.parse(renewThresholdAt)) {
-      return { token: current, renewed: false };
-    }
-    const rawToken = generateAccessToken(current.type);
-    const hash = await hashAccessToken(rawToken);
-    const result = this.db.run(
-      `UPDATE multiremi_access_tokens
-       SET token_hash = ?, token_prefix = ?, expires_at = ?
-       WHERE id = ?
-         AND revoked_at IS NULL
-         AND expires_at IS NOT NULL
-         AND expires_at > ?
-         AND expires_at <= ?`,
-      [hash, rawToken.slice(0, 12), newExpiresAt, id, now, renewThresholdAt],
-    );
-    const token = this.getAccessToken(id);
-    if (!token || token.revokedAt) return null;
-    if (token.expiresAt && Date.parse(token.expiresAt) <= nowMs) return null;
-    return { token, renewed: result.changes > 0, ...(result.changes > 0 ? { rawToken } : {}) };
+    return this.accessTokens.renewAccessTokenExpiry(id, options);
   }
 
   async verifyAccessToken(rawToken: string, allowedTypes?: MultiremiAccessTokenType[]): Promise<MultiremiAccessToken | null> {
-    const token = rawToken.trim();
-    if (!token) return null;
-    const hash = await hashAccessToken(token);
-    const row = this.db.query("SELECT * FROM multiremi_access_tokens WHERE token_hash = ?").get(hash) as Row | null;
-    if (!row) return null;
-    const accessToken = toAccessToken(row);
-    if (allowedTypes?.length && !allowedTypes.includes(accessToken.type)) return null;
-    if (accessToken.revokedAt) return null;
-    if (accessToken.expiresAt && Date.parse(accessToken.expiresAt) <= Date.now()) return null;
-    this.db.run("UPDATE multiremi_access_tokens SET last_used_at = ? WHERE id = ?", [nowIso(), accessToken.id]);
-    return this.getAccessToken(accessToken.id);
+    return this.accessTokens.verifyAccessToken(rawToken, allowedTypes);
   }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
@@ -3006,65 +2016,27 @@ export class MultiremiStore {
   }
 
   listCloudRuntimeNodes(options: { limit?: number; offset?: number; ownerId?: string | null } = {}): MultiremiCloudRuntimeNode[] {
-    const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 20)));
-    const offset = Math.max(0, Math.floor(options.offset ?? 0));
-    const rows = options.ownerId
-      ? this.db.query("SELECT * FROM multiremi_cloud_runtime_nodes WHERE owner_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?").all(options.ownerId, limit, offset) as Row[]
-      : this.db.query("SELECT * FROM multiremi_cloud_runtime_nodes ORDER BY created_at DESC LIMIT ? OFFSET ?").all(limit, offset) as Row[];
-    return rows.map(toCloudRuntimeNode);
+    return this.cloudNodes.listCloudRuntimeNodes(options);
   }
 
   createCloudRuntimeNode(input: CreateCloudRuntimeNodeInput, ownerId = "local"): MultiremiCloudRuntimeNode {
-    const instanceType = String(input.instanceType ?? input.instance_type ?? "").trim();
-    if (!instanceType) throw new Error("instance_type is required");
-    const id = createId("crn");
-    const now = nowIso();
-    const name = String(input.name ?? "").trim() || `local-${instanceType}`;
-    this.db.run(
-      `INSERT INTO multiremi_cloud_runtime_nodes (
-        id, owner_id, instance_id, region, instance_type, image_id, subnet_id,
-        name, status, tags, metadata, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?, ?)`,
-      [
-        id,
-        ownerId,
-        `local-${id}`,
-        String(input.region ?? "local").trim() || "local",
-        instanceType,
-        String(input.imageId ?? input.image_id ?? "").trim(),
-        String(input.subnetId ?? input.subnet_id ?? "").trim(),
-        name,
-        toJson(input.tags ?? {}),
-        toJson(input.metadata ?? { local: true }),
-        now,
-        now,
-      ],
-    );
-    return this.getCloudRuntimeNode(id)!;
+    return this.cloudNodes.createCloudRuntimeNode(input, ownerId);
   }
 
   getCloudRuntimeNode(id: string): MultiremiCloudRuntimeNode | null {
-    const row = this.db.query("SELECT * FROM multiremi_cloud_runtime_nodes WHERE id = ?").get(id) as Row | null;
-    return row ? toCloudRuntimeNode(row) : null;
+    return this.cloudNodes.getCloudRuntimeNode(id);
   }
 
   deleteCloudRuntimeNode(id: string): boolean {
-    const result = this.db.run("DELETE FROM multiremi_cloud_runtime_nodes WHERE id = ?", [id]);
-    return result.changes > 0;
+    return this.cloudNodes.deleteCloudRuntimeNode(id);
   }
 
   setCloudRuntimeNodeStatus(id: string, status: string): MultiremiCloudRuntimeNode | null {
-    const current = this.getCloudRuntimeNode(id);
-    if (!current) return null;
-    this.db.run("UPDATE multiremi_cloud_runtime_nodes SET status = ?, updated_at = ? WHERE id = ?", [status, nowIso(), id]);
-    return this.getCloudRuntimeNode(id);
+    return this.cloudNodes.setCloudRuntimeNodeStatus(id, status);
   }
 
   execCloudRuntimeNode(id: string, command: string): { node: MultiremiCloudRuntimeNode; exit_code: number; stdout: string; stderr: string } | null {
-    const node = this.getCloudRuntimeNode(id);
-    if (!node) return null;
-    const output = command.trim() ? `local cloud runtime node ${id}: ${command.trim()}` : `local cloud runtime node ${id}`;
-    return { node, exit_code: 0, stdout: output, stderr: "" };
+    return this.cloudNodes.execCloudRuntimeNode(id, command);
   }
 
   listRuntimeModels(runtimeId: string): MultiremiRuntimeModel[] {
@@ -3167,6 +2139,93 @@ export class MultiremiStore {
       );
     }
     return this.getRuntimeModelListRequest(runtimeId, requestId)!;
+  }
+
+  createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number; mode?: "scan" | "browse" } = {}): MultiremiRuntimeDirectoryScanRequest {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    const normalizedParams = normalizeRuntimeDirectoryScanParams(params);
+    const id = createId("rds");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_runtime_directory_scan_requests (
+        id, runtime_id, status, params, candidates, supported, created_at, updated_at
+      ) VALUES (?, ?, 'pending', ?, '[]', 1, ?, ?)`,
+      [id, runtimeId, toJson(normalizedParams), now, now],
+    );
+    return this.getRuntimeDirectoryScanRequest(runtimeId, id)!;
+  }
+
+  getRuntimeDirectoryScanRequest(runtimeId: string, requestId: string): MultiremiRuntimeDirectoryScanRequest | null {
+    this.expireRuntimeDirectoryScanRequests(runtimeId);
+    const row = this.db.query(
+      "SELECT * FROM multiremi_runtime_directory_scan_requests WHERE id = ? AND runtime_id = ?",
+    ).get(requestId, runtimeId) as Row | null;
+    return row ? toRuntimeDirectoryScanRequest(row) : null;
+  }
+
+  claimRuntimeDirectoryScanRequest(runtimeId: string): MultiremiRuntimeDirectoryScanRequest | null {
+    this.expireRuntimeDirectoryScanRequests(runtimeId);
+    const row = this.db.query(
+      `SELECT * FROM multiremi_runtime_directory_scan_requests
+       WHERE runtime_id = ? AND status = 'pending'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+    ).get(runtimeId) as Row | null;
+    if (!row) return null;
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multiremi_runtime_directory_scan_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
+      [now, now, String(row.id)],
+    );
+    return this.getRuntimeDirectoryScanRequest(runtimeId, String(row.id));
+  }
+
+  private expireRuntimeDirectoryScanRequests(runtimeId: string): void {
+    const now = nowIso();
+    const pendingCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS).toISOString();
+    const runningCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS).toISOString();
+    this.db.run(
+      `UPDATE multiremi_runtime_directory_scan_requests
+       SET status = 'timeout', error = 'daemon did not respond within 3 minutes; the runtime daemon may need updating', updated_at = ?
+       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
+      [now, runtimeId, pendingCutoff],
+    );
+    this.db.run(
+      `UPDATE multiremi_runtime_directory_scan_requests
+       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
+       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
+      [now, runtimeId, runningCutoff],
+    );
+  }
+
+  reportRuntimeDirectoryScanResult(runtimeId: string, requestId: string, input: ReportRuntimeDirectoryScanInput): MultiremiRuntimeDirectoryScanRequest {
+    const current = this.getRuntimeDirectoryScanRequest(runtimeId, requestId);
+    if (!current) throw new Error("request not found");
+    if (isTerminalRuntimeRequestStatus(current.status)) return current;
+    const status = normalizeRuntimeDirectoryScanStatus(input.status);
+    const now = nowIso();
+    if (status === "completed") {
+      // Browse mode echoes the expanded absolute root back; merge it into the
+      // request params so the folder-picker can render/ascend on empty listings.
+      const resolvedRoot = typeof input.resolvedRoot === "string" && input.resolvedRoot.trim() ? input.resolvedRoot.trim() : null;
+      const params = resolvedRoot ? { ...current.params, resolvedRoot } : current.params;
+      this.db.run(
+        `UPDATE multiremi_runtime_directory_scan_requests
+         SET status = 'completed', params = ?, candidates = ?, supported = ?, error = NULL, updated_at = ?
+         WHERE id = ?`,
+        [toJson(params), toJson(normalizeRuntimeDirectoryCandidates(input.candidates ?? [])), input.supported === false ? 0 : 1, now, requestId],
+      );
+    } else {
+      this.db.run(
+        `UPDATE multiremi_runtime_directory_scan_requests
+         SET status = 'failed', error = ?, updated_at = ?
+         WHERE id = ?`,
+        [input.error ?? "runtime directory scan failed", now, requestId],
+      );
+    }
+    return this.getRuntimeDirectoryScanRequest(runtimeId, requestId)!;
   }
 
   createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
@@ -3646,7 +2705,7 @@ export class MultiremiStore {
     return [...buckets.values()].sort((left, right) => left.date.localeCompare(right.date));
   }
 
-  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean } = {}): MultiremiDaemonHeartbeatAck {
+  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean; supportsDirectoryScan?: boolean } = {}): MultiremiDaemonHeartbeatAck {
     const runtime = this.getRuntime(runtimeId);
     if (!runtime) {
       return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
@@ -3674,6 +2733,17 @@ export class MultiremiStore {
     const pendingLocalSkills = this.claimRuntimeLocalSkillListRequest(runtimeId);
     if (pendingLocalSkills) {
       ack.pending_local_skills = { id: pendingLocalSkills.id };
+    }
+    if (options.supportsDirectoryScan) {
+      const pendingDirectoryScan = this.claimRuntimeDirectoryScanRequest(runtimeId);
+      if (pendingDirectoryScan) {
+        ack.pending_directory_scan = {
+          id: pendingDirectoryScan.id,
+          root: pendingDirectoryScan.params.root,
+          max_depth: pendingDirectoryScan.params.maxDepth,
+          mode: pendingDirectoryScan.params.mode,
+        };
+      }
     }
     const importLimit = options.supportsBatchImport ? 10 : 1;
     const pendingImports = this.claimRuntimeLocalSkillImportRequests(runtimeId, importLimit);
@@ -3825,13 +2895,28 @@ export class MultiremiStore {
   }
 
   listIssues(input: ListIssuesInput = {}): MultiremiIssue[] {
-    const rows = this.db.query("SELECT * FROM multiremi_issues ORDER BY updated_at DESC").all() as Row[];
+    const { where, params } = buildIssueListWhere(input);
     const offset = normalizeListOffset(input.offset);
     const limit = input.limit === undefined ? Number.POSITIVE_INFINITY : normalizeListLimit(input.limit);
-    return rows
-      .map((row) => this.hydrateIssue(toIssue(row)))
+    // Metadata is a JSON column filtered in JS; when it (or an unbounded limit) is present we can't
+    // safely push LIMIT/OFFSET into SQL, so we narrow the rows in SQL and paginate afterward.
+    const hasMetadata = Boolean(input.metadata) && Object.keys(input.metadata!).length > 0;
+
+    if (!hasMetadata && Number.isFinite(limit)) {
+      const rows = this.db
+        .query(`SELECT * FROM multiremi_issues ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+        .all(...params, limit, offset) as Row[];
+      return this.hydrateIssues(rows.map((row) => toIssue(row)));
+    }
+
+    const rows = this.db
+      .query(`SELECT * FROM multiremi_issues ${where} ORDER BY updated_at DESC`)
+      .all(...params) as Row[];
+    const issues = rows
+      .map((row) => toIssue(row))
       .filter((issue) => issueMatchesListFilter(issue, input))
       .slice(offset, offset + limit);
+    return this.hydrateIssues(issues);
   }
 
   listGroupedIssues(input: ListIssuesInput = {}): { groups: MultiremiIssueAssigneeGroup[] } {
@@ -5515,6 +4600,7 @@ export class MultiremiStore {
     const rawRef = input.resourceRef ?? input.resource_ref ?? {};
     const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, resourceType, resourceRef, null, "create");
+    if (resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, project.workspaceId);
     const id = input.id ?? createId("res");
     const now = nowIso();
     const position = normalizeProjectResourcePosition(input.position, this.countProjectResources(projectId));
@@ -5551,6 +4637,7 @@ export class MultiremiStore {
     const rawRef = hasRef ? input.resourceRef ?? input.resource_ref ?? {} : existing.resourceRef;
     const resourceRef = normalizeProjectResourceRef(existing.resourceType, rawRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, existing.resourceType, resourceRef, resourceId, "update");
+    if (existing.resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, existing.workspaceId);
     const label = hasAnyField(input, "label") ? cleanProjectResourceLabel(input.label) : existing.label;
     const position = hasAnyField(input, "position")
       ? normalizeProjectResourcePosition(input.position, existing.position)
@@ -6988,9 +6075,30 @@ export class MultiremiStore {
   }
 
   private resolveTaskRepos(workspaceId: string, projectResources: MultiremiProjectResource[]): MultiremiRepoData[] {
-    const projectRepos = normalizeRepos(projectResources
-      .filter((resource) => resource.resourceType === "github_repo")
-      .map((resource) => resource.resourceRef));
+    const ownProjectId = projectResources[0]?.projectId ?? null;
+    const refs: Record<string, unknown>[] = [];
+    const visited = new Set<string>();
+    if (ownProjectId) visited.add(ownProjectId);
+    // Own github_repo refs plus those of referenced projects, walked
+    // recursively. The visited set is the real cycle defense (write-time
+    // validation has a TOCTOU gap); dangling targets are silently skipped and
+    // referenced projects' local_directory resources are never pulled.
+    const collect = (resources: MultiremiProjectResource[], depth: number): void => {
+      for (const resource of resources) {
+        if (resource.resourceType === "github_repo") {
+          refs.push(resource.resourceRef);
+        } else if (resource.resourceType === "project_ref") {
+          if (depth >= PROJECT_REF_MAX_DEPTH) continue;
+          const targetId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+          if (!targetId || visited.has(targetId)) continue;
+          visited.add(targetId);
+          if (!this.getProject(targetId)) continue;
+          collect(this.listProjectResources(targetId), depth + 1);
+        }
+      }
+    };
+    collect(projectResources, 0);
+    const projectRepos = normalizeRepos(refs);
     if (projectRepos.length) return projectRepos;
     return normalizeRepos(this.getWorkspace(workspaceId)?.repos ?? []);
   }
@@ -7696,6 +6804,32 @@ export class MultiremiStore {
     };
   }
 
+  private hydrateIssues(issues: MultiremiIssue[]): MultiremiIssue[] {
+    if (issues.length === 0) return issues;
+    const labelsByIssue = this.labelsForIssues(issues.map((issue) => issue.id));
+    return issues.map((issue) => ({ ...issue, labels: labelsByIssue.get(issue.id) ?? [] }));
+  }
+
+  private labelsForIssues(issueIds: string[]): Map<string, MultiremiLabel[]> {
+    const result = new Map<string, MultiremiLabel[]>();
+    if (issueIds.length === 0) return result;
+    const placeholders = issueIds.map(() => "?").join(", ");
+    const rows = this.db.query(
+      `SELECT il.issue_id AS __issue_id, l.*
+       FROM multiremi_issue_labels l
+       JOIN multiremi_issue_to_labels il ON il.label_id = l.id
+       WHERE il.issue_id IN (${placeholders})
+       ORDER BY lower(l.name) ASC`,
+    ).all(...issueIds) as Row[];
+    for (const row of rows) {
+      const issueId = String(row.__issue_id);
+      const list = result.get(issueId) ?? [];
+      list.push(toLabel(row));
+      result.set(issueId, list);
+    }
+    return result;
+  }
+
   private hydrateRuntime(runtime: MultiremiRuntime): MultiremiRuntime {
     const stats = this.runtimeUsageSummary(runtime.id);
     return {
@@ -8108,116 +7242,6 @@ export class MultiremiStore {
     return tasks.map((task) => ({ ...task, autopilotRunId: runByTask.get(task.id) ?? task.autopilotRunId ?? null }));
   }
 
-  private addColumnIfMissing(table: string, definition: string): void {
-    try {
-      this.db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
-    } catch (err) {
-      if (!String((err as Error).message ?? err).toLowerCase().includes("duplicate column")) throw err;
-    }
-  }
-
-  private ensureIssueSubscriberTypedSchema(): void {
-    const columns = this.db.query("PRAGMA table_info(multiremi_issue_subscribers)").all() as Array<{ name: string }>;
-    const table = this.db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'multiremi_issue_subscribers'")
-      .get() as { sql?: string } | null;
-    const names = new Set(columns.map((column) => column.name));
-    const hasTypedColumns = names.has("user_type") && names.has("user_id");
-    const hasLegacyUnique = /\bUNIQUE\s*\(\s*issue_id\s*,\s*member_id\s*\)/i.test(table?.sql ?? "");
-
-    if (hasTypedColumns && !hasLegacyUnique) {
-      this.db.run("UPDATE multiremi_issue_subscribers SET user_type = 'member' WHERE user_type IS NULL OR user_type = ''");
-      this.db.run("UPDATE multiremi_issue_subscribers SET user_id = member_id WHERE user_id IS NULL OR user_id = ''");
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_issue ON multiremi_issue_subscribers(issue_id);
-        CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_member ON multiremi_issue_subscribers(member_id);
-        CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_user ON multiremi_issue_subscribers(user_type, user_id);
-      `);
-      return;
-    }
-
-    this.db.exec(`
-      ALTER TABLE multiremi_issue_subscribers RENAME TO multiremi_issue_subscribers_legacy;
-      DROP INDEX IF EXISTS idx_multiremi_issue_subscribers_issue;
-      DROP INDEX IF EXISTS idx_multiremi_issue_subscribers_member;
-      DROP INDEX IF EXISTS idx_multiremi_issue_subscribers_user;
-      CREATE TABLE multiremi_issue_subscribers (
-        id TEXT PRIMARY KEY,
-        issue_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        user_type TEXT NOT NULL DEFAULT 'member',
-        user_id TEXT NOT NULL,
-        reason TEXT NOT NULL DEFAULT 'manual',
-        created_at TEXT NOT NULL,
-        UNIQUE(issue_id, user_type, user_id),
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
-      );
-      INSERT INTO multiremi_issue_subscribers (id, issue_id, member_id, user_type, user_id, reason, created_at)
-      SELECT id, issue_id, member_id, 'member', member_id, reason, created_at
-      FROM multiremi_issue_subscribers_legacy;
-      DROP TABLE multiremi_issue_subscribers_legacy;
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_issue ON multiremi_issue_subscribers(issue_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_member ON multiremi_issue_subscribers(member_id);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_issue_subscribers_user ON multiremi_issue_subscribers(user_type, user_id);
-    `);
-  }
-
-  private ensureInboxGenericSchema(): void {
-    const columns = this.db.query("PRAGMA table_info(multiremi_inbox_items)").all() as Array<{ name: string; notnull: number }>;
-    const issueColumn = columns.find((column) => column.name === "issue_id");
-    if (!issueColumn || Number(issueColumn.notnull ?? 0) === 0) {
-      this.db.run("UPDATE multiremi_inbox_items SET recipient_type = COALESCE(NULLIF(recipient_type, ''), 'member')");
-      this.db.run("UPDATE multiremi_inbox_items SET recipient_id = COALESCE(NULLIF(recipient_id, ''), member_id)");
-      this.db.run("UPDATE multiremi_inbox_items SET severity = COALESCE(NULLIF(severity, ''), 'info')");
-      this.db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_recipient
-          ON multiremi_inbox_items(workspace_id, recipient_type, recipient_id, archived, read, created_at);
-      `);
-      return;
-    }
-
-    this.db.exec(`
-      ALTER TABLE multiremi_inbox_items RENAME TO multiremi_inbox_items_legacy;
-      DROP INDEX IF EXISTS idx_multiremi_inbox_member;
-      DROP INDEX IF EXISTS idx_multiremi_inbox_recipient;
-      CREATE TABLE multiremi_inbox_items (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL DEFAULT 'local',
-        issue_id TEXT,
-        member_id TEXT NOT NULL,
-        recipient_type TEXT NOT NULL DEFAULT 'member',
-        recipient_id TEXT,
-        severity TEXT NOT NULL DEFAULT 'info',
-        actor_type TEXT NOT NULL DEFAULT 'system',
-        actor_id TEXT,
-        type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        body TEXT,
-        details TEXT,
-        read INTEGER NOT NULL DEFAULT 0,
-        archived INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
-        FOREIGN KEY(member_id) REFERENCES multiremi_workspace_members(id) ON DELETE CASCADE
-      );
-      INSERT INTO multiremi_inbox_items (
-        id, workspace_id, issue_id, member_id, recipient_type, recipient_id, severity,
-        actor_type, actor_id, type, title, body, details, read, archived, created_at
-      )
-      SELECT
-        id, workspace_id, issue_id, member_id,
-        COALESCE(NULLIF(recipient_type, ''), 'member'),
-        COALESCE(NULLIF(recipient_id, ''), member_id),
-        COALESCE(NULLIF(severity, ''), 'info'),
-        actor_type, actor_id, type, title, body, details, read, archived, created_at
-      FROM multiremi_inbox_items_legacy;
-      DROP TABLE multiremi_inbox_items_legacy;
-      CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_member
-        ON multiremi_inbox_items(member_id, archived, read, created_at);
-      CREATE INDEX IF NOT EXISTS idx_multiremi_inbox_recipient
-        ON multiremi_inbox_items(workspace_id, recipient_type, recipient_id, archived, read, created_at);
-    `);
-  }
-
   private countProjectResources(projectId: string): number {
     const row = this.db.query("SELECT COUNT(*) AS count FROM multiremi_project_resources WHERE project_id = ?")
       .get(projectId) as { count: number } | null;
@@ -8245,57 +7269,40 @@ export class MultiremiStore {
     }
   }
 
+  private assertValidProjectRef(owningProjectId: string, resourceRef: Record<string, unknown>, workspaceId: string): void {
+    const targetId = String(resourceRef.projectId ?? resourceRef.project_id ?? "").trim();
+    if (!targetId) throw new Error("project_ref project_id is required");
+    if (targetId === owningProjectId) throw new Error("project_ref cannot reference its own project");
+    const target = this.getProject(targetId);
+    if (!target) throw new Error(`project_ref target project not found: ${targetId}`);
+    if (target.workspaceId !== workspaceId) throw new Error("project_ref target belongs to another workspace");
+    // Walk the target's project_ref graph; reaching the owning project again
+    // means this edge would close a cycle. The visited set prunes shared
+    // subtrees so a DAG diamond is not mistaken for a cycle. Write-time
+    // rejection has a TOCTOU gap, so runtime resolution guards with its own
+    // visited set — this keeps the graph acyclic under normal use.
+    const visited = new Set<string>();
+    const walk = (projectId: string, depth: number): void => {
+      if (projectId === owningProjectId) throw new Error("project_ref would introduce a reference cycle");
+      if (depth > PROJECT_REF_MAX_DEPTH || visited.has(projectId)) return;
+      visited.add(projectId);
+      for (const resource of this.listProjectResources(projectId)) {
+        if (resource.resourceType !== "project_ref") continue;
+        const nextId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+        // Dangling targets are silently skipped (like resolveTaskRepos) so a
+        // hard-deleted referenced project can't break a valid new edge.
+        if (!nextId || !this.getProject(nextId)) continue;
+        walk(nextId, depth + 1);
+      }
+    };
+    walk(targetId, 1);
+  }
+
   private nextIssueNumber(workspaceId: string): number {
     const row = this.db.query(
       "SELECT COALESCE(MAX(issue_number), 0) + 1 AS next FROM multiremi_issues WHERE workspace_id = ?",
     ).get(workspaceId) as { next: number } | null;
     return Number(row?.next ?? 1);
-  }
-
-  private backfillIssueKeys(): void {
-    const rows = this.db.query(
-      "SELECT id, workspace_id FROM multiremi_issues WHERE issue_number = 0 OR issue_key IS NULL OR issue_key = '' ORDER BY created_at ASC",
-    ).all() as Array<{ id: string; workspace_id?: string }>;
-    for (const row of rows) {
-      const workspaceId = String(row.workspace_id ?? "local");
-      const number = this.nextIssueNumber(workspaceId);
-      this.db.run(
-        "UPDATE multiremi_issues SET issue_number = ?, issue_key = ? WHERE id = ?",
-        [number, formatIssueKey(number), row.id],
-      );
-    }
-  }
-
-  // Populate multiremi_workspace_members.user_id from the legacy `mem_<ws>_<userId>`
-  // id convention so pre-existing members (created before the user_id column) keep
-  // resolving to their user. The workspace_id column gives us the exact prefix to
-  // strip, so extraction is deterministic even when the user id contains `_`.
-  private backfillMemberUserIds(): void {
-    const rows = this.db.query(
-      "SELECT id, workspace_id FROM multiremi_workspace_members WHERE user_id IS NULL OR user_id = ''",
-    ).all() as Array<{ id: string; workspace_id?: string }>;
-    for (const row of rows) {
-      const workspaceId = String(row.workspace_id ?? "local");
-      const prefix = `mem_${workspaceId}_`;
-      const id = String(row.id);
-      if (!id.startsWith(prefix)) continue;
-      const userId = id.slice(prefix.length);
-      if (!userId) continue;
-      this.db.run("UPDATE multiremi_workspace_members SET user_id = ? WHERE id = ?", [userId, id]);
-    }
-  }
-
-  // Tag the seed `local` user with the deployment owner's stable Feishu open_id so
-  // that when they log in via SSO, getOrCreateUser matches this existing record
-  // (keeping their id="local" ownership + history) instead of minting a new user.
-  // Only ever touches the pre-existing local row; a fresh install has none.
-  private backfillOwnerExternalId(): void {
-    const ownerOpenId = (process.env.MULTIREMI_OWNER_OPEN_ID ?? DEFAULT_OWNER_OPEN_ID).trim();
-    if (!ownerOpenId) return;
-    this.db.run(
-      "UPDATE multiremi_users SET external_id = ? WHERE id = 'local' AND (external_id IS NULL OR external_id = '')",
-      [ownerOpenId],
-    );
   }
 
   private notifyTaskEnqueued(task: MultiremiTask): void {
@@ -8401,19 +7408,6 @@ export class MultiremiStore {
 }
 
 type Row = Record<string, unknown>;
-
-function toJson(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-function parseJson<T>(value: unknown, fallback: T): T {
-  if (typeof value !== "string" || value.length === 0) return fallback;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function parseJsonValue(value: string): unknown | undefined {
   try {
@@ -8853,10 +7847,6 @@ function mergeAgentSkills(inlineSkills: MultiremiSkill[], structuredSkills: Mult
     merged.push(skill);
   }
   return merged;
-}
-
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
 }
 
 function stringFieldOrCurrent(value: unknown, current: string | null): string | null {
@@ -9416,34 +8406,6 @@ function normalizeRuntimeModelThinking(value: MultiremiRuntimeModel["thinking"])
   };
 }
 
-function normalizeAccessTokenType(value: string | undefined): MultiremiAccessTokenType {
-  const type = String(value ?? "pat").trim().toLowerCase();
-  if (type === "pat" || type === "daemon" || type === "task") return type;
-  throw new Error("token type must be pat, daemon, or task");
-}
-
-function normalizeAccessTokenExpiry(days: number | null | undefined): string | null {
-  if (days == null) return null;
-  const value = Number(days);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return new Date(Date.now() + Math.floor(value) * 24 * 60 * 60 * 1000).toISOString();
-}
-
-function generateAccessToken(type: MultiremiAccessTokenType): string {
-  if (type === "task") {
-    const bytes = crypto.getRandomValues(new Uint8Array(20));
-    return `mat_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-  }
-  const prefix = type === "daemon" ? "mdt" : "mul";
-  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "")}`;
-}
-
-async function hashAccessToken(token: string): Promise<string> {
-  const bytes = new TextEncoder().encode(token);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): boolean {
   const workspaceId = input.workspaceId ?? input.workspace_id;
   if (workspaceId && issue.workspaceId !== workspaceId) return false;
@@ -9469,6 +8431,48 @@ function issueMatchesListFilter(issue: MultiremiIssue, input: ListIssuesInput): 
     }
   }
   return true;
+}
+
+// SQL equivalent of issueMatchesListFilter for every column-level filter (metadata, a JSON column,
+// stays in JS). Kept in lockstep with issueMatchesListFilter so callers can push filters + pagination
+// into SQL without changing results.
+function buildIssueListWhere(input: ListIssuesInput): { where: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  const inClause = (column: string, values: string[]) => {
+    clauses.push(`${column} IN (${values.map(() => "?").join(", ")})`);
+    params.push(...values);
+  };
+
+  const workspaceId = input.workspaceId ?? input.workspace_id;
+  if (workspaceId) {
+    clauses.push("workspace_id = ?");
+    params.push(workspaceId);
+  }
+  const statuses = normalizeIssueStatusList(input.statuses ?? input.status);
+  if (statuses.length) inClause("status", statuses);
+  const priorities = normalizeStringList(input.priorities ?? input.priority);
+  if (priorities.length) inClause("priority", priorities);
+  const assigneeTypes = normalizeStringList(input.assigneeTypes ?? input.assignee_types);
+  if (assigneeTypes.length) inClause("assignee_type", assigneeTypes);
+  const assigneeId = input.assigneeId ?? input.assignee_id;
+  if (assigneeId) {
+    clauses.push("assignee_id = ?");
+    params.push(assigneeId);
+  }
+  const assigneeIds = normalizeStringList(input.assigneeIds ?? input.assignee_ids);
+  if (assigneeIds.length) inClause("assignee_id", assigneeIds);
+  if (input.includeNoAssignee) clauses.push("(assignee_id IS NULL OR assignee_id = '')");
+  const projectId = input.projectId ?? input.project_id;
+  if (projectId) {
+    clauses.push("project_id = ?");
+    params.push(projectId);
+  }
+  const projectIds = normalizeStringList(input.projectIds ?? input.project_ids);
+  if (projectIds.length) inClause("project_id", projectIds);
+  if (input.includeNoProject) clauses.push("(project_id IS NULL OR project_id = '')");
+
+  return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
 function normalizeStringList(value: string[] | string | undefined | null): string[] {
@@ -9732,6 +8736,7 @@ function extractSearchSnippet(value: string, query: string): string {
 function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
   if (!resourceType) throw new Error("resource_type is required");
   if (resourceType === "local_directory") return normalizeLocalDirectoryResourceRef(rawRef);
+  if (resourceType === "project_ref") return normalizeProjectRefResourceRef(rawRef);
   if (resourceType !== "github_repo") throw new Error(`unknown resource_type "${resourceType}"`);
   const url = String(rawRef.url ?? "").trim();
   if (!url) throw new Error("github_repo url is required");
@@ -9740,6 +8745,14 @@ function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string
   return defaultBranchHint
     ? { url, defaultBranchHint, default_branch_hint: defaultBranchHint }
     : { url };
+}
+
+function normalizeProjectRefResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
+  const projectId = String(rawRef.projectId ?? rawRef.project_id ?? "").trim();
+  if (!projectId) throw new Error("project_ref project_id is required");
+  // Fixed key order keeps toJson deterministic so the UNIQUE(project_id,
+  // resource_type, resource_ref) index catches duplicate references.
+  return { projectId, project_id: projectId };
 }
 
 function normalizeLocalDirectoryResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
@@ -9864,38 +8877,6 @@ function toRuntime(row: Row): MultiremiRuntime {
   };
 }
 
-function toCloudRuntimeNode(row: Row): MultiremiCloudRuntimeNode {
-  const createdAt = String(row.created_at);
-  const updatedAt = String(row.updated_at);
-  const ownerId = String(row.owner_id ?? "local");
-  const instanceId = String(row.instance_id ?? "");
-  const instanceType = String(row.instance_type ?? "");
-  const imageId = String(row.image_id ?? "");
-  const subnetId = String(row.subnet_id ?? "");
-  return {
-    id: String(row.id),
-    ownerId,
-    owner_id: ownerId,
-    instanceId,
-    instance_id: instanceId,
-    region: String(row.region ?? "local"),
-    instanceType,
-    instance_type: instanceType,
-    imageId,
-    image_id: imageId,
-    subnetId,
-    subnet_id: subnetId,
-    name: String(row.name ?? ""),
-    status: String(row.status ?? "unknown"),
-    tags: parseJson<Record<string, string>>(row.tags, {}),
-    metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
-    createdAt,
-    created_at: createdAt,
-    updatedAt,
-    updated_at: updatedAt,
-  };
-}
-
 function toRuntimeLocalSkillListRequest(row: Row): MultiremiRuntimeLocalSkillListRequest {
   return {
     id: String(row.id),
@@ -9946,6 +8927,77 @@ function normalizeRuntimeModelListStatus(value: unknown): MultiremiRuntimeModelL
   const status = String(value ?? "failed").trim();
   if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
   return "failed";
+}
+
+function toRuntimeDirectoryScanRequest(row: Row): MultiremiRuntimeDirectoryScanRequest {
+  return {
+    id: String(row.id),
+    runtimeId: String(row.runtime_id),
+    status: normalizeRuntimeDirectoryScanStatus(row.status),
+    params: normalizeRuntimeDirectoryScanParams(parseJson(row.params, {})),
+    candidates: normalizeRuntimeDirectoryCandidates(parseJson(row.candidates, [])),
+    supported: Number(row.supported ?? 1) !== 0,
+    error: nullableString(row.error),
+    runStartedAt: nullableString(row.run_started_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function normalizeRuntimeDirectoryScanStatus(value: unknown): MultiremiRuntimeDirectoryScanRequestStatus {
+  const status = String(value ?? "failed").trim();
+  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "timeout") return status;
+  return "failed";
+}
+
+function normalizeRuntimeDirectoryScanParams(raw: unknown): MultiremiRuntimeDirectoryScanParams {
+  if (!isRecord(raw)) return {};
+  const params: MultiremiRuntimeDirectoryScanParams = {};
+  const root = typeof raw.root === "string" ? raw.root.trim() : "";
+  if (root) params.root = root;
+  const maxDepth = Number(raw.maxDepth ?? raw.max_depth);
+  if (Number.isFinite(maxDepth) && maxDepth > 0) params.maxDepth = Math.floor(maxDepth);
+  const mode = normalizeRuntimeDirectoryScanMode(raw.mode);
+  if (mode) params.mode = mode;
+  const resolvedRoot = firstNonEmptyString(raw.resolvedRoot, raw.resolved_root);
+  if (resolvedRoot) params.resolvedRoot = resolvedRoot;
+  return params;
+}
+
+function normalizeRuntimeDirectoryScanMode(value: unknown): "scan" | "browse" | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === "scan" || value === "browse") return value;
+  throw new Error('directory scan mode must be "scan" or "browse"');
+}
+
+function normalizeRuntimeDirectoryCandidates(value: unknown): MultiremiRuntimeDirectoryCandidate[] {
+  if (!Array.isArray(value)) return [];
+  const candidates: MultiremiRuntimeDirectoryCandidate[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const path = typeof item.path === "string" ? item.path.trim() : "";
+    if (!path) continue;
+    const name = typeof item.name === "string" && item.name.trim() ? item.name.trim() : path;
+    const remoteUrl = firstNonEmptyString(item.remoteUrl, item.remote_url);
+    const currentBranch = firstNonEmptyString(item.currentBranch, item.current_branch);
+    const isDirty = typeof item.isDirty === "boolean"
+      ? item.isDirty
+      : typeof item.is_dirty === "boolean" ? item.is_dirty : null;
+    const candidate: MultiremiRuntimeDirectoryCandidate = { path, name, remoteUrl, currentBranch, isDirty };
+    const isGitRepo = typeof item.isGitRepo === "boolean"
+      ? item.isGitRepo
+      : typeof item.is_git_repo === "boolean" ? item.is_git_repo : undefined;
+    if (isGitRepo !== undefined) candidate.isGitRepo = isGitRepo;
+    candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function toRuntimeUpdateRequest(row: Row): MultiremiRuntimeUpdateRequest {
@@ -10005,37 +9057,12 @@ function cleanOptionalLocalSkillString(value: string | null | undefined): string
   return trimmed || null;
 }
 
-function cleanOptionalString(value: unknown): string | null {
-  const trimmed = String(value ?? "").trim();
-  return trimmed || null;
-}
-
 function normalizeEmail(value: unknown): string {
   const email = String(value ?? "").trim().toLowerCase();
   if (!email) throw new Error("email is required");
   if (email.length > 254) throw new Error("email is too long");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("email is invalid");
   return email;
-}
-
-function normalizeFeedbackMetadata(value: Record<string, unknown>): Record<string, unknown> {
-  const metadata: Record<string, unknown> = {};
-  for (const [key, rawValue] of Object.entries(value)) {
-    const cleanKey = key.trim();
-    if (!cleanKey) continue;
-    if (
-      typeof rawValue === "string"
-      || typeof rawValue === "number"
-      || typeof rawValue === "boolean"
-      || rawValue === null
-    ) {
-      metadata[cleanKey] = rawValue;
-    }
-  }
-  if (Buffer.byteLength(toJson(metadata), "utf8") > 8 * 1024) {
-    throw new Error("metadata exceeds the 8KB size limit");
-  }
-  return metadata;
 }
 
 function withRuntimeLiveness(runtime: MultiremiRuntime): MultiremiRuntime {
@@ -10198,36 +9225,6 @@ function toGitHubPullRequest(row: Row): MultiremiGitHubPullRequest {
     changedFiles: Number(row.changed_files ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
-  };
-}
-
-function toAccessToken(row: Row): MultiremiAccessToken {
-  return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id ?? "local"),
-    daemonId: nullableString(row.daemon_id),
-    taskId: nullableString(row.task_id),
-    agentId: nullableString(row.agent_id),
-    userId: String(row.user_id ?? "local"),
-    name: String(row.name ?? ""),
-    type: normalizeAccessTokenType(String(row.type ?? "pat")),
-    tokenPrefix: String(row.token_prefix ?? ""),
-    lastUsedAt: nullableString(row.last_used_at),
-    expiresAt: nullableString(row.expires_at),
-    revokedAt: nullableString(row.revoked_at),
-    createdAt: String(row.created_at),
-  };
-}
-
-function toFeedback(row: Row): MultiremiFeedback {
-  return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id ?? "local"),
-    userId: String(row.user_id ?? "local"),
-    memberId: nullableString(row.member_id),
-    message: String(row.message ?? ""),
-    metadata: parseJson(row.metadata, {}),
-    createdAt: String(row.created_at),
   };
 }
 

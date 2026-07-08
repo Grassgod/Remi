@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithI18n } from "../test/i18n";
 
@@ -9,12 +9,27 @@ const longRepoUrl =
 const apiRepoUrl = "https://github.com/multimira-ai/api";
 const webRepoUrl = "https://github.com/multimira-ai/web";
 
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: [] }),
-}));
+const mockCreateProjectMutate = vi.hoisted(() => vi.fn());
+
+// Keep the real query helpers (queryOptions, useMutation) and only stub
+// useQuery, keyed by query so the reference-project picker (projectListOptions)
+// sees a project to attach while every other query stays empty.
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQuery: (options?: { queryKey?: readonly unknown[] }) => {
+      const key = options?.queryKey;
+      if (Array.isArray(key) && key[0] === "projects") {
+        return { data: [{ id: "proj-lib", title: "Shared Library", icon: "📚" }] };
+      }
+      return { data: [] };
+    },
+  };
+});
 
 vi.mock("@multiremi/core/projects/mutations", () => ({
-  useCreateProject: () => ({ mutateAsync: vi.fn() }),
+  useCreateProject: () => ({ mutateAsync: mockCreateProjectMutate }),
 }));
 
 vi.mock("@multiremi/core/projects", () => ({
@@ -64,9 +79,13 @@ vi.mock("../navigation", () => ({
 }));
 
 vi.mock("../editor", () => {
-  const ContentEditor = React.forwardRef<HTMLTextAreaElement, { placeholder?: string }>(
-    ({ placeholder }, ref) => <textarea ref={ref} placeholder={placeholder} />,
-  );
+  const ContentEditor = React.forwardRef<
+    { getMarkdown: () => string },
+    { placeholder?: string }
+  >(({ placeholder }, ref) => {
+    React.useImperativeHandle(ref, () => ({ getMarkdown: () => "" }));
+    return <textarea placeholder={placeholder} />;
+  });
   ContentEditor.displayName = "ContentEditor";
 
   return {
@@ -193,5 +212,76 @@ describe("CreateProjectModal", () => {
     await user.type(repoSearchInput, "no-match");
 
     expect(screen.getByText("No repositories match your search.")).toBeInTheDocument();
+  });
+
+  it("submits mixed resource types including a project_ref", async () => {
+    const user = userEvent.setup();
+    mockCreateProjectMutate.mockResolvedValue({ id: "new-project", slug: "new-project" });
+
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    // Title is required to enable the Create button.
+    await user.type(screen.getByPlaceholderText("Project title"), "Mixed sources");
+
+    // Git tab (default): attach a workspace repo → github_repo.
+    await user.click(
+      screen.getByRole("button", { name: (name) => name.includes(apiRepoUrl) }),
+    );
+
+    // Reference-project tab: attach the referenced project → project_ref.
+    await user.click(screen.getByRole("button", { name: "Reference project" }));
+    await user.click(screen.getByRole("button", { name: /Shared Library/i }));
+
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() =>
+      expect(mockCreateProjectMutate).toHaveBeenCalledTimes(1),
+    );
+    const payload = mockCreateProjectMutate.mock.calls[0]![0] as {
+      resources?: unknown[];
+    };
+    expect(payload.resources).toEqual([
+      { resource_type: "github_repo", resource_ref: { url: apiRepoUrl } },
+      { resource_type: "project_ref", resource_ref: { project_id: "proj-lib" } },
+    ]);
+  });
+
+  it("keeps the repo popover anchored to the same pill element as the selection grows", async () => {
+    const user = userEvent.setup();
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    // Swapping the PopoverTrigger element when the count goes 0→1 detaches the
+    // open popover's anchor and it jumps to the viewport origin. Pin the DOM
+    // node identity across the first selection.
+    const pill = screen
+      .getAllByRole("button", { name: /Repos/i })
+      .find((el) => el.textContent === "Repos") as HTMLElement;
+    await user.click(pill);
+    await user.click(
+      screen.getByRole("button", { name: (name) => name.includes(apiRepoUrl) }),
+    );
+
+    expect(pill.isConnected).toBe(true);
+    expect(pill).toHaveTextContent("1 resource");
+  });
+
+  it("keeps the disabled-submit reason keyboard-reachable via a focusable wrapper", () => {
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    // Draft title starts empty, so the submit is disabled with a reason tooltip.
+    const submit = screen.getByRole("button", { name: "Create Project" });
+    expect(submit).toBeDisabled();
+
+    // A disabled button can't take focus, so the tooltip trigger wraps it in a
+    // focusable span — without tabIndex a keyboard user could never summon the
+    // reason. Assert the wrapper and its focusability survive.
+    const wrapper = submit.parentElement as HTMLElement;
+    expect(wrapper.tagName).toBe("SPAN");
+    expect(wrapper).toHaveAttribute("tabindex", "0");
+
+    // The reason string itself is wired into the tooltip content.
+    expect(
+      screen.getByRole("tooltip", { name: "Enter a project title first" }),
+    ).toBeInTheDocument();
   });
 });

@@ -164,6 +164,77 @@ describe("Multiremi multi-user auth", () => {
     expect((await usePrivate.json()).error).toContain("private");
   });
 
+  it("FR4: a new user creates a workspace, becomes its owner, and can open it with their login token", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const b = await login(store, { externalId: "ou_b", email: "b@feishu.local", name: "B" });
+
+    const created = await app.request("/api/workspaces", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "B Team" }),
+    });
+    expect(created.status).toBe(201);
+    const workspace = await created.json();
+
+    // The creator — not the legacy "local" owner — owns the new workspace.
+    expect(store.getUserRoleInWorkspace(b.userId, workspace.id)).toBe("owner");
+    expect(store.getUserRoleInWorkspace("local", workspace.id)).toBeNull();
+
+    // The workspace shows up in their list and opens with the login token
+    // (which was minted under the "local" workspace before this one existed).
+    const list = await app.request("/api/workspaces", bearer(b.token));
+    expect((await list.json()).map((w: { id: string }) => w.id)).toEqual([workspace.id]);
+    expect((await app.request(`/api/workspaces/${workspace.id}`, bearer(b.token))).status).toBe(200);
+
+    // Membership stays the authority: the legacy local workspace is still hidden.
+    expect((await app.request("/api/workspaces/local", bearer(b.token))).status).toBe(404);
+  });
+
+  it("add computer: a new user mints a real setup token for their own workspace", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const b = await login(store, { externalId: "ou_b", email: "b@feishu.local", name: "B" });
+    const created = await app.request("/api/workspaces", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "B Team" }),
+    });
+    const workspace = await created.json();
+
+    // Mimic the dashboard dialog exactly: no workspace in the body, the current
+    // workspace only present as the X-Workspace-Slug header.
+    const minted = await app.request("/api/tokens", {
+      method: "POST",
+      headers: { ...jsonAuth(b.token), "X-Workspace-Slug": workspace.slug },
+      body: JSON.stringify({ name: "Remi daemon 2026-07-06", expires_in_days: 365 }),
+    });
+    expect(minted.status).toBe(201);
+    const token = await minted.json();
+    expect(token.token).toStartWith("mul_");
+    // Bound to the requester and their workspace — never a user-less admin token,
+    // even if the body tries to spoof another identity.
+    expect(token.userId).toBe(b.userId);
+    expect(token.workspaceId).toBe(workspace.id);
+    const spoofed = await app.request("/api/tokens", {
+      method: "POST",
+      headers: { ...jsonAuth(b.token), "X-Workspace-Slug": workspace.slug },
+      body: JSON.stringify({ name: "spoof", userId: "local" }),
+    });
+    expect((await spoofed.json()).userId).toBe(b.userId);
+
+    // Without any workspace context the default is still the local workspace,
+    // which stays members-only.
+    const noContext = await app.request("/api/tokens", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "no context" }),
+    });
+    expect(noContext.status).toBe(404);
+  });
+
   it("AC6: email-code login is disabled by default and enabled by flag; Feishu SSO stays reachable", async () => {
     const store = seedDeployment();
     const app = createMultiremiApp({ store, authToken: "root-secret" });

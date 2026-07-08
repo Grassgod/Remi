@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { ProjectStore } from "./store.js";
 import type { ProjectInitInput, InitStepName } from "./model.js";
-import { createProjectChat, setupProjectChat } from "@connectors/feishu/sdk.js";
+import { createProjectChat } from "@connectors/feishu/sdk.js";
 import { GroupConfigStore } from "../group/store.js";
 import { loadConfig } from "@shared/config.js";
 
@@ -126,9 +126,6 @@ export async function runProjectInit(
       monitor: true,           // project groups auto-reply by default
       replyMode: "thread",
     });
-
-    // Setup group: avatar + mission board tab
-    await setupProjectChat(loadConfig().feishu, chatId, projectId);
 
     return chatId;
   });

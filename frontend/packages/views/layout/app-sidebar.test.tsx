@@ -76,7 +76,8 @@ vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
 vi.mock("@multiremi/ui/components/common/actor-avatar", () => ({ ActorAvatar: () => <span /> }));
 
-vi.mock("@multiremi/core/auth", () => ({
+vi.mock("@multiremi/core/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multiremi/core/auth")>()),
   useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-1" } }),
 }));
 vi.mock("@multiremi/core/paths", () => ({
