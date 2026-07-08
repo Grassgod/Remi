@@ -26,7 +26,7 @@
       "@connectors/*": ["./packages/connectors/src/*"],
       "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./packages/daemon/src/*"],
-      "@remi/*": ["./src/remi/*"],
+      "@remi/*": ["./packages/remi/src/*"],
       "@multiremi/*": ["./packages/server/src/*"]
     }
   },

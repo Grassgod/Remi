@@ -47,7 +47,7 @@ export interface FeishuChannelHandle {
  */
 export async function bootFeishuChannel(): Promise<FeishuChannelHandle | null> {
   if (!feishuConfigured()) return null;
-  const { Remi } = await import("../remi/core.js");
+  const { Remi } = await import("@remi/core.js");
   const { loadConfig } = await import("@shared/config.js");
   const remi = Remi.boot(loadConfig());
   log.info("Starting Feishu channel");

@@ -7,7 +7,7 @@ import { SESSIONS_FILE } from "@shared/config.js";
 import type { IncomingMessage } from "@connectors/base.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { createAgentResponse } from "@shared/contracts/provider-types.js";
-import { Remi } from "../../../src/remi/core.js";
+import { Remi } from "@remi/core.js";
 import * as sessDb from "@shared/db/sessions.js";
 
 function makeTmpDir(): string {

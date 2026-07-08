@@ -3,9 +3,9 @@
  */
 
 import { loadConfig } from "@shared/config.js";
-import { Remi } from "../remi/core.js";
+import { Remi } from "@remi/core.js";
 import { setLogLevel, createLogger, initLogPersistence } from "@shared/logger.js";
-import { startWebDashboard, stopWebDashboard } from "../remi/admin/server.js";
+import { startWebDashboard, stopWebDashboard } from "@remi/admin/server.js";
 
 const log = createLogger("serve");
 

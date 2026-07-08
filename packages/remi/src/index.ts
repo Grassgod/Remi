@@ -10,7 +10,7 @@ export const VERSION = "0.1.0";
 export { loadConfig, type RemiConfig, type ProviderConfig } from "@shared/config.js";
 
 // Core
-export { Remi } from "./remi/core.js";
+export { Remi } from "./core.js";
 
 // Providers
 export {
