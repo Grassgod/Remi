@@ -13,7 +13,6 @@
     "resolveJsonModule": true,
     "types": ["bun"],
     "paths": {
-      "@/*": ["./src/*"],
       "@remi/plugin-sdk": ["./packages/plugin-sdk/src/index.ts"],
       "@remi/plugin-sdk/*": ["./packages/plugin-sdk/src/*"],
       "@multiremi/contracts": ["./packages/contracts/src/index.ts"],
@@ -30,6 +29,6 @@
       "@multiremi/*": ["./packages/server/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "include": ["apps/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -40,7 +40,7 @@ mkdirSync(join(BUILD_DIR, "bin"), { recursive: true });
 
 console.log("Bundling with bun build...");
 execSync(
-  `bun build src/main.ts --target=bun --outfile=${join(BUILD_DIR, "dist", "remi.bundle.js")} --minify`,
+  `bun build apps/remi/main.ts --target=bun --outfile=${join(BUILD_DIR, "dist", "remi.bundle.js")} --minify`,
   { cwd: ROOT, stdio: "inherit" },
 );
 

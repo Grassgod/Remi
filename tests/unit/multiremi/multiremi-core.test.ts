@@ -4,7 +4,7 @@ import { createHash, createHmac } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { detectMultiremiProviders } from "../../../src/cli/multiremi.js";
+import { detectMultiremiProviders } from "../../../apps/remi/cli/multiremi.js";
 import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
 import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/daemon.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";

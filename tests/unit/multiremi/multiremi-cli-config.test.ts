@@ -14,7 +14,7 @@ import {
   multiremiDaemonServicePath,
   multiremiDaemonPaths,
   runMultiremi,
-} from "../../../src/cli/multiremi.js";
+} from "../../../apps/remi/cli/multiremi.js";
 
 let tmp: string | null = null;
 

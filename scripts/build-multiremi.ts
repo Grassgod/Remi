@@ -65,7 +65,7 @@ export function buildMultiremiReleaseArchives(): void {
       "bun",
       [
         "build",
-        "src/main.ts",
+        "apps/remi/main.ts",
         "--compile",
         "--minify",
         "--target",

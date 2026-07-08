@@ -42,7 +42,7 @@ export function generateEcosystem(config: RemiConfig): string {
   const apps: Record<string, unknown>[] = [
     {
       name: "remi",
-      script: "src/main.ts",
+      script: "apps/remi/main.ts",
       args: "serve",
       interpreter: "bun",
       cwd: REMI_ROOT,

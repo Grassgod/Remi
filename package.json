@@ -25,11 +25,11 @@
     "packages/*"
   ],
   "bin": {
-    "remi": "./src/main.ts"
+    "remi": "./apps/remi/main.ts"
   },
   "scripts": {
-    "start": "bun run src/main.ts serve",
-    "serve": "bun run src/main.ts serve",
+    "start": "bun run apps/remi/main.ts serve",
+    "serve": "bun run apps/remi/main.ts serve",
     "build": "bun run scripts/build.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "test": "bun test",

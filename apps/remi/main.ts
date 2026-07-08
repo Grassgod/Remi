@@ -2,7 +2,7 @@
 /**
  * Remi CLI entry point.
  *
- * Dispatches to subcommands via src/cli/index.ts.
+ * Dispatches to subcommands via apps/remi/cli/index.ts.
  * See `remi --help` for available commands.
  */
 
