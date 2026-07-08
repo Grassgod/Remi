@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 bun install                          # Install dependencies
 bun test                             # Run all tests (bun:test)
 bun test tests/memory.test.ts        # Run single test file
-bun run src/main.ts serve            # Daemon mode (connectors + scheduler)
+bun run apps/remi/main.ts serve      # Daemon mode (connectors + scheduler)
 ```
 
 ## Architecture
