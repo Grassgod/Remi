@@ -22,7 +22,10 @@
     "bun"
   ],
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "frontend",
+    "frontend/apps/*",
+    "frontend/packages/*"
   ],
   "bin": {
     "remi": "./apps/remi/main.ts"
@@ -55,7 +58,51 @@
     "@types/bun": "latest",
     "playwright-core": "^1.61.0"
   },
+  "overrides": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@xmldom/xmldom": "^0.8.13"
+  },
   "trustedDependencies": [
-    "protobufjs"
-  ]
+    "protobufjs",
+    "esbuild"
+  ],
+  "catalog": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^25.0.10",
+    "zustand": "^5.0.0",
+    "@tanstack/react-query": "^5.96.2",
+    "@tanstack/react-table": "^8.21.3",
+    "zod": "^4.1.5",
+    "tailwindcss": "^4",
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4",
+    "tailwind-merge": "^3.4.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "katex": "^0.16.45",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0",
+    "mermaid": "^11.14.0",
+    "lucide-react": "^1.0.1",
+    "i18next": "^26.0.8",
+    "react-i18next": "^17.0.6",
+    "@formatjs/intl-localematcher": "^0.8.4",
+    "eslint-plugin-i18next": "^6.1.4",
+    "unicode-animations": "^1.0.3",
+    "react-qr-code": "^2.0.18",
+    "react-virtuoso": "^4.14.0",
+    "posthog-js": "^1.176.1",
+    "yaml": "^2.6.0",
+    "vitest": "^4.1.0",
+    "jsdom": "^29.0.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/user-event": "^14.6.1"
+  }
 }

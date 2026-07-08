@@ -19,7 +19,8 @@ Thumbs.db
 .env.local
 
 # Bun
-bun.lock
+# bun.lock is committed: unified root workspace lockfile (frontend + backend)
+# must be reproducible. (Un-ignored during the frontend workspace-unification spike.)
 
 # Testing
 coverage/

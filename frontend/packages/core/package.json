@@ -103,7 +103,7 @@
     "./skills/frontmatter": "./skills/frontmatter.ts"
   },
   "dependencies": {
-    "@multiremi/contracts": "link:../../../packages/contracts",
+    "@multiremi/contracts": "workspace:*",
     "@formatjs/intl-localematcher": "catalog:",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-query-devtools": "^5.96.2",
