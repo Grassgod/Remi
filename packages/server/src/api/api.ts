@@ -139,7 +139,7 @@ const MULTIREMI_INSTALL_SCRIPT = "install-remi.sh";
 // CDN install via MULTIREMI_BASE_URL=<this server>; install-remi.sh then pulls
 // the version + tarball from /api/remi/releases/* below. Tarballs come from
 // MULTIREMI_RELEASE_DIR (default <repo>/dist), scripts from <repo>/scripts.
-const MULTIREMI_REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
+const MULTIREMI_REPO_ROOT = resolve(import.meta.dir, "..", "..", "..", "..");
 const MULTIREMI_RELEASE_TARBALL_RE = /^(?:multiremi|remi)-(\d+\.\d+\.\d+)-(?:linux|darwin)-(?:x64|arm64)\.tar\.gz$/;
 function multiremiReleaseDir(): string {
   return process.env.MULTIREMI_RELEASE_DIR ?? join(MULTIREMI_REPO_ROOT, "dist");

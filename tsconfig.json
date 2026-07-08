@@ -27,7 +27,7 @@
       "@auth/*": ["./packages/auth/src/*"],
       "@daemon/*": ["./packages/daemon/src/*"],
       "@remi/*": ["./src/remi/*"],
-      "@multiremi/*": ["./src/multiremi/*"]
+      "@multiremi/*": ["./packages/server/src/*"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],

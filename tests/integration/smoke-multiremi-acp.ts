@@ -10,9 +10,9 @@ import {
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
 } from "@acp/index.js";
-import { startMultiremiServer } from "../../src/multiremi/api.js";
-import { MultiremiDaemon } from "../../src/multiremi/daemon.js";
-import { MultiremiStore } from "../../src/multiremi/store.js";
+import { startMultiremiServer } from "@multiremi/api.js";
+import { MultiremiDaemon } from "@multiremi/daemon.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 type SmokeProvider = "claude" | "codex";
 type SmokeStatus = "passed" | "failed" | "unavailable" | "available";

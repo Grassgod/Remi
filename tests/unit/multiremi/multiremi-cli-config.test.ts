@@ -6,7 +6,7 @@ import {
   loadMultiremiConfig,
   redactMultiremiConfig,
   saveMultiremiConfig,
-} from "../../../src/multiremi/config.js";
+} from "@multiremi/config.js";
 import {
   buildDaemonForegroundArgs,
   buildMultiremiDaemonLaunchSpec,

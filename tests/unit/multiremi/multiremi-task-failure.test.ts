@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { MultiremiDaemonClient } from "../../../src/multiremi/client.js";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
 import {
   classifyDaemonTaskFailure,
   classifyPoisonedError,
@@ -7,7 +7,7 @@ import {
   classifyResumeUnsafeTimeout,
   classifyTaskFailure,
   TaskFailureReason,
-} from "../../../src/multiremi/task-failure.js";
+} from "@multiremi/task-failure.js";
 
 let previousFetch: typeof globalThis.fetch | null = null;
 

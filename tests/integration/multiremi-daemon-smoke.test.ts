@@ -6,14 +6,14 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
-import { startMultiremiServer } from "../../src/multiremi/api.js";
+import { startMultiremiServer } from "@multiremi/api.js";
 import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiDaemon,
   MultiremiRuntimeReregisterGate,
   type MultiremiDaemonProviderFactory,
-} from "../../src/multiremi/daemon.js";
-import { MultiremiStore } from "../../src/multiremi/store.js";
+} from "@multiremi/daemon.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
 let workDir: string | null = null;

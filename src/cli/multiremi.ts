@@ -2,17 +2,17 @@ import { execFileSync, spawn } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname, networkInterfaces } from "node:os";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
-import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "../multiremi/index.js";
+import { MultiremiDaemon, startMultiremiServer, MultiremiStore } from "@multiremi/index.js";
 import { AcpProvider } from "@acp/index.js";
 import { setLogLevel } from "@shared/logger.js";
-import { multiremiVersion } from "../multiremi/version.js";
+import { multiremiVersion } from "@multiremi/version.js";
 import {
   loadMultiremiConfig,
   multiremiConfigPath,
   redactMultiremiConfig,
   saveMultiremiConfig,
   type MultiremiCliConfig,
-} from "../multiremi/config.js";
+} from "@multiremi/config.js";
 import { bootFeishuChannel } from "./agent.js";
 import { ensureAcpBridges, type ProvisionProvider } from "@acp/provision.js";
 

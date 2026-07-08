@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "../../../src/multiremi/repo-cache.js";
+import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "@multiremi/repo-cache.js";
 
 const tempDirs: string[] = [];
 

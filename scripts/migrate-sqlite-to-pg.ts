@@ -13,8 +13,8 @@ import "@shared/db/sqlite-custom.js";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { PostgresSyncDatabase, isPostgresConfigured } from "../src/multiremi/sql-database.js";
-import { MultiremiStore } from "../src/multiremi/store.js";
+import { PostgresSyncDatabase, isPostgresConfigured } from "@multiremi/sql-database.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 const sqlitePath = process.argv[2] ?? join(homedir(), ".remi", "remi.db");
 const pgUrl = process.env.MULTIREMI_DATABASE_URL ?? "";

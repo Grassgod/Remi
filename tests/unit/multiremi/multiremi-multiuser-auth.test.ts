@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
-import { createMultiremiApp } from "../../../src/multiremi/api.js";
-import { MultiremiStore } from "../../../src/multiremi/store.js";
+import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 // The deployment owner's stable Feishu open_id (see DEFAULT_OWNER_OPEN_ID in the store).
 const OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";

@@ -5,12 +5,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { detectMultiremiProviders } from "../../../src/cli/multiremi.js";
-import { createMultiremiApp, startMultiremiServer } from "../../../src/multiremi/api.js";
-import { writeAgentSkillContext, writeProjectResourceContext } from "../../../src/multiremi/daemon.js";
-import { MultiremiDaemonClient } from "../../../src/multiremi/client.js";
-import { buildTaskPrompt } from "../../../src/multiremi/prompt.js";
-import { MultiremiScheduler } from "../../../src/multiremi/scheduler.js";
-import { MultiremiStore } from "../../../src/multiremi/store.js";
+import { createMultiremiApp, startMultiremiServer } from "@multiremi/api.js";
+import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/daemon.js";
+import { MultiremiDaemonClient } from "@multiremi/client.js";
+import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { MultiremiScheduler } from "@multiremi/scheduler.js";
+import { MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
 let previousUploadDir: string | undefined;

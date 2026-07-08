@@ -18,9 +18,9 @@ import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { setDbPath } from "@shared/db/index.js";
-import { startMultiremiServer } from "../../src/multiremi/api.js";
-import { MultiremiStore } from "../../src/multiremi/store.js";
-import { MultiremiDaemon } from "../../src/multiremi/daemon.js";
+import { startMultiremiServer } from "@multiremi/api.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { MultiremiDaemon } from "@multiremi/daemon.js";
 import { chromium } from "playwright-core";
 
 const args = new Map<string, string>();
