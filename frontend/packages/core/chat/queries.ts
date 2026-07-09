@@ -20,6 +20,7 @@ export const chatKeys = {
   pendingTasks: (wsId: string) => [...chatKeys.all(wsId), "pending-tasks"] as const,
   /** Per-task execution messages — shared with issue agent cards. */
   taskMessages: (taskId: string) => ["task-messages", taskId] as const,
+  humanRequests: (taskId: string) => ["task-human-requests", taskId] as const,
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

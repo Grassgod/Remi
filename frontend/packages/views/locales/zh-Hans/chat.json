@@ -104,6 +104,7 @@
       "reconnecting": "重连中",
       "queued": "排队中",
       "waiting_local_directory": "等待本地目录释放",
+      "awaiting_human": "等待人工审批",
       "starting_up": "启动中",
       "thinking": "思考中",
       "typing": "输入中"
@@ -116,5 +117,11 @@
       "searching_web": "搜索网页",
       "fallback": "处理中"
     }
+  },
+  "human_requests": {
+    "permission_title": "需要权限审批",
+    "question_title": "Agent 提问",
+    "answer_placeholder": "输入回答…",
+    "submit": "提交"
   }
 }

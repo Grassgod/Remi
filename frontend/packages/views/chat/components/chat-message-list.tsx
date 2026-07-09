@@ -538,9 +538,28 @@ function ItemRow({ item }: { item: ChatTimelineItem }) {
       return <ThinkingRow item={item} />;
     case "error":
       return <ErrorRow item={item} />;
+    case "permission_request":
+    case "permission_response":
+    case "question_request":
+    case "question_response":
+      return <HumanEventRow item={item} />;
     default:
       return null;
   }
+}
+
+// Static history rows for the approval-routing flow; the interactive pending
+// card lives in HumanRequestDock, this only records what was asked/decided.
+function HumanEventRow({ item }: { item: ChatTimelineItem }) {
+  const isRequest = item.type === "permission_request" || item.type === "question_request";
+  return (
+    <div className="flex items-start gap-1.5 py-0.5 text-xs text-muted-foreground">
+      <AlertCircle
+        className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", isRequest ? "text-amber-500" : "text-emerald-500")}
+      />
+      <span className="min-w-0 break-words">{item.content ?? ""}</span>
+    </div>
+  );
 }
 
 function shortenPath(p: string): string {

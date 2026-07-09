@@ -100,6 +100,14 @@ function getEventLabel(item: TimelineItem): string {
       return item.tool ? `${item.tool}` : "Result";
     case "error":
       return "Error";
+    case "permission_request":
+      return "Permission";
+    case "permission_response":
+      return "Permission";
+    case "question_request":
+      return "Question";
+    case "question_response":
+      return "Answer";
     default:
       return "Event";
   }

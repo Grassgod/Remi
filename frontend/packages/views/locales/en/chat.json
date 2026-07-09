@@ -107,6 +107,7 @@
       "reconnecting": "Reconnecting",
       "queued": "Queued",
       "waiting_local_directory": "Waiting for local directory",
+      "awaiting_human": "Waiting for approval",
       "starting_up": "Starting up",
       "thinking": "Thinking",
       "typing": "Typing"
@@ -119,5 +120,11 @@
       "searching_web": "Searching the web",
       "fallback": "Working"
     }
+  },
+  "human_requests": {
+    "permission_title": "Permission required",
+    "question_title": "Agent question",
+    "answer_placeholder": "Type an answer…",
+    "submit": "Submit"
   }
 }

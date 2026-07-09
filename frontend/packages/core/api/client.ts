@@ -1333,6 +1333,17 @@ export class ApiClient {
     return this.fetch(`/api/tasks/${taskId}/messages`);
   }
 
+  async listTaskHumanRequests(taskId: string): Promise<unknown> {
+    return this.fetch(`/api/tasks/${taskId}/human-requests`);
+  }
+
+  async respondTaskHumanRequest(taskId: string, requestId: string, response: Record<string, unknown>): Promise<unknown> {
+    return this.fetch(`/api/tasks/${taskId}/human-requests/${requestId}/respond`, {
+      method: "POST",
+      body: JSON.stringify({ response }),
+    });
+  }
+
   async listTasksByIssue(issueId: string): Promise<AgentTask[]> {
     return this.fetch(`/api/issues/${issueId}/task-runs`);
   }
