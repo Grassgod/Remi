@@ -4,7 +4,8 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
 import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "@acp/index.js";
-import type { PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
+import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
+import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
@@ -37,6 +38,7 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
   MultiremiSkillFile,
+  MultiremiTaskHumanRequest,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
   TaskMessageInput,
@@ -51,6 +53,22 @@ export { writeTaskContext, writeTaskGcContext, writeProjectResourceContext, writ
 export { runWorkspaceGcOnce, type MultiremiDaemonGcSummary };
 
 const log = createLogger("multiremi-daemon");
+const HUMAN_REQUEST_POLL_MS = 2000;
+
+function readResponseOptionId(response: Record<string, unknown> | null): string | null {
+  if (!response) return null;
+  const value = response.option_id ?? response.optionId;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readResponseAnswers(response: Record<string, unknown> | null): Record<string, string> | null {
+  if (!response || typeof response.answers !== "object" || response.answers === null || Array.isArray(response.answers)) return null;
+  const answers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(response.answers as Record<string, unknown>)) {
+    if (typeof value === "string" && value.trim()) answers[key] = value;
+  }
+  return Object.keys(answers).length ? answers : null;
+}
 export const MULTIREMI_REREGISTER_COALESCE_WINDOW_MS = 30_000;
 export const MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS = 60_000;
 
@@ -78,6 +96,10 @@ export interface MultiremiDaemonOptions {
   launchedBy?: string | null;
   onRestartRequested?: () => void;
   taskTimeoutMs?: number;
+  /** "ask" routes permission/question prompts to a human via the server; "auto" (default) self-approves. */
+  approvalMode?: "auto" | "ask";
+  /** How long an "ask"-mode prompt waits for a human before expiring (default 30 min). */
+  humanRequestTimeoutMs?: number;
   daemonPort?: number;
   workspacesRoot?: string;
   repoCacheRoot?: string;
@@ -97,6 +119,7 @@ interface RunSummary {
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
+  setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
@@ -184,6 +207,8 @@ export class MultiremiDaemon {
       once: options.once ?? false,
       launchedBy: options.launchedBy ?? process.env.MULTIREMI_LAUNCHED_BY ?? null,
       taskTimeoutMs: options.taskTimeoutMs ?? parseInt(process.env.MULTIREMI_TASK_TIMEOUT_MS ?? "0", 10),
+      approvalMode: options.approvalMode ?? (process.env.MULTIREMI_APPROVAL_MODE === "ask" ? "ask" : "auto"),
+      humanRequestTimeoutMs: options.humanRequestTimeoutMs ?? numberEnv(process.env.MULTIREMI_HUMAN_REQUEST_TIMEOUT_MS, 30 * 60 * 1000),
       daemonPort: options.daemonPort ?? numberEnv(process.env.MULTIREMI_DAEMON_PORT, 6131),
       workspacesRoot,
       repoCacheRoot: options.repoCacheRoot ?? process.env.MULTIREMI_REPO_CACHE_ROOT ?? join(workspacesRoot, ".repos"),
@@ -676,6 +701,120 @@ export class MultiremiDaemon {
     ].map((value) => value?.trim()).filter((value): value is string => Boolean(value));
   }
 
+  private attachHumanInputHandlers(
+    provider: MultiremiTaskProvider,
+    task: MultiremiTaskWithAgent,
+    signal: AbortSignal,
+    nextSeq: () => number,
+  ): void {
+    if (this.options.approvalMode !== "ask") {
+      provider.setPermissionHandler?.((params) => {
+        const allow = params.options.find((o) => o.kind === "allow_always")
+          ?? params.options.find((o) => o.kind === "allow_once");
+        return Promise.resolve<PermissionOutcome>(
+          allow ? { outcome: "selected", optionId: allow.optionId } : { outcome: "cancelled" },
+        );
+      });
+      // Elicitation stays unhandled in auto mode: the provider cancels it and
+      // the agent picks its own answer, matching pre-approval-routing behavior.
+      return;
+    }
+
+    provider.setPermissionHandler?.(async (params) => {
+      try {
+        const toolTitle = params.toolCall?.title ?? "tool call";
+        const request = await this.client.createTaskHumanRequest(task.id, {
+          kind: "permission",
+          payload: { session_id: params.sessionId, tool_call: params.toolCall ?? null, options: params.options },
+        });
+        await this.reportHumanRequestMessage(task.id, nextSeq(), "permission_request", `Permission requested: ${toolTitle}`, {
+          request_id: request.id,
+          options: params.options,
+          tool_call: params.toolCall ?? null,
+        });
+        const settled = await this.awaitHumanDecision(task.id, request.id, signal);
+        const optionId = settled?.status === "responded" ? readResponseOptionId(settled.response) : null;
+        const chosen = optionId ? params.options.find((o) => o.optionId === optionId) ?? null : null;
+        await this.reportHumanRequestMessage(
+          task.id,
+          nextSeq(),
+          "permission_response",
+          chosen
+            ? `Permission ${chosen.kind.startsWith("allow") ? "granted" : "denied"}: ${chosen.name}`
+            : `Permission request ${settled?.status ?? "cancelled"}`,
+          { request_id: request.id, option_id: optionId, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
+        );
+        if (optionId) return { outcome: "selected", optionId };
+        return { outcome: "cancelled" };
+      } catch (err) {
+        // Conservative deny when the routing infrastructure itself fails.
+        log.warn(`Permission routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        return { outcome: "cancelled" };
+      }
+    });
+
+    provider.setElicitationHandler?.(async (params) => {
+      try {
+        const questions = elicitationToQuestions(params);
+        if (!questions?.length) return { action: "cancel" };
+        const request = await this.client.createTaskHumanRequest(task.id, {
+          kind: "question",
+          payload: { session_id: params.sessionId, message: params.message, questions },
+        });
+        await this.reportHumanRequestMessage(task.id, nextSeq(), "question_request", params.message || "Agent asked a question", {
+          request_id: request.id,
+          questions,
+        });
+        const settled = await this.awaitHumanDecision(task.id, request.id, signal);
+        const answers = settled?.status === "responded" ? readResponseAnswers(settled.response) : null;
+        await this.reportHumanRequestMessage(
+          task.id,
+          nextSeq(),
+          "question_response",
+          answers ? Object.entries(answers).map(([q, a]) => `${q}: ${a}`).join("; ") : `Question ${settled?.status ?? "cancelled"}`,
+          { request_id: request.id, answers, status: settled?.status ?? "cancelled", responded_by: settled?.respondedBy ?? null },
+        );
+        if (!answers) return { action: "cancel" };
+        return { action: "accept", content: answersToElicitationContent(questions, answers) };
+      } catch (err) {
+        log.warn(`Question routing failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        return { action: "cancel" };
+      }
+    });
+  }
+
+  /**
+   * Poll until the request leaves "pending", the task aborts, or the human
+   * timeout elapses. Timeout/abort expires the request server-side; if a human
+   * response won that race, the server returns the responded row and we honor it.
+   */
+  private async awaitHumanDecision(taskId: string, requestId: string, signal: AbortSignal): Promise<MultiremiTaskHumanRequest | null> {
+    const deadline = Date.now() + Math.max(0, this.options.humanRequestTimeoutMs);
+    while (!signal.aborted && Date.now() < deadline) {
+      try {
+        const request = await this.client.getTaskHumanRequest(taskId, requestId);
+        if (request && request.status !== "pending") return request;
+      } catch (err) {
+        log.warn(`Poll human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      await sleep(Math.min(Math.max(this.options.pollIntervalMs, 250), HUMAN_REQUEST_POLL_MS));
+    }
+    try {
+      return await this.client.expireTaskHumanRequest(taskId, requestId, signal.aborted ? "cancelled" : "timeout");
+    } catch (err) {
+      log.warn(`Expire human request ${requestId} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  private async reportHumanRequestMessage(taskId: string, seq: number, type: string, content: string, input: Record<string, unknown>): Promise<void> {
+    try {
+      await this.client.reportTaskMessages(taskId, [{ seq, type, content, input }]);
+    } catch (err) {
+      log.warn(`Failed to report ${type} message for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private async runAgent(task: MultiremiTaskWithAgent, signal: AbortSignal, resolvedWorkDir: ResolvedTaskWorkDir): Promise<RunSummary> {
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
@@ -709,6 +848,7 @@ export class MultiremiDaemon {
       },
       workDir,
       signal,
+      approvalMode: this.options.approvalMode,
     };
     const config = runtime.assemble(ctx);
 
@@ -724,16 +864,10 @@ export class MultiremiDaemon {
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
     }
-    provider.setPermissionHandler?.((params) => {
-      const allow = params.options.find((o) => o.kind === "allow_always")
-        ?? params.options.find((o) => o.kind === "allow_once");
-      return Promise.resolve(
-        allow ? { outcome: "selected", optionId: allow.optionId } : { outcome: "cancelled" },
-      );
-    });
-
     let output = "";
     let seq = 1;
+    const nextSeq = () => seq++;
+    this.attachHumanInputHandlers(provider, task, signal, nextSeq);
     let finalSessionId: string | null = task.sessionId;
     let usage: TaskUsageEntry[] = [];
 
@@ -741,7 +875,7 @@ export class MultiremiDaemon {
       const session = new AgentSession(provider as any, config);
       const prompt = buildTaskPrompt(task);
       for await (const event of session.run(prompt)) {
-        const message = eventToTaskMessage(event, seq++);
+        const message = eventToTaskMessage(event, nextSeq());
         if (message) {
           if (message.type === "assistant" && message.content) output += message.content;
           await this.client.reportTaskMessages(task.id, [message]);

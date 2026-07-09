@@ -821,6 +821,21 @@ export function runMigrations(db: SqlDatabase): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_messages_task ON multiremi_task_messages(task_id, seq);
+
+    CREATE TABLE IF NOT EXISTS multiremi_task_human_requests (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      response TEXT,
+      responded_by TEXT,
+      created_at TEXT NOT NULL,
+      responded_at TEXT,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
   `);
   db.exec(`
     DELETE FROM multiremi_task_messages

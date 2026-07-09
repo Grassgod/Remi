@@ -4180,6 +4180,31 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!task) return c.json({ error: "task not found" }, 404);
     return c.json({ messages: store.listTaskMessages(task.id) });
   });
+  const listTaskHumanRequestsRoute = (c: any) => {
+    const task = taskFromParam(store, c, "id");
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ requests: store.listTaskHumanRequests(task.id) });
+  };
+  const respondTaskHumanRequestRoute = async (c: any) => {
+    const task = taskFromParam(store, c, "id");
+    if (!task) return c.json({ error: "task not found" }, 404);
+    const requestId = c.req.param("requestId");
+    const request = store.getTaskHumanRequest(requestId);
+    if (!request || request.taskId !== task.id) return c.json({ error: "request not found" }, 404);
+    const body = await readJson<{ response?: Record<string, unknown> }>(c);
+    const responded = store.respondTaskHumanRequest(request.id, {
+      response: body?.response ?? {},
+      respondedBy: store.getCurrentUser()?.id ?? null,
+    });
+    if (!responded) {
+      return c.json({ error: "request already resolved", request: store.getTaskHumanRequest(request.id) }, 409);
+    }
+    return c.json({ request: responded });
+  };
+  app.get("/api/multiremi/tasks/:id/human-requests", listTaskHumanRequestsRoute);
+  app.get("/api/tasks/:id/human-requests", listTaskHumanRequestsRoute);
+  app.post("/api/multiremi/tasks/:id/human-requests/:requestId/respond", respondTaskHumanRequestRoute);
+  app.post("/api/tasks/:id/human-requests/:requestId/respond", respondTaskHumanRequestRoute);
 
   // Multiremi daemon-compatible endpoints.
   app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
@@ -4234,6 +4259,32 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       return c.json({ error: (err as Error).message }, 400);
     }
     return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
+    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown> }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const kind = body.kind === "question" ? "question" : "permission";
+    const request = store.createTaskHumanRequest({ taskId, kind, payload: body.payload ?? {} });
+    return c.json({ request }, 201);
+  });
+  app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
+    return c.json({ request });
+  });
+  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/expire", async (c) => {
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
+    const body = await readJsonStrict<{ status?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const status = body.status === "cancelled" ? "cancelled" : "timeout";
+    const expired = store.expireTaskHumanRequest(request.id, status);
+    // Lost the race to a human response: return the current row so the worker honors it.
+    return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
   });
   app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
     const body = await readJsonStrict<{ summary?: string; step?: number; total?: number }>(c);
@@ -9457,13 +9508,15 @@ function isActiveTaskStatus(status: MultiremiTaskStatus): boolean {
   return status === "queued"
     || status === "dispatched"
     || status === "running"
-    || status === "waiting_local_directory";
+    || status === "waiting_local_directory"
+    || status === "awaiting_human";
 }
 
 function isInFlightTaskStatus(status: MultiremiTaskStatus): boolean {
   return status === "dispatched"
     || status === "running"
-    || status === "waiting_local_directory";
+    || status === "waiting_local_directory"
+    || status === "awaiting_human";
 }
 
 function daemonRuntimeId(daemonId: string, provider: string): string {

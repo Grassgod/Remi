@@ -5,6 +5,7 @@ import type {
   MultiremiRuntimeModel,
   MultiremiRuntimeLocalSkillSummary,
   MultiremiSkillFile,
+  MultiremiTaskHumanRequest,
   MultiremiTaskStatus,
   MultiremiTaskWithAgent,
   RegisterRuntimeInput,
@@ -111,6 +112,21 @@ export class MultiremiDaemonClient {
 
   async getWorkspaceRepos(workspaceId: string): Promise<MultiremiWorkspaceReposResponse> {
     return this.get<MultiremiWorkspaceReposResponse>(`/api/daemon/workspaces/${encodeURIComponent(workspaceId)}/repos`);
+  }
+
+  async createTaskHumanRequest(taskId: string, input: { kind: "permission" | "question"; payload: Record<string, unknown> }): Promise<MultiremiTaskHumanRequest> {
+    const resp = await this.post<{ request: MultiremiTaskHumanRequest }>(`/api/daemon/tasks/${taskId}/human-requests`, input);
+    return resp.request;
+  }
+
+  async getTaskHumanRequest(taskId: string, requestId: string): Promise<MultiremiTaskHumanRequest | null> {
+    const resp = await this.get<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}`);
+    return resp.request ?? null;
+  }
+
+  async expireTaskHumanRequest(taskId: string, requestId: string, status: "timeout" | "cancelled"): Promise<MultiremiTaskHumanRequest | null> {
+    const resp = await this.post<{ request: MultiremiTaskHumanRequest | null }>(`/api/daemon/tasks/${taskId}/human-requests/${requestId}/expire`, { status });
+    return resp.request ?? null;
   }
 
   async reportRuntimeUpdateResult(runtimeId: string, requestId: string, result: { status: string; output?: string; error?: string }): Promise<void> {
