@@ -104,6 +104,7 @@
       "reconnecting": "再接続中",
       "queued": "待機中",
       "waiting_local_directory": "ローカルディレクトリを待機中",
+      "awaiting_human": "承認待ち",
       "starting_up": "起動中",
       "thinking": "考え中",
       "typing": "入力中"
@@ -116,5 +117,11 @@
       "searching_web": "ウェブを検索中",
       "fallback": "作業中"
     }
+  },
+  "human_requests": {
+    "permission_title": "許可が必要です",
+    "question_title": "エージェントからの質問",
+    "answer_placeholder": "回答を入力…",
+    "submit": "送信"
   }
 }

@@ -77,6 +77,7 @@ import type {
   ChatDonePayload,
   ChatMessage,
   ChatPendingTask,
+  TaskAwaitingHumanPayload,
   ChatMessagesPage,
   InvitationCreatedPayload,
 } from "../types";
@@ -897,6 +898,9 @@ export function useRealtimeSync(
           return { ...old, status: "running" };
         },
       );
+      // awaiting_human → running means the request was resolved (respond or
+      // timeout); refetch so pending cards flip to their settled state.
+      void qc.invalidateQueries({ queryKey: chatKeys.humanRequests(payload.task_id) });
     });
 
     // task:waiting_local_directory fires when the daemon dequeues a task but
@@ -918,6 +922,22 @@ export function useRealtimeSync(
         );
       },
     );
+
+    // task:awaiting_human fires when the agent paused on a permission prompt
+    // or AskUserQuestion. Write the status for TaskStatusPill and refetch the
+    // request list so HumanRequestDock renders the interactive card.
+    const unsubTaskAwaitingHuman = ws.on("task:awaiting_human", (p) => {
+      const payload = p as TaskAwaitingHumanPayload;
+      void qc.invalidateQueries({ queryKey: chatKeys.humanRequests(payload.task_id) });
+      if (!payload.chat_session_id) return;
+      qc.setQueryData<ChatPendingTask>(
+        chatKeys.pendingTask(payload.chat_session_id),
+        (old) => {
+          if (!old || old.task_id !== payload.task_id) return old;
+          return { ...old, status: "awaiting_human" };
+        },
+      );
+    });
 
     // task:cancelled reaches us when:
     //   1. handleStop already cleared the cache locally (this is a no-op confirm)
@@ -1062,6 +1082,7 @@ export function useRealtimeSync(
       unsubTaskDispatch();
       unsubTaskRunning();
       unsubTaskWaitingLocalDir();
+      unsubTaskAwaitingHuman();
       unsubTaskCancelled();
       unsubTaskCompleted();
       unsubTaskFailed();

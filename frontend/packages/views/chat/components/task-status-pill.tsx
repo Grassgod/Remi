@@ -27,6 +27,7 @@ type StageKey =
   | "reconnecting"
   | "queued"
   | "waiting_local_directory"
+  | "awaiting_human"
   | "starting_up"
   | "thinking"
   | "typing";
@@ -81,6 +82,11 @@ export function pickStageKeys(
   // why a queued task isn't moving.
   if (status === "waiting_local_directory") {
     return { stageKey: "waiting_local_directory", static: true };
+  }
+  // Agent parked on a permission prompt / AskUserQuestion; the interactive
+  // card lives in HumanRequestDock — the pill only names the wait state.
+  if (status === "awaiting_human") {
+    return { stageKey: "awaiting_human", static: true };
   }
   if (status === "queued") return { stageKey: "queued" };
   if (status === "dispatched") return { stageKey: "starting_up" };

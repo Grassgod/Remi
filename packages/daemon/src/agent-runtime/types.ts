@@ -68,6 +68,8 @@ export interface EphemeralContext {
   daemonOptions: EphemeralDaemonOptions;
   workDir: string;
   signal: AbortSignal;
+  /** "ask" surfaces permission prompts to a human via the server; default is self-approved. */
+  approvalMode?: "auto" | "ask";
 }
 
 export interface EphemeralDaemonOptions {

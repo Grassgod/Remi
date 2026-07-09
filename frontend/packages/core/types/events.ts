@@ -23,6 +23,7 @@ export type WSEventType =
   | "agent:restored"
   | "task:queued"
   | "task:dispatch"
+  | "task:awaiting_human"
   | "task:running"
   | "task:waiting_local_directory"
   | "task:progress"
@@ -218,7 +219,16 @@ export interface TaskMessagePayload {
   issue_id: string;
   chat_session_id?: string;
   seq: number;
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "error";
+  type:
+    | "text"
+    | "thinking"
+    | "tool_use"
+    | "tool_result"
+    | "error"
+    | "permission_request"
+    | "permission_response"
+    | "question_request"
+    | "question_response";
   tool?: string;
   content?: string;
   input?: Record<string, unknown>;
@@ -255,6 +265,19 @@ export interface TaskRunningPayload {
 // `wait_reason` mirrors the server-side hint (path / holder task id), but
 // is not yet surfaced end-to-end; the UI today only reads the status.
 export interface TaskWaitingLocalDirectoryPayload {
+  task_id: string;
+  agent_id: string;
+  issue_id: string;
+  chat_session_id?: string;
+  status: string;
+  wait_reason?: string;
+}
+
+// task:awaiting_human fires when the agent paused for a human decision — a
+// tool-permission prompt or an AskUserQuestion form routed through the server.
+// The worker holds the ACP promise open; responding (HumanRequestDock) or a
+// timeout resumes the task.
+export interface TaskAwaitingHumanPayload {
   task_id: string;
   agent_id: string;
   issue_id: string;
@@ -411,6 +434,7 @@ export interface WSEventPayloadMap {
   "task:dispatch": TaskDispatchPayload;
   "task:running": TaskRunningPayload;
   "task:waiting_local_directory": TaskWaitingLocalDirectoryPayload;
+  "task:awaiting_human": TaskAwaitingHumanPayload;
   "task:completed": TaskCompletedPayload;
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;

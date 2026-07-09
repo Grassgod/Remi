@@ -6,9 +6,32 @@ export type MultiremiTaskStatus =
   | "dispatched"
   | "running"
   | "waiting_local_directory"
+  | "awaiting_human"
   | "completed"
   | "failed"
   | "cancelled";
+
+export type MultiremiTaskHumanRequestKind = "permission" | "question";
+export type MultiremiTaskHumanRequestStatus = "pending" | "responded" | "timeout" | "cancelled";
+
+export interface MultiremiTaskHumanRequest {
+  id: string;
+  taskId: string;
+  kind: MultiremiTaskHumanRequestKind;
+  payload: Record<string, unknown>;
+  status: MultiremiTaskHumanRequestStatus;
+  response: Record<string, unknown> | null;
+  respondedBy: string | null;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface CreateTaskHumanRequestInput {
+  id?: string;
+  taskId: string;
+  kind: MultiremiTaskHumanRequestKind;
+  payload: Record<string, unknown>;
+}
 
 export type MultiremiRuntimeStatus = "online" | "offline";
 export type MultiremiRuntimeVisibility = "private" | "public";

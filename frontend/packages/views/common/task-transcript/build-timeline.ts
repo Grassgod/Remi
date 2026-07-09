@@ -4,7 +4,16 @@ import { redactSecrets } from "./redact";
 /** A unified timeline entry: tool calls, thinking, text, and errors in chronological order. */
 export interface TimelineItem {
   seq: number;
-  type: "tool_use" | "tool_result" | "thinking" | "text" | "error";
+  type:
+    | "tool_use"
+    | "tool_result"
+    | "thinking"
+    | "text"
+    | "error"
+    | "permission_request"
+    | "permission_response"
+    | "question_request"
+    | "question_response";
   tool?: string;
   content?: string;
   input?: Record<string, unknown>;

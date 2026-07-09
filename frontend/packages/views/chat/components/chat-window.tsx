@@ -28,6 +28,7 @@ import {
 } from "../../issues/components/pickers/property-picker";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { OfflineBanner } from "./offline-banner";
+import { HumanRequestDock } from "./human-request-dock";
 import { NoAgentBanner } from "./no-agent-banner";
 import {
   chatSessionsOptions,
@@ -580,6 +581,8 @@ export function ChatWindow() {
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
+      <HumanRequestDock taskId={pendingTaskId} />
+
       {noAgent ? (
         <NoAgentBanner />
       ) : (

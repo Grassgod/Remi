@@ -32,6 +32,7 @@ import type {
   CreateRuntimeLocalSkillImportInput,
   CreateSkillInput,
   CreateSquadInput,
+  CreateTaskHumanRequestInput,
   CreateTaskInput,
   CreateWorkspaceInvitationInput,
   CreateWorkspaceInput,
@@ -122,6 +123,9 @@ import type {
   MultiremiSquadMember,
   MultiremiTask,
   MultiremiTaskActivityByHour,
+  MultiremiTaskHumanRequest,
+  MultiremiTaskHumanRequestKind,
+  MultiremiTaskHumanRequestStatus,
   MultiremiTaskMessage,
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
@@ -163,8 +167,8 @@ import type {
 const log = createLogger("multiremi-store");
 
 const TERMINAL_STATUSES: MultiremiTaskStatus[] = ["completed", "failed", "cancelled"];
-const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "running", "waiting_local_directory"];
-const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory"];
+const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "running", "waiting_local_directory", "awaiting_human"];
+const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory", "awaiting_human"];
 const ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"] as const;
 const CLOSED_ISSUE_STATUSES = new Set(["done", "completed", "closed", "cancelled", "failed"]);
 const AUTO_RETRY_FAILURE_REASONS = new Set(["runtime_offline", "runtime_recovery", "timeout", "codex_semantic_inactivity"]);
@@ -414,7 +418,7 @@ export class MultiremiStore {
   }
 
   migrate(): void {
-    runMigrations(this.db);
+runMigrations(this.db);
   }
 
   createAgent(input: CreateAgentInput): MultiremiAgent {
@@ -6263,7 +6267,7 @@ export class MultiremiStore {
              SELECT COUNT(*)
              FROM multiremi_tasks runtime_active
              WHERE runtime_active.runtime_id = ?
-               AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory')
+               AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < ?
            ${workspaceFilter}
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
@@ -6273,12 +6277,12 @@ export class MultiremiStore {
              SELECT COUNT(*)
              FROM multiremi_tasks running
              WHERE running.agent_id = t.agent_id
-               AND running.status IN ('dispatched', 'running', 'waiting_local_directory')
+               AND running.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < a.max_concurrent_tasks
            AND NOT EXISTS (
              SELECT 1 FROM multiremi_tasks active
              WHERE active.agent_id = t.agent_id
-               AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
+               AND active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND (
                  (t.issue_id IS NOT NULL AND active.issue_id = t.issue_id)
                  OR (t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
@@ -6338,6 +6342,89 @@ export class MultiremiStore {
     const task = this.getTask(taskId)!;
     this.notifyTaskEvent("task:waiting_local_directory", task);
     return task;
+  }
+
+  createTaskHumanRequest(input: CreateTaskHumanRequestInput): MultiremiTaskHumanRequest {
+    const id = input.id ?? createId("hrq");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_task_human_requests (id, task_id, kind, payload, status, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?)`,
+      [id, input.taskId, input.kind, JSON.stringify(input.payload ?? {}), now],
+    );
+    const reason = input.kind === "permission" ? "Waiting for permission approval" : "Waiting for a human answer";
+    const transition = this.db.run(
+      `UPDATE multiremi_tasks
+       SET status = 'awaiting_human', wait_reason = ?, progress_summary = ?, updated_at = ?
+       WHERE id = ? AND status IN ('dispatched', 'running')`,
+      [reason, reason, now, input.taskId],
+    );
+    if (transition.changes > 0) {
+      const task = this.getTask(input.taskId);
+      if (task) this.notifyTaskEvent("task:awaiting_human", task);
+    }
+    return this.getTaskHumanRequest(id)!;
+  }
+
+  getTaskHumanRequest(requestId: string): MultiremiTaskHumanRequest | null {
+    const row = this.db.query("SELECT * FROM multiremi_task_human_requests WHERE id = ?").get(requestId) as Row | null;
+    return row ? toTaskHumanRequest(row) : null;
+  }
+
+  listTaskHumanRequests(taskId: string): MultiremiTaskHumanRequest[] {
+    const rows = this.db.query(
+      "SELECT * FROM multiremi_task_human_requests WHERE task_id = ? ORDER BY created_at ASC, id ASC",
+    ).all(taskId) as Row[];
+    return rows.map(toTaskHumanRequest);
+  }
+
+  /** Atomic first-write-wins: returns null when the request is no longer pending. */
+  respondTaskHumanRequest(
+    requestId: string,
+    input: { response: Record<string, unknown>; respondedBy?: string | null },
+  ): MultiremiTaskHumanRequest | null {
+    const now = nowIso();
+    const result = this.db.run(
+      `UPDATE multiremi_task_human_requests
+       SET status = 'responded', response = ?, responded_by = ?, responded_at = ?
+       WHERE id = ? AND status = 'pending'`,
+      [JSON.stringify(input.response ?? {}), input.respondedBy ?? null, now, requestId],
+    );
+    if (result.changes === 0) return null;
+    const request = this.getTaskHumanRequest(requestId)!;
+    this.resumeTaskFromAwaitingHuman(request.taskId);
+    return request;
+  }
+
+  /** Worker-initiated terminal transition (timeout, or task aborted while pending). */
+  expireTaskHumanRequest(requestId: string, status: "timeout" | "cancelled"): MultiremiTaskHumanRequest | null {
+    const result = this.db.run(
+      `UPDATE multiremi_task_human_requests
+       SET status = ?, responded_at = ?
+       WHERE id = ? AND status = 'pending'`,
+      [status, nowIso(), requestId],
+    );
+    if (result.changes === 0) return null;
+    const request = this.getTaskHumanRequest(requestId)!;
+    this.resumeTaskFromAwaitingHuman(request.taskId);
+    return request;
+  }
+
+  private resumeTaskFromAwaitingHuman(taskId: string): void {
+    const pending = this.db.query(
+      "SELECT COUNT(*) AS n FROM multiremi_task_human_requests WHERE task_id = ? AND status = 'pending'",
+    ).get(taskId) as { n: number } | null;
+    if (pending && Number(pending.n) > 0) return;
+    const result = this.db.run(
+      `UPDATE multiremi_tasks
+       SET status = 'running', wait_reason = NULL, updated_at = ?
+       WHERE id = ? AND status = 'awaiting_human'`,
+      [nowIso(), taskId],
+    );
+    if (result.changes > 0) {
+      const task = this.getTask(taskId);
+      if (task) this.notifyTaskEvent("task:running", task);
+    }
   }
 
   reportProgress(taskId: string, summary: string, step?: number | null, total?: number | null): MultiremiTask {
@@ -6441,7 +6528,7 @@ export class MultiremiStore {
            failure_reason = NULL,
            completed_at = ?,
            updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory')`,
+       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
       [storedResult, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -6471,7 +6558,7 @@ export class MultiremiStore {
            completed_at = ?,
            failed_at = ?,
            updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory')`,
+       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
       [input.error, failureReason, input.sessionId ?? null, input.workDir ?? null, now, now, now, taskId],
     );
     if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
@@ -6521,7 +6608,7 @@ export class MultiremiStore {
 
   recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
     const orphanRows = this.db.query(
-      "SELECT id FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory')",
+      "SELECT id FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
     ).all(runtimeId) as Array<{ id: string }>;
     if (!orphanRows.length) return { orphaned: 0, retried: 0 };
 
@@ -9849,6 +9936,30 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
     output: nullableString(row.output),
     createdAt: String(row.created_at),
   };
+}
+
+function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    kind: normalizeHumanRequestKind(row.kind),
+    payload: parseJson(row.payload, {} as Record<string, unknown>) ?? {},
+    status: normalizeHumanRequestStatus(row.status),
+    response: row.response == null ? null : parseJson(row.response, null),
+    respondedBy: nullableString(row.responded_by),
+    createdAt: String(row.created_at),
+    respondedAt: nullableString(row.responded_at),
+  };
+}
+
+function normalizeHumanRequestKind(value: unknown): MultiremiTaskHumanRequestKind {
+  return String(value ?? "") === "question" ? "question" : "permission";
+}
+
+function normalizeHumanRequestStatus(value: unknown): MultiremiTaskHumanRequestStatus {
+  const status = String(value ?? "").trim();
+  if (status === "pending" || status === "responded" || status === "timeout" || status === "cancelled") return status;
+  return "cancelled";
 }
 
 function computeChatElapsedMs(task: MultiremiTask): number | null {

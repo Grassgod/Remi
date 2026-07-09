@@ -19,9 +19,11 @@ export const permissionsBlock: CapabilityBlock = {
     };
   },
 
-  ephemeral(_ctx: EphemeralContext) {
+  ephemeral(ctx: EphemeralContext) {
     return {
-      permissionMode: "bypassPermissions" as const,
+      // "ask" keeps the agent's own permission gate active so requests reach
+      // the daemon's permission handler (routed to a human via the server).
+      permissionMode: ctx.approvalMode === "ask" ? "default" : ("bypassPermissions" as const),
       permissionHandler: null,
       elicitationHandler: null,
     };

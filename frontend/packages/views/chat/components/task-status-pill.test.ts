@@ -34,6 +34,15 @@ describe("pickStageKeys", () => {
     ).toEqual({ stageKey: "waiting_local_directory", static: true });
   });
 
+  it("returns awaiting_human as a static stage while a human decides", () => {
+    // Agent is parked on a permission prompt / AskUserQuestion routed through
+    // the server; the interactive card lives in HumanRequestDock.
+    expect(pickStageKeys("awaiting_human", [], "online")).toEqual({
+      stageKey: "awaiting_human",
+      static: true,
+    });
+  });
+
   it("returns thinking for running with no messages", () => {
     expect(pickStageKeys("running", [], "online")).toEqual({ stageKey: "thinking" });
   });
