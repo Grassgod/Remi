@@ -95,14 +95,14 @@ make start            # Start backend + frontend together
 make stop             # Stop app processes for the current checkout
 make db-down          # Stop the shared PostgreSQL container
 
-# Frontend (all commands go through Turborepo)
-pnpm install
-pnpm dev:web          # Next.js dev server (port 3000)
-pnpm dev:desktop      # Electron dev (electron-vite, HMR)
-pnpm build            # Build all frontend apps
-pnpm typecheck        # TypeScript check (all packages + apps via turbo)
-pnpm lint             # ESLint
-pnpm test             # TS tests (Vitest, all packages + apps via turbo)
+# Frontend (bun workspace at the REPO ROOT — run `bun install` there, not here;
+# these scripts fan out via `bun run --filter '@multiremi/*'`)
+bun install           # from the repo root
+bun run dev:web       # Next.js dev server (port 3000)
+bun run build         # Build all frontend apps
+bun run typecheck     # TypeScript check (all packages + apps)
+bun run lint          # ESLint
+bun run test          # TS tests (Vitest, all packages + apps)
 
 # Backend (Go)
 make server           # Run Go server only (port 8080)
@@ -115,9 +115,9 @@ make migrate-up       # Run database migrations
 make migrate-down     # Rollback migrations
 
 # Run a single TS test (works for any package with a test script)
-pnpm --filter @multiremi/views exec vitest run auth/login-page.test.tsx
-pnpm --filter @multiremi/core exec vitest run runtimes/version.test.ts
-pnpm --filter @multiremi/web exec vitest run app/\(auth\)/login/page.test.tsx
+cd packages/views && ../../../node_modules/.bin/vitest run auth/login-page.test.tsx
+cd packages/core && ../../../node_modules/.bin/vitest run runtimes/version.test.ts
+cd apps/web && ../../../node_modules/.bin/vitest run app/\(auth\)/login/page.test.tsx
 
 # Run a single Go test
 cd server && go test ./internal/handler/ -run TestName
@@ -338,7 +338,7 @@ All test deps are in the pnpm catalog for unified versioning.
 
 1. Write failing test in the **correct package** first.
 2. Write implementation.
-3. Run `pnpm test` (Turborepo discovers all packages).
+3. Run `bun run test` (fans out to all packages).
 4. Green → done.
 
 ### Go tests

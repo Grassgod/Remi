@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:web": "turbo dev --filter=@multiremi/web",
-    "build": "turbo build",
-    "typecheck": "turbo typecheck",
-    "test": "turbo test",
-    "lint": "turbo lint",
-    "clean": "turbo clean && rm -rf node_modules",
+    "dev:web": "bun run --filter '@multiremi/web' dev",
+    "build": "bun run --filter '@multiremi/*' build",
+    "typecheck": "bun run --filter '@multiremi/*' typecheck",
+    "test": "bun run --filter '@multiremi/*' test",
+    "lint": "bun run --filter '@multiremi/*' lint",
+    "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules",
     "ui:add": "cd packages/ui && npx shadcn@latest add",
     "generate:reserved-slugs": "node scripts/generate-reserved-slugs.mjs"
   },
