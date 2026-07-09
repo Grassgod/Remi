@@ -21,13 +21,20 @@ type Logger = (message: string) => void;
 const NODE_VERSION = "v22.14.0"; // pinned LTS for the bundled fallback
 
 const PROVIDER_CLI: Record<ProvisionProvider, string> = { claude: "claude", codex: "codex" };
-// First entry is the package we install; both are checked when locating an
-// already-installed bridge. @zed-industries/claude-agent-acp is deprecated
-// (stuck at 0.23.1, renamed) — prefer the maintained @agentclientprotocol one.
+// The maintained @agentclientprotocol bridges are the only accepted
+// implementations. The deprecated @zed-industries packages and standalone
+// binaries on PATH (e.g. the old embedded-core Rust codex-acp) are
+// deliberately not recognized: machines carrying them get the pinned bridge
+// installed into ~/.remi/acp, which then wins resolution because
+// ensureAcpBridges prepends ~/.remi/bin onto PATH at every daemon start.
 const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
-  claude: ["@agentclientprotocol/claude-agent-acp", "@zed-industries/claude-agent-acp"],
+  claude: ["@agentclientprotocol/claude-agent-acp"],
   codex: ["@agentclientprotocol/codex-acp"],
 };
+// Pinned bridge versions — the whole fleet must run exactly these so machines
+// stay interchangeable. Bump deliberately alongside a remi release; daemons
+// converge on their next start (or via a scope="acp" update request).
+export const BRIDGE_PIN: Record<ProvisionProvider, string> = { claude: "0.57.0", codex: "1.1.0" };
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
 
 function remiHome(): string {
@@ -68,13 +75,20 @@ export function locateBridgePackage(provider: ProvisionProvider): string | null 
   return null;
 }
 
-/** Is the bridge already usable on this machine (npm package or a PATH binary)? */
-function bridgePresent(provider: ProvisionProvider): boolean {
-  if (locateBridgePackage(provider)) return true;
-  // A standalone bridge binary on PATH counts too (e.g. homebrew's Rust codex-acp).
-  if (which(PROVIDER_BIN[provider])) return true;
-  if (existsSync(join(remiBin(), PROVIDER_BIN[provider]))) return true;
-  return false;
+/**
+ * Is a recognized bridge package present at the pinned version? PATH-only
+ * binaries deliberately don't count — a wrong-version or legacy bridge gets
+ * the pinned one installed over it.
+ */
+export function bridgeSatisfied(provider: ProvisionProvider): boolean {
+  const dir = locateBridgePackage(provider);
+  if (!dir) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: string };
+    return pkg.version === BRIDGE_PIN[provider];
+  } catch {
+    return false;
+  }
 }
 
 /** Read the version of the provisioned/located bridge package, or null. */
@@ -185,9 +199,10 @@ function linkCodexBin(log: Logger): void {
 }
 
 /**
- * Ensure the ACP bridges for `providers` are present, installing the missing
- * ones. Also prepends ~/.remi/node/bin (if bundled) + ~/.remi/bin onto this
- * process's PATH so spawned bridges (node scripts) resolve. Best-effort.
+ * Ensure the ACP bridges for `providers` are present at the pinned versions,
+ * installing/upgrading any that don't match. Also prepends ~/.remi/node/bin
+ * (if bundled) + ~/.remi/bin onto this process's PATH so spawned bridges
+ * (node scripts) resolve. Best-effort.
  */
 export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (m) => console.error(`[provision] ${m}`)): void {
   // Always put our managed dirs on PATH so already-provisioned bridges + node
@@ -198,16 +213,16 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
   prependManagedPath();
   pointClaudeBridgeDir();
 
-  const missing = providers.filter((p) => which(PROVIDER_CLI[p]) && !bridgePresent(p));
-  if (missing.length === 0) return;
+  const stale = providers.filter((p) => which(PROVIDER_CLI[p]) && !bridgeSatisfied(p));
+  if (stale.length === 0) return;
 
   const node = ensureNode(log);
   if (!node) {
-    log(`cannot provision bridges (${missing.join(", ")}): node unavailable`);
+    log(`cannot provision bridges (${stale.join(", ")}): node unavailable`);
     return;
   }
-  for (const provider of missing) {
-    const pkg = PROVIDER_PACKAGES[provider][0];
+  for (const provider of stale) {
+    const pkg = `${PROVIDER_PACKAGES[provider][0]}@${BRIDGE_PIN[provider]}`;
     log(`installing ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
     if (npmInstall(node.npm, node.node, pkg, log)) {
       if (provider === "codex") linkCodexBin(log);
@@ -219,7 +234,7 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
 }
 
 /**
- * Force-reinstall the ACP bridge for `provider` to the latest published version
+ * Force-reinstall the ACP bridge for `provider` to the pinned version
  * (ignores whether one is already present), re-link/re-point, and return the
  * new bridge version. Throws on failure. Services a remote "update ACP bridge"
  * request from the dashboard.
@@ -227,7 +242,7 @@ export function ensureAcpBridges(providers: ProvisionProvider[], log: Logger = (
 export function reinstallBridge(provider: ProvisionProvider, log: Logger = (m) => console.error(`[provision] ${m}`)): string {
   const node = ensureNode(log);
   if (!node) throw new Error("cannot reinstall ACP bridge: node unavailable");
-  const pkg = `${PROVIDER_PACKAGES[provider][0]}@latest`;
+  const pkg = `${PROVIDER_PACKAGES[provider][0]}@${BRIDGE_PIN[provider]}`;
   log(`reinstalling ${provider} ACP bridge (${pkg}) into ${acpPrefix()}`);
   if (!npmInstall(node.npm, node.node, pkg, log)) {
     throw new Error(`npm install ${pkg} failed`);
