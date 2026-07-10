@@ -86,8 +86,19 @@ function preparePatchedPackage() {
   const upstreamRoot = findUpstreamPackageRoot();
   const pkg = readPackageJson(upstreamRoot);
   const acpAgentPath = join(upstreamRoot, "dist", "acp-agent.js");
-  const upstreamHash = hashFile(acpAgentPath).slice(0, 12);
   const runtime = resolveClaudeRuntime(upstreamRoot);
+
+  // Builds with the native AskUserQuestion bridge (>= 0.44) need no patch, so
+  // run the upstream package in place. Copying it into the cache breaks
+  // installs where its dependencies are hoisted to a shared node_modules
+  // (e.g. ~/.remi/acp): the copy can no longer resolve
+  // @anthropic-ai/claude-agent-sdk and the bridge dies on startup.
+  if (buildHasNativeAskBridge(readFileSync(acpAgentPath, "utf-8"))) {
+    verifyPreparedPackage(upstreamRoot, runtime);
+    return { root: upstreamRoot, runtime };
+  }
+
+  const upstreamHash = hashFile(acpAgentPath).slice(0, 12);
   const runtimeCacheKey = runtime.cacheKey;
   const cacheRoot = process.env.REMI_CLAUDE_AGENT_ACP_CACHE
     ?? join(process.env.REMI_HOME ?? join(homedir(), ".remi"), "cache", "claude-agent-acp-remi");
