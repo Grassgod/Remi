@@ -3393,7 +3393,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<UpdateIssueInput>(c);
-    return c.json({ issue: store.updateIssue(issue.id, body) });
+    const updated = store.updateIssue(issue.id, body);
+    return c.json({ issue: maybeDispatchOnIssueUpdate(store, issue, updated, body) });
   });
   const updateIssueCompatibilityRoute = async (c: Context) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -3405,8 +3406,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const input = issueUpdateCompatibilityInput(body);
     try {
       const updated = store.updateIssue(issue.id, input);
-      const response = issueCompatibilityResponse(updated);
-      publishIssueUpdated(c, store, issue, updated, input, response);
+      const dispatched = maybeDispatchOnIssueUpdate(store, issue, updated, input);
+      const response = issueCompatibilityResponse(dispatched);
+      publishIssueUpdated(c, store, issue, dispatched, input, response);
       return c.json(response);
     } catch (err) {
       const response = issueErrorResponse(c, err);
@@ -5643,6 +5645,35 @@ function publishIssueCreated(
   response: Record<string, unknown> = issueCompatibilityResponse(issue),
 ): void {
   publishWorkspaceEvent(c, store, "issue:created", issue.workspaceId, { issue: response });
+}
+
+// go-compat (maybeEnqueueOnAssign): changing an issue's assignee, or moving an
+// assigned issue out of backlog, dispatches a task — the update-path twin of
+// the assign-on-create block in POST /api/issues. Done/cancelled targets are
+// excluded so bulk-closing backlog items doesn't wake agents. If no runnable
+// agent is available the assignment stands without a task, matching the Go
+// server's "not ready → skip" behavior.
+function maybeDispatchOnIssueUpdate(
+  store: MultiremiStore,
+  previous: MultiremiIssue,
+  issue: MultiremiIssue,
+  input: UpdateIssueInput,
+): MultiremiIssue {
+  if (!issue.assigneeType || !issue.assigneeId) return issue;
+  if (issue.status === "backlog" || issue.status === "done" || issue.status === "cancelled") return issue;
+  const assigneeChanged = hasRequestField(input, "assigneeType", "assignee_type", "assigneeId", "assignee_id") &&
+    (previous.assigneeType !== issue.assigneeType || previous.assigneeId !== issue.assigneeId);
+  const leftBacklog = hasRequestField(input, "status") && previous.status === "backlog";
+  if (!assigneeChanged && !leftBacklog) return issue;
+  try {
+    return store.assignIssue(issue.id, {
+      assigneeType: issue.assigneeType,
+      assigneeId: issue.assigneeId,
+    }).issue;
+  } catch (err) {
+    log.warn(`assign-on-update dispatch skipped for ${issue.id}: ${err instanceof Error ? err.message : String(err)}`);
+    return issue;
+  }
 }
 
 function publishIssueUpdated(

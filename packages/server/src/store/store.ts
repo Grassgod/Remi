@@ -1043,12 +1043,19 @@ runMigrations(this.db);
   // Matches on the explicit user_id link, falling back to the legacy
   // `mem_<ws>_<userId>` id convention for members created before user_id existed.
   getUserRoleInWorkspace(userId: string | null | undefined, workspaceId: string): string | null {
+    return this.findWorkspaceMemberForUser(userId, workspaceId)?.role ?? null;
+  }
+
+  // Active member row for a user in a workspace, or null when they are not a
+  // member. Accepts a user id, a member row id, or the legacy `mem_<ws>_<userId>`
+  // convention — request identities carry user ids while subscriber/inbox APIs
+  // key on member row ids, so callers must translate through here.
+  findWorkspaceMemberForUser(userId: string | null | undefined, workspaceId: string): MultiremiWorkspaceMember | null {
     const uid = cleanOptionalString(userId);
     if (!uid) return null;
-    const member = this.listWorkspaceMembers(workspaceId).find((m) =>
+    return this.listWorkspaceMembers(workspaceId).find((m) =>
       m.userId === uid || m.id === uid || m.id === `mem_${workspaceId}_${uid}`
-    );
-    return member ? member.role : null;
+    ) ?? null;
   }
 
   listWorkspacesForUser(userId: string | null | undefined): MultiremiWorkspace[] {
@@ -2840,8 +2847,8 @@ runMigrations(this.db);
       data: { projectId, parentIssueId, priority, startDate, dueDate },
     });
     if (createdBy) {
-      const creator = this.getWorkspaceMember(createdBy);
-      if (creator && !creator.archivedAt) this.addIssueSubscriber(id, createdBy, "created");
+      const creator = this.findWorkspaceMemberForUser(createdBy, workspaceId);
+      if (creator) this.addIssueSubscriber(id, creator.id, "created");
     }
     return this.getIssue(id)!;
   }
@@ -3596,7 +3603,11 @@ runMigrations(this.db);
     if (parentId) this.unresolveThreadRoot(parentId);
     const authorType = input.authorType ?? "member";
     if (authorType === "member" && input.authorId) {
-      this.addIssueSubscriber(issueId, input.authorId, "commented");
+      // authorId is a request user id, not a member row id — translate before
+      // subscribing, and skip (rather than fail the comment) when the author
+      // has no member row in this workspace.
+      const authorMember = this.findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
+      if (authorMember) this.addIssueSubscriber(issueId, authorMember.id, "commented");
     }
     this.appendIssueActivity(issueId, {
       actorType: authorType,

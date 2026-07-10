@@ -827,6 +827,101 @@ describe("Bun Multiremi core store", () => {
     });
   });
 
+  it("dispatches a task when an issue update assigns an agent (assign-on-update)", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_assign_update", name: "assign update", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Update Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Assign later", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+
+    const res = await app.request(`/api/issues/${issue.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignee_type: "agent", assignee_id: agent.id }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("in_progress");
+
+    const tasks = store.listTasks().filter((task) => task.issueId === issue.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.agentId).toBe(agent.id);
+
+    // Unrelated edits must not re-dispatch or cancel the running task.
+    const rename = await app.request(`/api/issues/${issue.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Assign later (renamed)" }),
+    });
+    expect(rename.status).toBe(200);
+    expect(store.listTasks().filter((task) => task.issueId === issue.id)).toHaveLength(1);
+  });
+
+  it("dispatches a task when an assigned backlog issue moves to an active status", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_backlog_update", name: "backlog update", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Backlog Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({
+      title: "Parked work",
+      workspaceId: "local",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    expect(store.listTasks().filter((task) => task.issueId === issue.id)).toHaveLength(0);
+    const app = createMultiremiApp({ store });
+
+    const res = await app.request(`/api/issues/${issue.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "todo" }),
+    });
+    expect(res.status).toBe(200);
+    const tasks = store.listTasks().filter((task) => task.issueId === issue.id);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.agentId).toBe(agent.id);
+
+    // Closing a backlog issue must NOT wake the agent.
+    const parked = store.createIssue({
+      title: "Parked forever",
+      workspaceId: "local",
+      status: "backlog",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+    const close = await app.request(`/api/issues/${parked.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "cancelled" }),
+    });
+    expect(close.status).toBe(200);
+    expect(store.listTasks().filter((task) => task.issueId === parked.id)).toHaveLength(0);
+  });
+
+  it("accepts comments authored with a user id when the member row uses the mem_<ws>_<uid> convention", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_uid_comment", name: "uid comment", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Diagram Bot", provider: "claude", runtimeId: runtime.id });
+    // Production shape: the request identity is a user id ("local"), while the
+    // workspace member row is keyed mem_<ws>_<userId> with a user_id link.
+    store.createWorkspaceMember({ id: "mem_local_local", userId: "local", name: "贺华杰", workspaceId: "local" });
+    const issue = store.createIssue({ title: "架构图", workspaceId: "local", createdBy: "local" });
+
+    const subscribersAfterCreate = store.listIssueSubscribers(issue.id);
+    expect(subscribersAfterCreate.map((s) => s.userId)).toContain("mem_local_local");
+
+    const body = `[@Diagram Bot](mention://agent/${agent.id}) 请开始`;
+    const comment = store.createIssueComment(issue.id, {
+      authorType: "member",
+      authorId: "local",
+      body,
+    });
+
+    expect(comment.body).toBe(body);
+    const task = store.listTasks().find((item) => item.triggerCommentId === comment.id);
+    expect(task?.agentId).toBe(agent.id);
+  });
+
   it("cancels active tasks when their trigger comment changes or is deleted", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_trigger_cancel", name: "trigger cancel", provider: "claude", workspaceId: "local" });
