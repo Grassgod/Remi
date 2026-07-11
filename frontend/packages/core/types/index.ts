@@ -43,6 +43,8 @@ export type {
   RuntimeModelListRequest,
   RuntimeModelListStatus,
   RuntimeModelsResult,
+  FleetProviderModels,
+  FleetModelsResponse,
   RuntimeLocalSkillStatus,
   RuntimeLocalSkillSummary,
   RuntimeLocalSkillListRequest,

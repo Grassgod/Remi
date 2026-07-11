@@ -16,7 +16,6 @@ import {
   useWorkspacePresenceMap,
 } from "@multiremi/core/agents";
 import { api, ApiError } from "@multiremi/core/api";
-import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import {
@@ -61,7 +60,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const qc = useQueryClient();
-  const currentUser = useAuthStore((s) => s.user);
 
   const {
     data: agents = [],
@@ -237,9 +235,6 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   }
 
   const isArchived = !!agent.archived_at;
-  const runtime = agent.runtime_id
-    ? runtimes.find((r) => r.id === agent.runtime_id) ?? null
-    : null;
   const owner = agent.owner_id
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;
@@ -286,12 +281,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
       <div className="flex flex-1 min-h-0 flex-col gap-3 overflow-y-auto p-3 md:grid md:grid-cols-[320px_minmax(0,1fr)] md:gap-4 md:overflow-hidden md:p-6">
         <AgentDetailInspector
           agent={agent}
-          runtime={runtime}
           owner={owner}
           presence={presence}
-          runtimes={runtimes}
-          members={members}
-          currentUserId={currentUser?.id ?? null}
           canEdit={canEdit.allowed}
           onUpdate={handleUpdate}
           onShowIntegrations={() => setTabNavIntent("integrations")}

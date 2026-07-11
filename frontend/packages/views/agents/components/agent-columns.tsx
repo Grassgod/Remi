@@ -1,6 +1,6 @@
 "use client";
 
-import { Cloud, Lock, Monitor } from "lucide-react";
+import { Lock, Monitor } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { Agent, AgentRuntime } from "@multiremi/core/types";
 import {
@@ -17,6 +17,7 @@ import {
 import { ActorAvatar } from "../../common/actor-avatar";
 import { availabilityConfig, workloadConfig } from "../presence";
 import { AgentRowActions } from "./agent-row-actions";
+import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { Sparkline } from "./sparkline";
 import { useT } from "../../i18n";
 
@@ -68,7 +69,7 @@ const COL_WIDTHS = {
 
 type ColumnHeaderT = ReturnType<typeof useT<"agents">>["t"];
 
-function makeHeaderRenderer(t: ColumnHeaderT, key: "agent" | "status" | "workload" | "runtime" | "activity_7d" | "runs") {
+function makeHeaderRenderer(t: ColumnHeaderT, key: "agent" | "status" | "workload" | "engine" | "activity_7d" | "runs") {
   return key === "runs"
     ? () => <div className="text-right">{t(($) => $.columns.runs)}</div>
     : () => t(($) => $.columns[key]);
@@ -112,8 +113,8 @@ export function createAgentColumns({
       },
     },
     {
-      id: "runtime",
-      header: makeHeaderRenderer(t, "runtime"),
+      id: "engine",
+      header: makeHeaderRenderer(t, "engine"),
       size: COL_WIDTHS.runtime,
       meta: { grow: true },
       cell: ({ row }) => <RuntimeCell row={row.original} />,
@@ -311,20 +312,26 @@ function WorkloadCell({
 function RuntimeCell({ row }: { row: AgentRow }) {
   const { t } = useT("agents");
   const { agent, runtime } = row;
-  const isCloud = agent.runtime_mode === "cloud";
-  const RuntimeIcon = isCloud ? Cloud : Monitor;
-  const runtimeLabel = runtime?.name ?? (isCloud ? t(($) => $.row.fallback_runtime_cloud) : t(($) => $.row.fallback_runtime_local));
+  // Pool model: the agent carries an engine, not a machine. Legacy rows
+  // without a provider fall back to the bound runtime's provider.
+  const engine = agent.provider || runtime?.provider || "";
+  const label = engine || t(($) => $.row.fallback_engine);
+  const tooltip = t(($) => $.row.engine_tooltip, { engine: label });
 
   return (
     <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <RuntimeIcon className="h-3 w-3 shrink-0" />
+      {engine ? (
+        <ProviderLogo provider={engine} className="h-3 w-3 shrink-0" />
+      ) : (
+        <Monitor className="h-3 w-3 shrink-0" />
+      )}
       <Tooltip>
         <TooltipTrigger
           render={
-            <span className="block min-w-0 truncate">{runtimeLabel}</span>
+            <span className="block min-w-0 truncate capitalize">{label}</span>
           }
         />
-        <TooltipContent>{runtimeLabel}</TooltipContent>
+        <TooltipContent>{tooltip}</TooltipContent>
       </Tooltip>
     </div>
   );

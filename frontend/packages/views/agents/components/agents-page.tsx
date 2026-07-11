@@ -48,22 +48,17 @@ import { CreateAgentDialog } from "./create-agent-dialog";
 import { type AgentRow, createAgentColumns } from "./agent-columns";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import {
-  buildRuntimeMachines,
-  type RuntimeMachine,
-} from "../../runtimes/components/runtime-machines";
-import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown";
+import { EngineFilterDropdown } from "./engine-filter-dropdown";
 
 // Filter axes:
 //
 //   View           = active vs archived dataset. Archived is low-frequency,
 //                    accessed through a ghost link in the toolbar.
 //   Scope          = ownership lens (All vs Mine). Layer-1 segment.
-//   Runtime machine = "Which host is the agent bound to?" — dropdown
-//                    filter grouped by section (Local / Remote / Cloud).
-//                    Mirrors the machine grouping on the Runtimes page
-//                    so a user can drill from a machine into the agents
-//                    hosted on it.
+//   Engine         = "Which provider does the agent run on?" — dropdown
+//                    filter over claude/codex. Machines are gone from the
+//                    agent model (pool scheduling); the engine is the only
+//                    placement dimension an agent carries.
 //   Availability   = "Can the agent take work right now?" — 3-state chip
 //                    group (online / unstable / offline) sourced from
 //                    AgentAvailability. The only chip filter we keep —
@@ -83,36 +78,7 @@ const SORT_LABEL_KEY: Record<SortKey, "label_recent" | "label_name" | "label_run
   created: "label_created",
 };
 
-export interface AgentsPageProps {
-  /**
-   * Desktop-only daemon id for the current host. Forwarded into
-   * `buildRuntimeMachines` so the local machine renders under the
-   * "Local" section (rather than "Remote") on the same host that owns
-   * the daemon. Web omits this — the SaaS shell doesn't bundle a
-   * daemon, so the local section never has a real candidate anyway.
-   */
-  localDaemonId?: string | null;
-  /**
-   * Desktop-only friendly device name for the local daemon. Paired
-   * with `localDaemonId` for the "Local" section title; web omits.
-   */
-  localMachineName?: string | null;
-  /**
-   * Desktop-only signal that this host always owns a local machine
-   * row, even when no server-side runtime is currently registered
-   * (daemon stopped, not yet started, or runtime GC'd). Mirrors
-   * `RuntimesPage.hasLocalMachine`. The filter dropdown uses the
-   * synthesized placeholder to keep "Local" available for selection
-   * in the empty window.
-   */
-  hasLocalMachine?: boolean;
-}
-
-export function AgentsPage({
-  localDaemonId = null,
-  localMachineName = null,
-  hasLocalMachine = false,
-}: AgentsPageProps = {}) {
+export function AgentsPage() {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -126,9 +92,7 @@ export function AgentsPage({
     error: listError,
     refetch: refetchList,
   } = useQuery(agentListOptions(wsId));
-  const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
-    runtimeListOptions(wsId),
-  );
+  const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runCountsRaw = [] } = useQuery(agentRunCounts30dOptions(wsId));
 
@@ -146,11 +110,8 @@ export function AgentsPage({
   const setScope = useAgentsViewStore((s) => s.setScope);
   const [availabilityFilter, setAvailabilityFilter] =
     useState<AvailabilityFilter>("all");
-  // `null` means "all runtimes" (the default). When set, the value is a
-  // RuntimeMachine id from `buildRuntimeMachines` (the same grouping the
-  // Runtimes page uses), so the user can drill from a machine on that
-  // page into the agents bound to it.
-  const [runtimeMachineId, setRuntimeMachineId] = useState<string | null>(null);
+  // `null` means "all engines" (the default).
+  const [engineFilter, setEngineFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("recent");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -229,109 +190,41 @@ export function AgentsPage({
     return visibleInView.filter((a) => a.owner_id === currentUser.id);
   }, [visibleInView, scope, currentUser, view]);
 
-  // Build the workspace's runtime machines (local / remote / cloud
-  // groupings) the same way the Runtimes page does, so the filter
-  // dropdown labels match the machines the user sees there. The
-  // `now` clock only affects health rollups — we don't render health
-  // chips in this list, so a snapshot from mount time is fine. We
-  // also forward `localDaemonId` / `localMachineName` /
-  // `hasLocalMachine` so the Local section (and the synthesized
-  // placeholder on Desktop) appears here the same way it does on the
-  // Runtimes page; `currentUserId` gates device-name consolidation
-  // so a remote member's identically-named host doesn't get claimed
-  // as the viewer's local machine.
-  const [machinesNow] = useState(() => Date.now());
-  const machines = useMemo(
-    () =>
-      buildRuntimeMachines(runtimes, {
-        now: machinesNow,
-        localDaemonId,
-        localMachineName,
-        currentUserId: currentUser?.id ?? null,
-        ensureLocalMachine: hasLocalMachine,
-      }),
-    [runtimes, machinesNow, localDaemonId, localMachineName, currentUser?.id, hasLocalMachine],
+  // An agent's engine: authoritative from `provider` on pool backends;
+  // legacy rows without it fall back to the bound runtime's provider.
+  const agentEngine = useCallback(
+    (a: Agent): string =>
+      a.provider || runtimesById.get(a.runtime_id)?.provider || "",
+    [runtimesById],
   );
 
-  // Reverse map: runtime_id → machine id. Lets the filter step look up
-  // an agent's machine in O(1). Built off the machine grouping rather
-  // than `runtimesById` so a runtime's machine identity matches the
-  // dropdown labels (machines dedupe across providers by daemon).
-  const runtimeIdToMachineId = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const machine of machines) {
-      for (const r of machine.runtimes) m.set(r.id, machine.id);
-    }
-    return m;
-  }, [machines]);
-
-  // Per-machine agent counts in `inScope` — used both for the chip
-  // badges in the dropdown AND to make the runtime filter respect the
-  // current scope (e.g. "Mine" only shows machines that have one of
-  // my agents). Computed against `inScope` (not `visibleInView`).
-  // Agents whose runtime doesn't map to a current machine
-  // (e.g. bound to a GC'd runtime) are intentionally skipped here
-  // — they still appear in the list when the filter is "All
-  // runtimes", just not bucketed under any per-machine chip. The
-  // "All runtimes" badge uses `inScope.length` directly so it stays
-  // consistent with the unfiltered list.
-  const agentCountByMachine = useMemo(() => {
+  // Per-engine agent counts in `inScope` — badge numbers for the engine
+  // filter dropdown. The "All engines" badge uses `inScope.length`.
+  const agentCountByEngine = useMemo(() => {
     const counts = new Map<string, number>();
     for (const a of inScope) {
-      const machineId = runtimeIdToMachineId.get(a.runtime_id);
-      if (!machineId) continue;
-      counts.set(machineId, (counts.get(machineId) ?? 0) + 1);
+      const engine = agentEngine(a);
+      if (!engine) continue;
+      counts.set(engine, (counts.get(engine) ?? 0) + 1);
     }
     return counts;
-  }, [inScope, runtimeIdToMachineId]);
+  }, [inScope, agentEngine]);
 
-  // If the selected machine is GC'd while we're on the page (daemon
-  // stopped, runtime deleted), the filter would zero out the list with
-  // no UI to clear it. Bounce back to "all" so the user always sees
-  // something actionable.
-  useEffect(() => {
-    if (
-      runtimeMachineId !== null &&
-      !machines.some((machine) => machine.id === runtimeMachineId)
-    ) {
-      setRuntimeMachineId(null);
-    }
-  }, [runtimeMachineId, machines]);
-
-  // Resolved title for the current machine filter — used by the
-  // no-matches state so the user sees "No agents on `dev.local`" rather
-  // than a bare "No agents match this filter" when the search is empty
-  // but the machine filter is doing the narrowing.
-  const selectedMachine = useMemo(
-    () =>
-      runtimeMachineId === null
-        ? null
-        : machines.find((machine) => machine.id === runtimeMachineId) ?? null,
-    [runtimeMachineId, machines],
-  );
-
-  // Machine-scoped list: `inScope` narrowed by the selected runtime
-  // machine, but NOT by the availability chip or search. The
-  // availability row needs this intermediate step so its chips show
-  // counts for "agents on this machine", not "agents on every machine"
-  // — once a machine is selected, the chips further narrow the
-  // already-machine-scoped list. The `inScope.length` total stays
-  // available for the dropdown's "All runtimes" badge (the count the
-  // user would see if they cleared the machine filter).
-  const inScopeOnMachine = useMemo(() => {
+  // Engine-scoped list: `inScope` narrowed by the selected engine, but
+  // NOT by the availability chip or search — the availability chips show
+  // counts within the engine scope.
+  const inScopeOnEngine = useMemo(() => {
     if (view !== "active") return inScope;
-    if (runtimeMachineId === null) return inScope;
-    return inScope.filter(
-      (a) => runtimeIdToMachineId.get(a.runtime_id) === runtimeMachineId,
-    );
-  }, [inScope, view, runtimeMachineId, runtimeIdToMachineId]);
+    if (engineFilter === null) return inScope;
+    return inScope.filter((a) => agentEngine(a) === engineFilter);
+  }, [inScope, view, engineFilter, agentEngine]);
 
   // Final cut — availability chip + search. Starts from
-  // `inScopeOnMachine` so a selected machine filter is already
+  // `inScopeOnEngine` so a selected machine filter is already
   // applied; the availability chip and search refine within it.
   const filteredAgents = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return inScopeOnMachine.filter((a) => {
+    return inScopeOnEngine.filter((a) => {
       // Availability chip filter only applies to the Active view —
       // archived agents have no presence to match against.
       if (view === "active" && availabilityFilter !== "all") {
@@ -350,7 +243,7 @@ export function AgentsPage({
       return true;
     });
   }, [
-    inScopeOnMachine,
+    inScopeOnEngine,
     view,
     availabilityFilter,
     presenceMap,
@@ -358,7 +251,7 @@ export function AgentsPage({
   ]);
 
   // Per-availability counts for the chip badges. Computed against
-  // `inScopeOnMachine` (ignoring the availability filter itself) so
+  // `inScopeOnEngine` (ignoring the availability filter itself) so
   // the numbers reflect "if I clicked this chip, this many agents
   // would match on the currently-selected machine" rather than
   // collapsing to 0 for the unselected chips.
@@ -371,13 +264,13 @@ export function AgentsPage({
       // here; present only to satisfy the exhaustive availability Record.
       archived: 0,
     };
-    for (const a of inScopeOnMachine) {
+    for (const a of inScopeOnEngine) {
       const detail = presenceMap.get(a.id);
       if (!detail) continue;
       counts[detail.availability] += 1;
     }
     return counts;
-  }, [inScopeOnMachine, presenceMap]);
+  }, [inScopeOnEngine, presenceMap]);
 
   const sortedAgents = useMemo(() => {
     const xs = [...filteredAgents];
@@ -574,16 +467,15 @@ export function AgentsPage({
                   totalCount={inScope.length}
                   archivedCount={archivedCount}
                   onShowArchived={() => setView("archived")}
-                  machines={machines}
-                  runtimeMachineId={runtimeMachineId}
-                  onRuntimeMachineChange={setRuntimeMachineId}
-                  agentCountByMachine={agentCountByMachine}
+                  engineFilter={engineFilter}
+                  onEngineFilterChange={setEngineFilter}
+                  agentCountByEngine={agentCountByEngine}
                 />
                 <AvailabilityFilterRow
                   value={availabilityFilter}
                   onChange={setAvailabilityFilter}
                   counts={availabilityCounts}
-                  totalCount={inScopeOnMachine.length}
+                  totalCount={inScopeOnEngine.length}
                 />
               </>
             ) : (
@@ -600,7 +492,7 @@ export function AgentsPage({
                 view={view}
                 search={search}
                 scope={scope}
-                runtimeMachineTitle={selectedMachine?.title ?? null}
+                engineFilter={engineFilter}
               />
             ) : (
               <DataTable
@@ -616,10 +508,6 @@ export function AgentsPage({
 
       {showCreate && (
         <CreateAgentDialog
-          runtimes={runtimes}
-          runtimesLoading={runtimesLoading}
-          members={members}
-          currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
           onClose={() => {
             setShowCreate(false);
@@ -719,10 +607,9 @@ function ActiveToolbarRow({
   totalCount,
   archivedCount,
   onShowArchived,
-  machines,
-  runtimeMachineId,
-  onRuntimeMachineChange,
-  agentCountByMachine,
+  engineFilter,
+  onEngineFilterChange,
+  agentCountByEngine,
 }: {
   scope: Scope;
   setScope: (v: Scope) => void;
@@ -735,10 +622,9 @@ function ActiveToolbarRow({
   totalCount: number;
   archivedCount: number;
   onShowArchived: () => void;
-  machines: RuntimeMachine[];
-  runtimeMachineId: string | null;
-  onRuntimeMachineChange: (id: string | null) => void;
-  agentCountByMachine: Map<string, number>;
+  engineFilter: string | null;
+  onEngineFilterChange: (engine: string | null) => void;
+  agentCountByEngine: Map<string, number>;
 }) {
   const { t } = useT("agents");
   return (
@@ -754,11 +640,10 @@ function ActiveToolbarRow({
       </div>
       <ScopeSegment scope={scope} setScope={setScope} counts={scopeCounts} />
       <div className="ml-auto flex items-center gap-3">
-        <RuntimeMachineFilterDropdown
-          machines={machines}
-          value={runtimeMachineId}
-          onChange={onRuntimeMachineChange}
-          agentCountByMachine={agentCountByMachine}
+        <EngineFilterDropdown
+          value={engineFilter}
+          onChange={onEngineFilterChange}
+          agentCountByEngine={agentCountByEngine}
           totalAgentCount={totalCount}
         />
         {archivedCount > 0 && (
@@ -1018,35 +903,35 @@ function NoMatches({
   view,
   search,
   scope,
-  runtimeMachineTitle,
+  engineFilter,
 }: {
   view: View;
   search: string;
   scope: Scope;
-  runtimeMachineTitle: string | null;
+  engineFilter: string | null;
 }) {
   const { t } = useT("agents");
   const hasSearch = search.length > 0;
   const hasFilter = scope === "mine";
-  const hasRuntimeFilter = runtimeMachineTitle !== null;
+  const hasEngineFilter = engineFilter !== null;
 
   let body: string;
   if (view === "archived") {
     body = hasSearch
       ? t(($) => $.no_matches.search_archived, { query: search })
       : t(($) => $.no_matches.no_archived);
-  } else if (hasSearch && hasRuntimeFilter) {
-    body = t(($) => $.no_matches.search_runtime_filtered, {
+  } else if (hasSearch && hasEngineFilter) {
+    body = t(($) => $.no_matches.search_engine_filtered, {
       query: search,
-      machine: runtimeMachineTitle,
+      engine: engineFilter,
     });
   } else if (hasSearch) {
     body = hasFilter
       ? t(($) => $.no_matches.search_active_filtered, { query: search })
       : t(($) => $.no_matches.search_active, { query: search });
-  } else if (hasRuntimeFilter) {
-    body = t(($) => $.no_matches.runtime_filtered, {
-      machine: runtimeMachineTitle,
+  } else if (hasEngineFilter) {
+    body = t(($) => $.no_matches.engine_filtered, {
+      engine: engineFilter,
     });
   } else {
     body = t(($) => $.no_matches.no_filter_match);

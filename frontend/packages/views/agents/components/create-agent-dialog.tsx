@@ -4,18 +4,17 @@ import { useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
-import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
+import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
   AgentVisibility,
-  RuntimeDevice,
-  MemberWithUser,
   CreateAgentRequest,
 } from "@multiremi/core/types";
 import { isImeComposing } from "@multiremi/core/utils";
@@ -38,22 +37,19 @@ import {
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 
+// The two engines a pool agent can run on. Static by design: these are the
+// providers the daemon fleet ships bridges for; the fleet catalog only
+// refines each engine's models + capacity.
+const ENGINES = ["claude", "codex"] as const;
+
 export function CreateAgentDialog({
-  runtimes,
-  runtimesLoading,
-  members,
-  currentUserId,
   template,
   squadId,
   onClose,
   onCreate,
 }: {
-  runtimes: RuntimeDevice[];
-  runtimesLoading?: boolean;
-  members: MemberWithUser[];
-  currentUserId: string | null;
   // When provided, the dialog opens in "Duplicate" mode: the visible
-  // fields (name / description / runtime / visibility / model) are
+  // fields (name / description / engine / visibility / model) are
   // pre-populated from this agent, and the hidden fields
   // (instructions / custom_args / custom_env / max_concurrent_tasks)
   // are forwarded to the create call so the new agent is a true clone.
@@ -94,29 +90,27 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Duplicate-mode pre-fill: clone lands on the source agent's runtime so
-  // the user doesn't have to re-pick. Skipped when that runtime is now
-  // locked for the caller (Create would 403). Empty fallback hands the
-  // job to RuntimePicker — it owns filter state, so it's the only place
-  // that knows which runtimes are visible right now.
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
-    const templateRuntime = template?.runtime_id
-      ? runtimes.find((r) => r.id === template.runtime_id)
-      : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
-      return templateRuntime.id;
-    }
-    return "";
-  });
+  // Engine (provider). There is no machine to pick — the pool schedules
+  // work onto any online runtime of this provider. Duplicate mode inherits
+  // the source agent's engine; old backends may omit it, so fall back to
+  // the default engine.
+  const [provider, setProvider] = useState<string>(
+    template?.provider && (ENGINES as readonly string[]).includes(template.provider)
+      ? template.provider
+      : "claude",
+  );
+  // Capacity signal for the selected engine — 0 online machines means new
+  // tasks would queue until one comes up. Purely informational; creation
+  // stays allowed.
+  const fleet = useFleetProviderModels(wsId ?? "", provider);
 
-  const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
-  // Defense-in-depth: even if a locked runtime somehow ends up selected
-  // (e.g. duplicate of an agent whose template runtime is now locked, and
-  // the workspace has no usable fallback), gate Create on it so we don't
-  // submit a request the backend will reject with 403.
-  const selectedRuntimeLocked =
-    selectedRuntime != null &&
-    !isRuntimeUsableForUser(selectedRuntime, currentUserId);
+  const switchEngine = (next: string) => {
+    if (next === provider) return;
+    setProvider(next);
+    // The model catalog is per-engine; a claude model id makes no sense on
+    // codex. Reset to "engine default" on switch.
+    setModel("");
+  };
 
   // Shared squad-join follow-up. Returns nothing — the caller has
   // already shown its create-success toast; we only need to surface a
@@ -149,7 +143,7 @@ export function CreateAgentDialog({
   };
 
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    if (!name.trim()) return;
     setCreating(true);
 
     try {
@@ -157,7 +151,7 @@ export function CreateAgentDialog({
       const data: CreateAgentRequest = {
         name: name.trim(),
         description: description.trim(),
-        runtime_id: selectedRuntime.id,
+        provider,
         visibility,
         model: model.trim() || undefined,
         instructions: trimmedInstructions || undefined,
@@ -325,21 +319,40 @@ export function CreateAgentDialog({
               </div>
             </div>
 
-            <RuntimePicker
-              runtimes={runtimes}
-              runtimesLoading={runtimesLoading}
-              members={members}
-              currentUserId={currentUserId}
-              selectedRuntimeId={selectedRuntimeId}
-              onSelect={setSelectedRuntimeId}
-            />
+            {/* Engine: the only "where does it run"-adjacent choice left.
+                Machines are gone from this flow — the pool schedules work
+                onto any online runtime of the chosen engine. */}
+            <div>
+              <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.engine_label)}</Label>
+              <div className="mt-1.5 flex gap-2">
+                {ENGINES.map((engine) => (
+                  <button
+                    type="button"
+                    key={engine}
+                    onClick={() => switchEngine(engine)}
+                    className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                      provider === engine
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    <ProviderLogo provider={engine} className="h-4 w-4 shrink-0" />
+                    <span className="font-medium capitalize">{engine}</span>
+                  </button>
+                ))}
+              </div>
+              {!fleet.isLoading && fleet.onlineRuntimeCount === 0 && (
+                <p className="mt-1.5 text-xs text-warning">
+                  {t(($) => $.create_dialog.engine_no_capacity)}
+                </p>
+              )}
+            </div>
 
             <ModelDropdown
-              runtimeId={selectedRuntime?.id ?? null}
-              runtimeOnline={selectedRuntime?.status === "online"}
+              wsId={wsId ?? ""}
+              provider={provider}
               value={model}
               onChange={setModel}
-              disabled={!selectedRuntime}
             />
 
             {/* --- Optional sections (instructions / skills) ---
@@ -372,17 +385,7 @@ export function CreateAgentDialog({
           <Button variant="ghost" onClick={onClose}>
             {t(($) => $.create_dialog.cancel)}
           </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={
-              creating || !name.trim() || !selectedRuntime || selectedRuntimeLocked
-            }
-            title={
-              selectedRuntimeLocked
-                ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-                : undefined
-            }
-          >
+          <Button onClick={handleSubmit} disabled={creating || !name.trim()}>
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}
           </Button>
         </div>

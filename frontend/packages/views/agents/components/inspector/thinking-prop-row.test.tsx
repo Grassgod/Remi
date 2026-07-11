@@ -9,10 +9,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type {
-  RuntimeModel,
-  RuntimeModelListRequest,
-} from "@multiremi/core/types";
+import type { FleetModelsResponse, RuntimeModel } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
@@ -22,15 +19,11 @@ const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents, issues: enIssues },
 };
 
-const mockInitiateListModels = vi.hoisted(() => vi.fn());
-const mockGetListModelsResult = vi.hoisted(() => vi.fn());
+const mockListFleetModels = vi.hoisted(() => vi.fn());
 
 vi.mock("@multiremi/core/api", () => ({
   api: {
-    initiateListModels: (...args: unknown[]) =>
-      mockInitiateListModels(...args),
-    getListModelsResult: (...args: unknown[]) =>
-      mockGetListModelsResult(...args),
+    listFleetModels: (...args: unknown[]) => mockListFleetModels(...args),
   },
 }));
 
@@ -52,7 +45,7 @@ const CLAUDE_MODEL: RuntimeModel = {
 };
 
 // Model without thinking metadata — what the row sees when the agent's
-// model swap landed on a non-thinking runtime, or when the daemon catalog
+// model swap landed on a non-thinking provider, or when the fleet catalog
 // shrank and stopped emitting `thinking` for this id.
 const NO_THINKING_MODEL: RuntimeModel = {
   id: "gemini-2.5-pro",
@@ -60,15 +53,9 @@ const NO_THINKING_MODEL: RuntimeModel = {
   default: true,
 };
 
-function listResult(models: RuntimeModel[]): RuntimeModelListRequest {
+function fleet(models: RuntimeModel[]): FleetModelsResponse {
   return {
-    id: "req-1",
-    runtime_id: "runtime-1",
-    status: "completed",
-    models,
-    supported: true,
-    created_at: "2026-05-20T00:00:00Z",
-    updated_at: "2026-05-20T00:00:00Z",
+    providers: [{ provider: "claude", online_runtime_count: 1, models }],
   };
 }
 
@@ -88,8 +75,8 @@ function renderRow(
       <QueryClientProvider client={queryClient}>
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
           <ThinkingPropRow
-            runtimeId="runtime-1"
-            runtimeOnline
+            wsId="ws-1"
+            provider="claude"
             model="claude-sonnet-4-6"
             value=""
             canEdit
@@ -106,8 +93,7 @@ function renderRow(
 describe("ThinkingPropRow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockInitiateListModels.mockResolvedValue(listResult([CLAUDE_MODEL]));
-    mockGetListModelsResult.mockResolvedValue(listResult([CLAUDE_MODEL]));
+    mockListFleetModels.mockResolvedValue(fleet([CLAUDE_MODEL]));
   });
 
   afterEach(() => {
@@ -115,31 +101,29 @@ describe("ThinkingPropRow", () => {
   });
 
   it("hides the row when the active model has no thinking levels and nothing is persisted", async () => {
-    mockInitiateListModels.mockResolvedValue(listResult([NO_THINKING_MODEL]));
+    mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     renderRow({ model: "gemini-2.5-pro", value: "" });
 
     // ThinkingPropRow returns null when levels are empty and value is
-    // empty — both initially (data undefined) and after discovery
-    // (NO_THINKING_MODEL has no `thinking` block). The `useQuery` hook
-    // runs before the early null return on first render, so the
-    // subscription is established and discovery still fires. In
-    // production this is also covered by the sibling ModelPicker
-    // mounted next to the row in agent-detail-inspector.
+    // empty — both initially (data undefined) and after the fleet catalog
+    // resolves (NO_THINKING_MODEL has no `thinking` block).
     await waitFor(() => {
-      expect(mockInitiateListModels).toHaveBeenCalled();
+      expect(mockListFleetModels).toHaveBeenCalled();
     });
     await waitFor(() => {
       expect(screen.queryByText("Thinking")).toBeNull();
     });
   });
 
-  it("hides the row while the runtime is offline (no query fires)", () => {
-    renderRow({ runtimeOnline: false, value: "" });
+  it("hides the row when the engine has no fleet catalog bucket", async () => {
+    // A provider with no runtime at all yields no bucket → empty levels,
+    // empty value → row stays hidden.
+    renderRow({ provider: "codex", value: "" });
 
-    // Query disabled when runtimeOnline=false, so no models, levels stay
-    // empty, value is empty → row stays hidden.
+    await waitFor(() => {
+      expect(mockListFleetModels).toHaveBeenCalled();
+    });
     expect(screen.queryByText("Thinking")).toBeNull();
-    expect(mockInitiateListModels).not.toHaveBeenCalled();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {
@@ -148,7 +132,7 @@ describe("ThinkingPropRow", () => {
     // catalog shrank). PR1's behavior is daemon-side warn/drop, not a
     // synchronous DB clear, so the frontend must surface the orphan
     // token and let the user clear it explicitly.
-    mockInitiateListModels.mockResolvedValue(listResult([NO_THINKING_MODEL]));
+    mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     renderRow({ model: "gemini-2.5-pro", value: "xhigh" });
 
     await screen.findByText("Thinking");
@@ -157,7 +141,7 @@ describe("ThinkingPropRow", () => {
   });
 
   it("clears the orphan value via the picker footer, emitting onChange(\"\")", async () => {
-    mockInitiateListModels.mockResolvedValue(listResult([NO_THINKING_MODEL]));
+    mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     const { onChange } = renderRow({
       model: "gemini-2.5-pro",
       value: "xhigh",

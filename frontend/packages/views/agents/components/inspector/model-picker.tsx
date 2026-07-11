@@ -1,9 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus } from "lucide-react";
-import { runtimeModelsOptions } from "@multiremi/core/runtimes";
+import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
   PickerItem,
@@ -14,25 +13,19 @@ import { useT } from "../../../i18n";
 
 /**
  * Inline model picker for the agent inspector. Lighter cousin of
- * `ModelDropdown` (which is used in the create-agent dialog) — same data
- * source via `runtimeModelsOptions`, but renders inside a PropertyPicker so
- * it fits a single PropRow. Drops the "select a runtime first" state because
- * the inspector only renders this picker after a runtime is bound.
- *
- * Unsupported providers (e.g. antigravity, whose `agy` CLI has no
- * `--model` flag and reads model selection from its own settings) render
- * an inert italic "Managed by runtime" label instead of a clickable
- * picker — the back-end ignores agent.model for those runtimes anyway.
+ * `ModelDropdown` (which is used in the create-agent dialog) — same fleet
+ * catalog source (the union of what the online runtimes of this engine
+ * reported), rendered inside a PropertyPicker so it fits a single PropRow.
  */
 export function ModelPicker({
-  runtimeId,
-  runtimeOnline,
+  wsId,
+  provider,
   value,
   canEdit = true,
   onChange,
 }: {
-  runtimeId: string | null;
-  runtimeOnline: boolean;
+  wsId: string;
+  provider: string;
   value: string;
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
@@ -42,17 +35,7 @@ export function ModelPicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
-  const supported = modelsQuery.data?.supported ?? true;
-  // Memoise the model list so every downstream useMemo gets a stable
-  // reference; `?? []` would mint a fresh array on every render and
-  // invalidate filters needlessly.
-  const models = useMemo(
-    () => modelsQuery.data?.models ?? [],
-    [modelsQuery.data],
-  );
+  const { models, isLoading } = useFleetProviderModels(wsId, provider);
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
@@ -77,14 +60,6 @@ export function ModelPicker({
     setSearch("");
     if (id !== value) await onChange(id);
   };
-
-  if (!supported && !modelsQuery.isLoading) {
-    return (
-      <span className="truncate italic text-muted-foreground">
-        {t(($) => $.pickers.model_managed_by_runtime)}
-      </span>
-    );
-  }
 
   if (!canEdit) {
     return (
@@ -128,14 +103,14 @@ export function ModelPicker({
         </div>
       }
     >
-      {modelsQuery.isLoading && (
+      {isLoading && (
         <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           {t(($) => $.pickers.model_discovering)}
         </div>
       )}
 
-      {!modelsQuery.isLoading &&
+      {!isLoading &&
         filtered.map((m) => (
           <PickerItem
             key={m.id}
@@ -164,7 +139,7 @@ export function ModelPicker({
           </PickerItem>
         ))}
 
-      {!modelsQuery.isLoading && filtered.length === 0 && !canCreate && (
+      {!isLoading && filtered.length === 0 && !canCreate && (
         <p className="px-3 py-3 text-center text-xs text-muted-foreground">
           {t(($) => $.pickers.model_empty)}
         </p>

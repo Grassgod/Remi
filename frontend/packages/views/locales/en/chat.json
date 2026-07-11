@@ -98,8 +98,8 @@
   "no_agent_banner": "You need an agent to start chatting.",
   "offline_banner": {
     "fallback_name": "the agent",
-    "unstable": "{{name}}'s connection is unstable — replies may be delayed.",
-    "offline": "{{name}} is offline — your message will be delivered when they're back."
+    "unstable": "The machines that run {{name}} are unstable right now — replies may be delayed.",
+    "offline": "No online machine can run {{name}} right now — your message will queue until one connects."
   },
   "status_pill": {
     "stages": {

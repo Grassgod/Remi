@@ -1,13 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import type { Agent, AgentRuntime } from "@multiremi/core/types";
 import { useAgentPresenceDetail } from "@multiremi/core/agents";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import {
-  deriveRuntimeHealth,
-  type RuntimeHealth,
-} from "@multiremi/core/runtimes";
 import { agentListOptions, memberListOptions } from "@multiremi/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { runtimeListOptions } from "@multiremi/core/runtimes/queries";
@@ -15,7 +10,7 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { ActorAvatar as ActorAvatarBase } from "@multiremi/ui/components/common/actor-avatar";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { AppLink } from "../../navigation";
-import { HealthIcon } from "../../runtimes/components/shared";
+import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { availabilityConfig } from "../presence";
 import { VisibilityBadge } from "./visibility-badge";
 import { useT } from "../../i18n";
@@ -55,7 +50,12 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const owner = agent.owner_id
     ? members.find((m) => m.user_id === agent.owner_id) ?? null
     : null;
-  const runtime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  // Pool model: the agent carries an engine; legacy rows fall back to the
+  // bound runtime's provider.
+  const engine =
+    agent.provider ||
+    runtimes.find((r) => r.id === agent.runtime_id)?.provider ||
+    "";
   const isArchived = !!agent.archived_at;
   const initials = agent.name
     .split(" ")
@@ -113,11 +113,11 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
         </p>
       )}
 
-      {/* Meta rows — minimal set: runtime (where it lives), skills (what
+      {/* Meta rows — minimal set: engine (what it runs on), skills (what
           it knows), owner (who manages it). Model is intentionally
           omitted — power-user detail lives on the detail page. */}
       <div className="flex flex-col gap-1.5 text-xs">
-        <RuntimeRow agent={agent} runtime={runtime} />
+        <EngineRow engine={engine} />
         {agent.skills.length > 0 && (
           <SkillsRow skills={agent.skills.map((s) => s.name)} />
         )}
@@ -152,37 +152,17 @@ function AgentAvailabilityLine({
   );
 }
 
-// Compact runtime row — wifi-style health icon + runtime name. The icon
-// shape (Wifi / WifiOff) plus colour reflects the live runtime health
-// derived from runtime + clock; cloud runtimes always read as online.
-// This is duplicate signal with the availability dot above by design —
-// the dot is the agent's effective availability (which mostly tracks
-// runtime health), and seeing the same wifi icon next to the runtime
-// name confirms WHICH runtime is the one currently in the dot's state.
-function RuntimeRow({
-  agent,
-  runtime,
-}: {
-  agent: Agent;
-  runtime: AgentRuntime | null;
-}) {
+// Compact engine row — provider logo + engine name. The availability dot
+// above already reflects pool capacity for this engine; this row says
+// WHICH engine that capacity is measured against.
+function EngineRow({ engine }: { engine: string }) {
   const { t } = useT("agents");
-  const isCloud = agent.runtime_mode === "cloud";
-  const health: RuntimeHealth = isCloud
-    ? "online"
-    : runtime
-      ? deriveRuntimeHealth(runtime, Date.now())
-      : "offline";
-  const label =
-    runtime?.name ??
-    (isCloud
-      ? t(($) => $.row.fallback_runtime_cloud)
-      : t(($) => $.profile_card.unknown_runtime));
+  const label = engine || t(($) => $.row.fallback_engine);
   return (
     <div className="flex items-center gap-1.5">
-      <span className="w-12 shrink-0 text-muted-foreground">{t(($) => $.profile_card.runtime_label)}</span>
-      <HealthIcon health={health} className="h-3 w-3 shrink-0" />
-      <span className="min-w-0 truncate" title={label}>
+      <span className="w-12 shrink-0 text-muted-foreground">{t(($) => $.profile_card.engine_label)}</span>
+      {engine && <ProviderLogo provider={engine} className="h-3 w-3 shrink-0" />}
+      <span className="min-w-0 truncate capitalize" title={label}>
         {label}
       </span>
     </div>

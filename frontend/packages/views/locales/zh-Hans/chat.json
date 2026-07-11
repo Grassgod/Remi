@@ -95,8 +95,8 @@
   "no_agent_banner": "需要先有一个智能体才能开始对话。",
   "offline_banner": {
     "fallback_name": "智能体",
-    "unstable": "{{name}} 的连接不稳定——回复可能延迟。",
-    "offline": "{{name}} 离线——你的消息将在它上线后发送。"
+    "unstable": "运行 {{name}} 的机器当前不稳定——回复可能延迟。",
+    "offline": "当前没有在线机器可运行 {{name}}——消息将排队，等有机器上线后执行。"
   },
   "status_pill": {
     "stages": {

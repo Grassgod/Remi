@@ -11,7 +11,6 @@ import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { agentListOptions, memberListOptions, squadMemberStatusOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
-import { runtimeListOptions } from "@multiremi/core/runtimes";
 import { CreateAgentDialog } from "../../agents/components/create-agent-dialog";
 import { useNavigation } from "../../navigation";
 import { AppLink } from "../../navigation";
@@ -112,11 +111,6 @@ export function SquadDetailPage() {
     return wsMembers.find((m) => m.user_id === currentUser.id)?.role ?? null;
   }, [wsMembers, currentUser]);
   const isWorkspaceAdmin = myRole === "owner" || myRole === "admin";
-
-  const { data: runtimes = [], isLoading: runtimesLoading } = useQuery({
-    ...runtimeListOptions(wsId),
-    enabled: !!wsId && isWorkspaceAdmin,
-  });
 
   const [showAddMember, setShowAddMember] = useState(false);
   const [showCreateAgent, setShowCreateAgent] = useState(false);
@@ -289,10 +283,6 @@ export function SquadDetailPage() {
           never renders. */}
       {showCreateAgent && isWorkspaceAdmin && (
         <CreateAgentDialog
-          runtimes={runtimes}
-          runtimesLoading={runtimesLoading}
-          members={wsMembers}
-          currentUserId={currentUser?.id ?? null}
           squadId={squadId}
           onClose={() => setShowCreateAgent(false)}
           onCreate={handleCreateAgent}

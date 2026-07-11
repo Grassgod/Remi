@@ -7,7 +7,7 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { runtimeListOptions } from "@multiremi/core/runtimes/queries";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
-import { deriveAgentAvailability } from "@multiremi/core/agents";
+import { deriveAgentAvailability, resolveAgentRuntimes } from "@multiremi/core/agents";
 import type { AgentTask } from "@multiremi/core/types";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
@@ -51,10 +51,9 @@ export function AgentActivityHoverContent({
     return () => clearInterval(id);
   }, []);
 
-  // Build O(1) lookups so each task row resolves agent + runtime without
-  // an N×M scan. Cheap — agents/runtimes count in tens at most.
+  // Build an O(1) lookup so each task row resolves its agent without an
+  // N×M scan. Cheap — agents/runtimes count in tens at most.
   const agentById = new Map(agents.map((a) => [a.id, a] as const));
-  const runtimeById = new Map(runtimes.map((r) => [r.id, r] as const));
 
   if (tasks.length === 0) return null;
 
@@ -66,8 +65,9 @@ export function AgentActivityHoverContent({
       <div className="flex flex-col gap-1.5">
         {tasks.map((task) => {
           const agent = agentById.get(task.agent_id);
-          const runtime = runtimeFrom(agent?.runtime_id, runtimeById);
-          const availability = deriveAgentAvailability(runtime, now);
+          const availability = agent
+            ? deriveAgentAvailability(resolveAgentRuntimes(agent, runtimes), now)
+            : "offline";
           const isRunning = task.status === "running";
           // queued/dispatched both read as "queued" in the user-facing
           // copy — `dispatched` is the daemon-acked sub-state of queued
@@ -124,13 +124,6 @@ export function AgentActivityHoverContent({
   );
 }
 
-function runtimeFrom<T extends { id: string }>(
-  id: string | undefined,
-  byId: Map<string, T>,
-): T | null {
-  if (!id) return null;
-  return byId.get(id) ?? null;
-}
 
 // Compact `2m 14s` / `45s` / `1h 03m` duration since the given ISO string.
 // Capped at hours — anything over a day for a running task is a sign of a

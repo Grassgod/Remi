@@ -2,8 +2,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import type { Agent, MemberWithUser, RuntimeDevice } from "@multiremi/core/types";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import type { Agent, FleetModelsResponse } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multiremi/core/paths";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
@@ -25,80 +25,50 @@ vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
 }));
 
-// ModelDropdown talks to the api; the create dialog only needs it as a
+const mockListFleetModels = vi.hoisted(() => vi.fn());
+
+vi.mock("@multiremi/core/api", () => ({
+  api: {
+    listFleetModels: (...args: unknown[]) => mockListFleetModels(...args),
+    listSkills: vi.fn().mockResolvedValue([]),
+    setAgentSkills: vi.fn().mockResolvedValue(undefined),
+    addSquadMember: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// ModelDropdown owns its own fleet query; the dialog only needs it as a
 // stand-in here, so swap it out.
 vi.mock("./model-dropdown", () => ({
   ModelDropdown: () => null,
 }));
 
-// Provider logos don't matter for these assertions but they pull in SVGs.
+// Provider logos pull in SVGs that don't matter for these assertions.
 vi.mock("../../runtimes/components/provider-logo", () => ({
   ProviderLogo: () => null,
 }));
 
-// Avatars hit the api for member metadata.
-vi.mock("../../common/actor-avatar", () => ({
-  ActorAvatar: () => null,
-}));
-
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
 import { CreateAgentDialog } from "./create-agent-dialog";
 
-const ME = "user-me";
-const OTHER = "user-other";
-
-const members: MemberWithUser[] = [
-  {
-    id: "m-me",
-    user_id: ME,
-    workspace_id: "ws-1",
-    role: "member",
-    name: "Me",
-    email: "me@example.com",
-    avatar_url: null,
-    created_at: "2026-01-01T00:00:00Z",
-  },
-  {
-    id: "m-other",
-    user_id: OTHER,
-    workspace_id: "ws-1",
-    role: "member",
-    name: "Other",
-    email: "other@example.com",
-    avatar_url: null,
-    created_at: "2026-01-01T00:00:00Z",
-  },
-];
-
-function makeRuntime(overrides: Partial<RuntimeDevice>): RuntimeDevice {
+function fleetWithCapacity(counts: Record<string, number>): FleetModelsResponse {
   return {
-    id: "rt",
-    workspace_id: "ws-1",
-    daemon_id: null,
-    name: "Test Runtime",
-    runtime_mode: "local",
-    provider: "claude",
-    launch_header: "",
-    status: "online",
-    device_info: "host.local",
-    metadata: {},
-    owner_id: ME,
-    visibility: "private",
-    last_seen_at: "2026-04-27T11:59:50Z",
-    created_at: "2026-04-01T00:00:00Z",
-    updated_at: "2026-04-01T00:00:00Z",
-    ...overrides,
+    providers: Object.entries(counts).map(([provider, online]) => ({
+      provider,
+      online_runtime_count: online,
+      models: [],
+    })),
   };
 }
 
-function makeTemplate(runtimeId: string): Agent {
+function makeTemplate(overrides: Partial<Agent> = {}): Agent {
   return {
     id: "agent-template",
     workspace_id: "ws-1",
-    runtime_id: runtimeId,
+    runtime_id: "",
+    provider: "codex",
     name: "Template Agent",
     description: "",
     instructions: "",
@@ -110,16 +80,17 @@ function makeTemplate(runtimeId: string): Agent {
     status: "idle",
     max_concurrent_tasks: 1,
     model: "",
-    owner_id: ME,
+    owner_id: "user-me",
     skills: [],
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
     archived_at: null,
     archived_by: null,
+    ...overrides,
   };
 }
 
-function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
+function renderDialog(template?: Agent) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -131,9 +102,6 @@ function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
         <WorkspaceSlugProvider slug="test-ws">
         <NavigationProvider value={navigationStub}>
           <CreateAgentDialog
-            runtimes={runtimes}
-            members={members}
-            currentUserId={ME}
             template={template}
             onClose={onClose}
             onCreate={onCreate}
@@ -146,142 +114,86 @@ function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
   return { onCreate, onClose };
 }
 
-describe("CreateAgentDialog runtime visibility gate", () => {
-  beforeEach(() => vi.clearAllMocks());
+function createButton(): HTMLButtonElement {
+  const btn = screen
+    .getAllByRole("button")
+    .find((b) => b.textContent === "Create");
+  expect(btn).toBeDefined();
+  return btn as HTMLButtonElement;
+}
+
+describe("CreateAgentDialog (pool model)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 2, codex: 1 }));
+  });
   // Base UI Dialog renders into a portal on document.body and leaves
   // focus-guard / inert wrapper divs around after the React tree unmounts.
   // The auto-cleanup from @testing-library/react drops the container but
-  // not the portal residue, so two-tests-in-a-row queries see double
-  // matches ("All", "My Runtime"). Force cleanup + wipe body between tests.
+  // not the portal residue. Force cleanup + wipe body between tests.
   afterEach(() => {
     cleanup();
     document.body.innerHTML = "";
   });
 
-  it("disables another member's private runtime in the picker", () => {
-    const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
-      owner_id: OTHER,
-      visibility: "private",
+  it("creates without any machine choice — engine defaults to claude", async () => {
+    const { onCreate } = renderDialog();
+
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Pool Agent" },
     });
-    renderDialog([mine, othersPrivate]);
+    fireEvent.click(createButton());
 
-    // Flip to "All" so other-owned runtimes show.
-    fireEvent.click(screen.getByText("All"));
-    // Open the picker.
-    fireEvent.click(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
-    );
-
-    const disabledRow = screen
-      .getByText("Others Private")
-      .closest("button") as HTMLButtonElement;
-    expect(disabledRow).not.toBeNull();
-    expect(disabledRow.disabled).toBe(true);
-    expect(disabledRow.title).toMatch(/Private runtime/i);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    const payload = onCreate.mock.calls[0]?.[0];
+    expect(payload.provider).toBe("claude");
+    expect(payload.runtime_id).toBeUndefined();
   });
 
-  it("lets a plain member pick another member's public runtime", () => {
-    const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
-    const othersPublic = makeRuntime({
-      id: "rt-others-public",
-      name: "Others Public",
-      owner_id: OTHER,
-      visibility: "public",
+  it("switching the engine toggles the submitted provider", async () => {
+    const { onCreate } = renderDialog();
+
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Codex Agent" },
     });
-    renderDialog([mine, othersPublic]);
+    fireEvent.click(screen.getByRole("button", { name: /codex/i }));
+    fireEvent.click(createButton());
 
-    fireEvent.click(screen.getByText("All"));
-    fireEvent.click(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
-    );
-
-    const publicRow = screen
-      .getByText("Others Public")
-      .closest("button") as HTMLButtonElement;
-    expect(publicRow).not.toBeNull();
-    expect(publicRow.disabled).toBe(false);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0].provider).toBe("codex");
   });
 
-  it("defaults the selected runtime to a usable one, not a locked private", () => {
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    const mine = makeRuntime({
-      id: "rt-mine",
-      name: "My Runtime",
-      owner_id: ME,
-      visibility: "private",
-    });
-    renderDialog([othersPrivate, mine]);
+  it("duplicate mode inherits the template's engine", async () => {
+    const { onCreate } = renderDialog(makeTemplate({ provider: "codex" }));
 
-    // The trigger label shows the selected runtime name. The picker must
-    // not seed with the other-owned private runtime even if it sorted
-    // first in the input list.
-    expect(screen.queryByText("Others Private", { selector: "span.truncate" })).toBeNull();
-    expect(screen.getByText("My Runtime", { selector: "span.truncate" })).toBeInTheDocument();
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0].provider).toBe("codex");
   });
 
-  it("in duplicate mode, does not pre-fill the template's runtime when it's now locked", async () => {
-    // Template runtime is owned by someone else and now private — the
-    // duplicate flow used to seed with it anyway, leaving the user with
-    // a Create button that 403s server-side. Now we fall back to the
-    // first usable runtime instead.
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    const mine = makeRuntime({
-      id: "rt-mine",
-      name: "My Runtime",
-      owner_id: ME,
-      visibility: "private",
-    });
-    const template = makeTemplate("rt-others-private");
-    const { onCreate } = renderDialog([othersPrivate, mine], template);
+  it("shows the no-capacity hint when the selected engine has no online machine", async () => {
+    mockListFleetModels.mockResolvedValue(fleetWithCapacity({ claude: 0, codex: 1 }));
+    renderDialog();
 
     expect(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
+      await screen.findByText(/No online machine for this engine/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Others Private", { selector: "span.truncate" }),
-    ).toBeNull();
 
-    // Sanity check: with a usable selection seeded, Create should submit.
-    fireEvent.click(screen.getByText("Create"));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(onCreate).toHaveBeenCalledTimes(1);
-    expect(onCreate.mock.calls[0]?.[0].runtime_id).toBe("rt-mine");
+    // Creation stays allowed — the task queues server-side.
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Queued Agent" },
+    });
+    expect(createButton().disabled).toBe(false);
   });
 
-  it("disables Create when the selected runtime is locked (template + no usable fallback)", () => {
-    // Edge case: template points at a locked runtime AND the workspace
-    // has no usable alternatives in scope. The defense-in-depth gate on
-    // the Create button must keep the user from submitting a 403.
-    const onlyOthersPrivate = makeRuntime({
-      id: "rt-only-others-private",
-      name: "Only Others Private",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    // Flip the picker to "All" so the locked runtime is at least
-    // visible — that's the scope where the selected-but-locked state
-    // can persist after the initial seed search returns nothing.
-    const template = makeTemplate("rt-only-others-private");
-    renderDialog([onlyOthersPrivate], template);
+  it("gates Create on the name only", () => {
+    renderDialog();
+    expect(createButton().disabled).toBe(true);
 
-    // The Create button is rendered by lucide-free CTA text "Create".
-    const createBtn = screen
-      .getAllByRole("button")
-      .find((b) => b.textContent === "Create");
-    expect(createBtn).toBeDefined();
-    expect((createBtn as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Named" },
+    });
+    expect(createButton().disabled).toBe(false);
   });
 });
