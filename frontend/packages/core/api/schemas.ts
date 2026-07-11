@@ -126,7 +126,10 @@ const TimelineEntrySchema = z.object({
   type: z.string(),
   id: z.string(),
   actor_type: z.string(),
-  actor_id: z.string(),
+  // System activities (issue_assigned, issue_updated, …) come back with
+  // actor_id: null. A single null used to fail the whole array and blank the
+  // activity feed via the fallback — normalize to "" instead.
+  actor_id: z.preprocess((value) => value ?? "", z.string()),
   created_at: z.string(),
   action: z.string().optional(),
   details: z.record(z.string(), z.unknown()).optional(),

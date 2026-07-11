@@ -7,6 +7,7 @@ import {
   DuplicateIssueErrorBodySchema,
   EMPTY_CLI_LATEST_VERSION,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+  EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   ListIssuesResponseSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -16,6 +17,7 @@ import {
   RuntimeUsageListSchema,
   SquadListSchema,
   SquadSchema,
+  TimelineEntriesSchema,
   UserSchema,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
@@ -272,6 +274,57 @@ describe("dashboard + runtime usage schema drift", () => {
       { date: "2026-05-19", region: "us-east" },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
+  });
+});
+
+// The activity feed renders whatever /timeline validates; a single bad entry
+// used to blank the ENTIRE feed via the array-level fallback. System
+// activities (issue_assigned, issue_updated) legitimately carry
+// actor_id: null — this is the production shape that hid comments for days.
+describe("TimelineEntriesSchema null actor_id", () => {
+  const opts = { endpoint: "GET /api/issues/:id/timeline" };
+  const productionShape = [
+    {
+      type: "activity",
+      id: "act_1",
+      actor_type: "system",
+      actor_id: "local",
+      created_at: "2026-07-11T16:28:35.517Z",
+      action: "issue_created",
+      details: { priority: "none" },
+    },
+    {
+      type: "activity",
+      id: "act_2",
+      actor_type: "system",
+      actor_id: null,
+      created_at: "2026-07-11T16:28:35.547Z",
+      action: "issue_assigned",
+      details: { assignee_type: "agent", assignee_id: "agt_1" },
+    },
+    {
+      type: "comment",
+      id: "cmt_1",
+      actor_type: "agent",
+      actor_id: "agt_1",
+      created_at: "2026-07-11T16:41:14.000Z",
+      content: "Remi 是一个 AI 消息路由器。",
+      parent_id: null,
+      updated_at: "2026-07-11T16:41:14.000Z",
+      comment_type: "comment",
+      reactions: [],
+      attachments: [],
+      resolved_at: null,
+      resolved_by_type: null,
+      resolved_by_id: null,
+    },
+  ];
+
+  it("keeps the feed when a system activity has actor_id null", () => {
+    const parsed = parseWithFallback(productionShape, TimelineEntriesSchema, EMPTY_TIMELINE_ENTRIES, opts);
+    expect(parsed).toHaveLength(3);
+    expect(parsed[1]).toMatchObject({ action: "issue_assigned", actor_id: "" });
+    expect(parsed[2]).toMatchObject({ type: "comment", content: "Remi 是一个 AI 消息路由器。" });
   });
 });
 
