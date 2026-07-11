@@ -260,6 +260,43 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.claimTask(runtime.id)).toBeNull();
   });
 
+  it("pool-claims unbound agents' tasks and stamps affinity (chat session + local directory)", () => {
+    const ws = freshWorkspace();
+    const codex = store.registerRuntime({ name: "rt-pool-codex", provider: "codex", workspaceId: ws, daemonId: "daemon-pg-pool" });
+    const claude = store.registerRuntime({ name: "rt-pool-claude", provider: "claude", workspaceId: ws });
+    const agent = store.createAgent({ name: "PG Pool", provider: "codex", workspaceId: ws });
+    expect(agent.runtimeId).toBeNull();
+
+    // Unbound task: claude can't claim it, codex can, and the claim stamps it.
+    const task = store.createTask({ agentId: agent.id, prompt: "pooled", workspaceId: ws });
+    expect(task.runtimeId).toBeNull();
+    expect(store.claimTask(claude.id)).toBeNull();
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    expect(store.getTask(task.id)?.runtimeId).toBe(codex.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "done" });
+
+    // Chat affinity: a promoted provider session pins follow-ups to its machine.
+    const session = store.createChatSession({ agentId: agent.id, title: "pg chat", workspaceId: ws });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi", workspaceId: ws });
+    expect(first.runtimeId).toBeNull();
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "done", sessionId: "sess_pg_chat", workDir: "/tmp/pg-chat" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again", workspaceId: ws });
+    expect(followUp.runtimeId).toBe(codex.id);
+
+    // local_directory affinity resolves the daemon's provider-matching runtime.
+    const project = store.createProject({
+      title: "PG local dir",
+      workspaceId: ws,
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-project", daemon_id: "daemon-pg-pool" } }],
+    });
+    const issue = store.createIssue({ title: "pg dir issue", workspaceId: ws, projectId: project.id });
+    const dirTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in dir", workspaceId: ws });
+    expect(dirTask.runtimeId).toBe(codex.id);
+  });
+
   it("creates and lists workspace members", () => {
     const ws = freshWorkspace();
     const before = store.listWorkspaceMembers(ws).length; // owner seeded by createWorkspace

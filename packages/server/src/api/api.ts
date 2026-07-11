@@ -1004,7 +1004,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const agent = store.createAgent(input);
-    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
       template: input.template,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1026,7 +1026,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       ownerId: currentRequestUserId(c),
     });
     if (!before) {
-      recordAgentCreatedAnalytics(c, store, agent, null, {
+      recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
         template: "default",
         isFirstAgentInWorkspace: isFirstAgent,
       });
@@ -1147,7 +1147,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const agent = store.createAgent(input);
-    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
       template: input.template,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1161,7 +1161,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const result = await createAgentFromTemplate(store, input);
-    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, body), {
       template: input.templateSlug ?? input.template_slug,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1214,7 +1214,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const result = await createAgentFromTemplate(store, input);
-    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, body), {
       template: input.templateSlug ?? input.template_slug,
       isFirstAgentInWorkspace: isFirstAgent,
     });

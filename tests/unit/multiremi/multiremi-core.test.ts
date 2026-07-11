@@ -232,6 +232,167 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(secondRuntime.id)?.id).toBe(task.id);
   });
 
+  it("claims unbound agents' tasks from any provider-matching runtime and stamps the claimer", () => {
+    const store = createStore();
+    const claude = store.registerRuntime({ id: "rt_pool_claude", name: "pool claude", provider: "claude" });
+    const codexA = store.registerRuntime({ id: "rt_pool_codex_a", name: "pool codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_pool_codex_b", name: "pool codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Pool Codex", provider: "codex" });
+    expect(agent.runtimeId).toBeNull();
+    const task = store.createTask({ agentId: agent.id, prompt: "run anywhere" });
+    expect(task.runtimeId).toBeNull();
+
+    expect(store.claimTask(claude.id)).toBeNull();
+    expect(store.claimTask(codexA.id)?.id).toBe(task.id);
+    expect(store.getTask(task.id)?.runtimeId).toBe(codexA.id);
+
+    const secondAgent = store.createAgent({ name: "Pool Codex 2", provider: "codex" });
+    const secondTask = store.createTask({ agentId: secondAgent.id, prompt: "second machine" });
+    expect(store.claimTask(codexB.id)?.id).toBe(secondTask.id);
+    expect(store.getTask(secondTask.id)?.runtimeId).toBe(codexB.id);
+
+    const anyRuntime = store.registerRuntime({ id: "rt_pool_any", name: "pool any", provider: "any" });
+    const thirdAgent = store.createAgent({ name: "Pool Codex 3", provider: "codex" });
+    const thirdTask = store.createTask({ agentId: thirdAgent.id, prompt: "any provider" });
+    expect(store.claimTask(anyRuntime.id)?.id).toBe(thirdTask.id);
+  });
+
+  it("keeps unbound agents unbound when a daemon registers", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Pool stays unbound", provider: "codex", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+    const register = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daemon_id: "daemon-pool", workspace_id: "local", runtimes: [{ name: "", type: "codex" }] }),
+    });
+    expect(register.status).toBe(200);
+    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
+  });
+
+  it("unpins legacy agent runtime bindings at startup", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_legacy_pin", name: "legacy pin", provider: "codex" });
+    const agent = store.createAgent({ name: "Legacy pinned", provider: "codex", runtimeId: runtime.id });
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
+    const reopened = new MultiremiStore(db!);
+    expect(reopened.getAgent(agent.id)?.runtimeId).toBeNull();
+  });
+
+  it("keeps follow-up chat messages on the machine that holds the provider session", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_chat_codex_a", name: "chat codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_chat_codex_b", name: "chat codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Chat pool", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "hello" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(first.runtimeId).toBeNull();
+
+    expect(store.claimTask(codexB.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "done", sessionId: "sess_chat_affinity", workDir: "/tmp/chat" });
+    expect(store.getChatSession(session.id)?.sessionId).toBe("sess_chat_affinity");
+
+    const second = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(second.runtimeId).toBe(codexB.id);
+
+    // A provider switch drops the affinity — a codex-machine stamp would make
+    // the task unclaimable by any claude runtime.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const third = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "after switch" });
+    expect(third.runtimeId).toBeNull();
+  });
+
+  it("routes project tasks to the machine holding the local directory", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_dir_codex", name: "dir codex", provider: "codex", daemonId: "daemon-dir" });
+    store.registerRuntime({ id: "rt_dir_claude", name: "dir claude", provider: "claude", daemonId: "daemon-dir" });
+    store.registerRuntime({ id: "rt_elsewhere_codex", name: "elsewhere codex", provider: "codex", daemonId: "daemon-elsewhere" });
+    const agent = store.createAgent({ name: "Dir pool", provider: "codex" });
+    const project = store.createProject({ title: "Local project", workspaceId: "local" });
+    store.createProjectResource(project.id, {
+      resourceType: "local_directory",
+      resourceRef: { local_path: "/abs/project", daemon_id: "daemon-dir" },
+    });
+    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in the local dir" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+
+    const orphanProject = store.createProject({ title: "Orphan project", workspaceId: "local" });
+    store.createProjectResource(orphanProject.id, {
+      resourceType: "local_directory",
+      resourceRef: { local_path: "/abs/orphan", daemon_id: "daemon-gone" },
+    });
+    const orphanIssue = store.createIssue({ title: "orphan issue", workspaceId: "local", projectId: orphanProject.id });
+    const orphanTask = store.createTask({ agentId: agent.id, issueId: orphanIssue.id, prompt: "no machine has this" });
+    expect(orphanTask.runtimeId).toBeNull();
+  });
+
+  it("frees resume-unsafe retries to the pool while resume-safe retries stay pinned", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_retry_codex", name: "retry codex", provider: "codex" });
+    const agent = store.createAgent({ name: "Retry pool", provider: "codex" });
+
+    const offlineIssue = store.createIssue({ title: "offline retry", workspaceId: "local" });
+    const offlineTask = store.createTask({ agentId: agent.id, issueId: offlineIssue.id, prompt: "fails offline" });
+    expect(store.claimTask(runtime.id)?.id).toBe(offlineTask.id);
+    store.startTask(offlineTask.id);
+    store.failTask(offlineTask.id, { error: "runtime went away", failureReason: "runtime_offline" });
+    const offlineRetry = store.listTasks().find((task) => task.parentTaskId === offlineTask.id)!;
+    expect(offlineRetry.runtimeId).toBe(runtime.id);
+
+    const unsafeIssue = store.createIssue({ title: "unsafe retry", workspaceId: "local" });
+    // Priority beats the queued offline retry in the claim ordering.
+    const unsafeTask = store.createTask({ agentId: agent.id, issueId: unsafeIssue.id, prompt: "fails unsafely", priority: 100 });
+    expect(store.claimTask(runtime.id)?.id).toBe(unsafeTask.id);
+    store.startTask(unsafeTask.id);
+    store.failTask(unsafeTask.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });
+    const unsafeRetry = store.listTasks().find((task) => task.parentTaskId === unsafeTask.id)!;
+    expect(unsafeRetry.runtimeId).toBeNull();
+  });
+
+  it("serves the fleet model catalog grouped by provider", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_fleet_claude_a",
+      name: "fleet claude a",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        { id: "claude-opus-4-8", label: "Opus 4.8", provider: "claude", default: true },
+        { id: "claude-sonnet-5", label: "Sonnet 5", provider: "claude", default: false },
+      ],
+    });
+    store.registerRuntime({
+      id: "rt_fleet_claude_b",
+      name: "fleet claude b",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{ id: "claude-sonnet-5", label: "Sonnet 5", provider: "claude", default: false }],
+    });
+    const offline = store.registerRuntime({
+      id: "rt_fleet_codex",
+      name: "fleet codex",
+      provider: "codex",
+      workspaceId: "local",
+      models: [{ id: "gpt-5.2", label: "GPT-5.2", provider: "codex", default: true }],
+    });
+    db!.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", offline.id]);
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/models");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const claude = body.providers.find((entry: any) => entry.provider === "claude");
+    expect(claude.online_runtime_count).toBe(2);
+    expect(claude.models.map((model: any) => model.id).sort()).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
+    expect(claude.models.find((model: any) => model.id === "claude-opus-4-8").default).toBe(true);
+    // Offline runtimes still surface their provider (capacity 0) but not a catalog.
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    expect(codex.online_runtime_count).toBe(0);
+    expect(codex.models).toEqual([]);
+  });
+
   it("claims runtime tasks atomically across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-task-claim-"));
     const path = join(dir, "multiremi.db");
@@ -2665,9 +2826,11 @@ describe("Bun Multiremi core store", () => {
     expect(createdAgent.status).toBe(201);
     const agent = await createdAgent.json();
     expect(agent.owner_id).toBe("alice");
-    expect(agent.runtime_id).toBe(aliceRuntime.id);
-    expect(agent.provider).toBeUndefined();
+    // Pool model: the legacy runtime_id only picks the provider; no binding.
+    expect(agent.runtime_id).toBe("");
+    expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
+    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(agent.visibility).toBe("private");
 
     expect((await app.request(`/api/agents/${agent.id}`, { headers: aliceAuthHeaders })).status).toBe(200);
@@ -2779,13 +2942,13 @@ describe("Bun Multiremi core store", () => {
     expect(invalidCreate.status).toBe(400);
     expect(await invalidCreate.json()).toEqual({ error: "invalid request body" });
 
-    const missingRuntime = await app.request("/api/agents", {
+    const unknownProvider = await app.request("/api/agents", {
       method: "POST",
       headers: jsonHeaders(aliceToken.token),
-      body: JSON.stringify({ name: "No runtime", provider: "codex" }),
+      body: JSON.stringify({ name: "Bad provider", provider: "gemini" }),
     });
-    expect(missingRuntime.status).toBe(400);
-    expect(await missingRuntime.json()).toEqual({ error: "runtime_id is required" });
+    expect(unknownProvider.status).toBe(400);
+    expect(await unknownProvider.json()).toEqual({ error: 'unknown provider "gemini"' });
 
     const crossWorkspaceRuntime = await app.request("/api/agents", {
       method: "POST",
@@ -2837,13 +3000,15 @@ describe("Bun Multiremi core store", () => {
     });
     expect(bobPublicRuntime.status).toBe(201);
     const bobAgent = await bobPublicRuntime.json();
-    expect(bobAgent.provider).toBeUndefined();
+    // Legacy runtime_id still forces the provider but no longer binds.
+    expect(bobAgent.provider).toBe("claude");
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
     expect(store.getAgent(bobAgent.id)?.description).toBe("Bob public description");
     expect(store.getAgent(bobAgent.id)?.avatarUrl).toBe("https://example.com/bob-agent.png");
     expect(bobAgent.description).toBe("Bob public description");
     expect(bobAgent.avatar_url).toBe("https://example.com/bob-agent.png");
-    expect(bobAgent.runtime_id).toBe(bobPublic.id);
+    expect(bobAgent.runtime_id).toBe("");
     expect(bobAgent.owner_id).toBe("bob");
     expect(bobAgent.max_concurrent_tasks).toBe(6);
     const bobAgentCreated = store.listAnalyticsEvents({ name: "agent_created" })[0]!;
@@ -2870,14 +3035,7 @@ describe("Bun Multiremi core store", () => {
     expect(invalidDefaultJson.status).toBe(400);
     expect(await invalidDefaultJson.json()).toEqual({ error: "invalid request body" });
 
-    const providerOnlyDefault = await app.request("/api/multiremi/agents/default", {
-      method: "POST",
-      headers: jsonHeaders(bobToken.token),
-      body: JSON.stringify({ provider: "claude" }),
-    });
-    expect(providerOnlyDefault.status).toBe(400);
-    expect(await providerOnlyDefault.json()).toEqual({ error: "runtime_id is required" });
-
+    // Pool model: the default agent seeds without a runtime and stays unbound.
     const defaultSeed = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
@@ -2886,10 +3044,10 @@ describe("Bun Multiremi core store", () => {
     expect(defaultSeed.status).toBe(201);
     const defaultSeedBody = await defaultSeed.json();
     expect(defaultSeedBody.agent).toMatchObject({
-      id: "agt_default_local_rt_gate_bob_public",
+      id: "agt_default_local_claude",
       name: "Claude",
       provider: "claude",
-      runtimeId: bobPublic.id,
+      runtimeId: null,
       workspaceId: "local",
       ownerId: "bob",
       description: "Default Claude agent",
@@ -2897,7 +3055,7 @@ describe("Bun Multiremi core store", () => {
     const agentCreatedEventsAfterDefault = store.listAnalyticsEvents({ name: "agent_created" });
     expect(agentCreatedEventsAfterDefault).toHaveLength(2);
     expect(agentCreatedEventsAfterDefault[1]!.properties).toMatchObject({
-      agent_id: "agt_default_local_rt_gate_bob_public",
+      agent_id: "agt_default_local_claude",
       provider: "claude",
       runtime_mode: "local",
       template: "default",
@@ -2907,13 +3065,22 @@ describe("Bun Multiremi core store", () => {
     });
     expect(metricValue(store, "multiremi_agent_created_total", { runtime_mode: "local", source: "manual" })).toBe(2);
 
+    // Provider-only seeding works and reuses the same default agent.
+    const providerOnlyDefault = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(providerOnlyDefault.status).toBe(200);
+    expect((await providerOnlyDefault.json()).agent.id).toBe("agt_default_local_claude");
+
     const defaultSeedAgain = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
       body: JSON.stringify({ runtime_id: bobPublic.id }),
     });
     expect(defaultSeedAgain.status).toBe(200);
-    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_rt_gate_bob_public");
+    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_claude");
     expect(store.listAnalyticsEvents({ name: "agent_created" })).toHaveLength(2);
 
     const invalidNativeUpdate = await app.request(`/api/multiremi/agents/${bobAgent.id}`, {
@@ -2958,16 +3125,17 @@ describe("Bun Multiremi core store", () => {
     expect(duplicateName.status).toBe(409);
     expect(await duplicateName.json()).toEqual({ error: "an agent named \"Bob public agent\" already exists in this workspace" });
 
-    const forbiddenMove = await app.request(`/api/agents/${bobAgent.id}`, {
+    // Machine binding is gone: legacy runtime moves are dropped, not rejected.
+    const ignoredMove = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
       body: JSON.stringify({ runtime_id: alicePrivate.id }),
     });
-    expect(forbiddenMove.status).toBe(403);
-    expect(await forbiddenMove.json()).toEqual({
-      error: "this runtime is private; only its owner or a workspace admin can move agents onto it",
-    });
+    expect(ignoredMove.status).toBe(200);
+    expect((await ignoredMove.json()).runtime_id).toBe("");
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
 
+    // Provider is editable on unbound agents (and round-trips cleanly).
     const providerOnlyUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
@@ -2975,7 +3143,23 @@ describe("Bun Multiremi core store", () => {
     });
     expect(providerOnlyUpdate.status).toBe(200);
     const providerOnlyUpdateBody = await providerOnlyUpdate.json();
-    expect(providerOnlyUpdateBody.provider).toBeUndefined();
+    expect(providerOnlyUpdateBody.provider).toBe("codex");
+    expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
+
+    const unknownProviderUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "gemini" }),
+    });
+    expect(unknownProviderUpdate.status).toBe(400);
+    expect(await unknownProviderUpdate.json()).toEqual({ error: 'unknown provider "gemini"' });
+
+    const providerRestore = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(providerRestore.status).toBe(200);
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
 
     const descriptionUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
@@ -3001,7 +3185,9 @@ describe("Bun Multiremi core store", () => {
       body: JSON.stringify({ name: "Admin private agent", runtime_id: alicePrivate.id }),
     });
     expect(adminPrivateRuntime.status).toBe(201);
-    expect((await adminPrivateRuntime.json()).runtime_id).toBe(alicePrivate.id);
+    const adminAgent = await adminPrivateRuntime.json();
+    expect(adminAgent.runtime_id).toBe("");
+    expect(adminAgent.provider).toBe("codex");
   });
 
   it("redacts agent mcp_config like the Go server", async () => {
@@ -5844,13 +6030,13 @@ describe("Bun Multiremi API", () => {
     expect(invalidNativeTemplateCreate.status).toBe(400);
     expect(await invalidNativeTemplateCreate.json()).toEqual({ error: "invalid request body" });
 
-    const missingRuntime = await app.request("/api/agents/from-template", {
+    const unknownProviderTemplate = await app.request("/api/agents/from-template", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template_slug: "summarizer", name: "No Runtime", provider: "codex" }),
+      body: JSON.stringify({ template_slug: "summarizer", name: "No Runtime", provider: "gemini" }),
     });
-    expect(missingRuntime.status).toBe(400);
-    expect(await missingRuntime.json()).toMatchObject({ error: "runtime_id is required" });
+    expect(unknownProviderTemplate.status).toBe(400);
+    expect(await unknownProviderTemplate.json()).toMatchObject({ error: 'unknown provider "gemini"' });
 
     const multiremiTemplates = await app.request("/api/multiremi/agent-templates");
     const multiremiTemplatesBody = await multiremiTemplates.json();
@@ -5871,9 +6057,10 @@ describe("Bun Multiremi API", () => {
     expect(created.status).toBe(201);
     const createdBody = await created.json();
     expect(createdBody.agent.name).toBe("Bug Fixer Agent");
-    expect(createdBody.agent.provider).toBeUndefined();
+    expect(createdBody.agent.provider).toBe("codex");
     expect(store.getAgent(createdBody.agent.id)?.provider).toBe("codex");
-    expect(createdBody.agent.runtime_id).toBe(codexRuntime.id);
+    expect(createdBody.agent.runtime_id).toBe("");
+    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBeNull();
     expect(createdBody.agent.avatar_url).toBe("https://example.com/template-bug-fixer.png");
     expect(store.getAgent(createdBody.agent.id)?.avatarUrl).toBe("https://example.com/template-bug-fixer.png");
     expect(createdBody.agent.max_concurrent_tasks).toBe(6);
@@ -8086,10 +8273,10 @@ describe("Bun Multiremi API", () => {
     const runtimeBootstrapBody = await runtimeBootstrap.json();
     expect(runtimeBootstrap.status).toBe(200);
     expect(runtimeBootstrapBody.workspace_id).toBe(workspace.id);
-    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_${runtime.id}`);
+    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_codex`);
     expect(store.getAgent(runtimeBootstrapBody.agent_id)).toMatchObject({
       provider: "codex",
-      runtimeId: runtime.id,
+      runtimeId: null,
       workspaceId: workspace.id,
     });
     const onboardingAgentCreated = store.listAnalyticsEvents({ name: "agent_created" })[0]!;
@@ -10323,12 +10510,12 @@ describe("Bun Multiremi API", () => {
     });
     const agent = await createdAgent.json();
     expect(createdAgent.status).toBe(201);
-    expect(agent.provider).toBeUndefined();
+    expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
     expect(Object.keys(agent).filter((key) => /[A-Z]/.test(key))).toEqual([]);
     expect(agent).toMatchObject({
       workspace_id: "local",
-      runtime_id: runtime.id,
+      runtime_id: "",
       max_concurrent_tasks: 6,
       has_custom_env: true,
       custom_env_key_count: 1,

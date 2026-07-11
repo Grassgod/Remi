@@ -110,13 +110,8 @@ export async function createAgentFromTemplate(
   if (!template) throw new AgentTemplateError(`template not found: ${templateSlug}`, 400);
   const name = String(input.name ?? "").trim();
   if (!name) throw new AgentTemplateError("name is required", 400);
-  const runtimeId = String(input.runtimeId ?? input.runtime_id ?? "").trim();
-  if (!runtimeId) throw new AgentTemplateError("runtime_id is required", 400);
-  const runtime = store.getRuntime(runtimeId);
-  if (!runtime) throw new AgentTemplateError("invalid runtime_id", 400);
-  const provider = normalizeAgentTemplateProvider(input.provider ?? runtime.provider);
-  const workspaceId = input.workspaceId ?? input.workspace_id ?? runtime.workspaceId ?? "local";
-  if ((runtime.workspaceId ?? "local") !== workspaceId) throw new AgentTemplateError("invalid runtime_id", 400);
+  const provider = normalizeAgentTemplateProvider(input.provider);
+  const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
   const createdBy = input.ownerId ?? input.owner_id ?? null;
   const extraSkillIds = input.extraSkillIds ?? input.extra_skill_ids ?? [];
 
@@ -185,10 +180,9 @@ export async function createAgentFromTemplate(
     workspaceId,
     ownerId: createdBy,
     visibility: input.visibility ?? "private",
-    runtimeId,
     avatarUrl: templateAvatarUrl(input),
     instructions: input.instructions ?? template.instructions,
-    model: input.model ?? runtime?.models.find((model) => model.default)?.id ?? null,
+    model: input.model ?? null,
     maxConcurrentTasks: normalizeTemplateMaxConcurrentTasks(input.maxConcurrentTasks ?? input.max_concurrent_tasks),
     skills: [],
   });
