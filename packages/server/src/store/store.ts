@@ -7251,6 +7251,7 @@ runMigrations(this.db);
         body,
         data: { taskId: task.id, runtimeId: task.runtimeId },
       });
+      if (status === "completed") this.postAgentReplyComment(task, body);
       const issue = this.getIssue(task.issueId);
       if (issue?.projectId) this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
     }
@@ -7281,6 +7282,28 @@ runMigrations(this.db);
       }
     }
     return retry;
+  }
+
+  // Post the agent's final reply as an issue comment so the outcome is visible
+  // in the issue thread, not only inside the run transcript. Threads under the
+  // triggering comment when the task came from an @mention. Legacy daemons
+  // still report the "Task completed." placeholder — skip it, it says nothing.
+  private postAgentReplyComment(task: MultiremiTask, output: string | null): void {
+    if (!task.issueId || !task.agentId) return;
+    const body = (output ?? "").trim();
+    if (!body || body === "Task completed.") return;
+    try {
+      const parent = task.triggerCommentId ? this.getIssueComment(task.triggerCommentId) : null;
+      this.createIssueComment(task.issueId, {
+        authorType: "agent",
+        authorId: task.agentId,
+        parentId: parent && parent.issueId === task.issueId ? parent.id : null,
+        body,
+      });
+    } catch (err) {
+      // Task completion must never fail because the reply couldn't be posted.
+      log.warn(`agent reply comment skipped for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private nextIssueStatusAfterTaskTerminal(

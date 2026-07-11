@@ -898,6 +898,48 @@ describe("Bun Multiremi core store", () => {
     expect(store.listTasks().filter((task) => task.issueId === parked.id)).toHaveLength(0);
   });
 
+  it("posts the agent's final reply as an issue comment on completion", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_reply_comment", name: "reply comment", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Reply Bot", provider: "claude", runtimeId: runtime.id });
+
+    // Plain issue task: reply lands as a top-level agent comment.
+    const issue = store.createIssue({ title: "总结项目", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "总结项目" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "Remi 是一个 AI 消息路由器。" });
+    const comments = store.listIssueComments(issue.id);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      authorType: "agent",
+      authorId: agent.id,
+      body: "Remi 是一个 AI 消息路由器。",
+      parentId: null,
+    });
+
+    // Comment-mention task: reply threads under the triggering comment.
+    const trigger = store.createIssueComment(issue.id, {
+      authorType: "member",
+      authorId: "local",
+      body: `[@Reply Bot](mention://agent/${agent.id}) 再说一遍`,
+    });
+    const mentionTask = store.listTasks().find((item) => item.triggerCommentId === trigger.id)!;
+    expect(store.claimTask(runtime.id)?.id).toBe(mentionTask.id);
+    store.startTask(mentionTask.id);
+    store.completeTask(mentionTask.id, { output: "好的:是一个消息路由器。" });
+    const reply = store.listIssueComments(issue.id).find((c) => c.parentId === trigger.id);
+    expect(reply).toMatchObject({ authorType: "agent", body: "好的:是一个消息路由器。" });
+
+    // Placeholder / empty outputs post nothing.
+    const silent = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "quiet" });
+    expect(store.claimTask(runtime.id)?.id).toBe(silent.id);
+    store.startTask(silent.id);
+    const before = store.listIssueComments(issue.id).length;
+    store.completeTask(silent.id, { output: "Task completed." });
+    expect(store.listIssueComments(issue.id)).toHaveLength(before);
+  });
+
   it("accepts comments authored with a user id when the member row uses the mem_<ws>_<uid> convention", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_uid_comment", name: "uid comment", provider: "claude", workspaceId: "local" });
@@ -3291,7 +3333,10 @@ describe("Bun Multiremi core store", () => {
     expect(store.getIssue(run.issueId!)?.status).toBe("done");
     expect(store.getProject(project.id)?.doneCount).toBe(1);
     expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
-    expect(store.listIssueActivity(run.issueId!).at(-1)?.type).toBe("task_completed");
+    // Completion appends task_completed, then the agent-reply comment_created.
+    const activityTypes = store.listIssueActivity(run.issueId!).map((entry) => entry.type);
+    expect(activityTypes).toContain("task_completed");
+    expect(activityTypes.at(-1)).toBe("comment_created");
   });
 
   it("includes autopilot run ids in daemon task payloads", async () => {
