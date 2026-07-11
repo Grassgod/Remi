@@ -1,6 +1,6 @@
 {
   "name": "remi",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Remi - Personal AI assistant with persistent memory, multi-connector messaging (CLI, Lark/Feishu), and Claude Code integration.",
   "type": "module",
   "license": "MIT",

@@ -84,7 +84,10 @@ describe("Bun Multiremi daemon smoke", () => {
     const sendOptions: SendOptions[] = [];
     let closed = false;
     const response: AgentResponse = {
-      text: "Smoke completed",
+      // The real ACP provider always returns text: "" (buildAgentResponse) —
+      // the task result must come from the streamed agent_message_chunk events,
+      // so keep this empty to exercise that path.
+      text: "",
       sessionId: "sess-smoke",
       requestId: "req-smoke",
       inputTokens: 7,
@@ -236,8 +239,10 @@ describe("Bun Multiremi daemon smoke", () => {
         cacheReadTokens: 2,
         cacheWriteTokens: 1,
       });
+      // Registration renames the runtime to `<provider> (<deviceName>)` where
+      // deviceName is host-derived (commit 2d2622b2), so match the convention.
       expect(store.listRuntimes()[0]).toMatchObject({
-        name: "smoke-runtime",
+        name: expect.stringMatching(/^claude \(/),
         provider: "claude",
         status: "online",
       });

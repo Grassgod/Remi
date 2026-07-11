@@ -877,7 +877,9 @@ export class MultiremiDaemon {
       for await (const event of session.run(prompt)) {
         const message = eventToTaskMessage(event, nextSeq());
         if (message) {
-          if (message.type === "assistant" && message.content) output += message.content;
+          // eventToTaskMessage reports assistant text as type "text" — this is
+          // what becomes the task result / issue activity body on completion.
+          if (message.type === "text" && message.content) output += message.content;
           await this.client.reportTaskMessages(task.id, [message]);
         }
       }
