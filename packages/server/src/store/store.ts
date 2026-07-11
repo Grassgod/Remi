@@ -761,31 +761,41 @@ runMigrations(this.db);
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { runtimeId?: string | null; workspaceId?: string | null; ownerId?: string | null } = {},
+    options: { workspaceId?: string | null; ownerId?: string | null } = {},
   ): MultiremiAgent {
-    const runtimeId = cleanOptionalString(options.runtimeId);
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
-    const id = runtimeId ? `agt_default_${safeIdSegment(workspaceId)}_${safeIdSegment(runtimeId)}` : `agt_default_${provider}`;
-    const existing = this.getAgent(id);
+    const existing = this.getDefaultAgent(workspaceId, provider);
     if (existing) {
       if (existing.archivedAt) {
-        const now = nowIso();
-        this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
-        return this.getAgent(id)!;
+        this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
+        return this.getAgent(existing.id)!;
       }
       return existing;
     }
     return this.createAgent({
-      id,
+      id: `agt_default_${safeIdSegment(workspaceId)}_${provider}`,
       name: provider === "codex" ? "Codex" : "Claude",
       description: provider === "codex" ? "Default Codex agent" : "Default Claude agent",
       provider,
       workspaceId,
       ownerId,
-      runtimeId,
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
+  }
+
+  /**
+   * Find the workspace's default agent for a provider. Matches legacy ids too
+   * (`agt_default_<provider>`, `agt_default_<ws>_<runtime>`) so pre-pool
+   * deployments reuse their default agent instead of growing a twin.
+   */
+  getDefaultAgent(workspaceId: string, provider: string): MultiremiAgent | null {
+    const row = this.db.query(
+      `SELECT * FROM multiremi_agents
+       WHERE id LIKE 'agt_default_%' AND workspace_id = ? AND provider = ?
+       ORDER BY archived_at IS NOT NULL, created_at ASC LIMIT 1`,
+    ).get(workspaceId, provider) as Row | null;
+    return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
   getAgent(id: string): MultiremiAgent | null {
@@ -1722,18 +1732,6 @@ runMigrations(this.db);
       if (runtime.status === "online") this.recordRuntimeReadyAnalytics(runtime, 0);
     }
     return runtime;
-  }
-
-  bindUnboundAgentsToRuntime(runtime: MultiremiRuntime): number {
-    const now = nowIso();
-    const result = this.db.run(
-      `UPDATE multiremi_agents SET runtime_id = ?, updated_at = ?
-       WHERE workspace_id = ? AND provider = ?
-         AND (runtime_id IS NULL OR runtime_id = '')
-         AND archived_at IS NULL`,
-      [runtime.id, now, runtime.workspaceId, runtime.provider],
-    );
-    return result.changes;
   }
 
   getRuntime(id: string): MultiremiRuntime | null {
@@ -5998,8 +5996,13 @@ runMigrations(this.db);
     const chatSession = input.chatSessionId ? this.getChatSession(input.chatSessionId) : null;
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
-    const runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
+    let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
+    // Pool scheduling: tasks stay unbound so any provider-matching runtime can
+    // claim them. Two machine-local realities still force a stamp: a promoted
+    // provider session lives on the machine that ran it, and a local_directory
+    // project resource only exists on its daemon.
+    if (!runtimeId) runtimeId = this.resolveTaskRuntimeAffinity(agent, chatSession, issue);
 
     const id = input.id ?? createId("tsk");
     const now = nowIso();
@@ -6034,6 +6037,48 @@ runMigrations(this.db);
     const task = this.getTask(id)!;
     this.notifyTaskEnqueued(task);
     return task;
+  }
+
+  private resolveTaskRuntimeAffinity(
+    agent: MultiremiAgent,
+    chatSession: MultiremiChatSession | null,
+    issue: MultiremiIssue | null,
+  ): string | null {
+    if (chatSession?.sessionId) {
+      const row = this.db
+        .query(
+          `SELECT runtime_id FROM multiremi_tasks
+           WHERE chat_session_id = ? AND runtime_id IS NOT NULL
+           ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(chatSession.id) as Row | null;
+      const runtime = row ? this.getRuntime(String(row.runtime_id)) : null;
+      // The provider must still match, or the claim predicate would leave the
+      // task unclaimable forever (e.g. after the agent switched providers).
+      if (runtime && (runtime.provider === "any" || runtime.provider === agent.provider)) return runtime.id;
+    }
+    if (issue?.projectId) {
+      for (const resource of this.listProjectResources(issue.projectId)) {
+        if (resource.resourceType !== "local_directory") continue;
+        const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+        if (!daemonId) continue;
+        const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+        if (runtime) return runtime.id;
+      }
+    }
+    return null;
+  }
+
+  getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
+    const rows = this.db
+      .query(
+        `SELECT * FROM multiremi_runtimes
+         WHERE (daemon_id = ? OR legacy_daemon_id = ? OR id = ?)
+           AND (provider = ? OR provider = 'any')`,
+      )
+      .all(daemonId, daemonId, daemonId, provider) as Row[];
+    const runtimes = rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
+    return runtimes.find((runtime) => runtime.status === "online") ?? runtimes[0] ?? null;
   }
 
   getTask(id: string): MultiremiTask | null {
@@ -6661,7 +6706,9 @@ runMigrations(this.db);
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason);
     const retry = this.createTask({
       agentId: parent.agentId,
-      runtimeId: parent.runtimeId,
+      // Resume-safe failures must go back to the machine holding the session;
+      // once the session is abandoned, any pool machine may pick up the retry.
+      runtimeId: resumeSafe ? parent.runtimeId : null,
       issueId: parent.issueId,
       chatSessionId: parent.chatSessionId,
       triggerCommentId: parent.triggerCommentId,

@@ -927,6 +927,9 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)");
   db.run("UPDATE multiremi_issues SET status = 'todo' WHERE status = 'open'");
+  // Pool scheduling: agents are logical workers and never bind to a machine.
+  // Runs every startup so legacy pins converge back into the pool.
+  db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
   backfillIssueKeys(db);
 }
 
