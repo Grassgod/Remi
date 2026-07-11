@@ -60,11 +60,14 @@ const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
 
 interface PromptState {
   promptStartTime: number;
+  /** Streamed agent_message_chunk text, so getLastResponse().text carries the final reply. */
+  text: string;
   usage: {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
     cacheWriteTokens: number;
+    totalTokens: number;
     costUsd: number;
     model: string | null;
     contextWindowSize: number | null;
@@ -75,11 +78,13 @@ interface PromptState {
 function createPromptState(): PromptState {
   return {
     promptStartTime: Date.now(),
+    text: "",
     usage: {
       inputTokens: 0,
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
+      totalTokens: 0,
       costUsd: 0,
       model: null,
       contextWindowSize: null,
@@ -303,6 +308,9 @@ export class AcpProvider implements Provider {
       const update = notification.update;
       if (update.sessionUpdate === "usage_update") {
         accumulateUsage(entry.promptState, update);
+      }
+      if (update.sessionUpdate === "agent_message_chunk") {
+        entry.promptState.text += extractChunkText((update as Record<string, any>).content);
       }
       if (update.sessionUpdate === "tool_call_update") {
         const status = (update as any).status;
@@ -639,6 +647,18 @@ function buildMediaContent(
     }));
 }
 
+function extractChunkText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : content ? [content] : [];
+  let text = "";
+  for (const block of blocks) {
+    if (typeof block === "string") text += block;
+    else if (block && typeof block === "object" && "text" in block) {
+      text += String((block as { text?: unknown }).text ?? "");
+    }
+  }
+  return text;
+}
+
 function accumulateUsage(state: PromptState, update: SessionUpdate): void {
   const u = update as Record<string, any>;
   if (u.inputTokens != null) state.usage.inputTokens = u.inputTokens;
@@ -648,29 +668,28 @@ function accumulateUsage(state: PromptState, update: SessionUpdate): void {
   if (u.model) state.usage.model = u.model;
   if (u.costUsd != null) state.usage.costUsd = u.costUsd;
   if (u.contextWindowSize != null) state.usage.contextWindowSize = u.contextWindowSize;
-  // ACP format: `used` is total tokens consumed
-  if (u.used != null) {
-    state.usage.inputTokens = u.used;
-    state.usage.outputTokens = 0;
-  }
+  // ACP wire format ({used, size, cost}): `used` is total context tokens with
+  // no input/output split — record it as such rather than faking input=used.
+  if (u.used != null) state.usage.totalTokens = u.used;
   if (u.size != null) state.usage.contextWindowSize = u.size;
   if (u.cost?.amount != null) state.usage.costUsd = u.cost.amount;
 }
 
 function buildAgentResponse(entry: PoolEntry, result: PromptResult): AgentResponse {
-  const { usage, promptStartTime, completedToolCount } = entry.promptState;
+  const { usage, text, promptStartTime, completedToolCount } = entry.promptState;
   const durationMs = Date.now() - promptStartTime;
 
   // Reset per-prompt state for next prompt
   entry.promptState = createPromptState();
 
   return createAgentResponse({
-    text: "",
+    text,
     sessionId: entry.acpSessionId,
     model: usage.model,
     costUsd: usage.costUsd || null,
     inputTokens: usage.inputTokens || null,
     outputTokens: usage.outputTokens || null,
+    totalTokens: usage.totalTokens || null,
     cacheReadInputTokens: usage.cacheReadTokens || null,
     contextWindow: usage.contextWindowSize,
     durationMs,

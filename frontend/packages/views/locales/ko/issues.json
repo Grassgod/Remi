@@ -197,6 +197,7 @@
     "prop_updated": "수정일",
     "prop_input": "입력",
     "prop_output": "출력",
+    "prop_context": "컨텍스트",
     "prop_cache": "캐시",
     "prop_cache_value": "읽기 {{read}} / 쓰기 {{write}}",
     "prop_runs": "실행",

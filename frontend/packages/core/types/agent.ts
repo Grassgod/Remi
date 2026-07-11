@@ -439,6 +439,8 @@ export interface IssueUsageSummary {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_write_tokens: number;
+  /** Context tokens consumed, from bridges that report no input/output split (older servers omit it). */
+  total_tokens?: number;
   task_count: number;
 }
 

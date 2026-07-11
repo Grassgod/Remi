@@ -94,6 +94,7 @@ describe("Bun Multiremi daemon smoke", () => {
       outputTokens: 3,
       cacheReadInputTokens: 2,
       cacheCreateInputTokens: 1,
+      totalTokens: 11,
       model: "claude-smoke",
     };
     const providerFactory: MultiremiDaemonProviderFactory = (options) => {
@@ -238,6 +239,7 @@ describe("Bun Multiremi daemon smoke", () => {
         outputTokens: 3,
         cacheReadTokens: 2,
         cacheWriteTokens: 1,
+        totalTokens: 11,
       });
       // Registration renames the runtime to `<provider> (<deviceName>)` where
       // deviceName is host-derived (commit 2d2622b2), so match the convention.

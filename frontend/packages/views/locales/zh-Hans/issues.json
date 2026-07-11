@@ -195,6 +195,7 @@
     "prop_updated": "更新时间",
     "prop_input": "输入",
     "prop_output": "输出",
+    "prop_context": "上下文",
     "prop_cache": "缓存",
     "prop_cache_value": "{{read}} 读 / {{write}} 写",
     "prop_runs": "运行次数",

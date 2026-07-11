@@ -226,6 +226,7 @@ export class MultiremiDaemonClient {
         output_tokens: entry.outputTokens,
         cache_read_tokens: entry.cacheReadTokens ?? 0,
         cache_write_tokens: entry.cacheWriteTokens ?? 0,
+        total_tokens: entry.totalTokens ?? 0,
       })),
     });
   }

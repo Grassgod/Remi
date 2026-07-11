@@ -4755,6 +4755,7 @@ describe("Bun Multiremi API", () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
+      totalTokens: 0,
     }]);
     const usageSecond = await app.request(`/api/daemon/tasks/${task.id}/usage`, {
       method: "POST",

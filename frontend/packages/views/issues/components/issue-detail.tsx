@@ -1495,12 +1495,21 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${tokenUsageOpen ? "rotate-90" : ""}`} />
           </button>
           {tokenUsageOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
-            <PropRow label={t(($) => $.detail.prop_input)}>
-              <span className="text-muted-foreground">{formatTokenCount(usage.total_input_tokens)}</span>
-            </PropRow>
-            <PropRow label={t(($) => $.detail.prop_output)}>
-              <span className="text-muted-foreground">{formatTokenCount(usage.total_output_tokens)}</span>
-            </PropRow>
+            {/* ACP bridges report only a context-used total (no input/output
+                split) — show that as 上下文 and hide the misleading 0/0 rows. */}
+            {(usage.total_input_tokens > 0 || usage.total_output_tokens > 0 || !(usage.total_tokens ?? 0)) && <>
+              <PropRow label={t(($) => $.detail.prop_input)}>
+                <span className="text-muted-foreground">{formatTokenCount(usage.total_input_tokens)}</span>
+              </PropRow>
+              <PropRow label={t(($) => $.detail.prop_output)}>
+                <span className="text-muted-foreground">{formatTokenCount(usage.total_output_tokens)}</span>
+              </PropRow>
+            </>}
+            {(usage.total_tokens ?? 0) > 0 && (
+              <PropRow label={t(($) => $.detail.prop_context)}>
+                <span className="text-muted-foreground">{formatTokenCount(usage.total_tokens ?? 0)}</span>
+              </PropRow>
+            )}
             {(usage.total_cache_read_tokens > 0 || usage.total_cache_write_tokens > 0) && (
               <PropRow label={t(($) => $.detail.prop_cache)}>
                 <span className="text-muted-foreground">

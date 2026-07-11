@@ -7749,6 +7749,7 @@ function daemonTaskUsageEntries(raw: unknown): TaskUsageEntry[] {
       outputTokens: normalizeDaemonUsageNumber(record.output_tokens),
       cacheReadTokens: normalizeDaemonUsageNumber(record.cache_read_tokens),
       cacheWriteTokens: normalizeDaemonUsageNumber(record.cache_write_tokens),
+      totalTokens: normalizeDaemonUsageNumber(record.total_tokens),
     });
   }
   return entries;
@@ -9472,6 +9473,7 @@ function issueUsageResponse(store: MultiremiStore, issue: MultiremiIssue): {
   total_output_tokens: number;
   total_cache_read_tokens: number;
   total_cache_write_tokens: number;
+  total_tokens: number;
   task_count: number;
 } {
   const taskIds = new Set(store.listTasksForIssue(issue.id).map((task) => task.id));
@@ -9480,6 +9482,7 @@ function issueUsageResponse(store: MultiremiStore, issue: MultiremiIssue): {
     total_output_tokens: 0,
     total_cache_read_tokens: 0,
     total_cache_write_tokens: 0,
+    total_tokens: 0,
     task_count: taskIds.size,
   };
   for (const task of store.listTasksForIssue(issue.id)) {
@@ -9488,6 +9491,7 @@ function issueUsageResponse(store: MultiremiStore, issue: MultiremiIssue): {
       totals.total_output_tokens += entry.outputTokens ?? 0;
       totals.total_cache_read_tokens += entry.cacheReadTokens ?? 0;
       totals.total_cache_write_tokens += entry.cacheWriteTokens ?? 0;
+      totals.total_tokens += entry.totalTokens ?? 0;
     }
   }
   return totals;

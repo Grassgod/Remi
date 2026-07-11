@@ -194,6 +194,7 @@
     "prop_updated": "更新日",
     "prop_input": "入力",
     "prop_output": "出力",
+    "prop_context": "コンテキスト",
     "prop_cache": "キャッシュ",
     "prop_cache_value": "読み取り {{read}} / 書き込み {{write}}",
     "prop_runs": "実行",

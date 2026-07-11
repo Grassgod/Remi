@@ -885,7 +885,7 @@ export class MultiremiDaemon {
       }
       const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
       finalSessionId = last?.sessionId ?? finalSessionId;
-      usage = responseToUsage(agent.provider, last);
+      usage = responseToUsage(agent.provider, last, config.model);
       await this.client.pinTaskSession(task.id, finalSessionId, workDir);
       return {
         output: output.trim() || last?.text || "Task completed.",
@@ -1172,20 +1172,22 @@ function parseMaybeJson(value: string): Record<string, unknown> | undefined {
   }
 }
 
-function responseToUsage(provider: string, response: any): TaskUsageEntry[] {
+function responseToUsage(provider: string, response: any, fallbackModel?: string | null): TaskUsageEntry[] {
   if (!response) return [];
   const inputTokens = Number(response.inputTokens ?? 0);
   const outputTokens = Number(response.outputTokens ?? 0);
   const cacheReadTokens = Number(response.cacheReadInputTokens ?? 0);
   const cacheWriteTokens = Number(response.cacheCreateInputTokens ?? 0);
-  if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheWriteTokens) return [];
+  const totalTokens = Number(response.totalTokens ?? 0);
+  if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheWriteTokens && !totalTokens) return [];
   return [{
     provider,
-    model: String(response.model ?? ""),
+    model: String(response.model ?? fallbackModel ?? ""),
     inputTokens,
     outputTokens,
     cacheReadTokens,
     cacheWriteTokens,
+    totalTokens,
   }];
 }
 

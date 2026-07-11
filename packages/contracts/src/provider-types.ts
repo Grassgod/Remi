@@ -17,6 +17,8 @@ export interface AgentResponse {
   outputTokens?: number | null;
   cacheCreateInputTokens?: number | null;
   cacheReadInputTokens?: number | null;
+  /** Total context tokens consumed, for providers that report no input/output split (ACP `used`). */
+  totalTokens?: number | null;
   contextWindow?: number | null;
   durationMs?: number | null;
   model?: string | null;

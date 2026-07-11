@@ -197,6 +197,7 @@
     "prop_updated": "Updated",
     "prop_input": "Input",
     "prop_output": "Output",
+    "prop_context": "Context",
     "prop_cache": "Cache",
     "prop_cache_value": "{{read}} read / {{write}} write",
     "prop_runs": "Runs",

@@ -8042,7 +8042,8 @@ type RuntimeUsageEntry = Required<Pick<TaskUsageEntry,
   "inputTokens" |
   "outputTokens" |
   "cacheReadTokens" |
-  "cacheWriteTokens"
+  "cacheWriteTokens" |
+  "totalTokens"
 >>;
 
 function parseTaskUsageEntries(value: unknown): RuntimeUsageEntry[] {
@@ -8063,19 +8064,21 @@ function normalizeTaskUsageEntries(raw: unknown): RuntimeUsageEntry[] {
       outputTokens: normalizeUsageNumber(record.outputTokens ?? record.output_tokens),
       cacheReadTokens: normalizeUsageNumber(record.cacheReadTokens ?? record.cache_read_tokens),
       cacheWriteTokens: normalizeUsageNumber(record.cacheWriteTokens ?? record.cache_write_tokens),
+      totalTokens: normalizeUsageNumber(record.totalTokens ?? record.total_tokens),
     });
   }
   return entries;
 }
 
 function addUsageTotals(
-  target: Pick<RuntimeUsageEntry, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">,
+  target: Pick<RuntimeUsageEntry, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens"> & { totalTokens?: number },
   entry: RuntimeUsageEntry,
 ): void {
   target.inputTokens += entry.inputTokens;
   target.outputTokens += entry.outputTokens;
   target.cacheReadTokens += entry.cacheReadTokens;
   target.cacheWriteTokens += entry.cacheWriteTokens;
+  if (target.totalTokens !== undefined) target.totalTokens += entry.totalTokens;
 }
 
 function normalizeUsageNumber(value: unknown): number {

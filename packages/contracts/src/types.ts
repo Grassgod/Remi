@@ -1235,6 +1235,8 @@ export interface TaskUsageEntry {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Total context tokens consumed, for bridges (ACP `used`) that report no input/output split. */
+  totalTokens?: number;
 }
 
 export interface CreateAgentInput {
