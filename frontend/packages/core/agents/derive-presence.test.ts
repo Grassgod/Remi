@@ -83,13 +83,13 @@ describe("deriveAgentAvailability", () => {
   // irrelevant to this axis.
 
   it("returns online when runtime is fresh-online", () => {
-    expect(deriveAgentAvailability(makeRuntime(), NOW)).toBe("online");
+    expect(deriveAgentAvailability([makeRuntime()], NOW)).toBe("online");
   });
 
   it("returns unstable when runtime just dropped (< 5 min)", () => {
     expect(
       deriveAgentAvailability(
-        makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:59:30Z" }),
+        [makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:59:30Z" })],
         NOW,
       ),
     ).toBe("unstable");
@@ -98,7 +98,7 @@ describe("deriveAgentAvailability", () => {
   it("returns offline when runtime has been gone > 5 min", () => {
     expect(
       deriveAgentAvailability(
-        makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:50:00Z" }),
+        [makeRuntime({ status: "offline", last_seen_at: "2026-04-27T11:50:00Z" })],
         NOW,
       ),
     ).toBe("offline");
@@ -108,14 +108,35 @@ describe("deriveAgentAvailability", () => {
     expect(
       deriveAgentAvailability(
         // 6.5 days ago — past the 6-day about_to_gc threshold.
-        makeRuntime({ status: "offline", last_seen_at: "2026-04-21T00:00:00Z" }),
+        [makeRuntime({ status: "offline", last_seen_at: "2026-04-21T00:00:00Z" })],
         NOW,
       ),
     ).toBe("offline");
   });
 
-  it("returns offline when the runtime is null (deleted / never registered)", () => {
-    expect(deriveAgentAvailability(null, NOW)).toBe("offline");
+  it("returns offline when the candidate set is empty (deleted / never registered)", () => {
+    expect(deriveAgentAvailability([], NOW)).toBe("offline");
+  });
+
+  it("reports the best health across the pool — one online machine is enough", () => {
+    expect(
+      deriveAgentAvailability(
+        [
+          makeRuntime({ id: "rt-dead", status: "offline", last_seen_at: "2026-04-27T11:50:00Z" }),
+          makeRuntime({ id: "rt-live" }),
+        ],
+        NOW,
+      ),
+    ).toBe("online");
+    expect(
+      deriveAgentAvailability(
+        [
+          makeRuntime({ id: "rt-dead", status: "offline", last_seen_at: "2026-04-27T11:50:00Z" }),
+          makeRuntime({ id: "rt-wobble", status: "offline", last_seen_at: "2026-04-27T11:59:30Z" }),
+        ],
+        NOW,
+      ),
+    ).toBe("unstable");
   });
 });
 
@@ -241,7 +262,7 @@ describe("deriveAgentPresenceDetail", () => {
   it("composes online + working for the common busy case", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: makeRuntime(),
+      runtimes: [makeRuntime()],
       tasks: [
         makeTask({ status: "running" }),
         makeTask({ id: "t2", status: "queued" }),
@@ -262,10 +283,10 @@ describe("deriveAgentPresenceDetail", () => {
     // availability — UI reads "Offline · Queued · 2".
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: makeRuntime({
+      runtimes: [makeRuntime({
         status: "offline",
         last_seen_at: "2026-04-27T11:50:00Z",
-      }),
+      })],
       tasks: [
         makeTask({ status: "queued" }),
         makeTask({ id: "t2", status: "queued" }),
@@ -284,10 +305,10 @@ describe("deriveAgentPresenceDetail", () => {
     // so the user sees "connection wobbling" alongside "agent is busy".
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: makeRuntime({
+      runtimes: [makeRuntime({
         status: "offline",
         last_seen_at: "2026-04-27T11:59:00Z",
-      }),
+      })],
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
@@ -298,10 +319,10 @@ describe("deriveAgentPresenceDetail", () => {
   it("composes offline + idle for an unreachable agent with no tasks pending", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: makeRuntime({
+      runtimes: [makeRuntime({
         status: "offline",
         last_seen_at: "2026-04-27T11:50:00Z",
-      }),
+      })],
       tasks: [],
       now: NOW,
     });
@@ -309,10 +330,10 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.workload).toBe("idle");
   });
 
-  it("handles a missing runtime by reporting offline + the task-driven workload", () => {
+  it("handles an empty candidate set by reporting offline + the task-driven workload", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: null,
+      runtimes: [],
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
@@ -323,7 +344,7 @@ describe("deriveAgentPresenceDetail", () => {
   it("returns idle workload when only terminal tasks are present (history doesn't bleed in)", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
-      runtime: makeRuntime(),
+      runtimes: [makeRuntime()],
       tasks: [
         makeTask({
           status: "failed",
@@ -339,7 +360,7 @@ describe("deriveAgentPresenceDetail", () => {
   it("mirrors agent.max_concurrent_tasks into capacity", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({ max_concurrent_tasks: 3 }),
-      runtime: makeRuntime(),
+      runtimes: [makeRuntime()],
       tasks: [],
       now: NOW,
     });
@@ -354,7 +375,7 @@ describe("deriveAgentPresenceDetail", () => {
     // "Working" for an archived agent.
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({ archived_at: "2026-04-27T10:00:00Z" }),
-      runtime: makeRuntime(),
+      runtimes: [makeRuntime()],
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
@@ -398,6 +419,45 @@ describe("buildPresenceMap", () => {
     expect(o?.availability).toBe("offline");
     // Workload still resolves independently — running task counts.
     expect(o?.workload).toBe("working");
+  });
+
+  it("resolves pool agents by provider: any matching online runtime lights the dot", () => {
+    // Pool model: agents carry a provider and no binding. The stale
+    // runtime_id ("", or pointing at a dead machine) must not matter as
+    // long as some runtime of the same provider — or an "any" runtime —
+    // is online.
+    const pooled = makeAgent({ id: "pooled", runtime_id: "", provider: "claude" });
+    const mismatched = makeAgent({ id: "mismatched", runtime_id: "", provider: "codex" });
+    const viaAny = makeAgent({ id: "via-any", runtime_id: "", provider: "hermes" });
+    const map = buildPresenceMap({
+      agents: [pooled, mismatched, viaAny],
+      runtimes: [
+        makeRuntime({ id: "rt-claude-dead", status: "offline", last_seen_at: "2026-04-27T11:50:00Z" }),
+        makeRuntime({ id: "rt-claude-live" }),
+        makeRuntime({ id: "rt-any", provider: "any" }),
+      ],
+      snapshot: [],
+      now: NOW,
+    });
+    expect(map.get("pooled")?.availability).toBe("online");
+    // codex has no runtime at all — but the "any" runtime still covers it.
+    expect(map.get("mismatched")?.availability).toBe("online");
+    expect(map.get("via-any")?.availability).toBe("online");
+  });
+
+  it("keeps the legacy single-runtime binding when the agent has no provider", () => {
+    const legacy = makeAgent({ id: "legacy", runtime_id: "rt-dead" });
+    const map = buildPresenceMap({
+      agents: [legacy],
+      runtimes: [
+        makeRuntime({ id: "rt-dead", status: "offline", last_seen_at: "2026-04-27T11:50:00Z" }),
+        makeRuntime({ id: "rt-live" }),
+      ],
+      snapshot: [],
+      now: NOW,
+    });
+    // Without a provider the pool is invisible — only the pinned runtime counts.
+    expect(map.get("legacy")?.availability).toBe("offline");
   });
 
   it("threads the same `now` so every agent on a shared runtime gets the same availability", () => {

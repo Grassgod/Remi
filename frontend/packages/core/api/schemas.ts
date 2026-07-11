@@ -14,6 +14,7 @@ import type {
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
+  FleetModelsResponse,
   GroupedIssuesResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
@@ -300,6 +301,29 @@ export const EMPTY_CLOUD_RUNTIME_NODE: CloudRuntimeNode = {
   created_at: "",
   updated_at: "",
 };
+
+// Fleet model catalog (`GET /api/models`) — feeds the machine-less create
+// flow's engine toggle + model dropdown. Lenient by design: an unknown
+// provider or a malformed model row must degrade to "engine with no
+// catalog", never crash the create dialog.
+const FleetProviderModelsSchema = z.object({
+  provider: z.string(),
+  online_runtime_count: z.number().default(0),
+  models: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string().default(""),
+      provider: z.string().optional(),
+      default: z.boolean().optional(),
+    }).loose(),
+  ).default([]),
+}).loose();
+
+export const FleetModelsResponseSchema = z.object({
+  providers: z.array(FleetProviderModelsSchema).default([]),
+}).loose();
+
+export const EMPTY_FLEET_MODELS: FleetModelsResponse = { providers: [] };
 
 // ---------------------------------------------------------------------------
 // Workspace dashboard schemas

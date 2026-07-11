@@ -6,6 +6,8 @@ import {
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_CLI_LATEST_VERSION,
+  EMPTY_FLEET_MODELS,
+  FleetModelsResponseSchema,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
@@ -490,5 +492,47 @@ describe("RuntimeDirectoryScanRequestSchema", () => {
       );
       expect(parsed).toBe(EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST);
     }
+  });
+});
+
+describe("FleetModelsResponseSchema", () => {
+  const opts = { endpoint: "GET /api/models (test)" };
+
+  it("parses a well-formed catalog and defaults missing counts / models", () => {
+    const parsed = parseWithFallback(
+      {
+        providers: [
+          {
+            provider: "claude",
+            online_runtime_count: 2,
+            models: [{ id: "claude-opus-4-8", label: "Opus 4.8", default: true }],
+          },
+          // Missing count + models: engine still surfaces with 0 capacity.
+          { provider: "codex" },
+        ],
+      },
+      FleetModelsResponseSchema,
+      EMPTY_FLEET_MODELS,
+      opts,
+    );
+    expect(parsed.providers).toHaveLength(2);
+    expect(parsed.providers[0]?.models[0]?.id).toBe("claude-opus-4-8");
+    expect(parsed.providers[1]?.online_runtime_count).toBe(0);
+    expect(parsed.providers[1]?.models).toEqual([]);
+  });
+
+  it("defaults a missing providers array instead of crashing the create dialog", () => {
+    const parsed = parseWithFallback({}, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, opts);
+    expect(parsed.providers).toEqual([]);
+  });
+
+  it("falls back to EMPTY_FLEET_MODELS on a wrong-typed payload", () => {
+    const parsed = parseWithFallback(
+      { providers: [{ provider: 42 }] },
+      FleetModelsResponseSchema,
+      EMPTY_FLEET_MODELS,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_FLEET_MODELS);
   });
 });
