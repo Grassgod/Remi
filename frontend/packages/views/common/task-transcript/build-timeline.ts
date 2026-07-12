@@ -86,6 +86,9 @@ export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
       if (item.type === "tool_use") {
         if (item.input) step.input = item.input;
       } else {
+        // Claude sends the args in the update, so the result may carry the
+        // input when the use didn't — take it as a fallback.
+        if (item.input && !step.input) step.input = item.input;
         if (item.output != null) step.output = item.output;
         const metaDuration = typeof item.meta?.duration_ms === "number" ? item.meta.duration_ms : undefined;
         if (metaDuration != null) step.durationMs = metaDuration;

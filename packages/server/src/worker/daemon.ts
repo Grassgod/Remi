@@ -3,7 +3,7 @@ import { cpus, homedir, hostname } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 import { createLogger } from "@shared/logger.js";
-import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "@acp/index.js";
+import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider, createAdapter, type AgentAdapter } from "@acp/index.js";
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@acp/protocol.js";
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
@@ -870,7 +870,7 @@ export class MultiremiDaemon {
     this.attachHumanInputHandlers(provider, task, signal, nextSeq);
     let finalSessionId: string | null = task.sessionId;
     let usage: TaskUsageEntry[] = [];
-    const toMessages = createEventMapper();
+    const toMessages = createEventMapper(createAdapter(config.agentType));
 
     try {
       const session = new AgentSession(provider as any, config);
@@ -1131,6 +1131,8 @@ interface ToolCallState {
   startMs: number;
   terminalEmitted: boolean;
   lastFingerprint?: string;
+  /** Whether the emitted tool_use already carried the input (so the result needn't repeat it). */
+  inputOnUse: boolean;
 }
 
 const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
@@ -1144,7 +1146,7 @@ const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
  * assigns a distinct seq to every emitted message — reusing one seq for two
  * messages would collide on UNIQUE(task_id, seq).
  */
-function createEventMapper(): (event: ProviderEvent) => TaskMessageInput[] {
+function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent) => TaskMessageInput[] {
   const tools = new Map<string, ToolCallState>();
   let synCounter = 0;
 
@@ -1175,7 +1177,7 @@ function createEventMapper(): (event: ProviderEvent) => TaskMessageInput[] {
     }
 
     if (su === "tool_call" || su === "tool_call_update") {
-      return mapToolEvent(raw, su === "tool_call", tools, () => `syn_${synCounter++}`);
+      return mapToolEvent(raw, su === "tool_call", tools, adapter, () => `syn_${synCounter++}`);
     }
 
     return [];
@@ -1186,16 +1188,15 @@ function mapToolEvent(
   raw: Record<string, any>,
   isInitial: boolean,
   tools: Map<string, ToolCallState>,
+  adapter: AgentAdapter,
   synthId: () => string,
 ): TaskMessageInput[] {
   const id: string = typeof raw.toolCallId === "string" && raw.toolCallId ? raw.toolCallId : synthId();
-  const name =
-    raw._meta?.claudeCode?.toolName ??
-    raw.kind ??
-    raw.title ??
-    tools.get(id)?.name ??
-    "tool";
-  const input = raw.rawInput != null ? parseMaybeJson(raw.rawInput) : undefined;
+  // The adapter resolves the real tool name and reconstructs input from
+  // title/content/locations — claude-agent-acp leaves rawInput empty and encodes
+  // the args there instead (the command in title, file path in locations, etc.).
+  const name = adapter.resolveToolName(raw as never) || tools.get(id)?.name || "tool";
+  const input = adapter.extractToolInput(raw as never);
   const status: string | undefined = typeof raw.status === "string" ? raw.status : undefined;
   const output = raw.rawOutput != null ? JSON.stringify(raw.rawOutput) : extractText(raw.content) || undefined;
   const meta: Record<string, unknown> = {};
@@ -1212,6 +1213,7 @@ function mapToolEvent(
     status: status ?? "pending",
     startMs: Date.now(),
     terminalEmitted: false,
+    inputOnUse: false,
   };
   // Merge late-arriving fields; keep the first non-empty input.
   state.name = name;
@@ -1221,6 +1223,8 @@ function mapToolEvent(
   tools.set(id, state);
 
   if (isInitial) {
+    const hasInput = Boolean(state.input && Object.keys(state.input).length > 0);
+    state.inputOnUse = hasInput;
     messages.push({
       type: "tool_use",
       toolCallId: id,
@@ -1248,9 +1252,13 @@ function mapToolEvent(
         toolCallId: id,
         status: status ?? state.status,
         tool: state.name,
+        // Carry the input only when the tool_use didn't (claude sends the args
+        // in the update, not the initial call), so the step card can show them.
+        input: state.inputOnUse ? undefined : state.input,
         output,
         meta: Object.keys(resultMeta).length ? resultMeta : undefined,
       });
+      if (!state.inputOnUse && state.input) state.inputOnUse = true;
     }
   }
 
