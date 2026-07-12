@@ -554,16 +554,20 @@ runMigrations(this.db);
 
   private rescheduleAgentQueuedTasks(agent: MultiremiAgent, opts: { workspaceChanged: boolean }): void {
     const now = nowIso();
-    // A workspace move makes the agent's queued tasks orphans: they serve the
-    // OLD workspace's issues/chats/autopilots. Migrating just their workspace
-    // column would leave a task in wsB linked to a wsA issue/project — a
-    // cross-tenant execution context. Cancel them instead; the agent picks up
-    // fresh work in its new workspace. (No re-home needed after cancel.)
+    // A workspace move makes the agent's in-flight/queued tasks orphans: they
+    // serve the OLD workspace's issues/chats/autopilots. Migrating their
+    // workspace column would leave a task in wsB linked to a wsA issue/project
+    // — a cross-tenant execution context. Cancel them via cancelTask so the
+    // full terminal handling runs (cancelled_at, afterTaskTerminal, the
+    // task:cancelled event, issue/autopilot-run wrap-up). Include dispatched
+    // tasks: an agent workspace move must not leave one stuck in the old
+    // workspace where nothing can reclaim it. The agent picks up fresh work in
+    // its new workspace.
     if (opts.workspaceChanged) {
-      this.db.run(
-        "UPDATE multiremi_tasks SET status = 'cancelled', completed_at = ?, updated_at = ? WHERE agent_id = ? AND status = 'queued'",
-        [now, now, agent.id],
-      );
+      const active = this.db
+        .query("SELECT id FROM multiremi_tasks WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'waiting_local_directory')")
+        .all(agent.id) as Row[];
+      for (const row of active) this.cancelTask(String(row.id));
       return;
     }
     // Include tasks with only a session/work_dir (no runtime pin) — a chat
@@ -4830,6 +4834,7 @@ runMigrations(this.db);
     if (input.leaderId) {
       const leader = this.getAgent(input.leaderId);
       if (!leader) throw new Error(`Agent not found: ${input.leaderId}`);
+      if (leader.archivedAt) throw new Error(`Agent is archived: ${input.leaderId}`);
       if (leader.workspaceId !== workspaceId) throw new Error("Squad member is in a different workspace");
     }
     const id = input.id ?? createId("sqd");
@@ -4915,6 +4920,7 @@ runMigrations(this.db);
     if (input.leaderId) {
       const leader = this.getAgent(input.leaderId);
       if (!leader) throw new Error(`Agent not found: ${input.leaderId}`);
+      if (leader.archivedAt) throw new Error(`Agent is archived: ${input.leaderId}`);
       if (leader.workspaceId !== current.workspaceId) throw new Error("Squad member is in a different workspace");
     }
     const now = nowIso();
@@ -5313,10 +5319,14 @@ runMigrations(this.db);
     if (!current) throw new Error(`Autopilot not found: ${id}`);
     const nextAssigneeType = input.assigneeType ?? current.assigneeType;
     const nextAssigneeId = input.assigneeId ?? current.assigneeId;
-    // Only validate the assignee when the request actually changes it — a
+    // Only validate the assignee when the request actually CHANGES it — the
+    // edit dialog re-sends the current assignee_type/id on every save, so a
     // title/status/pause/archive update must not fail just because legacy or
-    // since-moved data has a cross-workspace assignee.
-    const assigneeChanged = input.assigneeType !== undefined || input.assigneeId !== undefined;
+    // since-moved data has a cross-workspace assignee. Compare values, not
+    // mere field presence.
+    const assigneeChanged =
+      (input.assigneeType !== undefined && input.assigneeType !== current.assigneeType) ||
+      (input.assigneeId !== undefined && input.assigneeId !== current.assigneeId);
     if (assigneeChanged) {
       const nextAgent = nextAssigneeType === "agent" ? this.getAgent(nextAssigneeId) : null;
       const nextSquad = nextAssigneeType === "squad" ? this.getSquad(nextAssigneeId) : null;
@@ -6545,13 +6555,33 @@ runMigrations(this.db);
     // The re-claim above matches only on runtime_id, so a task whose agent or
     // runtime changed provider/owner/workspace while it sat dispatched could be
     // handed back to a runtime that may no longer run it. Re-check eligibility;
-    // if it fails, re-pool the task instead of returning it here.
+    // if it fails, don't return it here.
     const runtime = this.getRuntime(runtimeId);
     if (task?.agent && runtime && !this.runtimeCanRunAgent(runtime, task.agent)) {
-      this.db.run(
-        "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
-        [nowIso(), String(row.id)],
-      );
+      const now = nowIso();
+      const daemonId = this.localDirectoryDaemonForTask(row);
+      if (daemonId) {
+        // local_directory task: re-pin to the machine that holds the directory
+        // under the agent's current provider (never re-pool — it must not run
+        // in a scratch checkout elsewhere).
+        const rt = this.getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
+        const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
+        this.db.run(
+          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          [newRuntimeId, now, String(row.id)],
+        );
+      } else if ((runtime.workspaceId ?? "local") !== (task.agent.workspaceId ?? "local")) {
+        // The agent moved workspace while dispatched — it can't run in the old
+        // workspace and re-pooling into a foreign workspace would strand it.
+        // Cancel it (agent picks up fresh work in its new workspace).
+        this.cancelTask(String(row.id));
+      } else {
+        // owner/provider drift — re-pool for another eligible machine.
+        this.db.run(
+          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          [now, String(row.id)],
+        );
+      }
       return null;
     }
     return task;

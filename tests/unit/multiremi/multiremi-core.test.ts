@@ -473,6 +473,67 @@ describe("Bun Multiremi core store", () => {
     expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
   });
 
+  it("re-pins (not re-pools) a stale local_directory task off an ineligible machine", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_stale_dir", name: "dir", provider: "codex", daemonId: "daemon-stale-dir" });
+    store.registerRuntime({ id: "rt_stale_other", name: "other", provider: "codex", daemonId: "daemon-other" });
+    const agent = store.createAgent({ name: "Dir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-stale-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    // Owner change makes dirRuntime ineligible; stale recovery must re-pin to
+    // the directory's daemon (never re-pool onto a machine without the dir).
+    store.updateAgent(agent.id, { ownerId: "someone" });
+    expect(store.claimTask(dirRuntime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+  });
+
+  it("fully cancels (terminal) an agent's tasks on workspace move, ending autopilot runs", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_wsm_full", name: "a", provider: "codex", workspaceId: "wsA" });
+    const agent = store.createAgent({ name: "Mover2", provider: "codex", workspaceId: "wsA" });
+    const events: string[] = [];
+    const off = store.onTaskEvent(({ type }) => { if (type === "task:cancelled") events.push(type); });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    off();
+    const cancelled = store.getTask(task.id)!;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancelledAt).not.toBeNull();
+    expect(events).toContain("task:cancelled");
+  });
+
+  it("unpins plain agent-bound queued tasks on the startup migration", () => {
+    const store = createStore();
+    const oldRuntime = store.registerRuntime({ id: "rt_migrate_old", name: "old", provider: "codex" });
+    const otherRuntime = store.registerRuntime({ id: "rt_migrate_new", name: "new", provider: "codex" });
+    const agent = store.createAgent({ name: "Legacy", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "legacy" });
+    // Simulate a pre-pool state: task pinned to a specific runtime, no session.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [oldRuntime.id, task.id]);
+    // Re-running migrations (new store on the same db) unpins the plain pin.
+    const reopened = new MultiremiStore(db!);
+    expect(reopened.getTask(task.id)?.runtimeId).toBeNull();
+    // Now any provider-matching runtime can take it.
+    expect(reopened.claimTask(otherRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("rejects an archived squad leader without persisting the squad", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Lead", provider: "codex", workspaceId: "local" });
+    store.archiveAgent(agent.id);
+    expect(() => store.createSquad({ name: "S2", workspaceId: "local", leaderId: agent.id })).toThrow(/archived/i);
+    expect(store.listSquads().find((sq) => sq.name === "S2")).toBeUndefined();
+  });
+
   it("re-pools a stale dispatched task the runtime may no longer run", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_stale", name: "stale", provider: "codex", ownerId: "alice", visibility: "private" });

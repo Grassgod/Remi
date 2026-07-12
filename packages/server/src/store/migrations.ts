@@ -930,6 +930,13 @@ export function runMigrations(db: SqlDatabase): void {
   // Pool scheduling: agents are logical workers and never bind to a machine.
   // Runs every startup so legacy pins converge back into the pool.
   db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
+  // Pre-pool, every queued task inherited its agent's runtime pin. Now that
+  // agents are unbound, a plain pin would keep the task claimable only by the
+  // original machine (stranding it when that machine is offline). Drop the pin
+  // from queued tasks that carry NO real affinity — a promoted provider
+  // session_id marks a chat task that must return to its machine, so those are
+  // preserved; local_directory tasks re-pin on their next scheduling pass.
+  db.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE status = 'queued' AND runtime_id IS NOT NULL AND (session_id IS NULL OR session_id = '')");
   backfillIssueKeys(db);
 }
 
