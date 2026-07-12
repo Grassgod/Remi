@@ -370,6 +370,75 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(codexB.id)?.id).toBe(retry.id);
   });
 
+  it("forces a task into its agent's workspace, blocking cross-workspace claims", () => {
+    const store = createStore();
+    // Alice's agent lives in workspace "wsA" and carries a secret.
+    const secretAgent = store.createAgent({ name: "Secret", provider: "codex", workspaceId: "wsA", ownerId: "alice", customEnv: { SECRET: "leak-me" } });
+    // Attacker (workspace "wsB") tries to create a task in their own workspace
+    // referencing the other workspace's agent, then claim it from their runtime.
+    const task = store.createTask({ agentId: secretAgent.id, workspaceId: "wsB", prompt: "steal" });
+    // The task is forced into the agent's workspace, not the caller-supplied one.
+    expect(task.workspaceId).toBe("wsA");
+    const attackerRuntime = store.registerRuntime({ id: "rt_attacker", name: "attacker", provider: "codex", workspaceId: "wsB", visibility: "public" });
+    expect(store.claimTask(attackerRuntime.id)).toBeNull();
+  });
+
+  it("re-pools queued tasks pinned to a runtime when it is deleted or turned private", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_drift_a", name: "codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_drift_b", name: "codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Drift", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codexA.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_drift", workDir: "/tmp/drift" });
+    // Follow-up is pinned to codexA by session affinity while codexA is alive.
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(codexA.id);
+
+    // Deleting codexA re-pools the queued follow-up (and drops the orphan session).
+    store.deleteRuntime(codexA.id);
+    const repooled = store.getTask(followUp.id)!;
+    expect(repooled.runtimeId).toBeNull();
+    expect(repooled.sessionId).toBeNull();
+    expect(store.claimTask(codexB.id)?.id).toBe(followUp.id);
+  });
+
+  it("re-pools a queued task when its pinned runtime turns private under another owner", () => {
+    const store = createStore();
+    const shared = store.registerRuntime({ id: "rt_flip", name: "shared", provider: "codex", ownerId: "bob", visibility: "public" });
+    const codexOther = store.registerRuntime({ id: "rt_flip_other", name: "other", provider: "codex" });
+    const agent = store.createAgent({ name: "Flip", provider: "codex", ownerId: "alice" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(shared.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_flip", workDir: "/tmp/flip" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(shared.id);
+
+    // Bob makes the runtime private → alice's pinned task must re-pool, not hang.
+    store.updateRuntime(shared.id, { visibility: "private" });
+    expect(store.getTask(followUp.id)?.runtimeId).toBeNull();
+    // codexOther (owner null → 'local' ... vs alice) can't run it, but a public
+    // machine could; here it stays unclaimable by the now-private one.
+    expect(store.claimTask(shared.id)).toBeNull();
+  });
+
+  it("gives each owner their own default agent so a private runtime can run it", () => {
+    const store = createStore();
+    const bobPrivate = store.registerRuntime({ id: "rt_def_bob", name: "bob", provider: "claude", ownerId: "bob", visibility: "private" });
+    const bobDefault = store.ensureDefaultAgent("claude", { workspaceId: "local", ownerId: "bob" });
+    const aliceDefault = store.ensureDefaultAgent("claude", { workspaceId: "local", ownerId: "alice" });
+    // Distinct per-owner agents, each owned by that member.
+    expect(bobDefault.id).not.toBe(aliceDefault.id);
+    expect(bobDefault.ownerId).toBe("bob");
+    // Bob's private runtime can run Bob's own default agent's task.
+    const task = store.createTask({ agentId: bobDefault.id, prompt: "onboard" });
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(task.id);
+  });
+
   it("keeps unbound agents unbound when a daemon registers", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Pool stays unbound", provider: "codex", workspaceId: "local" });
@@ -492,8 +561,7 @@ describe("Bun Multiremi core store", () => {
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const jsonHeaders = (token: string) => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` });
 
-    // Alice seeds the workspace default (created workspace-visible), then
-    // locks it down and stores secrets on it.
+    // Alice seeds her default agent (per-owner) and stores a secret on it.
     const seeded = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(aliceToken.token),
@@ -501,12 +569,11 @@ describe("Bun Multiremi core store", () => {
     });
     expect(seeded.status).toBe(201);
     const aliceAgent = (await seeded.json()).agent;
-    expect(aliceAgent.visibility).toBe("workspace");
     expect(aliceAgent.ownerId).toBe("alice");
-    store.updateAgent(aliceAgent.id, { visibility: "private", customEnv: { SECRET_TOKEN: "s3cret-value" } });
+    store.updateAgent(aliceAgent.id, { customEnv: { SECRET_TOKEN: "s3cret-value" } });
 
-    // Bob's provider-only call must neither return alice's private agent nor
-    // leak her custom_env — he gets his own default under a distinct id.
+    // Bob's provider-only call resolves to HIS own default agent — a distinct
+    // id owned by bob — never alice's, so her custom_env can't leak.
     const bobSeed = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
@@ -518,7 +585,7 @@ describe("Bun Multiremi core store", () => {
     expect(bobBody.agent.ownerId).toBe("bob");
     expect(JSON.stringify(bobBody)).not.toContain("s3cret-value");
 
-    // Alice keeps resolving to her own (now private) default.
+    // Each keeps resolving to their own default agent on repeat calls.
     const aliceAgain = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(aliceToken.token),
@@ -560,6 +627,28 @@ describe("Bun Multiremi core store", () => {
     const providers = new Map(body.providers.map((entry: any) => [entry.provider, entry]));
     expect((providers.get("claude") as any)?.online_runtime_count).toBe(1);
     expect((providers.get("codex") as any)?.online_runtime_count).toBe(1);
+  });
+
+  it("buckets fleet models by the runtime engine, not the model vendor", async () => {
+    const store = createStore();
+    // Production shape: codex runtime reports models with vendor provider "openai".
+    store.registerRuntime({
+      id: "rt_engine_bucket",
+      name: "codex box",
+      provider: "codex",
+      workspaceId: "local",
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true },
+        { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", default: false },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    // Models land in the codex (engine) bucket, not an "openai" bucket.
+    expect(codex.online_runtime_count).toBe(1);
+    expect(codex.models.map((m: any) => m.id).sort()).toEqual(["gpt-5.4", "gpt-5.5"]);
+    expect(body.providers.find((entry: any) => entry.provider === "openai")).toBeUndefined();
   });
 
   it("counts only the caller's usable runtimes in the fleet catalog", async () => {
@@ -3273,18 +3362,19 @@ describe("Bun Multiremi core store", () => {
     expect(defaultSeed.status).toBe(201);
     const defaultSeedBody = await defaultSeed.json();
     expect(defaultSeedBody.agent).toMatchObject({
-      id: "agt_default_local_claude",
+      id: "agt_default_local_claude_bob",
       name: "Claude",
       provider: "claude",
       runtimeId: null,
       workspaceId: "local",
       ownerId: "bob",
+      visibility: "private",
       description: "Default Claude agent",
     });
     const agentCreatedEventsAfterDefault = store.listAnalyticsEvents({ name: "agent_created" });
     expect(agentCreatedEventsAfterDefault).toHaveLength(2);
     expect(agentCreatedEventsAfterDefault[1]!.properties).toMatchObject({
-      agent_id: "agt_default_local_claude",
+      agent_id: "agt_default_local_claude_bob",
       provider: "claude",
       runtime_mode: "local",
       template: "default",
@@ -3301,7 +3391,7 @@ describe("Bun Multiremi core store", () => {
       body: JSON.stringify({ provider: "claude" }),
     });
     expect(providerOnlyDefault.status).toBe(200);
-    expect((await providerOnlyDefault.json()).agent.id).toBe("agt_default_local_claude");
+    expect((await providerOnlyDefault.json()).agent.id).toBe("agt_default_local_claude_bob");
 
     const defaultSeedAgain = await app.request("/api/multiremi/agents/default", {
       method: "POST",
@@ -3309,7 +3399,7 @@ describe("Bun Multiremi core store", () => {
       body: JSON.stringify({ runtime_id: bobPublic.id }),
     });
     expect(defaultSeedAgain.status).toBe(200);
-    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_claude");
+    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_claude_bob");
     expect(store.listAnalyticsEvents({ name: "agent_created" })).toHaveLength(2);
 
     const invalidNativeUpdate = await app.request(`/api/multiremi/agents/${bobAgent.id}`, {
@@ -4480,7 +4570,10 @@ describe("Bun Multiremi API", () => {
       local.send(JSON.stringify({ type: "unsubscribe", payload: { scope: "task", id: localTask.id } }));
       expect(await nextWebSocketMessage(local)).toEqual({ type: "unsubscribe_ack", payload: { scope: "task", id: localTask.id } });
 
-      const remoteTask = store.createTask({ agentId: agent.id, workspaceId: remoteWorkspace.id, prompt: "remote browser realtime" });
+      // A task inherits its agent's workspace, so the remote-workspace task
+      // needs an agent that actually lives in the remote workspace.
+      const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id });
+      const remoteTask = store.createTask({ agentId: remoteAgent.id, prompt: "remote browser realtime" });
       expect(await nextWebSocketMessage(remote)).toMatchObject({
         type: "task:queued",
         payload: {
@@ -5780,8 +5873,10 @@ describe("Bun Multiremi API", () => {
     expect(localHeartbeat.status).toBe(200);
 
     store.registerRuntime({ id: "rt_remote_auth", name: "Remote runtime", provider: "codex", workspaceId: "remote" });
-    const remoteAgent = store.createAgent({ name: "Remote Codex", provider: "codex" });
-    const remoteTask = store.createTask({ agentId: remoteAgent.id, workspaceId: "remote", prompt: "remote task" });
+    // The agent lives in the remote workspace, so its task does too — a task
+    // always inherits its agent's workspace (see createTask).
+    const remoteAgent = store.createAgent({ name: "Remote Codex", provider: "codex", workspaceId: "remote" });
+    const remoteTask = store.createTask({ agentId: remoteAgent.id, prompt: "remote task" });
 
     const remoteRuntimeRegister = await app.request("/api/multiremi/runtimes", {
       method: "POST",
@@ -8549,7 +8644,7 @@ describe("Bun Multiremi API", () => {
     const runtimeBootstrapBody = await runtimeBootstrap.json();
     expect(runtimeBootstrap.status).toBe(200);
     expect(runtimeBootstrapBody.workspace_id).toBe(workspace.id);
-    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_codex`);
+    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_codex_local`);
     expect(store.getAgent(runtimeBootstrapBody.agent_id)).toMatchObject({
       provider: "codex",
       runtimeId: null,

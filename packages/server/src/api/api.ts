@@ -1020,7 +1020,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const provider = resolveAgentRequestProvider(c, store, workspaceId, body);
     if (provider instanceof Response) return provider;
     const actingUserId = currentRequestUserId(c);
-    const before = store.getDefaultAgent(workspaceId, provider, { visibleTo: actingUserId });
+    const before = store.getDefaultAgent(workspaceId, provider, actingUserId);
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
     const agent = store.ensureDefaultAgent(provider, {
       workspaceId,
@@ -5915,9 +5915,14 @@ function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string
     if (runtime.provider === "any") for (const provider of MULTIREMI_DAEMON_PROVIDERS) bucket(provider);
     if (runtime.status !== "online") continue;
     for (const model of runtime.models ?? []) {
-      const provider = model.provider || (runtime.provider !== "any" ? runtime.provider : "");
-      if (!provider) continue;
-      const entry = bucket(provider);
+      // Bucket by the runtime's ENGINE, not model.provider. The daemon reports
+      // model.provider as the model vendor ("openai" / "anthropic"), but the
+      // UI (and scheduling) key on the engine that runs it ("codex" / "claude").
+      // An "any" runtime has no single engine, so fall back to model.provider
+      // only when we can't do better.
+      const engine = runtime.provider !== "any" ? runtime.provider : model.provider;
+      if (!engine) continue;
+      const entry = bucket(engine);
       const existing = entry.models.get(model.id);
       if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
     }
@@ -8529,7 +8534,7 @@ function safeRuntimeOnboardingBootstrap(
   if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
   const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
   const bootstrapUserId = store.getCurrentUser().id;
-  const before = store.getDefaultAgent(workspaceId, provider, { visibleTo: bootstrapUserId });
+  const before = store.getDefaultAgent(workspaceId, provider, bootstrapUserId);
   const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
   const agent = store.ensureDefaultAgent(provider, {
     workspaceId,

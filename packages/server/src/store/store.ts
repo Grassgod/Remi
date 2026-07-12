@@ -765,7 +765,7 @@ runMigrations(this.db);
   ): MultiremiAgent {
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
-    const existing = this.getDefaultAgent(workspaceId, provider, { visibleTo: ownerId });
+    const existing = this.getDefaultAgent(workspaceId, provider, ownerId);
     if (existing) {
       if (existing.archivedAt) {
         this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
@@ -773,17 +773,17 @@ runMigrations(this.db);
       }
       return existing;
     }
-    // The canonical id may be held by a default agent the caller can't see
-    // (someone flipped theirs private). Mint an owner-scoped id instead of
-    // colliding — the LIKE lookup above still finds it on the next call. Walk
-    // past any id already taken (owner-scoped could also be held by imported
-    // data or a prior record) so createAgent never hits a UNIQUE violation.
-    const canonicalId = `agt_default_${safeIdSegment(workspaceId)}_${provider}`;
-    let id = canonicalId;
-    if (this.getAgent(id)) {
-      id = `${canonicalId}_${safeIdSegment(ownerId)}`;
-      for (let n = 2; this.getAgent(id); n += 1) id = `${canonicalId}_${safeIdSegment(ownerId)}_${n}`;
-    }
+    // Per-owner default agent: each member gets their own, owned by them. This
+    // is what lets a member's PRIVATE runtime run their default/onboarding task
+    // (the claim ownership predicate requires runtime owner == agent owner) —
+    // a single workspace-shared default owned by whoever created it first would
+    // be rejected by every other member's private machine. It also means the
+    // /agents/default endpoint can never hand one member another member's
+    // default agent (with its custom_env / mcp_config). Walk past any taken id
+    // (legacy/imported rows) so createAgent can't hit a UNIQUE violation.
+    const base = `agt_default_${safeIdSegment(workspaceId)}_${provider}_${safeIdSegment(ownerId)}`;
+    let id = base;
+    for (let n = 2; this.getAgent(id); n += 1) id = `${base}_${n}`;
     return this.createAgent({
       id,
       name: provider === "codex" ? "Codex" : "Claude",
@@ -791,36 +791,23 @@ runMigrations(this.db);
       provider,
       workspaceId,
       ownerId,
-      // Default agents are shared workspace infrastructure, not a personal
-      // secret store — workspace visibility keeps the singleton reusable by
-      // every member without leaking anyone's private agent.
-      visibility: "workspace",
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
   }
 
   /**
-   * Find the workspace's default agent for a provider. Matches legacy ids too
-   * (`agt_default_<provider>`, `agt_default_<ws>_<runtime>`) so pre-pool
-   * deployments reuse their default agent instead of growing a twin.
-   *
-   * `visibleTo` scopes the lookup to agents that member may use: non-private
-   * ones, plus their own private ones. Passing it is what keeps this from
-   * handing member B another member's private agent (with its custom_env /
-   * mcp_config) just because its id matches the default pattern.
+   * Find a member's default agent for a provider. Matches legacy ids too
+   * (`agt_default_<provider>`, `agt_default_<ws>_<provider>`) so pre-pool
+   * deployments reuse their default agent instead of growing a twin. Scoped to
+   * `ownerId` (exact match) — default agents are per-owner, so this never
+   * returns another member's default agent (with its custom_env / mcp_config).
    */
-  getDefaultAgent(
-    workspaceId: string,
-    provider: string,
-    options: { visibleTo?: string | null } = {},
-  ): MultiremiAgent | null {
-    const visibleTo = cleanOptionalString(options.visibleTo);
+  getDefaultAgent(workspaceId: string, provider: string, ownerId: string): MultiremiAgent | null {
     const row = this.db.query(
       `SELECT * FROM multiremi_agents
-       WHERE id LIKE 'agt_default_%' AND workspace_id = ? AND provider = ?
-         AND (visibility <> 'private' OR owner_id = ?)
+       WHERE id LIKE 'agt_default_%' AND workspace_id = ? AND provider = ? AND owner_id = ?
        ORDER BY archived_at IS NOT NULL, created_at ASC LIMIT 1`,
-    ).get(workspaceId, provider, visibleTo ?? "") as Row | null;
+    ).get(workspaceId, provider, ownerId) as Row | null;
     return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
@@ -1826,7 +1813,14 @@ runMigrations(this.db);
       ],
     );
     if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, current.provider, now);
-    return this.getRuntime(id)!;
+    const updated = this.getRuntime(id)!;
+    // Ownership/visibility just changed → re-pool any queued task pinned here
+    // that the runtime may no longer run, so it isn't stranded on a machine the
+    // claim predicate now rejects.
+    if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local")) {
+      this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(updated, agent));
+    }
+    return updated;
   }
 
   setRuntimeOffline(id: string): MultiremiRuntime | null {
@@ -1886,8 +1880,41 @@ runMigrations(this.db);
   }
 
   deleteRuntime(id: string): boolean {
+    // Free any queued task pinned to this runtime before it disappears — a
+    // chat-session / local_directory follow-up stamped here would otherwise be
+    // unclaimable forever (its runtime is gone, and the stamp blocks every
+    // other machine). Drop the orphaned provider session too so the re-pooled
+    // task starts fresh rather than resuming a session on a vanished machine.
+    this.repoolQueuedTasksForRuntime(id);
     const result = this.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]);
     return result.changes > 0;
+  }
+
+  /**
+   * Unpin queued tasks stamped to a runtime that can no longer run them (the
+   * runtime is being deleted, or `stillEligible` reports it turned private /
+   * changed owner / changed provider). Clears runtime_id + the promoted
+   * session_id / work_dir so the task re-enters the pool cleanly. In-flight
+   * tasks are left to orphan recovery.
+   */
+  private repoolQueuedTasksForRuntime(
+    runtimeId: string,
+    stillEligible?: (agent: MultiremiAgent) => boolean,
+  ): void {
+    const rows = this.db
+      .query("SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'")
+      .all(runtimeId) as Row[];
+    const now = nowIso();
+    for (const row of rows) {
+      if (stillEligible) {
+        const agent = this.getAgent(String(row.agent_id));
+        if (agent && stillEligible(agent)) continue;
+      }
+      this.db.run(
+        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+        [now, String(row.id)],
+      );
+    }
   }
 
   deleteRuntimeWithArchivedAgentCleanup(id: string): boolean {
@@ -6060,7 +6087,13 @@ runMigrations(this.db);
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
-        input.workspaceId ?? issue?.workspaceId ?? chatSession?.workspaceId ?? "local",
+        // A task ALWAYS belongs to its agent's workspace — never the
+        // caller-supplied one. Otherwise a member could create a task in
+        // their own workspace referencing another workspace's agent, then
+        // claim it from their own runtime and receive that agent's
+        // custom_env / mcp_config. (Pre-pool the agent's runtime binding
+        // blocked this; unbinding reopened it.)
+        agent.workspaceId,
         input.priority ?? 0,
         input.prompt,
         attempt,
@@ -6116,15 +6149,13 @@ runMigrations(this.db);
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
         if (!daemonId) continue;
         const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
-        // Only pin to the directory's machine when it may run this agent —
-        // otherwise the claim predicate would reject it and the task would
-        // hang. Leaving it unpinned lets the pool surface it (it still won't
-        // find the directory elsewhere, but that's a project-config problem,
-        // not a task pinned to a runtime that can never claim it).
-        if (runtime) {
-          if (this.runtimeCanRunAgent(runtime, agent)) return { runtimeId: runtime.id, inheritChatSession };
-          return { runtimeId: null, inheritChatSession };
-        }
+        // Always pin to the machine that holds the directory, even if it can't
+        // currently run this agent (turned private / wrong owner). Leaving it
+        // unpinned would let a provider-matching machine WITHOUT the directory
+        // claim it and silently run in a scratch checkout of the wrong repo —
+        // worse than waiting. If the target is ineligible the task parks until
+        // the config is fixed; that is the safe failure.
+        if (runtime) return { runtimeId: runtime.id, inheritChatSession };
         // No runtime row for that daemon (never registered, or GC'd while
         // offline): stamp the deterministic id its runtime WILL get on
         // registration, so the task waits for the machine that has the
@@ -6423,6 +6454,7 @@ runMigrations(this.db);
          JOIN multiremi_agents a ON a.id = t.agent_id
          WHERE t.status = 'queued'
            AND a.archived_at IS NULL
+           AND a.workspace_id = t.workspace_id
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks runtime_active
