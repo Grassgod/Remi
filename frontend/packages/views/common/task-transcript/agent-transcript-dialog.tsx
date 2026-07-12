@@ -40,7 +40,8 @@ import { api } from "@multiremi/core/api";
 import { useTranscriptViewStore, type TranscriptSortDirection } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
-import type { TimelineItem, UsageSnapshot } from "./build-timeline";
+import { buildEntries, isStepRunning, type TimelineItem, type TranscriptEntry, type UsageSnapshot } from "./build-timeline";
+import { formatToolInputSummary, toolIcon } from "./tool-summaries";
 import { useT } from "../../i18n";
 
 interface AgentTranscriptDialogProps {
@@ -315,6 +316,18 @@ export function AgentTranscriptDialog({
     eventRefs.current.get(seq)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
+  // Follow the newest events while a task is live, but only when the user is
+  // already parked near the bottom — scrolling up to read history pauses the
+  // auto-follow (standard log-tail behavior). Only in chronological order.
+  const lastItemSeq = displayItems.length > 0 ? displayItems[displayItems.length - 1]!.seq : null;
+  useEffect(() => {
+    if (!isLive || sortDirection !== "chronological") return;
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight });
+  }, [lastItemSeq, isLive, sortDirection]);
+
   // Copy all events as text. Use the displayed order so users get the same
   // sequence they see on screen — matters when sort is set to newest-first.
   const handleCopyWorkdir = useCallback(() => {
@@ -384,6 +397,21 @@ export function AgentTranscriptDialog({
       setTimeout(() => setAnswerCopied(false), 2000);
     });
   }, [finalAnswer]);
+
+  // Pair tool_use/tool_result into step cards (Batch 2 gives us tool_call_id);
+  // the final answer, usage, and plan are surfaced in their own sections.
+  const entries = useMemo(() => buildEntries(displayItems), [displayItems]);
+  const planEntries = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      // "plan" isn't in TimelineItem's narrow union but flows through from the
+      // wire; compare as string.
+      if ((it?.type as string) === "plan" && Array.isArray(it?.meta?.entries)) {
+        return it!.meta!.entries as Array<Record<string, unknown>>;
+      }
+    }
+    return null;
+  }, [items]);
 
   // Status display
   const statusBadge = isLive ? (
@@ -629,6 +657,34 @@ export function AgentTranscriptDialog({
           </div>
         )}
 
+        {/* ── Plan checklist (latest snapshot) ───────────────────── */}
+        {planEntries && planEntries.length > 0 && (
+          <div className="border-b px-4 py-3 shrink-0 bg-muted/10">
+            <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+              {t(($) => $.transcript.plan)}
+            </span>
+            <div className="mt-1.5 space-y-1">
+              {planEntries.map((p, i) => {
+                const status = String(p.status ?? "pending");
+                return (
+                  <div key={i} className="flex items-start gap-1.5 text-xs">
+                    {status === "completed" ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-500" />
+                    ) : status === "in_progress" ? (
+                      <Loader2 className="h-3.5 w-3.5 shrink-0 mt-0.5 text-blue-500 animate-spin" />
+                    ) : (
+                      <div className="h-3.5 w-3.5 shrink-0 mt-0.5 rounded-full border border-muted-foreground/40" />
+                    )}
+                    <span className={cn(status === "completed" && "text-muted-foreground line-through")}>
+                      {redactString(String(p.content ?? p.activeForm ?? ""))}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── Optional header slot (e.g. webhook payload preview) ── */}
         {headerSlot && (
           <div className="border-b px-4 py-3 shrink-0 bg-muted/20">
@@ -641,7 +697,7 @@ export function AgentTranscriptDialog({
           ref={scrollContainerRef}
           className="flex-1 overflow-y-auto min-h-0"
         >
-          {displayItems.length === 0 ? (
+          {entries.length === 0 ? (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
               {isLive ? (
                 <div className="flex items-center gap-2">
@@ -654,17 +710,29 @@ export function AgentTranscriptDialog({
             </div>
           ) : (
             <div className="divide-y">
-              {displayItems.map((item) => (
-                <TranscriptEventRow
-                  key={item.seq}
-                  ref={(el) => {
-                    if (el) eventRefs.current.set(item.seq, el);
-                    else eventRefs.current.delete(item.seq);
-                  }}
-                  item={item}
-                  isSelected={selectedSeq === item.seq}
-                />
-              ))}
+              {entries.map((entry) =>
+                entry.kind === "step" ? (
+                  <TranscriptStepRow
+                    key={`s-${entry.toolCallId}`}
+                    ref={(el) => {
+                      if (el) eventRefs.current.set(entry.seq, el);
+                      else eventRefs.current.delete(entry.seq);
+                    }}
+                    step={entry}
+                    isSelected={selectedSeq === entry.seq}
+                  />
+                ) : (
+                  <TranscriptEventRow
+                    key={`e-${entry.seq}`}
+                    ref={(el) => {
+                      if (el) eventRefs.current.set(entry.seq, el);
+                      else eventRefs.current.delete(entry.seq);
+                    }}
+                    item={entry.item}
+                    isSelected={selectedSeq === entry.seq}
+                  />
+                ),
+              )}
             </div>
           )}
         </div>
@@ -902,6 +970,125 @@ const TranscriptEventRow = ({
     </div>
   );
 };
+
+// ─── Paired tool-call step card ─────────────────────────────────────────────
+
+interface TranscriptStepRowProps {
+  step: Extract<TranscriptEntry, { kind: "step" }>;
+  isSelected: boolean;
+}
+
+const TranscriptStepRow = ({
+  ref,
+  step,
+  isSelected,
+}: TranscriptStepRowProps & { ref?: React.Ref<HTMLDivElement> }) => {
+  const [expanded, setExpanded] = useState(false);
+  const Icon = toolIcon(step.tool);
+  const summary = formatToolInputSummary(step.tool ?? "", step.input);
+  const running = isStepRunning(step.status);
+  const failed = step.status === "failed";
+  const hasDetail =
+    (step.input && Object.keys(step.input).length > 0) || Boolean(step.output && step.output.length > 0);
+
+  return (
+    <div ref={ref} className={cn("group transition-colors", isSelected && "bg-accent/50")}>
+      <Collapsible open={expanded} onOpenChange={setExpanded}>
+        <div className="flex items-start gap-2 px-4 py-2">
+          {/* status dot */}
+          <span className="mt-1 shrink-0">
+            {running ? (
+              <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />
+            ) : failed ? (
+              <XCircle className="h-3.5 w-3.5 text-destructive" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+            )}
+          </span>
+          <span className="inline-flex items-center gap-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium mt-0.5 bg-blue-500/15 text-blue-700 dark:text-blue-300">
+            <Icon className="h-3 w-3" />
+            {step.tool ?? "Tool"}
+          </span>
+          <CollapsibleTrigger
+            className={cn(
+              "flex-1 text-left text-xs min-w-0 py-0.5 transition-colors text-muted-foreground",
+              hasDetail ? "cursor-pointer hover:text-foreground" : "cursor-default",
+            )}
+            disabled={!hasDetail}
+          >
+            <div className="flex items-start gap-1.5">
+              {hasDetail && (
+                <ChevronRight
+                  className={cn(
+                    "h-3 w-3 shrink-0 mt-0.5 text-muted-foreground/50 transition-transform",
+                    expanded && "rotate-90",
+                  )}
+                />
+              )}
+              <span className="truncate font-mono">{summary}</span>
+            </div>
+          </CollapsibleTrigger>
+          <span className="shrink-0 flex items-center gap-1.5 text-[10px] text-muted-foreground/50 tabular-nums mt-1">
+            {step.durationMs != null && <span>{formatStepDuration(step.durationMs)}</span>}
+            <span>#{step.seq}</span>
+          </span>
+        </div>
+        {hasDetail && (
+          <CollapsibleContent>
+            <div className="px-4 pb-3 ml-[72px] space-y-2">
+              {step.input && Object.keys(step.input).length > 0 && (
+                <pre className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
+                  {JSON.stringify(step.input, null, 2)}
+                </pre>
+              )}
+              {step.output && <StepOutput output={step.output} meta={step.meta} />}
+            </div>
+          </CollapsibleContent>
+        )}
+      </Collapsible>
+    </div>
+  );
+};
+
+// Render a tool result: diff blocks (from meta.content_blocks) get +/- line
+// coloring; everything else is JSON-pretty-printed or shown raw.
+function StepOutput({ output, meta }: { output: string; meta?: Record<string, unknown> }) {
+  const blocks = Array.isArray(meta?.content_blocks) ? (meta!.content_blocks as Array<Record<string, unknown>>) : [];
+  const diff = blocks.find((b) => b.type === "diff");
+  if (diff && (typeof diff.newText === "string" || typeof diff.new_text === "string")) {
+    const text = String(diff.newText ?? diff.new_text ?? "");
+    return (
+      <pre className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-[11px] font-mono whitespace-pre-wrap break-all">
+        {text.split("\n").map((line, i) => (
+          <div
+            key={i}
+            className={cn(
+              line.startsWith("+") && "text-emerald-600 dark:text-emerald-400",
+              line.startsWith("-") && "text-red-600 dark:text-red-400",
+            )}
+          >
+            {line}
+          </div>
+        ))}
+      </pre>
+    );
+  }
+  let body = output;
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed && typeof parsed === "object") body = JSON.stringify(parsed, null, 2);
+  } catch { /* plain text */ }
+  return (
+    <pre className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
+      {body.length > 4000 ? body.slice(0, 4000) + "\n… (truncated)" : body}
+    </pre>
+  );
+}
+
+function formatStepDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
 
 // ─── Event detail content ───────────────────────────────────────────────────
 

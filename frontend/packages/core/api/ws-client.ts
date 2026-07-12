@@ -35,6 +35,7 @@ export class WSClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private hasConnectedBefore = false;
   private onReconnectCallbacks = new Set<() => void>();
+  private onAuthenticatedCallbacks = new Set<() => void>();
   private anyHandlers = new Set<(msg: WSMessage) => void>();
   private logger: Logger;
 
@@ -135,6 +136,20 @@ export class WSClient {
       }
     }
     this.hasConnectedBefore = true;
+    // Fires on every authenticated connection (first + reconnect). Scope
+    // subscriptions must be (re)sent here: the server clears them on
+    // disconnect, and a subscribe frame sent before auth would be dropped.
+    for (const cb of this.onAuthenticatedCallbacks) {
+      try {
+        cb();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  get authenticated(): boolean {
+    return this.hasConnectedBefore && this.ws?.readyState === WebSocket.OPEN;
   }
 
   disconnect() {
@@ -153,6 +168,7 @@ export class WSClient {
     this.handlers.clear();
     this.anyHandlers.clear();
     this.onReconnectCallbacks.clear();
+    this.onAuthenticatedCallbacks.clear();
   }
 
   on(event: WSEventType, handler: EventHandler) {
@@ -176,6 +192,17 @@ export class WSClient {
     this.onReconnectCallbacks.add(callback);
     return () => {
       this.onReconnectCallbacks.delete(callback);
+    };
+  }
+
+  onAuthenticated_(callback: () => void) {
+    this.onAuthenticatedCallbacks.add(callback);
+    // If already authenticated, fire immediately so a late subscriber catches up.
+    if (this.authenticated) {
+      try { callback(); } catch { /* ignore */ }
+    }
+    return () => {
+      this.onAuthenticatedCallbacks.delete(callback);
     };
   }
 

@@ -38,6 +38,73 @@ export interface UsageSnapshot {
   cacheWriteTokens?: number;
 }
 
+/**
+ * A step is a paired tool_use + tool_result (grouped by tool_call_id) rendered
+ * as one card; everything else stays a plain event. Older messages without a
+ * tool_call_id can't be paired, so they degrade to `event` entries.
+ */
+export type TranscriptEntry =
+  | {
+      kind: "step";
+      seq: number;
+      toolCallId: string;
+      tool?: string;
+      status?: string;
+      input?: Record<string, unknown>;
+      output?: string;
+      meta?: Record<string, unknown>;
+      durationMs?: number;
+      createdAt?: string;
+    }
+  | { kind: "event"; seq: number; item: TimelineItem };
+
+const TERMINAL_STATUS = new Set(["completed", "failed"]);
+
+/**
+ * Fold a redacted timeline into render entries: pair tool_use/tool_result by
+ * tool_call_id into step cards (input from the use, status/output/duration from
+ * the result), keep everything else as events. Duration prefers the daemon's
+ * meta.duration_ms and falls back to the createdAt delta between the paired
+ * messages.
+ */
+export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
+  const steps = new Map<string, Extract<TranscriptEntry, { kind: "step" }>>();
+  const out: TranscriptEntry[] = [];
+  for (const item of items) {
+    if ((item.type === "tool_use" || item.type === "tool_result") && item.toolCallId) {
+      const id = item.toolCallId;
+      let step = steps.get(id);
+      if (!step) {
+        step = { kind: "step", seq: item.seq, toolCallId: id, tool: item.tool };
+        steps.set(id, step);
+        out.push(step);
+      }
+      if (item.tool) step.tool = item.tool;
+      if (item.status) step.status = item.status;
+      if (item.meta) step.meta = { ...step.meta, ...item.meta };
+      if (item.createdAt && !step.createdAt) step.createdAt = item.createdAt;
+      if (item.type === "tool_use") {
+        if (item.input) step.input = item.input;
+      } else {
+        if (item.output != null) step.output = item.output;
+        const metaDuration = typeof item.meta?.duration_ms === "number" ? item.meta.duration_ms : undefined;
+        if (metaDuration != null) step.durationMs = metaDuration;
+        else if (step.createdAt && item.createdAt) {
+          const d = new Date(item.createdAt).getTime() - new Date(step.createdAt).getTime();
+          if (Number.isFinite(d) && d >= 0) step.durationMs = d;
+        }
+      }
+      continue;
+    }
+    out.push({ kind: "event", seq: item.seq, item });
+  }
+  return out;
+}
+
+export function isStepRunning(status?: string): boolean {
+  return status != null && !TERMINAL_STATUS.has(status);
+}
+
 function canMergeStreamingText(prev: TimelineItem, next: TimelineItem): boolean {
   return (prev.type === "thinking" || prev.type === "text") && prev.type === next.type;
 }

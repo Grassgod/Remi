@@ -439,7 +439,8 @@
     "no_data": "No execution data recorded.",
     "sort_label": "Sort",
     "sort_chronological": "Oldest first",
-    "sort_newest_first": "Newest first"
+    "sort_newest_first": "Newest first",
+    "plan": "Plan"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

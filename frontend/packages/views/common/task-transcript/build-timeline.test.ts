@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import { appendTimelineItem, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, type TimelineItem } from "./build-timeline";
+import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, type TimelineItem } from "./build-timeline";
 
 function message(seq: number, type: TaskMessagePayload["type"], content?: string): TaskMessagePayload {
   return {
@@ -123,5 +123,44 @@ describe("task transcript timeline", () => {
       { task_id: "t", issue_id: "i", seq: 1, type: "usage", content: JSON.stringify({ sessionUpdate: "usage_update", used: 60000, size: 1000000 }) },
     ]);
     expect(usage?.totalTokens).toBe(60000);
+  });
+});
+
+describe("buildEntries pairing", () => {
+  const item = (over: Partial<TimelineItem> & { seq: number; type: TimelineItem["type"] }): TimelineItem => over;
+
+  it("pairs tool_use + tool_result on tool_call_id into one step", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash", toolCallId: "tc_1", input: { command: "ls" }, status: "pending" }),
+      item({ seq: 2, type: "tool_result", tool: "Bash", toolCallId: "tc_1", output: "ok", status: "completed", meta: { duration_ms: 42 } }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: "step", toolCallId: "tc_1", tool: "Bash", status: "completed", output: "ok", durationMs: 42 });
+    expect((entries[0] as { input?: unknown }).input).toEqual({ command: "ls" });
+  });
+
+  it("falls back to createdAt delta when meta.duration_ms is absent", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", toolCallId: "tc", createdAt: "2026-07-12T00:00:00.000Z" }),
+      item({ seq: 2, type: "tool_result", toolCallId: "tc", output: "x", status: "completed", createdAt: "2026-07-12T00:00:01.500Z" }),
+    ]);
+    expect((entries[0] as { durationMs?: number }).durationMs).toBe(1500);
+  });
+
+  it("keeps messages without a tool_call_id as plain events (legacy degrade)", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash" }),
+      item({ seq: 2, type: "text", content: "hi" }),
+    ]);
+    expect(entries.map((e) => e.kind)).toEqual(["event", "event"]);
+  });
+
+  it("handles a tool_result arriving before its tool_use (out of order)", () => {
+    const entries = buildEntries([
+      item({ seq: 2, type: "tool_result", toolCallId: "tc", output: "done", status: "completed" }),
+      item({ seq: 1, type: "tool_use", toolCallId: "tc", tool: "Read", input: { file_path: "/a" } }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: "step", tool: "Read", output: "done", status: "completed" });
   });
 });

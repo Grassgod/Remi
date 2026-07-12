@@ -783,20 +783,30 @@ export function useRealtimeSync(
     // task:completed / task:failed invalidate messages + pending-task so the
     // DB remains authoritative.
 
+    // Coalesce bursts of task:message frames (a running agent streams many text
+    // chunks) into one cache write per task every ~80ms. Each write rebuilds
+    // the transcript timeline downstream, so per-frame writes would thrash long
+    // transcripts; virtualization only bounds the DOM, not this cost.
+    const taskMessageBuffer = new Map<string, TaskMessagePayload[]>();
+    let taskMessageFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushTaskMessages = () => {
+      taskMessageFlushTimer = null;
+      for (const [taskId, pending] of taskMessageBuffer) {
+        qc.setQueryData<TaskMessagePayload[]>(["task-messages", taskId], (old = []) => {
+          const seen = new Set(old.map((m) => m.seq));
+          const additions = pending.filter((m) => !seen.has(m.seq));
+          if (additions.length === 0) return old;
+          return [...old, ...additions].sort((a, b) => a.seq - b.seq);
+        });
+      }
+      taskMessageBuffer.clear();
+    };
     const unsubTaskMessage = ws.on("task:message", (p) => {
       const payload = normalizeTaskMessage(p);
-      qc.setQueryData<TaskMessagePayload[]>(
-        ["task-messages", payload.task_id],
-        (old = []) => {
-          if (old.some((m) => m.seq === payload.seq)) return old;
-          return [...old, payload].sort((a, b) => a.seq - b.seq);
-        },
-      );
-      chatWsLogger.debug("task:message (global)", {
-        task_id: payload.task_id,
-        seq: payload.seq,
-        type: payload.type,
-      });
+      const pending = taskMessageBuffer.get(payload.task_id) ?? [];
+      pending.push(payload);
+      taskMessageBuffer.set(payload.task_id, pending);
+      if (!taskMessageFlushTimer) taskMessageFlushTimer = setTimeout(flushTaskMessages, 80);
     });
 
     // Helpers reused by chat lifecycle handlers.
@@ -1077,6 +1087,8 @@ export function useRealtimeSync(
       unsubInvitationDeclined();
       unsubInvitationRevoked();
       unsubTaskMessage();
+      if (taskMessageFlushTimer) clearTimeout(taskMessageFlushTimer);
+      flushTaskMessages();
       unsubChatMessage();
       unsubChatDone();
       unsubTaskQueued();

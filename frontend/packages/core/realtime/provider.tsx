@@ -26,6 +26,13 @@ type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => 
 interface WSContextValue {
   subscribe: (event: WSEventType, handler: EventHandler) => () => void;
   onReconnect: (callback: () => void) => () => void;
+  /**
+   * Subscribe to a server scope (e.g. task/chat) for the lifetime of the
+   * returned disposer. Sends the subscribe frame on every authenticated
+   * connection (first + reconnect, since the server clears scopes on
+   * disconnect) and an unsubscribe on dispose.
+   */
+  subscribeScope: (scope: string, id: string) => () => void;
 }
 
 const WSContext = createContext<WSContextValue | null>(null);
@@ -136,8 +143,23 @@ export function WSProvider({
     [wsClient],
   );
 
+  const subscribeScope = useCallback(
+    (scope: string, id: string) => {
+      if (!wsClient) return () => {};
+      // (Re)send on every authenticated connection; server clears scopes on drop.
+      const off = wsClient.onAuthenticated_(() => {
+        wsClient.send({ type: "subscribe", payload: { scope, id } } as never);
+      });
+      return () => {
+        off();
+        wsClient.send({ type: "unsubscribe", payload: { scope, id } } as never);
+      };
+    },
+    [wsClient],
+  );
+
   return (
-    <WSContext.Provider value={{ subscribe, onReconnect: onReconnectCb }}>
+    <WSContext.Provider value={{ subscribe, onReconnect: onReconnectCb, subscribeScope }}>
       {children}
     </WSContext.Provider>
   );

@@ -419,7 +419,8 @@
     "no_data": "記録された実行データがありません。",
     "sort_label": "並び替え",
     "sort_chronological": "古い順",
-    "sort_newest_first": "新しい順"
+    "sort_newest_first": "新しい順",
+    "plan": "計画"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",

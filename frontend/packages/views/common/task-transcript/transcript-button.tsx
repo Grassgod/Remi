@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Loader2, ScrollText } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
@@ -9,7 +10,10 @@ import {
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
 import { api } from "@multiremi/core/api";
+import { chatKeys } from "@multiremi/core/chat/queries";
+import { useTaskScopeSubscription } from "@multiremi/core/realtime";
 import type { AgentTask } from "@multiremi/core/types/agent";
+import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import { buildTimeline, type TimelineItem } from "./build-timeline";
 
@@ -49,36 +53,35 @@ export function TranscriptButton({
   headerSlot,
 }: TranscriptButtonProps) {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [loadedItems, setLoadedItems] = useState<TimelineItem[] | null>(null);
 
-  // Live mode: parent owns the timeline, we just render it.
-  // Lazy mode: we fetch once and cache.
-  const items = providedItems ?? loadedItems ?? [];
+  // When the parent doesn't own the timeline, read from the shared
+  // ["task-messages", id] query cache. use-realtime-sync writes every WS
+  // task:message frame into that key, so an open dialog updates live without a
+  // manual refetch. Chat tasks additionally need a scope subscription; issue
+  // tasks ride the workspace-wide broadcast.
+  const useQueryCache = providedItems === undefined;
+  const { data: liveMessages, isFetching } = useQuery({
+    queryKey: chatKeys.taskMessages(task.id),
+    queryFn: () => api.listTaskMessages(task.id),
+    enabled: open && useQueryCache,
+    staleTime: Infinity,
+  });
+  const loading = isFetching && !liveMessages;
+  useTaskScopeSubscription(task.id, open && useQueryCache);
+
+  const liveItems = useMemo(
+    () => (liveMessages ? buildTimeline(liveMessages as TaskMessagePayload[]) : undefined),
+    [liveMessages],
+  );
+  const items = providedItems ?? liveItems ?? [];
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      if (providedItems !== undefined || loadedItems !== null) {
-        setOpen(true);
-        return;
-      }
-      setLoading(true);
-      api
-        .listTaskMessages(task.id)
-        .then((msgs) => {
-          setLoadedItems(buildTimeline(msgs));
-          setOpen(true);
-        })
-        .catch((err) => {
-          console.error(err);
-          setLoadedItems([]);
-          setOpen(true);
-        })
-        .finally(() => setLoading(false));
+      setOpen(true);
     },
-    [providedItems, loadedItems, task.id],
+    [],
   );
 
   return (
