@@ -6022,7 +6022,12 @@ runMigrations(this.db);
     // claim them. Two machine-local realities still force a stamp: a promoted
     // provider session lives on the machine that ran it, and a local_directory
     // project resource only exists on its daemon.
-    if (!runtimeId) runtimeId = this.resolveTaskRuntimeAffinity(agent, chatSession, issue);
+    let inheritChatSession = true;
+    if (!runtimeId) {
+      const affinity = this.resolveTaskAffinity(agent, chatSession, issue);
+      runtimeId = affinity.runtimeId;
+      inheritChatSession = affinity.inheritChatSession;
+    }
 
     const id = input.id ?? createId("tsk");
     const now = nowIso();
@@ -6048,8 +6053,8 @@ runMigrations(this.db);
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-        input.sessionId ?? chatSession?.sessionId ?? null,
-        input.workDir ?? chatSession?.workDir ?? agent.cwd ?? null,
+        input.sessionId ?? (inheritChatSession ? chatSession?.sessionId ?? null : null),
+        input.workDir ?? (inheritChatSession ? chatSession?.workDir ?? null : null) ?? agent.cwd ?? null,
         now,
         now,
       ],
@@ -6059,11 +6064,19 @@ runMigrations(this.db);
     return task;
   }
 
-  private resolveTaskRuntimeAffinity(
+  /**
+   * Where a pooled task should be pinned, and whether it may inherit the chat
+   * session's promoted provider session. `inheritChatSession` goes false when
+   * the session was produced by a different provider than the agent now runs
+   * (the user switched engines): that session id / work_dir belong to the old
+   * engine's runtime and must not be handed to the new one.
+   */
+  private resolveTaskAffinity(
     agent: MultiremiAgent,
     chatSession: MultiremiChatSession | null,
     issue: MultiremiIssue | null,
-  ): string | null {
+  ): { runtimeId: string | null; inheritChatSession: boolean } {
+    let inheritChatSession = true;
     if (chatSession?.sessionId) {
       const row = this.db
         .query(
@@ -6073,9 +6086,13 @@ runMigrations(this.db);
         )
         .get(chatSession.id) as Row | null;
       const runtime = row ? this.getRuntime(String(row.runtime_id)) : null;
-      // The provider must still match, or the claim predicate would leave the
-      // task unclaimable forever (e.g. after the agent switched providers).
-      if (runtime && (runtime.provider === "any" || runtime.provider === agent.provider)) return runtime.id;
+      if (runtime) {
+        const providerOk = runtime.provider === "any" || runtime.provider === agent.provider;
+        if (providerOk) return { runtimeId: runtime.id, inheritChatSession: true };
+        // Engine switched since the session was promoted — abandon it so the
+        // new engine starts fresh rather than resuming a foreign session.
+        inheritChatSession = false;
+      }
     }
     if (issue?.projectId) {
       for (const resource of this.listProjectResources(issue.projectId)) {
@@ -6083,15 +6100,15 @@ runMigrations(this.db);
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
         if (!daemonId) continue;
         const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
-        if (runtime) return runtime.id;
+        if (runtime) return { runtimeId: runtime.id, inheritChatSession };
         // No runtime row for that daemon (never registered, or GC'd while
         // offline): stamp the deterministic id its runtime WILL get on
         // registration, so the task waits for the machine that has the
         // directory instead of running in a scratch dir somewhere else.
-        return daemonRuntimeId(daemonId, agent.provider);
+        return { runtimeId: daemonRuntimeId(daemonId, agent.provider), inheritChatSession };
       }
     }
-    return null;
+    return { runtimeId: null, inheritChatSession };
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
@@ -6326,7 +6343,6 @@ runMigrations(this.db);
       runtime.visibility,
       runtime.ownerId,
       runtime.ownerId,
-      runtime.id,
     ];
     const params = runtime.workspaceId
       ? [
@@ -6354,6 +6370,14 @@ runMigrations(this.db);
           runtime.provider,
           ...ownershipParams,
         ];
+    // Ownership guard: a private runtime only executes its owner's agents — a
+    // claim hands the runtime the agent's custom_env / mcp_config. It is NOT
+    // relaxed for tasks stamped to this runtime, because the /tasks API lets
+    // any member stamp an arbitrary agent+runtime (a stamp is not proof of
+    // authorization). Legitimate affinity (session / local_directory) to one's
+    // own private machine still passes via owner_id equality. Kept as a JS
+    // comment, not inline SQL: an apostrophe in an in-string `--` comment
+    // corrupts the sqlite→pg placeholder scanner.
     const row = this.db.query(
       `UPDATE multiremi_tasks
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ?
@@ -6373,11 +6397,7 @@ runMigrations(this.db);
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
-           -- A private runtime only executes its owner's agents (it would
-           -- receive the agent's custom_env / mcp_config). Tasks explicitly
-           -- stamped to this runtime stay claimable: the stamp came from a
-           -- prior authorized placement (legacy pin or session affinity).
-           AND (? = 'public' OR CAST(? AS TEXT) IS NULL OR a.owner_id = ? OR t.runtime_id = ?)
+           AND (? = 'public' OR CAST(? AS TEXT) IS NULL OR a.owner_id = ?)
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks running

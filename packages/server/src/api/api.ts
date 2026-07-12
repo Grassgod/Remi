@@ -9606,12 +9606,12 @@ function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, t
   if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
   if (runtime.provider !== "any" && agent.provider !== runtime.provider) return false;
   // Mirrors the claim SQL's ownership predicate: a private runtime only runs
-  // its owner's agents unless the task is explicitly stamped to it.
+  // its owner's agents. A task stamp is deliberately NOT an escape hatch — the
+  // /tasks API lets any member stamp an arbitrary agent+runtime.
   if (
     runtime.visibility !== "public" &&
     runtime.ownerId != null &&
-    agent.ownerId !== runtime.ownerId &&
-    task.runtimeId !== runtime.id
+    agent.ownerId !== runtime.ownerId
   ) {
     return false;
   }

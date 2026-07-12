@@ -284,20 +284,18 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(bobPrivate.id)).toBeNull();
     expect(store.claimTask(bobPublic.id)?.id).toBe(task.id);
 
-    // Explicitly stamped tasks stay claimable — the stamp implies a prior
-    // authorized placement (legacy pin or session affinity).
+    // A stamp is NOT an escape hatch: the unauthenticated /tasks API lets any
+    // member stamp an arbitrary agent+runtime, so bob stamping alice's private
+    // agent to his own private runtime must still be refused at claim time.
     const issueB = store.createIssue({ title: "alice b", workspaceId: "local" });
-    const pinned = store.createTask({
+    store.createTask({
       agentId: aliceAgent.id,
       issueId: issueB.id,
-      prompt: "pinned",
+      prompt: "stamped-steal",
       workspaceId: "local",
       runtimeId: bobPrivate.id,
     });
-    expect(store.claimTask(bobPrivate.id)?.id).toBe(pinned.id);
-    // Free bobPrivate's single concurrency slot before the next claim.
-    store.startTask(pinned.id);
-    store.completeTask(pinned.id, { output: "done" });
+    expect(store.claimTask(bobPrivate.id)).toBeNull();
 
     // Bob's own agents still flow to his private machine.
     const bobAgent = store.createAgent({ name: "Bob codex", provider: "codex", workspaceId: "local", ownerId: "bob" });
@@ -343,12 +341,18 @@ describe("Bun Multiremi core store", () => {
 
     const second = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
     expect(second.runtimeId).toBe(codexB.id);
+    // Same-engine follow-up resumes the promoted provider session + work_dir.
+    expect(second.sessionId).toBe("sess_chat_affinity");
+    expect(second.workDir).toBe("/tmp/chat");
 
     // A provider switch drops the affinity — a codex-machine stamp would make
-    // the task unclaimable by any claude runtime.
+    // the task unclaimable by any claude runtime — AND abandons the codex
+    // session/work_dir so the claude engine doesn't resume a foreign session.
     store.updateAgent(agent.id, { provider: "claude" });
     const third = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "after switch" });
     expect(third.runtimeId).toBeNull();
+    expect(third.sessionId).toBeNull();
+    expect(third.workDir).toBeNull();
   });
 
   it("routes project tasks to the machine holding the local directory", () => {
@@ -5494,6 +5498,9 @@ describe("Bun Multiremi API", () => {
       name: "Task token agent",
       provider: "codex",
       workspaceId: "local",
+      // Owner matches the private runtime's owner so the ownership guard lets
+      // the claim through — this case exercises task tokens, not scheduling.
+      ownerId: "usr_runtime_owner",
       runtimeId: ownerRuntimeId,
     });
     const taskTokenIssue = store.createIssue({
