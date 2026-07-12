@@ -823,7 +823,19 @@ describe("Bun Multiremi core store", () => {
     const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
     expect(retry.runtimeId).toBeNull();
     expect(retry.sessionId).toBeNull();
-    expect(retry.workDir).toBe(agent.cwd ?? null);
+    expect(retry.workDir).toBeNull();
+  });
+
+  it("does not stamp a machine-local agent.cwd onto an unpinned pool task", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_cwd_pool", name: "r", provider: "codex" });
+    // An agent configured with a fixed cwd. In the pool model that path is
+    // machine-local, so it must NOT ride along on the unpinned task's work_dir
+    // (the daemon applies agent.cwd only if it exists on the claiming machine).
+    const agent = store.createAgent({ name: "CwdAgent", provider: "codex", cwd: "/only/on/one/machine" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(task.runtimeId).toBeNull();
+    expect(task.workDir).toBeNull();
   });
 
   it("resumes an issue-only local_directory retry's session with no chat session to inherit from", () => {

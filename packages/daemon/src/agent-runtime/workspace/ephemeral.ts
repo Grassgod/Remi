@@ -18,6 +18,10 @@ import { resolveWorkDir } from "./persistent.js";
 export interface ResolvedTaskWorkDir {
   workDir: string;
   localDirectory: boolean;
+  // Whether the daemon may create this dir. false for a local_directory (must
+  // pre-exist) and for a validated agent.cwd (never recreate a machine-local
+  // path); true for the default per-task dir and a machine-affine task.workDir.
+  ensureDir: boolean;
   release?: () => void;
 }
 
@@ -117,9 +121,11 @@ export async function resolveTaskWorkDir(
 ): Promise<ResolvedTaskWorkDir> {
   const assignment = findLocalDirectoryAssignment(task, opts.daemonIds);
   if (!assignment) {
+    const resolved = resolveWorkDir(task, opts.workspacesRoot);
     return {
-      workDir: resolveWorkDir(task, opts.workspacesRoot),
+      workDir: resolved.workDir,
       localDirectory: false,
+      ensureDir: resolved.ensureDir,
     };
   }
   validateLocalDirectoryPath(assignment.absPath);
@@ -132,6 +138,7 @@ export async function resolveTaskWorkDir(
   return {
     workDir: assignment.absPath,
     localDirectory: true,
+    ensureDir: false,
     release,
   };
 }
