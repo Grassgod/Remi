@@ -473,6 +473,50 @@ describe("Bun Multiremi core store", () => {
     expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
   });
 
+  it("drops an explicitly-passed old-engine session when the agent switched engines", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_drop_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_drop_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Dropper", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+
+    // Switch to claude, then a chat send re-passes the old session fields explicitly.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const next = store.createTask({
+      agentId: agent.id,
+      chatSessionId: session.id,
+      sessionId: "codex-session",
+      workDir: "/tmp/codex",
+      prompt: "after switch",
+    });
+    // The old-engine session/work_dir must be dropped, and it re-pools onto claude.
+    expect(next.runtimeId).toBeNull();
+    expect(next.sessionId).toBeNull();
+    expect(next.workDir).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(next.id);
+  });
+
+  it("does not inherit an any-runtime session (its engine is ambiguous)", () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_any_sess", name: "any", provider: "any" });
+    const agent = store.createAgent({ name: "AnySwitcher", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(anyRuntime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    // A provider session is engine-specific, but an `any` runtime records no
+    // engine for the session it ran — so the follow-up conservatively does NOT
+    // resume it (re-pooling to start fresh, rather than risk handing a codex
+    // session to a claude run after a switch).
+    const same = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(same.sessionId).toBeNull();
+  });
+
   it("prefers local_directory affinity over chat session affinity", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });

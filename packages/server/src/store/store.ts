@@ -6250,8 +6250,14 @@ runMigrations(this.db);
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-        input.sessionId ?? (inheritChatSession ? chatSession?.sessionId ?? null : null),
-        input.workDir ?? (inheritChatSession ? chatSession?.workDir ?? null : null) ?? agent.cwd ?? null,
+        // When inheritChatSession is false the promoted provider session belongs
+        // to a machine we can't return to (engine switched / runtime gone), so
+        // it's dropped — including an explicitly-passed sessionId (a chat send
+        // re-sends the session's old fields, and a resume-safe retry that got
+        // degraded passes them too). Otherwise honour the explicit value, then
+        // the session's promoted one.
+        inheritChatSession ? (input.sessionId ?? chatSession?.sessionId ?? null) : null,
+        (inheritChatSession ? (input.workDir ?? chatSession?.workDir ?? null) : null) ?? agent.cwd ?? null,
         now,
         now,
       ],
@@ -6303,12 +6309,13 @@ runMigrations(this.db);
       const runtimeId = this.chatSessionRuntimeId(chatSession.id);
       const runtime = runtimeId ? this.getRuntime(runtimeId) : null;
       // Only follow the session back to its machine when that machine can still
-      // run this agent (provider still matches AND ownership still permits). If
-      // the runtime was deleted, the engine switched, or the runtime turned
-      // private under a different owner, the promoted session/work_dir belong
-      // to a machine we can't return to — abandon them and re-pool so the task
-      // isn't pinned to a runtime the claim predicate would reject forever.
-      if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
+      // run this agent (ownership permits) AND its engine EXACTLY matches the
+      // agent's. A provider session is engine-specific, so an `any` runtime that
+      // ran the session under a since-changed engine can't resume it — require
+      // runtime.provider === agent.provider, not just runtimeCanRunAgent (which
+      // treats `any` as matching every provider). Otherwise abandon the session
+      // and re-pool so the task isn't pinned to a machine that can't resume it.
+      if (runtime && runtime.provider === agent.provider && this.runtimeCanRunAgent(runtime, agent)) {
         return { runtimeId: runtime.id, inheritChatSession: true };
       }
       return { runtimeId: null, inheritChatSession: false };
