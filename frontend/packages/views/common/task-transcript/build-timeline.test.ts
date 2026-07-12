@@ -163,4 +163,15 @@ describe("buildEntries pairing", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: "step", tool: "Read", output: "done", status: "completed" });
   });
+
+  it("keeps the terminal status when items arrive newest-first (pending must not overwrite completed)", () => {
+    // Reproduces the spinner bug: a newest-first list feeds the completed
+    // tool_result before the pending tool_use; without a chronological sort the
+    // pending status wins and the step spins forever.
+    const entries = buildEntries([
+      item({ seq: 2, type: "tool_result", toolCallId: "tc", output: "ok", status: "completed", meta: { duration_ms: 30 } }),
+      item({ seq: 1, type: "tool_use", toolCallId: "tc", tool: "Bash", status: "pending" }),
+    ]);
+    expect(entries[0]).toMatchObject({ kind: "step", status: "completed", durationMs: 30 });
+  });
 });

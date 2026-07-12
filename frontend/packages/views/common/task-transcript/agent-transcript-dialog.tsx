@@ -400,7 +400,12 @@ export function AgentTranscriptDialog({
 
   // Pair tool_use/tool_result into step cards (Batch 2 gives us tool_call_id);
   // the final answer, usage, and plan are surfaced in their own sections.
-  const entries = useMemo(() => buildEntries(displayItems), [displayItems]);
+  // buildEntries pairs chronologically; apply the display sort to the entries
+  // afterward so newest-first doesn't corrupt the pairing.
+  const entries = useMemo(() => {
+    const paired = buildEntries(filteredItems);
+    return sortDirection === "newest_first" ? [...paired].reverse() : paired;
+  }, [filteredItems, sortDirection]);
   const planEntries = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];

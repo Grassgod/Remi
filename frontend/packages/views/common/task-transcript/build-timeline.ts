@@ -70,7 +70,13 @@ const TERMINAL_STATUS = new Set(["completed", "failed"]);
 export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
   const steps = new Map<string, Extract<TranscriptEntry, { kind: "step" }>>();
   const out: TranscriptEntry[] = [];
-  for (const item of items) {
+  // Pair in chronological (seq) order regardless of how the caller sorts for
+  // display — otherwise a newest-first list processes the tool_result before
+  // its tool_use, and the pending tool_use overwrites the completed status
+  // (steps then show a spinner forever). The caller reverses the returned
+  // entries for newest-first display.
+  const sorted = [...items].sort((a, b) => a.seq - b.seq);
+  for (const item of sorted) {
     if ((item.type === "tool_use" || item.type === "tool_result") && item.toolCallId) {
       const id = item.toolCallId;
       let step = steps.get(id);
