@@ -473,6 +473,52 @@ describe("Bun Multiremi core store", () => {
     expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
   });
 
+  it("prefers local_directory affinity over chat session affinity", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
+    const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
+    const agent = store.createAgent({ name: "Pref", provider: "codex" });
+    // Establish a chat session whose provider session lives on sessRuntime.
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
+    store.startTask(warmup.id);
+    store.completeTask(warmup.id, { output: "ok", sessionId: "sess_pref", workDir: "/tmp/pref" });
+
+    // A follow-up that is ALSO a directory-project issue must go to the
+    // directory machine, not the session machine, and must not inherit the
+    // foreign-machine session.
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(task.sessionId).toBeNull();
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("degrades a resume-safe retry to a fresh re-pool when the agent's engine changed", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_retry_codex2", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_retry_claude2", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "RetrySwitch", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // Switch the agent to claude, THEN the codex run fails with a resume-safe reason.
+    store.updateAgent(agent.id, { provider: "claude" });
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // The parent's codex runtime can't run a claude agent → retry re-pools fresh.
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(retry.id);
+  });
+
   it("lets local_directory affinity override an explicit runtime override", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_ovr_dir", name: "dir", provider: "codex", daemonId: "daemon-ovr" });
@@ -566,20 +612,6 @@ describe("Bun Multiremi core store", () => {
     expect(events).toContain("task:cancelled");
   });
 
-  it("unpins plain agent-bound queued tasks on the startup migration", () => {
-    const store = createStore();
-    const oldRuntime = store.registerRuntime({ id: "rt_migrate_old", name: "old", provider: "codex" });
-    const otherRuntime = store.registerRuntime({ id: "rt_migrate_new", name: "new", provider: "codex" });
-    const agent = store.createAgent({ name: "Legacy", provider: "codex" });
-    const task = store.createTask({ agentId: agent.id, prompt: "legacy" });
-    // Simulate a pre-pool state: task pinned to a specific runtime, no session.
-    db!.run("UPDATE multiremi_tasks SET runtime_id = ? WHERE id = ?", [oldRuntime.id, task.id]);
-    // Re-running migrations (new store on the same db) unpins the plain pin.
-    const reopened = new MultiremiStore(db!);
-    expect(reopened.getTask(task.id)?.runtimeId).toBeNull();
-    // Now any provider-matching runtime can take it.
-    expect(reopened.claimTask(otherRuntime.id)?.id).toBe(task.id);
-  });
 
   it("keeps a local_directory task's pin through the startup migration", () => {
     const store = createStore();

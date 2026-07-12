@@ -930,26 +930,14 @@ export function runMigrations(db: SqlDatabase): void {
   // Pool scheduling: agents are logical workers and never bind to a machine.
   // Runs every startup so legacy pins converge back into the pool.
   db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
-  // Pre-pool, every queued task inherited its agent's runtime pin. Now that
-  // agents are unbound, a plain pin would keep the task claimable only by the
-  // original machine (stranding it when that machine is offline). Drop the pin
-  // from queued tasks that carry NO real affinity. Two affinities are
-  // preserved: a promoted provider session_id (a chat task that must return to
-  // its machine) and a local_directory project resource (the directory only
-  // exists on that daemon — re-pooling would run it in the wrong repo). Runs
-  // every startup but is a no-op once converged, and the local_directory guard
-  // keeps it from ever unpinning a legitimately directory-bound task.
-  db.run(`
-    UPDATE multiremi_tasks SET runtime_id = NULL
-    WHERE status = 'queued'
-      AND runtime_id IS NOT NULL
-      AND (session_id IS NULL OR session_id = '')
-      AND (issue_id IS NULL OR issue_id NOT IN (
-        SELECT i.id FROM multiremi_issues i
-        JOIN multiremi_project_resources r ON r.project_id = i.project_id
-        WHERE r.resource_type = 'local_directory'
-      ))
-  `);
+  // NOTE: we deliberately do NOT unpin existing queued TASKS here. This
+  // migration runs on every startup, and a task's runtime_id can legitimately
+  // be an explicit pin, a resume-safe retry pin, or a session/local_directory
+  // affinity — none distinguishable from a pre-pool agent-inherited pin at the
+  // SQL level, so a blanket unpin would keep clobbering valid pins on every
+  // boot. Pre-pool tasks keep their pin (claimable by their original machine);
+  // new tasks are already unbound by createTask. Only the agent binding above
+  // is cleared, which is the invariant the pool model needs.
   backfillIssueKeys(db);
 }
 

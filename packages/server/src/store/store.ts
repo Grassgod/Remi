@@ -6273,27 +6273,12 @@ runMigrations(this.db);
     chatSession: MultiremiChatSession | null,
     issue: MultiremiIssue | null,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
-    let inheritChatSession = true;
-    if (chatSession?.sessionId) {
-      const row = this.db
-        .query(
-          `SELECT runtime_id FROM multiremi_tasks
-           WHERE chat_session_id = ? AND runtime_id IS NOT NULL
-           ORDER BY created_at DESC LIMIT 1`,
-        )
-        .get(chatSession.id) as Row | null;
-      const runtime = row ? this.getRuntime(String(row.runtime_id)) : null;
-      // Only follow the session back to its machine when that machine can still
-      // run this agent (provider still matches AND ownership still permits). If
-      // the runtime was deleted, the engine switched, or the runtime turned
-      // private under a different owner, the promoted session/work_dir belong
-      // to a machine we can't return to — abandon them and re-pool so the task
-      // isn't pinned to a runtime the claim predicate would reject forever.
-      if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
-        return { runtimeId: runtime.id, inheritChatSession: true };
-      }
-      inheritChatSession = false;
-    }
+    // local_directory affinity is checked FIRST and outranks session affinity:
+    // the directory only exists on that daemon (a hard data constraint), while
+    // a provider session is a soft constraint that can be restarted elsewhere.
+    // A task carrying both a chat session and a directory issue must go to the
+    // directory's machine; the session is only inherited if that machine is
+    // also where the session lives.
     if (issue?.projectId) {
       for (const resource of this.listProjectResources(issue.projectId)) {
         if (resource.resourceType !== "local_directory") continue;
@@ -6303,18 +6288,44 @@ runMigrations(this.db);
         // Always pin to the machine that holds the directory, even if it can't
         // currently run this agent (turned private / wrong owner). Leaving it
         // unpinned would let a provider-matching machine WITHOUT the directory
-        // claim it and silently run in a scratch checkout of the wrong repo —
-        // worse than waiting. If the target is ineligible the task parks until
-        // the config is fixed; that is the safe failure.
-        if (runtime) return { runtimeId: runtime.id, inheritChatSession };
-        // No runtime row for that daemon (never registered, or GC'd while
-        // offline): stamp the deterministic id its runtime WILL get on
-        // registration, so the task waits for the machine that has the
-        // directory instead of running in a scratch dir somewhere else.
-        return { runtimeId: daemonRuntimeId(daemonId, agent.provider), inheritChatSession };
+        // claim it and silently run in a scratch checkout of the wrong repo.
+        // No runtime row yet → the deterministic id its runtime WILL get on
+        // registration, so the task waits for that machine.
+        const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
+        // Inherit the session only if it lives on this same directory machine.
+        const inheritChatSession = chatSession?.sessionId
+          ? this.chatSessionRuntimeId(chatSession.id) === dirRuntimeId
+          : true;
+        return { runtimeId: dirRuntimeId, inheritChatSession };
       }
     }
-    return { runtimeId: null, inheritChatSession };
+    if (chatSession?.sessionId) {
+      const runtimeId = this.chatSessionRuntimeId(chatSession.id);
+      const runtime = runtimeId ? this.getRuntime(runtimeId) : null;
+      // Only follow the session back to its machine when that machine can still
+      // run this agent (provider still matches AND ownership still permits). If
+      // the runtime was deleted, the engine switched, or the runtime turned
+      // private under a different owner, the promoted session/work_dir belong
+      // to a machine we can't return to — abandon them and re-pool so the task
+      // isn't pinned to a runtime the claim predicate would reject forever.
+      if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
+        return { runtimeId: runtime.id, inheritChatSession: true };
+      }
+      return { runtimeId: null, inheritChatSession: false };
+    }
+    return { runtimeId: null, inheritChatSession: true };
+  }
+
+  /** Runtime that last ran a task for this chat session (its provider session lives there), or null. */
+  private chatSessionRuntimeId(chatSessionId: string): string | null {
+    const row = this.db
+      .query(
+        `SELECT runtime_id FROM multiremi_tasks
+         WHERE chat_session_id = ? AND runtime_id IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(chatSessionId) as Row | null;
+    return row ? String(row.runtime_id) : null;
   }
 
   /**
@@ -7028,7 +7039,15 @@ runMigrations(this.db);
     if (parent.autopilotRunId) return null;
     if (!parent.issueId && !parent.chatSessionId) return null;
 
-    const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason);
+    // Resume-safe only if the parent's machine can STILL run this agent. If the
+    // agent switched engine/owner (or the runtime changed) since the parent ran,
+    // its session/runtime are void — degrade to resume-unsafe so the retry
+    // re-pools and starts fresh instead of being pinned to a machine the claim
+    // predicate would reject forever.
+    const agent = this.getAgent(parent.agentId);
+    const parentRuntime = parent.runtimeId ? this.getRuntime(parent.runtimeId) : null;
+    const parentRuntimeUsable = !parent.runtimeId || (parentRuntime != null && agent != null && this.runtimeCanRunAgent(parentRuntime, agent));
+    const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({
       agentId: parent.agentId,
       // Resume-safe failures must go back to the machine holding the session;
