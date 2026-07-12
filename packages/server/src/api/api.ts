@@ -800,7 +800,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/me/onboarding/no-runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string }>(c);
-    const result = safeNoRuntimeOnboardingBootstrap(store, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "");
+    if (denied) return denied;
+    const result = safeNoRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -4180,6 +4182,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     if (!canCurrentUserAccessAgent(c, store, agent)) {
       return c.json({ error: "you do not have access to this agent" }, 403);
+    }
+    // Injecting into another user's chat session (same workspace) would pollute
+    // and potentially resume their provider session — gate on the session's
+    // creator, the same rule the chat read/send routes enforce.
+    const sessionId = cleanString(body.chatSessionId);
+    if (sessionId) {
+      const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
+      if (loaded instanceof Response) return loaded;
     }
     return c.json({ task: store.createTask(body) }, 201);
   });
@@ -8552,7 +8562,9 @@ function safeRuntimeOnboardingBootstrap(
   if (!workspaceId) return { error: "workspace_id is required", status: 400 };
   if (!runtimeId) return { error: "runtime_id is required", status: 400 };
   const runtime = store.getRuntime(runtimeId);
-  if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
+  // COALESCE(...,'local') so a workspace-less runtime is treated as local,
+  // matching how the claim predicate (and the rest of the system) reads it.
+  if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) return { error: "invalid runtime_id", status: 400 };
   const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
   const before = store.getDefaultAgent(workspaceId, provider, bootstrapUserId);
   const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
@@ -8567,20 +8579,21 @@ function safeRuntimeOnboardingBootstrap(
       isFirstAgentInWorkspace: isFirstAgent,
     });
   }
-  const issue = createOnboardingIssue(store, workspaceId, "Connect your local runtime", `Use ${runtime.name} to run your first task.`);
+  const issue = createOnboardingIssue(store, workspaceId, "Connect your local runtime", `Use ${runtime.name} to run your first task.`, bootstrapUserId);
   store.createTask({
     agentId: agent.id,
     issueId: issue.id,
     workspaceId,
     prompt: "Help complete onboarding and verify the local runtime is ready.",
   });
-  store.markCurrentUserOnboarded();
+  store.markCurrentUserOnboarded(bootstrapUserId);
   return { workspace_id: workspaceId, agent_id: agent.id, issue_id: issue.id };
 }
 
 function safeNoRuntimeOnboardingBootstrap(
   store: MultiremiStore,
   body: { workspace_id?: string; workspaceId?: string },
+  bootstrapUserId: string,
 ): { workspace_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
   const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
   if (!workspaceId) return { error: "workspace_id is required", status: 400 };
@@ -8590,8 +8603,9 @@ function safeNoRuntimeOnboardingBootstrap(
     workspaceId,
     "Install a local runtime",
     "Install and register a local Claude or Codex runtime to start running tasks.",
+    bootstrapUserId,
   );
-  store.markCurrentUserOnboarded();
+  store.markCurrentUserOnboarded(bootstrapUserId);
   return { workspace_id: workspaceId, issue_id: issue.id };
 }
 
@@ -8600,6 +8614,7 @@ function createOnboardingIssue(
   workspaceId: string,
   title: string,
   description: string,
+  createdBy = "local",
 ): ReturnType<MultiremiStore["createIssue"]> {
   const existing = store.listIssues({ workspaceId }).find((issue) => issue.title === title);
   if (existing) return existing;
@@ -8607,7 +8622,7 @@ function createOnboardingIssue(
     title,
     description,
     workspaceId,
-    createdBy: "local",
+    createdBy,
     priority: "medium",
     contextRefs: [{ type: "onboarding" }],
   });
@@ -9638,7 +9653,7 @@ function safeRerunIssue(
 }
 
 function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, task: MultiremiTask): boolean {
-  if (runtime.workspaceId && task.workspaceId !== runtime.workspaceId) return false;
+  if ((runtime.workspaceId ?? "local") !== (task.workspaceId ?? "local")) return false;
   if (isInFlightTaskStatus(task.status)) return task.runtimeId === runtime.id;
   if (task.status !== "queued") return false;
   const agent = store.getAgent(task.agentId);

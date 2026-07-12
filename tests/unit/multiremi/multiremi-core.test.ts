@@ -453,6 +453,60 @@ describe("Bun Multiremi core store", () => {
     expect(task.workspaceId).toBe("wsA");
   });
 
+  it("rejects a cross-workspace autopilot assignee", () => {
+    const store = createStore();
+    const foreignAgent = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "wsB" });
+    expect(() =>
+      store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: foreignAgent.id }),
+    ).toThrow(/different workspace/i);
+    // Same-workspace assignee is accepted.
+    const ownAgent = store.createAgent({ name: "Own", provider: "codex", workspaceId: "wsA" });
+    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: ownAgent.id });
+    expect(ap.assigneeId).toBe(ownAgent.id);
+  });
+
+  it("rejects a cross-workspace squad member", () => {
+    const store = createStore();
+    const squad = store.createSquad({ name: "Squad", workspaceId: "wsA" });
+    const foreignAgent = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "wsB" });
+    expect(() =>
+      store.addSquadMember(squad.id, { memberType: "agent", memberId: foreignAgent.id }),
+    ).toThrow(/different workspace/i);
+  });
+
+  it("re-homes an agent's queued tasks when its owner changes", () => {
+    const store = createStore();
+    const alicePrivate = store.registerRuntime({ id: "rt_owner_alice", name: "alice", provider: "codex", ownerId: "alice", visibility: "private" });
+    const bobPrivate = store.registerRuntime({ id: "rt_owner_bob", name: "bob", provider: "codex", ownerId: "bob", visibility: "private" });
+    const agent = store.createAgent({ name: "Owned", provider: "codex", ownerId: "alice" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(alicePrivate.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_owner", workDir: "/tmp/owner" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(alicePrivate.id);
+
+    // Reassign the agent to bob → the queued task must leave alice's private pin.
+    store.updateAgent(agent.id, { ownerId: "bob" });
+    expect(store.getTask(followUp.id)?.runtimeId).toBeNull();
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(followUp.id);
+  });
+
+  it("re-homes an agent's queued tasks when its workspace changes", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_wsmove_a", name: "a", provider: "codex", workspaceId: "wsA" });
+    const codexB = store.registerRuntime({ id: "rt_wsmove_b", name: "b", provider: "codex", workspaceId: "wsB" });
+    const agent = store.createAgent({ name: "Mover", provider: "codex", workspaceId: "wsA" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(task.workspaceId).toBe("wsA");
+    // Move the agent to wsB → its queued task follows so the claim workspace matches.
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    expect(store.getTask(task.id)?.workspaceId).toBe("wsB");
+    expect(store.claimTask(codexA.id)).toBeNull();
+    expect(store.claimTask(codexB.id)?.id).toBe(task.id);
+  });
+
   it("re-homes an agent's queued tasks when its engine switches", () => {
     const store = createStore();
     const codex = store.registerRuntime({ id: "rt_switch_codex", name: "codex", provider: "codex" });

@@ -538,34 +538,48 @@ runMigrations(this.db);
       ],
     );
     const updated = this.getAgent(id)!;
-    // Switching an agent's engine strands any queued task already pinned to a
-    // runtime of the old provider: that runtime no longer matches (claim uses
-    // the agent's current provider), and the stamp blocks every other machine.
-    // Re-home them onto the new engine.
-    if (input.provider !== undefined && input.provider !== current.provider) {
-      this.rescheduleAgentQueuedTasksOnProviderChange(updated);
+    // Changing a scheduling-relevant field (engine, owner, or workspace)
+    // strands the agent's already-queued tasks: a task pinned to a runtime
+    // that no longer matches the agent (provider/owner) can't be claimed, and
+    // a workspace change leaves the task's workspace stale versus the claim
+    // predicate. Re-home them.
+    const providerChanged = input.provider !== undefined && input.provider !== current.provider;
+    const ownerChanged = (updated.ownerId ?? "local") !== (current.ownerId ?? "local");
+    const workspaceChanged = updated.workspaceId !== current.workspaceId;
+    if (providerChanged || ownerChanged || workspaceChanged) {
+      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged });
     }
     return updated;
   }
 
-  private rescheduleAgentQueuedTasksOnProviderChange(agent: MultiremiAgent): void {
+  private rescheduleAgentQueuedTasks(agent: MultiremiAgent, opts: { workspaceChanged: boolean }): void {
+    const now = nowIso();
+    // Move queued tasks into the agent's (possibly new) workspace so the claim
+    // predicate's a.workspace_id = t.workspace_id still holds.
+    if (opts.workspaceChanged) {
+      this.db.run(
+        "UPDATE multiremi_tasks SET workspace_id = ?, updated_at = ? WHERE agent_id = ? AND status = 'queued'",
+        [agent.workspaceId, now, agent.id],
+      );
+    }
     const rows = this.db
       .query("SELECT * FROM multiremi_tasks WHERE agent_id = ? AND status = 'queued' AND runtime_id IS NOT NULL")
       .all(agent.id) as Row[];
-    const now = nowIso();
     for (const row of rows) {
       const daemonId = this.localDirectoryDaemonForTask(row);
       if (daemonId) {
         // local_directory task: keep it on the machine that holds the
-        // directory, but under the new engine's runtime id.
+        // directory, under the runtime id for the agent's current provider.
+        // Drop the provider session — an engine/owner change invalidates it —
+        // while keeping work_dir (the directory itself is unchanged).
         const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
         this.db.run(
-          "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE id = ?",
+          "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
           [newRuntimeId, now, String(row.id)],
         );
       } else {
-        // Session/other pin: the old-engine session is void — re-pool it.
+        // Session/other pin: the old session is void — re-pool it.
         this.db.run(
           "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
           [now, String(row.id)],
@@ -1176,14 +1190,14 @@ runMigrations(this.db);
     return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire });
   }
 
-  markCurrentUserOnboarded(): MultiremiUser {
-    const current = this.getCurrentUser();
+  markCurrentUserOnboarded(userId?: string | null): MultiremiUser {
+    const id = cleanOptionalString(userId) ?? this.getCurrentUser().id;
     const now = nowIso();
     this.db.run(
       "UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",
-      [now, now, current.id],
+      [now, now, id],
     );
-    return this.getUser(current.id)!;
+    return this.getUser(id)!;
   }
 
   listWorkspaces(): MultiremiWorkspace[] {
@@ -4918,6 +4932,10 @@ runMigrations(this.db);
       const agent = this.getAgent(input.memberId);
       if (!agent) throw new Error(`Agent not found: ${input.memberId}`);
       if (agent.archivedAt) throw new Error(`Agent is archived: ${input.memberId}`);
+      // A squad and its agents must share a workspace — a cross-workspace
+      // leader/member would let squad-driven tasks target another tenant's
+      // agent (whose task the runnable-agent resolver would then dispatch).
+      if (agent.workspaceId !== squad.workspaceId) throw new Error("Squad member is in a different workspace");
     } else if (input.memberType === "member") {
       const member = this.getWorkspaceMember(input.memberId);
       if (!member) throw new Error(`Member not found: ${input.memberId}`);
@@ -5205,11 +5223,18 @@ runMigrations(this.db);
     const assigneeType = input.assigneeType ?? input.assignee_type ?? "agent";
     const assigneeId = input.assigneeId ?? input.assignee_id;
     if (!assigneeId) throw new Error("Autopilot assignee is required");
-    if (assigneeType === "agent" && !this.getAgent(assigneeId)) throw new Error(`Agent not found: ${assigneeId}`);
-    if (assigneeType === "squad" && !this.getSquad(assigneeId)) throw new Error(`Squad not found: ${assigneeId}`);
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    // The assignee must live in the autopilot's workspace — otherwise a
+    // run_only autopilot (no issue/chat, so the createTask workspace check
+    // never fires) would drive another workspace's agent + machine.
+    const assigneeAgent = assigneeType === "agent" ? this.getAgent(assigneeId) : null;
+    const assigneeSquad = assigneeType === "squad" ? this.getSquad(assigneeId) : null;
+    if (assigneeType === "agent" && !assigneeAgent) throw new Error(`Agent not found: ${assigneeId}`);
+    if (assigneeType === "squad" && !assigneeSquad) throw new Error(`Squad not found: ${assigneeId}`);
+    if (assigneeAgent && assigneeAgent.workspaceId !== workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+    if (assigneeSquad && assigneeSquad.workspaceId !== workspaceId) throw new Error("Autopilot assignee is in a different workspace");
     const projectId = input.projectId ?? input.project_id ?? null;
     if (projectId && !this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
-    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const createdByType = normalizeAutopilotCreatorType(input.createdByType ?? input.created_by_type);
     const createdById = cleanOptionalString(input.createdById ?? input.created_by_id) ?? "local";
     const id = input.id ?? createId("aut");
@@ -5263,8 +5288,12 @@ runMigrations(this.db);
     if (!current) throw new Error(`Autopilot not found: ${id}`);
     const nextAssigneeType = input.assigneeType ?? current.assigneeType;
     const nextAssigneeId = input.assigneeId ?? current.assigneeId;
-    if (nextAssigneeType === "agent" && !this.getAgent(nextAssigneeId)) throw new Error(`Agent not found: ${nextAssigneeId}`);
-    if (nextAssigneeType === "squad" && !this.getSquad(nextAssigneeId)) throw new Error(`Squad not found: ${nextAssigneeId}`);
+    const nextAgent = nextAssigneeType === "agent" ? this.getAgent(nextAssigneeId) : null;
+    const nextSquad = nextAssigneeType === "squad" ? this.getSquad(nextAssigneeId) : null;
+    if (nextAssigneeType === "agent" && !nextAgent) throw new Error(`Agent not found: ${nextAssigneeId}`);
+    if (nextAssigneeType === "squad" && !nextSquad) throw new Error(`Squad not found: ${nextAssigneeId}`);
+    if (nextAgent && nextAgent.workspaceId !== current.workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+    if (nextSquad && nextSquad.workspaceId !== current.workspaceId) throw new Error("Autopilot assignee is in a different workspace");
     if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
     const now = nowIso();
     this.db.run(
@@ -6247,6 +6276,10 @@ runMigrations(this.db);
    */
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
     if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
+    // A task runs in its agent's workspace and the claim SQL requires the
+    // runtime's workspace to match, so a runtime in a different workspace can
+    // never run this agent (COALESCE(...,'local') for NULL-workspace runtimes).
+    if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
     if (runtime.visibility === "public") return true;
     return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
   }
