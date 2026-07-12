@@ -904,6 +904,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "parent_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
+  // Engine the task actually EXECUTED under, snapshotted at claim time. The
+  // agent's provider can change mid-run, so the promoted session's engine must
+  // come from this snapshot, not the agent's current provider.
+  addColumnIfMissing(db, "multiremi_tasks", "provider TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");

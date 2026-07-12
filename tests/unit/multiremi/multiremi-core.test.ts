@@ -500,6 +500,47 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(claude.id)?.id).toBe(next.id);
   });
 
+  it("snapshots the execution engine so a mid-run agent switch can't mislabel an any-runtime session", () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_snap_any", name: "any", provider: "any" });
+    const agent = store.createAgent({ name: "MidSwitch", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    // Claim snapshots the execution engine (codex) onto the task.
+    const claimed = store.claimTask(anyRuntime.id)!;
+    expect(claimed.provider).toBe("codex");
+    store.startTask(task.id);
+    // Agent switches to claude WHILE the task runs, then it completes.
+    store.updateAgent(agent.id, { provider: "claude" });
+    store.completeTask(task.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    // The session is labelled with the engine it actually ran under (codex),
+    // not the agent's now-current provider (claude).
+    expect(store.getChatSession(session.id)?.sessionProvider).toBe("codex");
+    // A claude follow-up therefore does NOT resume the codex session.
+    const next = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "next" });
+    expect(next.sessionId).toBeNull();
+  });
+
+  it("moves chat-session runtime metadata when a runtime id is merged", () => {
+    const store = createStore();
+    const oldRuntime = store.registerRuntime({ id: "rt_merge_old", name: "old", provider: "codex", daemonId: "daemon-old", legacyDaemonId: "legacy-x" });
+    const agent = store.createAgent({ name: "Merger", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(oldRuntime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "ok", sessionId: "sess_merge", workDir: "/tmp/merge" });
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(oldRuntime.id);
+    // Merge the old runtime id into a new one; the session metadata follows.
+    const newRuntime = store.registerRuntime({ id: "rt_merge_new", name: "new", provider: "codex", daemonId: "daemon-old" });
+    store.mergeRuntimeInto(oldRuntime.id, newRuntime.id);
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(newRuntime.id);
+    // A follow-up still resumes the session (its machine didn't "vanish").
+    const next = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(next.runtimeId).toBe(newRuntime.id);
+    expect(next.sessionId).toBe("sess_merge");
+  });
+
   it("records the session's runtime and engine as chat-session metadata on promotion", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_meta", name: "r", provider: "codex" });

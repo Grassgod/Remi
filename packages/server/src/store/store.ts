@@ -2130,6 +2130,13 @@ runMigrations(this.db);
         "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       ).changes;
+      // Move the chat-session affinity metadata too, or the follow-up would
+      // think the session's machine vanished once the old runtime is deleted
+      // and needlessly abandon a still-resumable session.
+      this.db.run(
+        "UPDATE multiremi_chat_sessions SET session_runtime_id = ?, updated_at = ? WHERE session_runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
       const deleted = this.deleteRuntime(oldRuntimeId);
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
@@ -6541,11 +6548,27 @@ runMigrations(this.db);
       this.heartbeatRuntime(runtimeId, { claimPending: false });
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
-      if (stale) return stale;
+      if (stale) return this.snapshotTaskProvider(stale, runtime);
 
-      return this.claimNextTaskForRuntime(runtime);
+      const claimed = this.claimNextTaskForRuntime(runtime);
+      return claimed ? this.snapshotTaskProvider(claimed, runtime) : null;
     });
     return tx();
+  }
+
+  /**
+   * Record the engine this task is executing under, at claim time. A concrete
+   * runtime fixes the engine; an "any" runtime runs whatever the agent's
+   * provider is right now. The promoted session's engine (session_provider)
+   * comes from this snapshot, not the agent's later-mutable provider.
+   */
+  private snapshotTaskProvider(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
+    const provider = runtime.provider !== "any" ? runtime.provider : (task.agent?.provider ?? null);
+    if (provider && task.provider !== provider) {
+      this.db.run("UPDATE multiremi_tasks SET provider = ? WHERE id = ?", [provider, task.id]);
+      return { ...task, provider };
+    }
+    return task;
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
@@ -7050,7 +7073,16 @@ runMigrations(this.db);
     // predicate would reject forever.
     const agent = this.getAgent(parent.agentId);
     const parentRuntime = parent.runtimeId ? this.getRuntime(parent.runtimeId) : null;
-    const parentRuntimeUsable = !parent.runtimeId || (parentRuntime != null && agent != null && this.runtimeCanRunAgent(parentRuntime, agent));
+    // The parent machine can host the resume only if it can still run the agent
+    // AND the engine the parent EXECUTED under still matches the agent's current
+    // one (an 'any' runtime passes runtimeCanRunAgent for every provider, so the
+    // execution snapshot is what actually guards a mid-run engine switch).
+    const parentRuntimeUsable = !parent.runtimeId || (
+      parentRuntime != null
+      && agent != null
+      && this.runtimeCanRunAgent(parentRuntime, agent)
+      && (parent.provider == null || parent.provider === agent.provider)
+    );
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({
       agentId: parent.agentId,
@@ -7616,9 +7648,10 @@ runMigrations(this.db);
       // Record the machine + engine that produced this session alongside it, so
       // follow-ups resume it precisely instead of inferring the machine from
       // "the latest task with a runtime_id" (which can be a since-cancelled task
-      // routed elsewhere) and the engine from the runtime's provider (which is
-      // ambiguous for an "any" runtime).
-      const sessionProvider = this.getAgent(task.agentId)?.provider ?? null;
+      // routed elsewhere) and the engine from the agent's current provider
+      // (which can have changed since the task ran). The engine comes from the
+      // task's execution snapshot (task.provider), set at claim time.
+      const sessionProvider = task.provider ?? this.getAgent(task.agentId)?.provider ?? null;
       this.db.run(
         `UPDATE multiremi_chat_sessions
          SET session_id = CASE WHEN ? = 1 THEN COALESCE(?, session_id) ELSE session_id END,
@@ -10327,6 +10360,7 @@ function toTask(row: Row): MultiremiTask {
     id: String(row.id),
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
+    provider: nullableString(row.provider),
     issueId: nullableString(row.issue_id),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),
