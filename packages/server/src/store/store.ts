@@ -7094,19 +7094,23 @@ runMigrations(this.db);
     // predicate would reject forever.
     const agent = this.getAgent(parent.agentId);
     const parentRuntime = parent.runtimeId ? this.getRuntime(parent.runtimeId) : null;
-    // The parent machine can host the resume only if it can still run the agent
-    // AND the engine the parent EXECUTED under still matches the agent's current
-    // one (an 'any' runtime passes runtimeCanRunAgent for every provider, so the
-    // execution snapshot is what actually guards a mid-run engine switch).
-    // The engine snapshot match is a PREREQUISITE, checked before the
-    // runtimeId short-circuit — otherwise a parent with runtimeId=null and a
-    // NULL provider snapshot would be treated as resumable, bypassing the
-    // fail-closed rule. A missing snapshot can't be proven to have run the
-    // agent's current engine, so it degrades to a fresh re-pool.
-    const engineMatches = agent != null && parent.provider != null && parent.provider === agent.provider;
-    const parentRuntimeUsable = engineMatches && (
-      !parent.runtimeId || (parentRuntime != null && this.runtimeCanRunAgent(parentRuntime, agent!))
-    );
+    // A resume carries the parent's provider session and work_dir — both are
+    // machine-local files. It is only safe when we KNOW that machine and it can
+    // still run the agent: the parent must be pinned to a live runtime, that
+    // runtime must still be able to run the agent, AND the engine the parent
+    // EXECUTED under (provider snapshot — an 'any' runtime passes
+    // runtimeCanRunAgent for every provider, so the snapshot is what actually
+    // guards a mid-run engine switch) must still match. A missing pin or a
+    // missing/mismatched snapshot can't be proven machine-safe, so it fails
+    // closed to a fresh re-pool that clears session/work_dir. (A resume-unsafe
+    // parent with no session takes the same fresh-re-pool path here.)
+    const parentRuntimeUsable =
+      parent.runtimeId != null
+      && parentRuntime != null
+      && agent != null
+      && parent.provider != null
+      && parent.provider === agent.provider
+      && this.runtimeCanRunAgent(parentRuntime, agent);
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({
       agentId: parent.agentId,

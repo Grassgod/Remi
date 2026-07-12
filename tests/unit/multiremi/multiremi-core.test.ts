@@ -806,6 +806,26 @@ describe("Bun Multiremi core store", () => {
     expect(retry.sessionId).toBeNull();
   });
 
+  it("never resumes an unpinned parent's machine-local session (fail-closed even when the engine matches)", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_unpinned_sess", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "Unpinned", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // A parent that kept its engine snapshot AND a machine-local session but
+    // lost its runtime pin. We no longer know which machine holds the session,
+    // so the retry must NOT stay unpinned-yet-resuming (any pool machine would
+    // then resume a foreign machine's session) — it fails closed and re-pools.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, session_id = ?, work_dir = ? WHERE id = ?", ["orphan-session", "/tmp/orphan", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+    expect(retry.workDir).toBe(agent.cwd ?? null);
+  });
+
   it("resumes an issue-only local_directory retry's session with no chat session to inherit from", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_dir_resume", name: "dir", provider: "codex", daemonId: "daemon-dir-resume" });
