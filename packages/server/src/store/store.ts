@@ -6553,12 +6553,27 @@ runMigrations(this.db);
     if (!row) return null;
     const task = this.getTaskWithAgent(String(row.id));
     // The re-claim above matches only on runtime_id, so a task whose agent or
-    // runtime changed provider/owner/workspace while it sat dispatched could be
-    // handed back to a runtime that may no longer run it. Re-check eligibility;
-    // if it fails, don't return it here.
+    // runtime changed while it sat dispatched could be handed back to a runtime
+    // that may no longer run it. Re-check the full eligibility the normal claim
+    // enforces — the agent must still exist, be unarchived, and be runnable by
+    // this runtime. If not, don't return it here.
     const runtime = this.getRuntime(runtimeId);
-    if (task?.agent && runtime && !this.runtimeCanRunAgent(runtime, task.agent)) {
+    const eligible = task?.agent != null
+      && !task.agent.archivedAt
+      && runtime != null
+      && this.runtimeCanRunAgent(runtime, task.agent);
+    if (task && !eligible) {
       const now = nowIso();
+      // An archived agent has no eligible machine at all — just re-pool (the
+      // normal claim's `a.archived_at IS NULL` then keeps it parked, matching a
+      // queued task of an archived agent).
+      if (!task.agent || task.agent.archivedAt || !runtime) {
+        this.db.run(
+          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          [now, String(row.id)],
+        );
+        return null;
+      }
       const daemonId = this.localDirectoryDaemonForTask(row);
       if (daemonId) {
         // local_directory task: re-pin to the machine that holds the directory

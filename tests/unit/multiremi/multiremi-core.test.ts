@@ -473,6 +473,19 @@ describe("Bun Multiremi core store", () => {
     expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
   });
 
+  it("does not redeliver a stale dispatched task after its agent is archived", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_arch_stale", name: "r", provider: "codex" });
+    const agent = store.createAgent({ name: "Archiving", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    store.archiveAgent(agent.id);
+    // Stale recovery must mirror the normal claim's archived-agent exclusion.
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBeNull();
+  });
+
   it("re-pins (not re-pools) a stale local_directory task off an ineligible machine", () => {
     const store = createStore();
     const dirRuntime = store.registerRuntime({ id: "rt_stale_dir", name: "dir", provider: "codex", daemonId: "daemon-stale-dir" });
@@ -524,6 +537,25 @@ describe("Bun Multiremi core store", () => {
     expect(reopened.getTask(task.id)?.runtimeId).toBeNull();
     // Now any provider-matching runtime can take it.
     expect(reopened.claimTask(otherRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("keeps a local_directory task's pin through the startup migration", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_mig_dir", name: "dir", provider: "codex", daemonId: "daemon-mig-dir" });
+    const agent = store.createAgent({ name: "DirLegacy", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-mig-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    // local_directory task is pinned to the directory's runtime and has no session.
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(task.sessionId).toBeNull();
+    // Re-running migrations must NOT unpin it (the directory only exists there).
+    const reopened = new MultiremiStore(db!);
+    expect(reopened.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
   });
 
   it("rejects an archived squad leader without persisting the squad", () => {

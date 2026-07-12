@@ -933,10 +933,23 @@ export function runMigrations(db: SqlDatabase): void {
   // Pre-pool, every queued task inherited its agent's runtime pin. Now that
   // agents are unbound, a plain pin would keep the task claimable only by the
   // original machine (stranding it when that machine is offline). Drop the pin
-  // from queued tasks that carry NO real affinity — a promoted provider
-  // session_id marks a chat task that must return to its machine, so those are
-  // preserved; local_directory tasks re-pin on their next scheduling pass.
-  db.run("UPDATE multiremi_tasks SET runtime_id = NULL WHERE status = 'queued' AND runtime_id IS NOT NULL AND (session_id IS NULL OR session_id = '')");
+  // from queued tasks that carry NO real affinity. Two affinities are
+  // preserved: a promoted provider session_id (a chat task that must return to
+  // its machine) and a local_directory project resource (the directory only
+  // exists on that daemon — re-pooling would run it in the wrong repo). Runs
+  // every startup but is a no-op once converged, and the local_directory guard
+  // keeps it from ever unpinning a legitimately directory-bound task.
+  db.run(`
+    UPDATE multiremi_tasks SET runtime_id = NULL
+    WHERE status = 'queued'
+      AND runtime_id IS NOT NULL
+      AND (session_id IS NULL OR session_id = '')
+      AND (issue_id IS NULL OR issue_id NOT IN (
+        SELECT i.id FROM multiremi_issues i
+        JOIN multiremi_project_resources r ON r.project_id = i.project_id
+        WHERE r.resource_type = 'local_directory'
+      ))
+  `);
   backfillIssueKeys(db);
 }
 
