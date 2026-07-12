@@ -7658,7 +7658,7 @@ runMigrations(this.db);
       // else leave null (fail-closed: an unknown-engine session isn't resumed).
       const promoteSession =
         (status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")) &&
-        task.sessionId != null;
+        !!cleanOptionalString(task.sessionId);
       const runtimeProvider = task.runtimeId ? this.getRuntime(task.runtimeId)?.provider : null;
       const sessionProvider = task.provider ?? (runtimeProvider && runtimeProvider !== "any" ? runtimeProvider : null);
       this.db.run(
