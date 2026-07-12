@@ -1985,11 +1985,28 @@ runMigrations(this.db);
       .all(runtimeId) as Row[];
     const now = nowIso();
     for (const row of rows) {
-      if (stillEligible) {
-        const agent = this.getAgent(String(row.agent_id));
-        if (agent && stillEligible(agent)) continue;
+      const agent = this.getAgent(String(row.agent_id));
+      if (stillEligible && agent && stillEligible(agent)) continue;
+      const daemonId = this.localDirectoryDaemonForTask(row);
+      if (daemonId) {
+        // A local_directory task is never re-pooled (its directory only exists
+        // on that daemon). But if THIS runtime is being retired/changed and the
+        // directory's daemon now has a different-id runtime for the agent's
+        // engine (e.g. a re-registration changed the provider → a new
+        // deterministic id), re-pin to it so the task isn't stranded on the old
+        // id. Otherwise leave it pinned to wait for the right machine.
+        if (agent) {
+          const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+          const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
+          if (targetId !== runtimeId) {
+            this.db.run(
+              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+              [targetId, now, String(row.id)],
+            );
+          }
+        }
+        continue;
       }
-      if (this.localDirectoryDaemonForTask(row)) continue;
       this.db.run(
         "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
@@ -6257,14 +6274,18 @@ runMigrations(this.db);
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-        // When inheritChatSession is false the promoted provider session belongs
-        // to a machine we can't return to (engine switched / runtime gone), so
-        // it's dropped — including an explicitly-passed sessionId (a chat send
-        // re-sends the session's old fields, and a resume-safe retry that got
-        // degraded passes them too). Otherwise honour the explicit value, then
-        // the session's promoted one.
-        inheritChatSession ? (input.sessionId ?? chatSession?.sessionId ?? null) : null,
-        (inheritChatSession ? (input.workDir ?? chatSession?.workDir ?? null) : null) ?? agent.cwd ?? null,
+        // The inheritChatSession gate applies only to a task that HAS a chat
+        // session: when false the promoted session belongs to a machine we
+        // can't return to (engine switched / runtime gone) — dropped, even if a
+        // chat send re-sends the old fields. A task WITHOUT a chat session
+        // (e.g. an issue-only resume-safe retry) carries its session explicitly,
+        // already gated by maybeRetryFailedTask, so honour it directly.
+        chatSession
+          ? (inheritChatSession ? (input.sessionId ?? chatSession.sessionId ?? null) : null)
+          : (input.sessionId ?? null),
+        (chatSession
+          ? (inheritChatSession ? (input.workDir ?? chatSession.workDir ?? null) : null)
+          : (input.workDir ?? null)) ?? agent.cwd ?? null,
         now,
         now,
       ],
@@ -7077,14 +7098,14 @@ runMigrations(this.db);
     // AND the engine the parent EXECUTED under still matches the agent's current
     // one (an 'any' runtime passes runtimeCanRunAgent for every provider, so the
     // execution snapshot is what actually guards a mid-run engine switch).
-    const parentRuntimeUsable = !parent.runtimeId || (
-      parentRuntime != null
-      && agent != null
-      && this.runtimeCanRunAgent(parentRuntime, agent)
-      // Fail-closed on a missing execution snapshot: a pre-snapshot in-flight
-      // task (provider NULL after a rolling upgrade) can't be proven to have
-      // run the agent's current engine, so it degrades to a fresh re-pool.
-      && parent.provider === agent.provider
+    // The engine snapshot match is a PREREQUISITE, checked before the
+    // runtimeId short-circuit — otherwise a parent with runtimeId=null and a
+    // NULL provider snapshot would be treated as resumable, bypassing the
+    // fail-closed rule. A missing snapshot can't be proven to have run the
+    // agent's current engine, so it degrades to a fresh re-pool.
+    const engineMatches = agent != null && parent.provider != null && parent.provider === agent.provider;
+    const parentRuntimeUsable = engineMatches && (
+      !parent.runtimeId || (parentRuntime != null && this.runtimeCanRunAgent(parentRuntime, agent!))
     );
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({

@@ -20,7 +20,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -317,6 +317,24 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ownedTask = store.createTask({ agentId: agent.id, issueId: ownedIssue.id, prompt: "owned", workspaceId: ws });
     expect(store.claimTask(privateRt.id)).toBeNull();
     expect(store.claimTask(publicRt.id)?.id).toBe(ownedTask.id);
+  });
+
+  it("re-pins a local_directory task when its runtime re-registers under a new engine", () => {
+    const ws = freshWorkspace();
+    store.registerRuntime({ id: "rt-pg-repin", name: "rt-pg-repin", provider: "codex", workspaceId: ws, daemonId: "daemon-pg-repin" });
+    const agent = store.createAgent({ name: "PG Repin", provider: "codex", workspaceId: ws });
+    const project = store.createProject({
+      title: "PG repin dir",
+      workspaceId: ws,
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-repin", daemon_id: "daemon-pg-repin" } }],
+    });
+    const issue = store.createIssue({ title: "pg repin issue", workspaceId: ws, projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: ws });
+    expect(task.runtimeId).toBe("rt-pg-repin");
+    // Same-id re-registration flips the engine → the codex directory task re-pins
+    // to the daemon's codex runtime id (exercises the repool UPDATE on Postgres).
+    store.registerRuntime({ id: "rt-pg-repin", name: "rt-pg-repin", provider: "claude", workspaceId: ws, daemonId: "daemon-pg-repin" });
+    expect(store.getTask(task.id)?.runtimeId).toBe(daemonRuntimeId("daemon-pg-repin", "codex"));
   });
 
   it("creates and lists workspace members", () => {

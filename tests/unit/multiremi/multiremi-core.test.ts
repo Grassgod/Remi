@@ -787,6 +787,74 @@ describe("Bun Multiremi core store", () => {
     expect(reopened.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
   });
 
+  it("fails a resume-safe retry closed when the parent has neither a runtime stamp nor an engine snapshot", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_fc_nostamp", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "NoStamp", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // An unpinned, pre-snapshot in-flight parent that nonetheless carries a
+    // provider session: no runtime stamp AND no engine snapshot. Its engine
+    // can't be proven to match the agent, so the resume must fail closed rather
+    // than let the `!runtimeId` branch treat it as resumable.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, provider = NULL, session_id = ? WHERE id = ?", ["stale-session", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+  });
+
+  it("resumes an issue-only local_directory retry's session with no chat session to inherit from", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_dir_resume", name: "dir", provider: "codex", daemonId: "daemon-dir-resume" });
+    const agent = store.createAgent({ name: "DirResume", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-dir-resume" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // The run produced a provider session on the directory machine.
+    db!.run("UPDATE multiremi_tasks SET session_id = ? WHERE id = ?", ["dir-session", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // Resume-safe (same machine still eligible, engine matches) → keep the pin
+    // AND the session, even though there is no chat session gating inheritance.
+    expect(retry.runtimeId).toBe(dirRuntime.id);
+    expect(retry.sessionId).toBe("dir-session");
+  });
+
+  it("re-pins a local_directory task to the daemon's engine runtime when the pinned runtime changes provider", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_repin", name: "r", provider: "codex", daemonId: "daemon-repin" });
+    const agent = store.createAgent({ name: "RepinDir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-repin" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe("rt_repin");
+    // The same-id runtime re-registers under a different engine. The codex
+    // agent's directory task must not be stranded on the now-claude runtime; it
+    // re-pins to the daemon's codex runtime id (deterministic), which a codex
+    // runtime coming up on that daemon can then claim. Skipping it would leave
+    // it pinned to a runtime the claim predicate rejects forever.
+    store.registerRuntime({ id: "rt_repin", name: "r", provider: "claude", daemonId: "daemon-repin" });
+    const repinned = store.getTask(task.id)!;
+    expect(repinned.runtimeId).toBe(daemonRuntimeId("daemon-repin", "codex"));
+    expect(repinned.status).toBe("queued");
+    const codex2 = store.registerRuntime({ id: daemonRuntimeId("daemon-repin", "codex"), name: "codex2", provider: "codex", daemonId: "daemon-repin" });
+    expect(store.claimTask(codex2.id)?.id).toBe(task.id);
+  });
+
   it("rejects an archived squad leader without persisting the squad", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Lead", provider: "codex", workspaceId: "local" });
