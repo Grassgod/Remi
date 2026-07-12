@@ -987,6 +987,24 @@ describe("Bun Multiremi core store", () => {
     expect(store.listIssueComments(issue.id)).toHaveLength(before);
   });
 
+  it("does not double-post when the agent already replied itself during the run", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_no_dup", name: "no dup", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Self Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "架构", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "总结架构" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+
+    // Agent posts its own formatted reply via a tool during execution.
+    store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id, body: "## 架构\n1. Hub-and-Spoke…" });
+    const afterSelfReply = store.listIssueComments(issue.id).length;
+
+    // Completion must NOT append a second (narration-heavy) comment.
+    store.completeTask(task.id, { output: "Let me read the conversation…Now I'll post the reply.回复已发布。" });
+    expect(store.listIssueComments(issue.id)).toHaveLength(afterSelfReply);
+  });
+
   it("accepts comments authored with a user id when the member row uses the mem_<ws>_<uid> convention", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_uid_comment", name: "uid comment", provider: "claude", workspaceId: "local" });
