@@ -1269,10 +1269,17 @@ function extractText(content: unknown): string {
   return text;
 }
 
-function parseMaybeJson(value: string): Record<string, unknown> | undefined {
+function parseMaybeJson(value: unknown): Record<string, unknown> | undefined {
+  // ACP rawInput may already be a parsed object (the common case) or a JSON
+  // string. Pass objects through untouched — coercing them via JSON.parse
+  // buries the real args under a spurious `{ value: … }` wrapper.
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string") return value == null ? undefined : { value };
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed : { value: parsed };
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : { value: parsed };
   } catch {
     return { value };
   }
