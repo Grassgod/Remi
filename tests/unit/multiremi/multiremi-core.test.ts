@@ -473,6 +473,48 @@ describe("Bun Multiremi core store", () => {
     expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
   });
 
+  it("lets local_directory affinity override an explicit runtime override", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_ovr_dir", name: "dir", provider: "codex", daemonId: "daemon-ovr" });
+    const wrongRuntime = store.registerRuntime({ id: "rt_ovr_wrong", name: "wrong", provider: "codex", daemonId: "daemon-wrong" });
+    const agent = store.createAgent({ name: "Ovr", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-ovr" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    // Explicitly try to pin the task to the WRONG machine.
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: wrongRuntime.id, prompt: "work" });
+    // The directory affinity wins — the task is pinned to the machine that
+    // holds the directory, not the caller-supplied one.
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(wrongRuntime.id)).toBeNull();
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("keeps the directory pin on a stale task whose agent was archived", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_arch_dir", name: "dir", provider: "codex", daemonId: "daemon-arch-dir" });
+    const agent = store.createAgent({ name: "ArchDir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-arch-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    store.archiveAgent(agent.id);
+    // Stale recovery keeps the directory pin (archived_at parks the claim), so
+    // a restore lands it back on the directory's machine, not elsewhere.
+    expect(store.claimTask(dirRuntime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
+    store.restoreAgent(agent.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
   it("does not redeliver a stale dispatched task after its agent is archived", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_arch_stale", name: "r", provider: "codex" });
@@ -1081,7 +1123,9 @@ describe("Bun Multiremi core store", () => {
 
   it("serves daemon claim responses in Go wire shape and normalizes them for the Bun daemon", async () => {
     const store = createStore();
-    const runtime = store.registerRuntime({ id: "rt_claim_shape", name: "claim shape", provider: "codex", workspaceId: "local", ownerId: "local", maxConcurrency: 2 });
+    // The runtime IS the machine that holds the project's local_directory
+    // (daemon-claim), so the directory affinity resolves to it.
+    const runtime = store.registerRuntime({ id: "rt_claim_shape", name: "claim shape", provider: "codex", workspaceId: "local", ownerId: "local", daemonId: "daemon-claim", maxConcurrency: 2 });
     const agent = store.createAgent({
       id: "agt_claim_shape",
       name: "Claim Shape Codex",

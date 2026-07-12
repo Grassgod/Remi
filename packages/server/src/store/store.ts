@@ -6210,11 +6210,15 @@ runMigrations(this.db);
     // affinity and session/work_dir inheritance, but keep local_directory
     // affinity (the directory constraint is independent of the session).
     let inheritChatSession = !input.resetProviderSession;
-    if (!runtimeId) {
-      const affinity = this.resolveTaskAffinity(agent, input.resetProviderSession ? null : chatSession, issue);
-      runtimeId = affinity.runtimeId;
-      if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
-    }
+    // Always compute affinity — a strong machine affinity (promoted session /
+    // local_directory) must OVERRIDE an explicit runtimeId, not just fill in
+    // when one is absent. Otherwise a caller could pin a directory task to the
+    // wrong machine (it would run in a scratch checkout of the wrong repo) or
+    // carry another machine's provider session. An explicit runtimeId is only
+    // honoured when there is no strong affinity to respect.
+    const affinity = this.resolveTaskAffinity(agent, input.resetProviderSession ? null : chatSession, issue);
+    if (affinity.runtimeId) runtimeId = affinity.runtimeId;
+    if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
 
     const id = input.id ?? createId("tsk");
     const now = nowIso();
@@ -6564,38 +6568,35 @@ runMigrations(this.db);
       && this.runtimeCanRunAgent(runtime, task.agent);
     if (task && !eligible) {
       const now = nowIso();
-      // An archived agent has no eligible machine at all — just re-pool (the
-      // normal claim's `a.archived_at IS NULL` then keeps it parked, matching a
-      // queued task of an archived agent).
-      if (!task.agent || task.agent.archivedAt || !runtime) {
+      const repool = () =>
         this.db.run(
           "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
           [now, String(row.id)],
         );
-        return null;
-      }
-      const daemonId = this.localDirectoryDaemonForTask(row);
-      if (daemonId) {
-        // local_directory task: re-pin to the machine that holds the directory
-        // under the agent's current provider (never re-pool — it must not run
-        // in a scratch checkout elsewhere).
+      // local_directory is checked FIRST, before archived/agent-missing — the
+      // directory pin must survive even while the agent is archived (archived_at
+      // keeps the normal claim from picking it up; if the agent is restored the
+      // task must still land on the machine that holds the directory, not a
+      // scratch checkout elsewhere).
+      const daemonId = task.agent ? this.localDirectoryDaemonForTask(row) : null;
+      if (daemonId && task.agent) {
         const rt = this.getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
         const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
         this.db.run(
           "UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
           [newRuntimeId, now, String(row.id)],
         );
+      } else if (!task.agent || task.agent.archivedAt || !runtime) {
+        // No agent / archived agent / runtime gone, and no directory pin to
+        // preserve — re-pool; the normal claim's archived guard parks it.
+        repool();
       } else if ((runtime.workspaceId ?? "local") !== (task.agent.workspaceId ?? "local")) {
-        // The agent moved workspace while dispatched — it can't run in the old
-        // workspace and re-pooling into a foreign workspace would strand it.
-        // Cancel it (agent picks up fresh work in its new workspace).
+        // The agent moved workspace while dispatched — cancel it (it picks up
+        // fresh work in its new workspace; re-pooling into a foreign workspace
+        // would strand it).
         this.cancelTask(String(row.id));
       } else {
-        // owner/provider drift — re-pool for another eligible machine.
-        this.db.run(
-          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
-          [now, String(row.id)],
-        );
+        repool(); // owner/provider drift — another eligible machine can take it
       }
       return null;
     }
