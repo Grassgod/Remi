@@ -128,6 +128,7 @@ import type {
 import { type Logger, noopLogger } from "../logger";
 import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
+import { normalizeTaskMessages } from "../chat/normalize-message";
 import { parseWithFallback } from "./schema";
 import {
   AgentTemplateSchema,
@@ -1330,7 +1331,9 @@ export class ApiClient {
   }
 
   async listTaskMessages(taskId: string): Promise<TaskMessagePayload[]> {
-    return this.fetch(`/api/tasks/${taskId}/messages`);
+    // GET returns the camelCase store object; the WS wire is snake_case. Funnel
+    // both through the one normalizer so the cache holds a single shape.
+    return normalizeTaskMessages(await this.fetch(`/api/tasks/${taskId}/messages`));
   }
 
   async listTaskHumanRequests(taskId: string): Promise<unknown> {

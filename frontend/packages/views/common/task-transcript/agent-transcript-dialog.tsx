@@ -18,6 +18,7 @@ import {
   Cpu,
   Filter,
   Folder,
+  Coins,
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
+import { Markdown } from "@multiremi/ui/markdown/Markdown";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -37,8 +39,8 @@ import { ActorAvatar } from "../actor-avatar";
 import { api } from "@multiremi/core/api";
 import { useTranscriptViewStore, type TranscriptSortDirection } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
-import { redactSecrets } from "./redact";
-import type { TimelineItem } from "./build-timeline";
+import { redactString } from "./redact";
+import type { TimelineItem, UsageSnapshot } from "./build-timeline";
 import { useT } from "../../i18n";
 
 interface AgentTranscriptDialogProps {
@@ -109,7 +111,11 @@ function getEventLabel(item: TimelineItem): string {
     case "question_response":
       return "Answer";
     default:
-      return "Event";
+      // Unknown/new message kinds render their raw type rather than a generic
+      // "Event" — the old default paired with an empty summary produced the
+      // uninformative "Event (empty)" rows. (`type` is exhaustive for the
+      // current union, so this is future-proofing for widened payloads.)
+      return (item.type as string) ? String(item.type).replace(/_/g, " ") : "Event";
   }
 }
 
@@ -145,8 +151,32 @@ function getEventSummary(item: TimelineItem): string {
       return item.output?.slice(0, 200) ?? "";
     case "error":
       return item.content ?? "";
+    case "permission_request":
+    case "question_request": {
+      // daemon already writes a human-readable line into content
+      // ("Permission requested: Bash" / the question text); append a count of
+      // the options / questions carried in input.
+      const base = item.content ?? getEventLabel(item);
+      const inp = item.input as Record<string, unknown> | undefined;
+      const options = Array.isArray(inp?.options) ? (inp!.options as unknown[]).length : 0;
+      const questions = Array.isArray(inp?.questions) ? (inp!.questions as unknown[]).length : 0;
+      const n = options || questions;
+      return n > 0 ? `${base} (${n})` : base;
+    }
+    case "permission_response":
+    case "question_response": {
+      const inp = item.input as Record<string, unknown> | undefined;
+      const chosen = inp?.option_id ?? (Array.isArray(inp?.answers) ? (inp!.answers as unknown[]).join(", ") : undefined);
+      const status = inp?.status;
+      return [chosen, status].filter(Boolean).map(String).join(" · ") || (item.content ?? "");
+    }
     default:
-      return "";
+      // Any other kind: first non-empty line of content, else output.
+      return (
+        item.content?.split("\n").find((l) => l.trim().length > 0) ??
+        item.output?.slice(0, 200) ??
+        ""
+      );
   }
 }
 
@@ -335,6 +365,26 @@ export function AgentTranscriptDialog({
 
   const toolCount = items.filter((i) => i.type === "tool_use").length;
 
+  // Header token rollup (server-provided) + the agent's final reply, surfaced
+  // above the event list so the outcome isn't buried in a one-line summary.
+  const usage = useMemo(() => usageSnapshotFromTask(task), [task]);
+  const [answerCopied, setAnswerCopied] = useState(false);
+  const finalAnswer = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it?.type === "text" && it.content?.trim()) return it.content;
+    }
+    return null;
+  }, [items]);
+  const handleCopyAnswer = useCallback(() => {
+    if (!finalAnswer) return;
+    void copyText(redactString(finalAnswer)).then((ok) => {
+      if (!ok) return;
+      setAnswerCopied(true);
+      setTimeout(() => setAnswerCopied(false), 2000);
+    });
+  }, [finalAnswer]);
+
   // Status display
   const statusBadge = isLive ? (
     <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">
@@ -494,6 +544,19 @@ export function AgentTranscriptDialog({
                 : t(($) => $.transcript.events, { count: items.length })}
             </MetadataChip>
 
+            {/* Token usage — input→output when the bridge splits them, else the
+                ACP context total. cost intentionally omitted (not on the wire). */}
+            {usage && (
+              <MetadataChip icon={<Coins className="h-3 w-3" />}>
+                {usage.inputTokens || usage.outputTokens
+                  ? `${formatTokenCount(usage.inputTokens ?? 0)}→${formatTokenCount(usage.outputTokens ?? 0)}`
+                  : usage.totalTokens
+                    ? t(($) => $.transcript.tokens_context, { value: formatTokenCount(usage.totalTokens) })
+                    : null}
+                {usage.model && <span className="text-muted-foreground/60 ml-1">{usage.model}</span>}
+              </MetadataChip>
+            )}
+
             {/* Working directory — server-derived display path. Falls back to
                 nothing when older backends omit the field rather than rendering
                 `work_dir` raw and leaking the user's home directory. The
@@ -541,6 +604,28 @@ export function AgentTranscriptDialog({
               selectedSeq={selectedSeq}
               onSegmentClick={handleSegmentClick}
             />
+          </div>
+        )}
+
+        {/* ── Final answer (agent's last reply, markdown) ────────── */}
+        {finalAnswer && (
+          <div className="border-b px-4 py-3 shrink-0 bg-muted/10">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                {t(($) => $.transcript.final_answer)}
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyAnswer}
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {answerCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                {t(($) => $.transcript.copy_answer)}
+              </button>
+            </div>
+            <div className="max-h-48 overflow-auto text-xs">
+              <Markdown mode="minimal">{redactString(finalAnswer)}</Markdown>
+            </div>
           </div>
         )}
 
@@ -738,12 +823,19 @@ const TranscriptEventRow = ({
   const label = getEventLabel(item);
   const summary = getEventSummary(item);
 
+  const hasInput = Boolean(item.input && Object.keys(item.input).length > 0);
+  const hasContent = Boolean(item.content && item.content.length > 0);
   const hasDetail =
-    (item.type === "tool_use" && item.input && Object.keys(item.input).length > 0) ||
-    (item.type === "tool_result" && item.output && item.output.length > 0) ||
-    (item.type === "thinking" && item.content && item.content.length > 0) ||
-    (item.type === "text" && item.content && item.content.length > 0) ||
-    (item.type === "error" && item.content && item.content.length > 0);
+    (item.type === "tool_use" && hasInput) ||
+    (item.type === "tool_result" && Boolean(item.output && item.output.length > 0)) ||
+    (item.type === "thinking" && hasContent) ||
+    (item.type === "text" && hasContent) ||
+    (item.type === "error" && hasContent) ||
+    // permission / question rows carry structured input worth expanding
+    (item.type.startsWith("permission_") && hasInput) ||
+    (item.type.startsWith("question_") && hasInput) ||
+    // any other kind: expandable if it has content or output
+    (hasContent || Boolean(item.output && item.output.length > 0));
 
   return (
     <div
@@ -789,9 +881,10 @@ const TranscriptEventRow = ({
             </div>
           </CollapsibleTrigger>
 
-          {/* Seq number / index */}
-          <span className="shrink-0 text-[10px] text-muted-foreground/50 tabular-nums mt-1">
-            #{item.seq}
+          {/* Timestamp + seq number */}
+          <span className="shrink-0 flex items-center gap-1.5 text-[10px] text-muted-foreground/50 tabular-nums mt-1">
+            {item.createdAt && <span>{formatEventTime(item.createdAt)}</span>}
+            <span>#{item.seq}</span>
           </span>
         </div>
 
@@ -815,32 +908,34 @@ const TranscriptEventRow = ({
 function EventDetailContent({ item }: { item: TimelineItem }) {
   switch (item.type) {
     case "tool_use":
+      // input already recursively redacted in buildTimeline
       return (
         <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
-          {item.input ? redactSecrets(JSON.stringify(item.input, null, 2)) : ""}
+          {item.input ? JSON.stringify(item.input, null, 2) : ""}
         </pre>
       );
-    case "tool_result":
+    case "tool_result": {
+      const out = item.output ?? "";
+      // Pretty-print JSON results; leave plain text as-is.
+      let body = out;
+      try {
+        const parsed = JSON.parse(out);
+        if (parsed && typeof parsed === "object") body = JSON.stringify(parsed, null, 2);
+      } catch { /* not JSON */ }
       return (
         <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
-          {item.output
-            ? item.output.length > 4000
-              ? redactSecrets(item.output.slice(0, 4000)) + "\n... (truncated)"
-              : redactSecrets(item.output)
-            : ""}
+          {body.length > 4000 ? body.slice(0, 4000) + "\n... (truncated)" : body}
         </pre>
       );
+    }
     case "thinking":
-      return (
-        <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
-          {item.content ?? ""}
-        </pre>
-      );
     case "text":
+      // Agent prose is markdown — render code blocks / tables / lists instead
+      // of a flat <pre>. Content is already redacted upstream.
       return (
-        <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
-          {item.content ?? ""}
-        </pre>
+        <div className="max-h-96 overflow-auto p-3 text-xs">
+          <Markdown mode="minimal">{item.content ?? ""}</Markdown>
+        </div>
       );
     case "error":
       return (
@@ -848,7 +943,104 @@ function EventDetailContent({ item }: { item: TimelineItem }) {
           {item.content ?? ""}
         </pre>
       );
+    case "permission_request":
+    case "permission_response":
+    case "question_request":
+    case "question_response":
+      return <HumanInteractionDetail item={item} />;
     default:
-      return null;
+      // Unknown kinds: show content, else the raw (redacted) input/meta.
+      if (item.content) {
+        return (
+          <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-words">
+            {item.content}
+          </pre>
+        );
+      }
+      return (
+        <pre className="max-h-60 overflow-auto p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
+          {JSON.stringify(item.input ?? item.meta ?? {}, null, 2)}
+        </pre>
+      );
   }
+}
+
+// Permission / question requests and their responses carry structured input
+// (options, chosen option, questions, answers) that the daemon writes as JSON.
+// Render it as a small key/value block rather than dumping raw JSON.
+function HumanInteractionDetail({ item }: { item: TimelineItem }) {
+  const inp = (item.input ?? {}) as Record<string, unknown>;
+  const options = Array.isArray(inp.options) ? (inp.options as Array<Record<string, unknown>>) : [];
+  const questions = Array.isArray(inp.questions) ? (inp.questions as Array<Record<string, unknown>>) : [];
+  const answers = Array.isArray(inp.answers) ? (inp.answers as unknown[]) : [];
+  const chosen = inp.option_id ? String(inp.option_id) : undefined;
+  const status = inp.status ? String(inp.status) : undefined;
+  const respondedBy = inp.responded_by ? String(inp.responded_by) : undefined;
+
+  return (
+    <div className="max-h-72 overflow-auto p-3 text-[11px] text-muted-foreground space-y-2">
+      {item.content && <div className="text-foreground">{item.content}</div>}
+      {options.length > 0 && (
+        <div className="space-y-1">
+          {options.map((opt, i) => {
+            const id = String(opt.optionId ?? opt.option_id ?? opt.id ?? i);
+            const name = String(opt.name ?? opt.label ?? opt.title ?? id);
+            const isChosen = chosen != null && id === chosen;
+            return (
+              <div key={id} className={cn("flex items-center gap-1.5", isChosen && "text-emerald-600 dark:text-emerald-400 font-medium")}>
+                {isChosen ? <Check className="h-3 w-3 shrink-0" /> : <span className="inline-block w-3 shrink-0" />}
+                <span>{name}</span>
+                {opt.kind ? <span className="text-muted-foreground/60">({String(opt.kind)})</span> : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {questions.map((q, i) => (
+        <div key={i} className="space-y-0.5">
+          <div className="text-foreground">{String(q.question ?? q.header ?? "")}</div>
+          {Array.isArray(q.options) && (
+            <div className="pl-3">{(q.options as Array<Record<string, unknown>>).map((o, j) => (
+              <div key={j}>· {String(o.label ?? o.name ?? "")}</div>
+            ))}</div>
+          )}
+        </div>
+      ))}
+      {answers.length > 0 && <div><span className="text-foreground">Answer:</span> {answers.map(String).join(", ")}</div>}
+      {(chosen || status || respondedBy) && (
+        <div className="flex gap-3 pt-1 border-t border-border/50">
+          {status && <span>status: {status}</span>}
+          {respondedBy && <span>by: {respondedBy}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatEventTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+// Fold the server-side per-provider usage rollup (camelCase on the wire) into a
+// single header snapshot. Terminal tasks carry this; live fallback (last usage
+// message) is a Batch 3 concern.
+function usageSnapshotFromTask(task: AgentTask): UsageSnapshot | null {
+  const entries = task.usage;
+  if (!entries || entries.length === 0) return null;
+  const acc: UsageSnapshot = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let any = false;
+  for (const e of entries) {
+    if (e.inputTokens) { acc.inputTokens = (acc.inputTokens ?? 0) + e.inputTokens; any = true; }
+    if (e.outputTokens) { acc.outputTokens = (acc.outputTokens ?? 0) + e.outputTokens; any = true; }
+    if (e.totalTokens) { acc.totalTokens = (acc.totalTokens ?? 0) + e.totalTokens; any = true; }
+    if (e.model) acc.model = e.model;
+  }
+  return any ? acc : null;
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }

@@ -214,25 +214,44 @@ export interface ActivityCreatedPayload {
   entry: TimelineEntry;
 }
 
+// Canonical snake_case shape after the normalizer runs. The wire delivers this
+// two ways with different casing — browser GET returns the camelCase store
+// object, the WS frame is snake_case — so both are funnelled through
+// normalizeTaskMessage (task-transcript/normalize.ts) before landing here, or
+// pairing/rendering silently breaks (live has tool_call_id, a refetch has
+// toolCallId). `type` stays an open string so a new daemon message kind
+// (usage / plan / …) degrades to a generic row instead of being dropped.
+export type KnownTaskMessageType =
+  | "text"
+  | "thinking"
+  | "tool_use"
+  | "tool_result"
+  | "usage"
+  | "plan"
+  | "error"
+  | "permission_request"
+  | "permission_response"
+  | "question_request"
+  | "question_response";
+
 export interface TaskMessagePayload {
   task_id: string;
   issue_id: string;
   chat_session_id?: string;
   seq: number;
-  type:
-    | "text"
-    | "thinking"
-    | "tool_use"
-    | "tool_result"
-    | "error"
-    | "permission_request"
-    | "permission_response"
-    | "question_request"
-    | "question_response";
+  type: KnownTaskMessageType | (string & {});
   tool?: string;
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+  /** ACP tool call id — pairs tool_use with its tool_result (Batch 2+). */
+  tool_call_id?: string;
+  /** ACP tool status: pending | in_progress | completed | failed (Batch 2+). */
+  status?: string;
+  /** Low-frequency display semantics: title/kind/locations/content_blocks/duration_ms/entries/usage (Batch 2+). */
+  meta?: Record<string, unknown>;
+  /** Server insert time; present on the wire already (GET as createdAt, WS as created_at). */
+  created_at?: string;
 }
 
 export interface TaskQueuedPayload {

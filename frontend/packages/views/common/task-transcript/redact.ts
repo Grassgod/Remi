@@ -35,3 +35,48 @@ export function redactSecrets(text: string): string {
   }
   return result;
 }
+
+// Key names whose value is a secret regardless of the value's own shape — the
+// string patterns above only fire on `KEY=value` / `KEY: value` text, so a
+// structured `{ "api_key": "raw" }` (tool input, meta) would slip through.
+const SENSITIVE_KEY_RE =
+  /(api[_-]?key|secret|token|password|passwd|credential|auth|private[_-]?key|access[_-]?key|database[_-]?url|conn(ection)?[_-]?string)/i;
+
+// Home-directory prefixes → placeholder, so absolute paths in tool inputs /
+// diffs / file locations don't leak the OS username in screen shares.
+const HOME_PATH_RE = /(?:\/home\/|\/Users\/|[A-Za-z]:\\Users\\)[^/\\\s"']+/g;
+
+function privatizeHomePaths(text: string): string {
+  return text.replace(HOME_PATH_RE, (match) => {
+    const sep = match.includes("\\") ? "\\" : "/";
+    const root = match.startsWith("/home") ? "/home" : match.includes(":\\") ? match.slice(0, 3) + "Users" : "/Users";
+    return `${root}${sep}<user>`;
+  });
+}
+
+/** String redaction + home-path privatization, applied to any leaf string. */
+export function redactString(text: string): string {
+  return privatizeHomePaths(redactSecrets(text));
+}
+
+/**
+ * Recursively redact an arbitrary value (tool input, meta, diff blocks) for
+ * display or copy. Masks values under sensitive key names outright, runs every
+ * leaf string through redactString, and is depth/cycle safe. The string
+ * `redactSecrets` alone can't cover structured `{ "token": "raw" }` shapes.
+ */
+export function redactValue<T>(value: T, _depth = 0, _seen = new WeakSet<object>()): T {
+  if (_depth > 8) return "[REDACTED DEPTH]" as unknown as T;
+  if (typeof value === "string") return redactString(value) as unknown as T;
+  if (value === null || typeof value !== "object") return value;
+  if (_seen.has(value)) return "[REDACTED CYCLE]" as unknown as T;
+  _seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map((v) => redactValue(v, _depth + 1, _seen)) as unknown as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = SENSITIVE_KEY_RE.test(k) && typeof v === "string" ? "[REDACTED CREDENTIAL]" : redactValue(v, _depth + 1, _seen);
+  }
+  return out as unknown as T;
+}

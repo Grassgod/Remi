@@ -138,6 +138,22 @@ export interface AgentTask {
    * shares and screenshots also stay safe).
    */
   relative_work_dir?: string;
+  /**
+   * Per-provider/model token usage. Unlike the rest of AgentTask, these fields
+   * are camelCase on the wire — taskCompatibilityResponse spreads the raw store
+   * object and the usage blob passes through untransformed. Older backends omit
+   * it; downstream reads must optional-chain every field. `totalTokens` is the
+   * ACP context total for bridges that report no input/output split.
+   */
+  usage?: Array<{
+    provider?: string;
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+    totalTokens?: number;
+  }>;
 }
 
 export interface Agent {

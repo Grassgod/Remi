@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redactSecrets } from "./redact";
+import { redactSecrets, redactString, redactValue } from "./redact";
 
 describe("redactSecrets", () => {
   it("redacts AWS access key", () => {
@@ -84,5 +84,48 @@ describe("redactSecrets", () => {
     for (const input of inputs) {
       expect(redactSecrets(input)).toBe(input);
     }
+  });
+});
+
+describe("redactString home-path privatization", () => {
+  it("masks the username in Unix home paths", () => {
+    expect(redactString("/home/alice/project/a.ts")).toBe("/home/<user>/project/a.ts");
+    expect(redactString("/Users/bob/repo")).toBe("/Users/<user>/repo");
+  });
+
+  it("masks Windows home paths", () => {
+    expect(redactString("C:\\Users\\carol\\code")).toBe("C:\\Users\\<user>\\code");
+  });
+
+  it("leaves non-home paths untouched", () => {
+    expect(redactString("/tmp/scratch/x")).toBe("/tmp/scratch/x");
+  });
+});
+
+describe("redactValue recursive key-aware masking", () => {
+  it("masks values under sensitive key names the string patterns miss", () => {
+    // {"api_key":"raw"} has no KEY=value text, so redactSecrets alone can't see it.
+    expect(redactValue({ api_key: "raw-value", note: "fine" })).toEqual({
+      api_key: "[REDACTED CREDENTIAL]",
+      note: "fine",
+    });
+  });
+
+  it("recurses into nested objects and arrays", () => {
+    const out = redactValue({ env: [{ SECRET_TOKEN: "x" }], path: "/home/dan/w" });
+    expect(out).toEqual({ env: [{ SECRET_TOKEN: "[REDACTED CREDENTIAL]" }], path: "/home/<user>/w" });
+  });
+
+  it("still redacts secret-shaped leaf strings", () => {
+    expect(redactValue({ msg: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn" }))
+      .toEqual({ msg: expect.not.stringContaining("ghp_") });
+  });
+
+  it("is cycle safe", () => {
+    const a: Record<string, unknown> = { x: 1 };
+    a.self = a;
+    const out = redactValue(a) as Record<string, unknown>;
+    expect(out.x).toBe(1);
+    expect(out.self).toBe("[REDACTED CYCLE]");
   });
 });

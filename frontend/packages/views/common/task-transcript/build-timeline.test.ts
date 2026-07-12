@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import { appendTimelineItem, buildTimeline, coalesceTimelineItems, type TimelineItem } from "./build-timeline";
+import { appendTimelineItem, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, type TimelineItem } from "./build-timeline";
 
 function message(seq: number, type: TaskMessagePayload["type"], content?: string): TaskMessagePayload {
   return {
@@ -75,5 +75,53 @@ describe("task transcript timeline", () => {
     expect(items[0]?.content).toBe("Authorization: Bearer [REDACTED]");
     expect(items[0]?.content).not.toContain("abc123xyz");
     expect(items[0]?.content).not.toContain("def456");
+  });
+
+  it("drops usage rows from the timeline (they became the (empty) rows)", () => {
+    const items = buildTimeline([
+      message(1, "text", "hi"),
+      { task_id: "t", issue_id: "i", seq: 2, type: "usage", meta: { totalTokens: 40477 } },
+      { task_id: "t", issue_id: "i", seq: 3, type: "tool_use", tool: "Bash", input: { command: "ls" } },
+    ]);
+    expect(items.map((i) => i.type)).toEqual(["text", "tool_use"]);
+  });
+
+  it("carries createdAt / tool_call_id / status / meta through to items", () => {
+    const items = buildTimeline([
+      { task_id: "t", issue_id: "i", seq: 1, type: "tool_use", tool: "Read", input: { file_path: "/a.ts" }, tool_call_id: "tc_1", status: "completed", created_at: "2026-07-12T00:00:00Z", meta: { kind: "read" } },
+    ]);
+    expect(items[0]).toMatchObject({ toolCallId: "tc_1", status: "completed", createdAt: "2026-07-12T00:00:00Z" });
+    expect(items[0]?.meta).toEqual({ kind: "read" });
+  });
+
+  it("recursively redacts secrets in structured tool input", () => {
+    const items = buildTimeline([
+      { task_id: "t", issue_id: "i", seq: 1, type: "tool_use", tool: "Bash", input: { api_key: "raw-secret-value", note: "ok" } },
+    ]);
+    expect(items[0]?.input).toEqual({ api_key: "[REDACTED CREDENTIAL]", note: "ok" });
+  });
+
+  it("privatizes home paths in output", () => {
+    const items = buildTimeline([
+      message(1, "tool_result", undefined),
+    ].map((m) => ({ ...m, type: "tool_result" as const, output: "/home/alice/project/a.ts" })));
+    expect(items[0]?.output).toBe("/home/<user>/project/a.ts");
+  });
+
+  it("extractUsageFromMessages takes the LAST snapshot, never a sum", () => {
+    // ACP usage is a running total that can even go down — accumulating double-counts.
+    const usage = extractUsageFromMessages([
+      { task_id: "t", issue_id: "i", seq: 1, type: "usage", meta: { totalTokens: 14445 } },
+      { task_id: "t", issue_id: "i", seq: 2, type: "usage", meta: { totalTokens: 14321, model: "claude-x" } },
+    ]);
+    expect(usage?.totalTokens).toBe(14321);
+    expect(usage?.model).toBe("claude-x");
+  });
+
+  it("extractUsageFromMessages parses the legacy JSON-in-content form", () => {
+    const usage = extractUsageFromMessages([
+      { task_id: "t", issue_id: "i", seq: 1, type: "usage", content: JSON.stringify({ sessionUpdate: "usage_update", used: 60000, size: 1000000 }) },
+    ]);
+    expect(usage?.totalTokens).toBe(60000);
   });
 });
