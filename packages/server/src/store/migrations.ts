@@ -889,6 +889,11 @@ export function runMigrations(db: SqlDatabase): void {
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
+  // Pool scheduling records the machine + engine that produced the promoted
+  // provider session as atomic metadata on the session itself, so follow-ups
+  // don't have to (mis)infer them from "the latest task with a runtime_id".
+  addColumnIfMissing(db, "multiremi_chat_sessions", "session_runtime_id TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "session_provider TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");

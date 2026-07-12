@@ -1100,6 +1100,12 @@ export interface MultiremiChatSession {
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
   workDir: string | null;
+  /** Runtime that produced the promoted provider session (sessionId). */
+  sessionRuntimeId: string | null;
+  /** Engine that produced the promoted provider session — the sessionId is
+   *  specific to it, so a follow-up only resumes when the agent's current
+   *  provider still matches. */
+  sessionProvider: string | null;
   latestTaskId: string | null;
   unreadSince: string | null;
   hasUnread: boolean;

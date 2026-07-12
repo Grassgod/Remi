@@ -6298,41 +6298,38 @@ runMigrations(this.db);
         // No runtime row yet → the deterministic id its runtime WILL get on
         // registration, so the task waits for that machine.
         const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
-        // Inherit the session only if it lives on this same directory machine.
-        const inheritChatSession = chatSession?.sessionId
-          ? this.chatSessionRuntimeId(chatSession.id) === dirRuntimeId
-          : true;
+        // Inherit the session only if it was produced on THIS directory machine
+        // AND by the agent's current engine (see sessionResumable).
+        const inheritChatSession = this.sessionResumable(chatSession, agent) && chatSession?.sessionRuntimeId === dirRuntimeId;
         return { runtimeId: dirRuntimeId, inheritChatSession };
       }
     }
     if (chatSession?.sessionId) {
-      const runtimeId = this.chatSessionRuntimeId(chatSession.id);
-      const runtime = runtimeId ? this.getRuntime(runtimeId) : null;
-      // Only follow the session back to its machine when that machine can still
-      // run this agent (ownership permits) AND its engine EXACTLY matches the
-      // agent's. A provider session is engine-specific, so an `any` runtime that
-      // ran the session under a since-changed engine can't resume it — require
-      // runtime.provider === agent.provider, not just runtimeCanRunAgent (which
-      // treats `any` as matching every provider). Otherwise abandon the session
-      // and re-pool so the task isn't pinned to a machine that can't resume it.
-      if (runtime && runtime.provider === agent.provider && this.runtimeCanRunAgent(runtime, agent)) {
-        return { runtimeId: runtime.id, inheritChatSession: true };
+      // Resume the session on the machine that produced it — but only when that
+      // machine can still run this agent AND the session's recorded engine
+      // matches the agent's current one. Otherwise abandon the session and
+      // re-pool (the claim predicate would reject a stale/foreign pin forever).
+      if (this.sessionResumable(chatSession, agent) && chatSession.sessionRuntimeId) {
+        const runtime = this.getRuntime(chatSession.sessionRuntimeId);
+        if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
+          return { runtimeId: runtime.id, inheritChatSession: true };
+        }
       }
       return { runtimeId: null, inheritChatSession: false };
     }
     return { runtimeId: null, inheritChatSession: true };
   }
 
-  /** Runtime that last ran a task for this chat session (its provider session lives there), or null. */
-  private chatSessionRuntimeId(chatSessionId: string): string | null {
-    const row = this.db
-      .query(
-        `SELECT runtime_id FROM multiremi_tasks
-         WHERE chat_session_id = ? AND runtime_id IS NOT NULL
-         ORDER BY created_at DESC LIMIT 1`,
-      )
-      .get(chatSessionId) as Row | null;
-    return row ? String(row.runtime_id) : null;
+  /**
+   * Can this chat session's promoted provider session be resumed by the agent
+   * as it stands now? The session id is specific to the engine that produced
+   * it, recorded as session_provider — so it only resumes when the agent's
+   * current provider still matches (an engine switch voids it). Sessions from
+   * before this metadata existed (null session_provider) are treated as
+   * non-resumable to stay safe.
+   */
+  private sessionResumable(chatSession: MultiremiChatSession | null, agent: MultiremiAgent): boolean {
+    return !!chatSession?.sessionId && chatSession.sessionProvider === agent.provider;
   }
 
   /**
@@ -7616,15 +7613,29 @@ runMigrations(this.db);
         [messageId, task.chatSessionId, task.id, role, messageBody, failureReason, elapsedMs, now],
       );
       const promoteSession = status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "");
+      // Record the machine + engine that produced this session alongside it, so
+      // follow-ups resume it precisely instead of inferring the machine from
+      // "the latest task with a runtime_id" (which can be a since-cancelled task
+      // routed elsewhere) and the engine from the runtime's provider (which is
+      // ambiguous for an "any" runtime).
+      const sessionProvider = this.getAgent(task.agentId)?.provider ?? null;
       this.db.run(
         `UPDATE multiremi_chat_sessions
          SET session_id = CASE WHEN ? = 1 THEN COALESCE(?, session_id) ELSE session_id END,
              work_dir = CASE WHEN ? = 1 THEN COALESCE(?, work_dir) ELSE work_dir END,
+             session_runtime_id = CASE WHEN ? = 1 THEN COALESCE(?, session_runtime_id) ELSE session_runtime_id END,
+             session_provider = CASE WHEN ? = 1 THEN COALESCE(?, session_provider) ELSE session_provider END,
              latest_task_id = ?,
              unread_since = COALESCE(unread_since, ?),
              updated_at = ?
          WHERE id = ?`,
-        [promoteSession ? 1 : 0, task.sessionId ?? null, promoteSession ? 1 : 0, task.workDir ?? null, task.id, now, now, task.chatSessionId],
+        [
+          promoteSession ? 1 : 0, task.sessionId ?? null,
+          promoteSession ? 1 : 0, task.workDir ?? null,
+          promoteSession ? 1 : 0, task.runtimeId ?? null,
+          promoteSession ? 1 : 0, sessionProvider,
+          task.id, now, now, task.chatSessionId,
+        ],
       );
       if (status === "completed") {
         const session = this.getChatSession(task.chatSessionId);
@@ -10287,6 +10298,8 @@ function toChatSession(row: Row): MultiremiChatSession {
     status: String(row.status ?? "active") as MultiremiChatSession["status"],
     sessionId: nullableString(row.session_id),
     workDir: nullableString(row.work_dir),
+    sessionRuntimeId: nullableString(row.session_runtime_id),
+    sessionProvider: nullableString(row.session_provider),
     latestTaskId: nullableString(row.latest_task_id),
     unreadSince: nullableString(row.unread_since),
     hasUnread: Boolean(row.unread_since),

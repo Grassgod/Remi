@@ -500,21 +500,46 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(claude.id)?.id).toBe(next.id);
   });
 
-  it("does not inherit an any-runtime session (its engine is ambiguous)", () => {
+  it("records the session's runtime and engine as chat-session metadata on promotion", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_meta", name: "r", provider: "codex" });
+    const agent = store.createAgent({ name: "Meta", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBeNull();
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "ok", sessionId: "sess_meta", workDir: "/tmp/meta" });
+    const promoted = store.getChatSession(session.id)!;
+    expect(promoted.sessionId).toBe("sess_meta");
+    expect(promoted.sessionRuntimeId).toBe(runtime.id);
+    expect(promoted.sessionProvider).toBe("codex");
+  });
+
+  it("resumes an any-runtime session only while the engine matches (recorded per session)", () => {
     const store = createStore();
     const anyRuntime = store.registerRuntime({ id: "rt_any_sess", name: "any", provider: "any" });
+    const claude = store.registerRuntime({ id: "rt_any_claude", name: "claude", provider: "claude" });
     const agent = store.createAgent({ name: "AnySwitcher", provider: "codex" });
     const session = store.createChatSession({ agentId: agent.id, title: "s" });
     const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
     expect(store.claimTask(anyRuntime.id)?.id).toBe(first.id);
     store.startTask(first.id);
     store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
-    // A provider session is engine-specific, but an `any` runtime records no
-    // engine for the session it ran — so the follow-up conservatively does NOT
-    // resume it (re-pooling to start fresh, rather than risk handing a codex
-    // session to a claude run after a switch).
+    // The session records the engine that produced it (codex), so a same-engine
+    // follow-up resumes it even though the runtime itself is "any".
     const same = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
-    expect(same.sessionId).toBeNull();
+    expect(same.sessionId).toBe("codex-session");
+    expect(same.runtimeId).toBe(anyRuntime.id);
+
+    // Switch to claude: the recorded codex session no longer matches and must
+    // not carry over, even though the any runtime could run claude.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const afterSwitch = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "switched" });
+    expect(afterSwitch.sessionId).toBeNull();
+    // Unpinned → any claude machine can take it (starting a fresh session).
+    expect(afterSwitch.runtimeId).toBeNull();
+    expect(store.claimTask(claude.id)).not.toBeNull();
   });
 
   it("prefers local_directory affinity over chat session affinity", () => {
