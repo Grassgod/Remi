@@ -537,7 +537,41 @@ runMigrations(this.db);
         id,
       ],
     );
-    return this.getAgent(id)!;
+    const updated = this.getAgent(id)!;
+    // Switching an agent's engine strands any queued task already pinned to a
+    // runtime of the old provider: that runtime no longer matches (claim uses
+    // the agent's current provider), and the stamp blocks every other machine.
+    // Re-home them onto the new engine.
+    if (input.provider !== undefined && input.provider !== current.provider) {
+      this.rescheduleAgentQueuedTasksOnProviderChange(updated);
+    }
+    return updated;
+  }
+
+  private rescheduleAgentQueuedTasksOnProviderChange(agent: MultiremiAgent): void {
+    const rows = this.db
+      .query("SELECT * FROM multiremi_tasks WHERE agent_id = ? AND status = 'queued' AND runtime_id IS NOT NULL")
+      .all(agent.id) as Row[];
+    const now = nowIso();
+    for (const row of rows) {
+      const daemonId = this.localDirectoryDaemonForTask(row);
+      if (daemonId) {
+        // local_directory task: keep it on the machine that holds the
+        // directory, but under the new engine's runtime id.
+        const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+        const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
+        this.db.run(
+          "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE id = ?",
+          [newRuntimeId, now, String(row.id)],
+        );
+      } else {
+        // Session/other pin: the old-engine session is void — re-pool it.
+        this.db.run(
+          "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+          [now, String(row.id)],
+        );
+      }
+    }
   }
 
   archiveAgent(id: string): MultiremiAgent {
@@ -1743,6 +1777,18 @@ runMigrations(this.db);
     if (!current) {
       this.recordRuntimeRegisteredAnalytics(runtime);
       if (runtime.status === "online") this.recordRuntimeReadyAnalytics(runtime, 0);
+    } else if (
+      // A re-registration under the same id that changes a scheduling-relevant
+      // field (provider / workspace / owner / visibility) can strand queued
+      // tasks pinned here that this runtime may no longer claim. Re-pool the
+      // ineligible ones. (setRuntimeOffline is intentionally NOT treated this
+      // way — offline is a recoverable transient state; the task waits.)
+      current.provider !== runtime.provider ||
+      (current.workspaceId ?? "local") !== (runtime.workspaceId ?? "local") ||
+      current.visibility !== runtime.visibility ||
+      (current.ownerId ?? "local") !== (runtime.ownerId ?? "local")
+    ) {
+      this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(runtime, agent));
     }
     return runtime;
   }
@@ -1896,6 +1942,12 @@ runMigrations(this.db);
    * changed owner / changed provider). Clears runtime_id + the promoted
    * session_id / work_dir so the task re-enters the pool cleanly. In-flight
    * tasks are left to orphan recovery.
+   *
+   * local_directory-affine tasks are NEVER unpinned: their directory lives on
+   * that specific machine, so re-pooling would let a provider-matching machine
+   * WITHOUT the directory claim them and run in a scratch checkout of the wrong
+   * repo. They stay pinned and park until the correct machine is available
+   * again — the safe failure.
    */
   private repoolQueuedTasksForRuntime(
     runtimeId: string,
@@ -1910,11 +1962,26 @@ runMigrations(this.db);
         const agent = this.getAgent(String(row.agent_id));
         if (agent && stillEligible(agent)) continue;
       }
+      if (this.localDirectoryDaemonForTask(row)) continue;
       this.db.run(
         "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
         [now, String(row.id)],
       );
     }
+  }
+
+  /** The daemon id a task is bound to by a local_directory resource, or null. */
+  private localDirectoryDaemonForTask(taskRow: Row): string | null {
+    const issueId = cleanOptionalString(taskRow.issue_id);
+    if (!issueId) return null;
+    const issue = this.getIssue(issueId);
+    if (!issue?.projectId) return null;
+    for (const resource of this.listProjectResources(issue.projectId)) {
+      if (resource.resourceType !== "local_directory") continue;
+      const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+      if (daemonId) return daemonId;
+    }
+    return null;
   }
 
   deleteRuntimeWithArchivedAgentCleanup(id: string): boolean {
@@ -6049,6 +6116,12 @@ runMigrations(this.db);
     const chatSession = input.chatSessionId ? this.getChatSession(input.chatSessionId) : null;
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
+    // The task always runs in the agent's workspace (stamped below). Reject any
+    // issue / chat session from a DIFFERENT workspace so we never create a task
+    // in workspace B linked to an issue/project in workspace A (a cross-tenant
+    // reference that would drive B's agent + machine + credentials from A).
+    if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
+    if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Pool scheduling: tasks stay unbound so any provider-matching runtime can
@@ -6405,37 +6478,25 @@ runMigrations(this.db);
 
   private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
     const now = nowIso();
-    const workspaceFilter = runtime.workspaceId ? "AND t.workspace_id = ?" : "";
-    const ownershipParams = [
+    // Always constrain by workspace, COALESCE(...,'local') so a runtime with
+    // NULL workspace only claims local-workspace tasks instead of every
+    // workspace's (the old `runtime.workspaceId ? ... : ""` dropped the filter
+    // entirely for NULL-workspace runtimes, letting one claim across tenants).
+    const workspaceFilter = "AND COALESCE(t.workspace_id, 'local') = ?";
+    const params = [
+      runtime.id,
+      now,
+      now,
+      runtime.id,
+      runtime.maxConcurrency,
+      runtime.workspaceId ?? "local",
+      runtime.id,
+      runtime.id,
+      runtime.provider,
+      runtime.provider,
       runtime.visibility,
       runtime.ownerId,
     ];
-    const params = runtime.workspaceId
-      ? [
-          runtime.id,
-          now,
-          now,
-          runtime.id,
-          runtime.maxConcurrency,
-          runtime.workspaceId,
-          runtime.id,
-          runtime.id,
-          runtime.provider,
-          runtime.provider,
-          ...ownershipParams,
-        ]
-      : [
-          runtime.id,
-          now,
-          now,
-          runtime.id,
-          runtime.maxConcurrency,
-          runtime.id,
-          runtime.id,
-          runtime.provider,
-          runtime.provider,
-          ...ownershipParams,
-        ];
     // Ownership guard: a private runtime only executes its owner's agents — a
     // claim hands the runtime the agent's custom_env / mcp_config. Owner match
     // uses COALESCE(...,'local') so a single-machine deployment (runtime owner
@@ -7289,7 +7350,7 @@ runMigrations(this.db);
   }
 
   private triggerCommentMentions(issue: MultiremiIssue, comment: MultiremiIssueComment): MultiremiTask[] {
-    const targets = this.resolveCommentMentionTargets(comment.body);
+    const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
 
     const tasks: MultiremiTask[] = [];
@@ -7324,7 +7385,7 @@ runMigrations(this.db);
     return tasks;
   }
 
-  private resolveCommentMentionTargets(body: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
+  private resolveCommentMentionTargets(body: string, workspaceId: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
     const targets: Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> = [];
     const seen = new Set<string>();
     const addTarget = (assigneeType: "agent" | "squad", assigneeId: string) => {
@@ -7334,17 +7395,26 @@ runMigrations(this.db);
       targets.push({ assigneeType, assigneeId });
     };
 
+    // A comment can only mention agents/squads in its own workspace — otherwise
+    // an explicit mention:// id (or a name collision) would spawn a task for
+    // another workspace's agent, and createTask would then reject the
+    // cross-workspace issue link anyway.
+    const inWorkspaceAgent = (id: string) => this.getAgent(id)?.workspaceId === workspaceId;
+    const inWorkspaceSquad = (id: string) => this.getSquad(id)?.workspaceId === workspaceId;
+
     const markdownMention = /mention:\/\/(agent|squad)\/([A-Za-z0-9_-]+)/g;
     for (const match of body.matchAll(markdownMention)) {
-      addTarget(match[1] as "agent" | "squad", match[2]);
+      const kind = match[1] as "agent" | "squad";
+      const id = match[2]!;
+      if (kind === "agent" ? inWorkspaceAgent(id) : inWorkspaceSquad(id)) addTarget(kind, id);
     }
 
     const withoutLinks = body.replace(/\[[^\]]+\]\(mention:\/\/[^)]+\)/g, " ");
     for (const agent of this.listAgents()) {
-      if (hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
+      if (agent.workspaceId === workspaceId && hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
     }
     for (const squad of this.listSquads()) {
-      if (hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
+      if (squad.workspaceId === workspaceId && hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
     }
     return targets;
   }

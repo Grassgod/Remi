@@ -426,6 +426,56 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(shared.id)).toBeNull();
   });
 
+  it("keeps a NULL-workspace runtime from claiming other workspaces' tasks", () => {
+    const store = createStore();
+    // A runtime registered without a workspace (stored NULL) must only claim
+    // local-workspace tasks, not every workspace's.
+    const looseRuntime = store.registerRuntime({ id: "rt_no_ws", name: "loose", provider: "codex", visibility: "public" });
+    expect(looseRuntime.workspaceId).toBeNull();
+    const otherAgent = store.createAgent({ name: "Other ws", provider: "codex", workspaceId: "wsX" });
+    store.createTask({ agentId: otherAgent.id, prompt: "in wsX" });
+    expect(store.claimTask(looseRuntime.id)).toBeNull();
+    // A local-workspace task it can claim.
+    const localAgent = store.createAgent({ name: "Local ws", provider: "codex" });
+    const localTask = store.createTask({ agentId: localAgent.id, prompt: "in local" });
+    expect(store.claimTask(looseRuntime.id)?.id).toBe(localTask.id);
+  });
+
+  it("forces a task into its agent's workspace and rejects cross-workspace issue links", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "WS agent", provider: "codex", workspaceId: "wsA" });
+    // An issue in a different workspace can't be linked to this agent's task.
+    const foreignIssue = store.createIssue({ title: "foreign", workspaceId: "wsB" });
+    expect(() => store.createTask({ agentId: agent.id, issueId: foreignIssue.id, prompt: "x" })).toThrow(/workspace/i);
+    // A same-workspace issue is fine, and the task lands in the agent's workspace.
+    const ownIssue = store.createIssue({ title: "own", workspaceId: "wsA" });
+    const task = store.createTask({ agentId: agent.id, issueId: ownIssue.id, workspaceId: "wsB", prompt: "x" });
+    expect(task.workspaceId).toBe("wsA");
+  });
+
+  it("re-homes an agent's queued tasks when its engine switches", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_switch_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_switch_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Switcher", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_switch", workDir: "/tmp/switch" });
+    // A follow-up is queued and pinned to the codex machine by session affinity.
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(codex.id);
+
+    // Switching the agent to claude re-homes the queued task off the codex pin.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const rehomed = store.getTask(followUp.id)!;
+    expect(rehomed.runtimeId).toBeNull();
+    expect(rehomed.sessionId).toBeNull();
+    // The claude machine can now claim it.
+    expect(store.claimTask(claude.id)?.id).toBe(followUp.id);
+  });
+
   it("gives each owner their own default agent so a private runtime can run it", () => {
     const store = createStore();
     const bobPrivate = store.registerRuntime({ id: "rt_def_bob", name: "bob", provider: "claude", ownerId: "bob", visibility: "private" });
@@ -627,6 +677,29 @@ describe("Bun Multiremi core store", () => {
     const providers = new Map(body.providers.map((entry: any) => [entry.provider, entry]));
     expect((providers.get("claude") as any)?.online_runtime_count).toBe(1);
     expect((providers.get("codex") as any)?.online_runtime_count).toBe(1);
+  });
+
+  it("maps an any-runtime's vendor models onto the right engine buckets", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_any_models",
+      name: "any with models",
+      provider: "any",
+      workspaceId: "local",
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true },
+        { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "anthropic", default: true },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const codex = body.providers.find((e: any) => e.provider === "codex");
+    const claude = body.providers.find((e: any) => e.provider === "claude");
+    expect(codex.models.map((m: any) => m.id)).toEqual(["gpt-5.5"]);
+    expect(claude.models.map((m: any) => m.id)).toEqual(["claude-sonnet-4-6"]);
+    // No vendor buckets leak into the response.
+    expect(body.providers.find((e: any) => e.provider === "openai")).toBeUndefined();
+    expect(body.providers.find((e: any) => e.provider === "anthropic")).toBeUndefined();
   });
 
   it("buckets fleet models by the runtime engine, not the model vendor", async () => {

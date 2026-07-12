@@ -791,7 +791,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/me/onboarding/runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string }>(c);
-    const result = safeRuntimeOnboardingBootstrap(store, body);
+    const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const result = safeRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -4166,6 +4169,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/tasks", async (c) => {
     const body = await readJson<CreateTaskInput>(c);
+    // Gate on the target agent: without this, any member could create a task
+    // for another workspace's (private) agent and drive its machine +
+    // credentials. The task always runs in the agent's workspace, so that's
+    // the workspace whose membership must be checked.
+    const agentId = cleanString(body.agentId);
+    const agent = agentId ? store.getAgent(agentId) : null;
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, agent.workspaceId);
+    if (denied) return denied;
+    if (!canCurrentUserAccessAgent(c, store, agent)) {
+      return c.json({ error: "you do not have access to this agent" }, 403);
+    }
     return c.json({ task: store.createTask(body) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
@@ -5895,6 +5910,10 @@ function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<string,
  * inflate the engine's online capacity. `callerOwnerId` is the acting user —
  * the owner their newly created agents will carry.
  */
+// Maps a model's vendor (as the daemon reports it) to the engine that runs it,
+// for the rare "any" runtime that carries a model catalog but no fixed engine.
+const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
+
 function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): Array<Record<string, unknown>> {
   const usable = runtimes.filter(
     (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
@@ -5918,9 +5937,10 @@ function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string
       // Bucket by the runtime's ENGINE, not model.provider. The daemon reports
       // model.provider as the model vendor ("openai" / "anthropic"), but the
       // UI (and scheduling) key on the engine that runs it ("codex" / "claude").
-      // An "any" runtime has no single engine, so fall back to model.provider
-      // only when we can't do better.
-      const engine = runtime.provider !== "any" ? runtime.provider : model.provider;
+      // An "any" runtime has no single engine, so map the vendor to its engine;
+      // a vendor we don't recognise is skipped rather than minting a phantom
+      // bucket the UI never queries.
+      const engine = runtime.provider !== "any" ? runtime.provider : MODEL_VENDOR_TO_ENGINE[model.provider ?? ""];
       if (!engine) continue;
       const entry = bucket(engine);
       const existing = entry.models.get(model.id);
@@ -8525,6 +8545,7 @@ function safeJoinCloudWaitlist(
 function safeRuntimeOnboardingBootstrap(
   store: MultiremiStore,
   body: { workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string },
+  bootstrapUserId: string,
 ): { workspace_id: string; agent_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
   const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
   const runtimeId = body.runtime_id ?? body.runtimeId ?? "";
@@ -8533,7 +8554,6 @@ function safeRuntimeOnboardingBootstrap(
   const runtime = store.getRuntime(runtimeId);
   if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
   const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
-  const bootstrapUserId = store.getCurrentUser().id;
   const before = store.getDefaultAgent(workspaceId, provider, bootstrapUserId);
   const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
   const agent = store.ensureDefaultAgent(provider, {
@@ -8542,7 +8562,7 @@ function safeRuntimeOnboardingBootstrap(
   });
   if (!before) {
     recordSystemAgentCreatedAnalytics(store, agent, runtime, {
-      actorId: store.getCurrentUser().id,
+      actorId: bootstrapUserId,
       template: "multiremi_helper",
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -9602,7 +9622,12 @@ function safeRerunIssue(
   if (!issue) return { error: "issue not found", status: 404 };
   const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
   if (!agentId) return { error: "issue has no agent assignee", status: 400 };
-  if (!store.getAgent(agentId)) return { error: "agent not found", status: 404 };
+  const agent = store.getAgent(agentId);
+  if (!agent) return { error: "agent not found", status: 404 };
+  // The rerun agent must live in the issue's workspace — a caller with issue
+  // access can't redirect the run to another workspace's agent (createTask
+  // would reject the cross-workspace link, but fail loudly here first).
+  if (agent.workspaceId !== issue.workspaceId) return { error: "agent not found", status: 404 };
   const task = store.createTask({
     agentId,
     issueId: issue.id,
