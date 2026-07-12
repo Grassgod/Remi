@@ -465,6 +465,50 @@ describe("Bun Multiremi core store", () => {
     expect(ap.assigneeId).toBe(ownAgent.id);
   });
 
+  it("does not persist a squad with a cross-workspace leader", () => {
+    const store = createStore();
+    const foreignLeader = store.createAgent({ name: "Foreign lead", provider: "codex", workspaceId: "wsB" });
+    expect(() => store.createSquad({ name: "S", workspaceId: "wsA", leaderId: foreignLeader.id })).toThrow(/different workspace/i);
+    // No squad row was written.
+    expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
+  });
+
+  it("re-pools a stale dispatched task the runtime may no longer run", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_stale", name: "stale", provider: "codex", ownerId: "alice", visibility: "private" });
+    const agent = store.createAgent({ name: "Stale", provider: "codex", ownerId: "alice" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    // The dispatch response was lost (never started) and the recovery window passed.
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    // Meanwhile the agent changed owner, so this runtime may no longer run it.
+    store.updateAgent(agent.id, { ownerId: "bob" });
+    // The stale re-claim must NOT hand the task back to the now-ineligible runtime.
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.getTask(task.id)?.runtimeId).toBeNull();
+  });
+
+  it("rejects an autopilot whose project is in another workspace", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "AP agent", provider: "codex", workspaceId: "wsA" });
+    const foreignProject = store.createProject({ title: "Foreign", workspaceId: "wsB" });
+    expect(() =>
+      store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id, projectId: foreignProject.id }),
+    ).toThrow(/project is in a different workspace/i);
+  });
+
+  it("allows pausing an autopilot without re-validating an unchanged assignee", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "AP agent", provider: "codex", workspaceId: "wsA" });
+    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id });
+    // Simulate drift: the agent later moves to another workspace.
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    // A status-only update must still succeed (no assignee re-validation).
+    const paused = store.updateAutopilot(ap.id, { status: "paused" });
+    expect(paused.status).toBe("paused");
+  });
+
   it("rejects a cross-workspace squad member", () => {
     const store = createStore();
     const squad = store.createSquad({ name: "Squad", workspaceId: "wsA" });
@@ -493,18 +537,19 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(bobPrivate.id)?.id).toBe(followUp.id);
   });
 
-  it("re-homes an agent's queued tasks when its workspace changes", () => {
+  it("cancels an agent's queued tasks when its workspace changes", () => {
     const store = createStore();
     const codexA = store.registerRuntime({ id: "rt_wsmove_a", name: "a", provider: "codex", workspaceId: "wsA" });
     const codexB = store.registerRuntime({ id: "rt_wsmove_b", name: "b", provider: "codex", workspaceId: "wsB" });
     const agent = store.createAgent({ name: "Mover", provider: "codex", workspaceId: "wsA" });
     const task = store.createTask({ agentId: agent.id, prompt: "work" });
     expect(task.workspaceId).toBe("wsA");
-    // Move the agent to wsB → its queued task follows so the claim workspace matches.
+    // Moving the agent to wsB cancels the orphaned wsA task (rather than
+    // migrating it and leaving a cross-workspace link); neither runtime claims it.
     store.updateAgent(agent.id, { workspaceId: "wsB" });
-    expect(store.getTask(task.id)?.workspaceId).toBe("wsB");
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
     expect(store.claimTask(codexA.id)).toBeNull();
-    expect(store.claimTask(codexB.id)?.id).toBe(task.id);
+    expect(store.claimTask(codexB.id)).toBeNull();
   });
 
   it("re-homes an agent's queued tasks when its engine switches", () => {
