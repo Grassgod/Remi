@@ -7081,7 +7081,10 @@ runMigrations(this.db);
       parentRuntime != null
       && agent != null
       && this.runtimeCanRunAgent(parentRuntime, agent)
-      && (parent.provider == null || parent.provider === agent.provider)
+      // Fail-closed on a missing execution snapshot: a pre-snapshot in-flight
+      // task (provider NULL after a rolling upgrade) can't be proven to have
+      // run the agent's current engine, so it degrades to a fresh re-pool.
+      && parent.provider === agent.provider
     );
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({
@@ -7644,20 +7647,26 @@ runMigrations(this.db);
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [messageId, task.chatSessionId, task.id, role, messageBody, failureReason, elapsedMs, now],
       );
-      const promoteSession = status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "");
-      // Record the machine + engine that produced this session alongside it, so
-      // follow-ups resume it precisely instead of inferring the machine from
-      // "the latest task with a runtime_id" (which can be a since-cancelled task
-      // routed elsewhere) and the engine from the agent's current provider
-      // (which can have changed since the task ran). The engine comes from the
-      // task's execution snapshot (task.provider), set at claim time.
-      const sessionProvider = task.provider ?? this.getAgent(task.agentId)?.provider ?? null;
+      // Promote the session ATOMICALLY as one unit — session_id together with
+      // its machine (runtime) and engine (provider) — and ONLY when this task
+      // actually produced a new session id. Otherwise a task that promotes but
+      // carries no sessionId (e.g. a non-retryable failure) would leave the old
+      // session_id in place while overwriting session_runtime_id/provider with
+      // this task's, mislabelling the old session's engine. The engine comes
+      // from the task's execution snapshot (task.provider), not the agent's
+      // now-mutable provider. Snapshot missing → derive from a concrete runtime,
+      // else leave null (fail-closed: an unknown-engine session isn't resumed).
+      const promoteSession =
+        (status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")) &&
+        task.sessionId != null;
+      const runtimeProvider = task.runtimeId ? this.getRuntime(task.runtimeId)?.provider : null;
+      const sessionProvider = task.provider ?? (runtimeProvider && runtimeProvider !== "any" ? runtimeProvider : null);
       this.db.run(
         `UPDATE multiremi_chat_sessions
-         SET session_id = CASE WHEN ? = 1 THEN COALESCE(?, session_id) ELSE session_id END,
-             work_dir = CASE WHEN ? = 1 THEN COALESCE(?, work_dir) ELSE work_dir END,
-             session_runtime_id = CASE WHEN ? = 1 THEN COALESCE(?, session_runtime_id) ELSE session_runtime_id END,
-             session_provider = CASE WHEN ? = 1 THEN COALESCE(?, session_provider) ELSE session_provider END,
+         SET session_id = CASE WHEN ? = 1 THEN ? ELSE session_id END,
+             work_dir = CASE WHEN ? = 1 THEN ? ELSE work_dir END,
+             session_runtime_id = CASE WHEN ? = 1 THEN ? ELSE session_runtime_id END,
+             session_provider = CASE WHEN ? = 1 THEN ? ELSE session_provider END,
              latest_task_id = ?,
              unread_since = COALESCE(unread_since, ?),
              updated_at = ?

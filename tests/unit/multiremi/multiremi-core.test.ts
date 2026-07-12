@@ -500,6 +500,51 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(claude.id)?.id).toBe(next.id);
   });
 
+  it("promotes session metadata atomically — a sessionless task can't mislabel the old session's engine", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_atomic_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_atomic_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Atomic", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    expect(store.getChatSession(session.id)?.sessionProvider).toBe("codex");
+
+    // Agent switches to claude; a claude task runs and completes WITHOUT a new
+    // session id (e.g. it produced no provider session). It must NOT overwrite
+    // the session's runtime/provider while leaving the old codex session_id.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const noSess = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "no session" });
+    // (this claude task re-pools; the codex session is not resumable for claude)
+    expect(store.claimTask(claude.id)?.id).toBe(noSess.id);
+    store.startTask(noSess.id);
+    store.completeTask(noSess.id, { output: "done" }); // no sessionId
+    const meta = store.getChatSession(session.id)!;
+    // The old codex session stays consistently labelled as codex (not claude).
+    expect(meta.sessionId).toBe("codex-session");
+    expect(meta.sessionProvider).toBe("codex");
+    expect(meta.sessionRuntimeId).toBe(codex.id);
+  });
+
+  it("fails closed on a missing execution snapshot for resume-safe retries", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_failclosed", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "FailClosed", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // Simulate a pre-snapshot in-flight task (rolling upgrade): clear provider.
+    db!.run("UPDATE multiremi_tasks SET provider = NULL WHERE id = ?", [task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // Unknown execution engine → can't prove resume-safety → fresh re-pool.
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+  });
+
   it("snapshots the execution engine so a mid-run agent switch can't mislabel an any-runtime session", () => {
     const store = createStore();
     const anyRuntime = store.registerRuntime({ id: "rt_snap_any", name: "any", provider: "any" });

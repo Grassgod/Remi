@@ -1129,8 +1129,10 @@ export interface MultiremiTask {
   agentId: string;
   runtimeId: string | null;
   /** Engine the task executed under, snapshotted at claim time (the agent's
-   *  provider can change mid-run). Null until the task is claimed. */
-  provider: string | null;
+   *  provider can change mid-run). Null until the task is claimed. Optional on
+   *  the wire — it's a server-internal scheduling field the daemon doesn't
+   *  receive, so a claim-response task may omit it. */
+  provider?: string | null;
   issueId: string | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
