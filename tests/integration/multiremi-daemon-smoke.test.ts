@@ -188,6 +188,9 @@ describe("Bun Multiremi daemon smoke", () => {
         permissionMode: "bypassPermissions",
       });
       const messages = store.listTaskMessages(task.id);
+      // The initial tool_call already carries rawOutput and no follow-up update,
+      // so the stateful mapper emits BOTH a tool_use and its paired tool_result
+      // (each with its own seq). Output lives on the result, not the use.
       expect(messages.map((message) => ({
         seq: message.seq,
         type: message.type,
@@ -197,41 +200,33 @@ describe("Bun Multiremi daemon smoke", () => {
         output: message.output,
       }))).toEqual([
         { seq: 1, type: "thinking", tool: null, content: "Thinking", input: null, output: null },
-        { seq: 2, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
-        { seq: 3, type: "text", tool: null, content: "Smoke ", input: null, output: null },
-        { seq: 4, type: "text", tool: null, content: "completed", input: null, output: null },
-        {
-          seq: 5,
-          type: "usage",
-          tool: null,
-          content: "{\"sessionUpdate\":\"usage_update\",\"model\":\"claude-smoke\",\"inputTokens\":7,\"outputTokens\":3}",
-          input: null,
-          output: null,
-        },
+        { seq: 2, type: "tool_use", tool: "Read", content: null, input: { path: "README.md" }, output: null },
+        { seq: 3, type: "tool_result", tool: "Read", content: null, input: null, output: "{\"content\":\"file body\"}" },
+        { seq: 4, type: "text", tool: null, content: "Smoke ", input: null, output: null },
+        { seq: 5, type: "text", tool: null, content: "completed", input: null, output: null },
+        { seq: 6, type: "usage", tool: null, content: null, input: null, output: null },
       ]);
-      expect(JSON.parse(messages[4].content ?? "{}")).toMatchObject({
-        sessionUpdate: "usage_update",
-        model: "claude-smoke",
-        inputTokens: 7,
-        outputTokens: 3,
-      });
+      // tool_use and tool_result pair on a shared (synthetic) tool_call_id.
+      expect(messages[1]?.toolCallId).toBeTruthy();
+      expect(messages[2]?.toolCallId).toBe(messages[1]?.toolCallId);
+      // usage numbers now live in meta, not a content JSON string.
+      expect(messages[5]?.meta).toMatchObject({ model: "claude-smoke", inputTokens: 7, outputTokens: 3 });
       const transcriptResponse = await fetch(`http://127.0.0.1:${server.port}/api/daemon/tasks/${task.id}/messages`, {
         headers: { Authorization: `Bearer ${daemonToken.token}` },
       });
       expect(transcriptResponse.status).toBe(200);
       const transcriptBody = await transcriptResponse.json() as any[];
-      expect(transcriptBody).toEqual([
-        { task_id: task.id, seq: 1, type: "thinking", content: "Thinking" },
-        { task_id: task.id, seq: 2, type: "tool_use", tool: "Read", input: { path: "README.md" }, output: "{\"content\":\"file body\"}" },
-        { task_id: task.id, seq: 3, type: "text", content: "Smoke " },
-        { task_id: task.id, seq: 4, type: "text", content: "completed" },
-        {
-          task_id: task.id,
-          seq: 5,
-          type: "usage",
-          content: "{\"sessionUpdate\":\"usage_update\",\"model\":\"claude-smoke\",\"inputTokens\":7,\"outputTokens\":3}",
-        },
+      expect(transcriptBody.map((m) => ({ seq: m.seq, type: m.type, tool: m.tool, content: m.content, output: m.output }))).toEqual([
+        { seq: 1, type: "thinking", tool: undefined, content: "Thinking", output: undefined },
+        { seq: 2, type: "tool_use", tool: "Read", content: undefined, output: undefined },
+        { seq: 3, type: "tool_result", tool: "Read", content: undefined, output: "{\"content\":\"file body\"}" },
+        { seq: 4, type: "text", tool: undefined, content: "Smoke ", output: undefined },
+        { seq: 5, type: "text", tool: undefined, content: "completed", output: undefined },
+        { seq: 6, type: "usage", tool: undefined, content: undefined, output: undefined },
       ]);
+      // wire carries created_at + the paired tool_call_id
+      expect(transcriptBody[0].created_at).toBeTruthy();
+      expect(transcriptBody[2].tool_call_id).toBe(transcriptBody[1].tool_call_id);
       expect(store.getTask(task.id)?.usage[0]).toMatchObject({
         provider: "claude",
         model: "claude-smoke",

@@ -90,6 +90,7 @@ import type {
   MultiremiSquadMember,
   MultiremiTask,
   MultiremiTaskMessage,
+  TaskMessageInput,
   MultiremiTaskStatus,
   MultiremiTaskWithAgent,
   MultiremiTaskTriggerMetadata,
@@ -4180,6 +4181,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/tasks/:id/messages", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "forbidden" }, 403);
+    }
     return c.json({ messages: store.listTaskMessages(task.id) });
   });
   const listTaskHumanRequestsRoute = (c: any) => {
@@ -4300,11 +4304,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/daemon/tasks/:taskId/messages", async (c) => {
     const body = await readJsonStrict<{ messages?: any[] }>(c);
     if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
-    const messages = body.messages ?? [];
-    if (!messages.length) return c.json({ status: "ok" });
+    const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+    if (!rawMessages.length) return c.json({ status: "ok" });
+    if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
+      return c.json({ error: "too many messages" }, 413);
+    }
     const taskId = c.req.param("taskId");
     if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
-    store.appendTaskMessages(taskId, messages);
+    // Whitelist each message to the known TaskMessageInput fields (accepting
+    // both camel and snake casing) so a compromised/buggy daemon can't smuggle
+    // arbitrary JSON into the row; the store layer additionally byte-caps every
+    // field.
+    store.appendTaskMessages(taskId, rawMessages.map(daemonTaskMessageInput));
     return c.json({ status: "ok" });
   });
   app.get("/api/daemon/tasks/:taskId/messages", (c) => {
@@ -4380,6 +4391,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/tasks/:taskId/messages", (c) => {
     const task = taskFromParam(store, c, "taskId");
     if (!task) return c.json({ error: "task not found" }, 404);
+    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "forbidden" }, 403);
+    }
     const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
     if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
     return c.json(store.listTaskMessages(task.id, since));
@@ -4430,6 +4444,9 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
       notifyDaemonTaskEvent(daemonWebSockets, event.type, event.task);
     }
     notifyBrowserTaskEvent(browserWebSockets, browserScopeWebSockets, event.type, event.task);
+  });
+  const unsubscribeTaskMessages = store.onTaskMessages(({ task, messages }) => {
+    notifyBrowserTaskMessages(store, browserWebSockets, browserScopeWebSockets, task, messages);
   });
   const unsubscribeWorkspaceEvent = store.onWorkspaceEvent((event) => {
     notifyBrowserWorkspaceEvent(browserWebSockets, browserUserWebSockets, browserScopeWebSockets, event);
@@ -4574,6 +4591,7 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
   server.stop = (closeActiveConnections?: boolean) => {
     unsubscribeTaskEnqueued();
     unsubscribeTaskEvent();
+    unsubscribeTaskMessages();
     unsubscribeWorkspaceEvent();
     scheduler?.stop();
     return stopServer(closeActiveConnections);
@@ -6633,6 +6651,34 @@ function canCurrentUserAccessAgent(c: Context, store: MultiremiStore, agent: Mul
   return role === "owner" || role === "admin";
 }
 
+// Store-only twin of canCurrentUserAccessAgent — no request Context, so it can
+// gate WS recipients (client.data.userId) as well as HTTP callers.
+function canUserAccessAgentByUserId(store: MultiremiStore, userId: string | null, agent: MultiremiAgent): boolean {
+  if (agent.visibility !== "private") return true;
+  if (userId && agent.ownerId === userId) return true;
+  // No verified identity (master token / open mode) acts as admin.
+  if (userId == null) return true;
+  const role = store.getUserRoleInWorkspace(userId, agent.workspaceId);
+  return role === "owner" || role === "admin";
+}
+
+// Whether a user may read a task's transcript messages. Transcript rows carry
+// raw tool input/diffs/output, so they inherit the task's visibility: chat
+// tasks are creator-only, and a private agent's task is owner/admin-only.
+// Workspace membership itself is enforced by the caller (registry keying /
+// route guard). userId null = no-identity admin path.
+function canUserViewTaskMessages(store: MultiremiStore, userId: string | null, task: MultiremiTask): boolean {
+  if (task.chatSessionId) {
+    const session = store.getChatSession(task.chatSessionId);
+    if (!session) return false;
+    if (userId == null) return true;
+    return session.creatorId === userId;
+  }
+  const agent = task.agentId ? store.getAgent(task.agentId) : null;
+  if (!agent) return true;
+  return canUserAccessAgentByUserId(store, userId, agent);
+}
+
 function currentWorkspaceRole(c: Context, store: MultiremiStore, workspaceId: string): string {
   const member = currentWorkspaceMember(c, store, workspaceId);
   if (member) return member.role;
@@ -7215,10 +7261,8 @@ function authorizeBrowserScope(
   if (scope === "task") {
     const task = store.getTask(id);
     if (!task || task.workspaceId !== client.data.workspaceId) return { ok: false, error: "forbidden" };
-    if (!task.chatSessionId) return { ok: true };
-    const session = store.getChatSession(task.chatSessionId);
-    if (!session || session.workspaceId !== client.data.workspaceId) return { ok: false, error: "forbidden" };
-    return session.creatorId === client.data.userId ? { ok: true } : { ok: false, error: "forbidden" };
+    // Chat-creator + private-agent visibility both live in canUserViewTaskMessages.
+    return canUserViewTaskMessages(store, client.data.userId, task) ? { ok: true } : { ok: false, error: "forbidden" };
   }
   if (scope === "chat") {
     const session = store.getChatSession(id);
@@ -7331,6 +7375,77 @@ function notifyBrowserTaskEvent(
     return;
   }
   notifyBrowserWorkspaceClients(workspaceRegistry, task.workspaceId, frame);
+}
+
+// Broadcast one task-message frame per persisted row. Mirrors notifyBrowserTaskEvent's
+// routing, but every recipient is filtered through canUserViewTaskMessages so a
+// private-agent task's raw input/diff/output can't leak to non-owners on the
+// workspace-wide broadcast path.
+function notifyBrowserTaskMessages(
+  store: MultiremiStore,
+  workspaceRegistry: BrowserWebSocketRegistry,
+  scopeRegistry: BrowserScopeWebSocketRegistry,
+  task: MultiremiTask,
+  messages: MultiremiTaskMessage[],
+): void {
+  for (const message of messages) {
+    const frame = JSON.stringify({
+      type: "task:message",
+      payload: taskMessageRealtimePayload(message, task),
+      actor_id: task.agentId,
+      actor_type: "agent",
+    });
+    if (task.chatSessionId) {
+      // Chat tasks: only the creator's chat/task subscriptions (authorized on subscribe).
+      sendFrameToBrowserScopes(scopeRegistry, frame, [["chat", task.chatSessionId], ["task", task.id]]);
+      continue;
+    }
+    sendFrameToBrowserWorkspaceClientsFiltered(workspaceRegistry, task.workspaceId, frame, (client) =>
+      canUserViewTaskMessages(store, client.data.kind === "browser" ? client.data.userId : null, task),
+    );
+  }
+}
+
+function taskMessageRealtimePayload(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    task_id: message.taskId,
+    issue_id: task.issueId,
+    seq: message.seq,
+    type: message.type,
+    created_at: message.createdAt,
+  };
+  if (task.chatSessionId) payload.chat_session_id = task.chatSessionId;
+  if (message.tool) payload.tool = message.tool;
+  if (message.content) payload.content = message.content;
+  if (message.input) payload.input = message.input;
+  if (message.output) payload.output = message.output;
+  if (message.toolCallId) payload.tool_call_id = message.toolCallId;
+  if (message.status) payload.status = message.status;
+  if (message.meta) payload.meta = message.meta;
+  return payload;
+}
+
+function sendFrameToBrowserWorkspaceClientsFiltered(
+  registry: BrowserWebSocketRegistry,
+  workspaceId: string,
+  frame: string,
+  allow: (client: MultiremiWebSocketClient) => boolean,
+): void {
+  const clients = registry.get(workspaceId);
+  if (!clients?.size) return;
+  for (const client of [...clients]) {
+    if (!allow(client)) continue;
+    try {
+      client.sendText(frame);
+    } catch {
+      unregisterBrowserWebSocketClient(registry, client);
+      try {
+        client.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  }
 }
 
 function notifyBrowserWorkspaceEvent(
@@ -9273,17 +9388,49 @@ function taskResultWireValue(task: MultiremiTask): unknown | null {
   };
 }
 
+const MAX_TASK_MESSAGES_PER_REQUEST = 256;
+
+// Whitelist an untrusted daemon message body to TaskMessageInput, tolerating
+// both camelCase (the daemon client serializes TaskMessageInput directly) and
+// snake_case field names.
+function daemonTaskMessageInput(raw: unknown): TaskMessageInput {
+  const m = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const str = (...keys: string[]): string | undefined => {
+    for (const k of keys) if (typeof m[k] === "string") return m[k] as string;
+    return undefined;
+  };
+  const obj = (...keys: string[]): Record<string, unknown> | undefined => {
+    for (const k of keys) if (m[k] && typeof m[k] === "object" && !Array.isArray(m[k])) return m[k] as Record<string, unknown>;
+    return undefined;
+  };
+  return {
+    seq: typeof m.seq === "number" ? m.seq : undefined,
+    type: str("type") ?? "text",
+    tool: str("tool") ?? null,
+    content: str("content") ?? null,
+    input: obj("input") ?? null,
+    output: str("output") ?? null,
+    toolCallId: str("toolCallId", "tool_call_id") ?? null,
+    status: str("status") ?? null,
+    meta: obj("meta") ?? null,
+  };
+}
+
 function daemonTaskMessageWireResponse(message: MultiremiTaskMessage, task: MultiremiTask): Record<string, unknown> {
   const response: Record<string, unknown> = {
     task_id: message.taskId,
     seq: message.seq,
     type: message.type,
+    created_at: message.createdAt,
   };
   if (task.issueId) response.issue_id = task.issueId;
   if (message.tool) response.tool = message.tool;
   if (message.content) response.content = message.content;
   if (message.input) response.input = message.input;
   if (message.output) response.output = message.output;
+  if (message.toolCallId) response.tool_call_id = message.toolCallId;
+  if (message.status) response.status = message.status;
+  if (message.meta) response.meta = message.meta;
   return response;
 }
 

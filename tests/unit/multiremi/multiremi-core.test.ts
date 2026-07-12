@@ -898,6 +898,53 @@ describe("Bun Multiremi core store", () => {
     expect(store.listTasks().filter((task) => task.issueId === parked.id)).toHaveLength(0);
   });
 
+  it("round-trips ACP tool-call semantics (tool_call_id/status/meta) and fires onTaskMessages", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_acp_semantics", name: "acp", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "ACP Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "ACP", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
+
+    const fired: number[] = [];
+    const unsub = store.onTaskMessages(({ task: t, messages }) => {
+      expect(t.id).toBe(task.id);
+      fired.push(messages.length);
+    });
+
+    store.appendTaskMessages(task.id, [
+      { seq: 1, type: "tool_use", tool: "Bash", input: { command: "ls" }, toolCallId: "tc_1", status: "in_progress", meta: { title: "Bash", locations: [{ path: "/a" }] } },
+    ]);
+    // A tool_call_update sharing the seq upserts the same row (terminal state).
+    store.appendTaskMessages(task.id, [
+      { seq: 1, type: "tool_result", tool: "Bash", output: "ok", toolCallId: "tc_1", status: "completed", meta: { duration_ms: 42 } },
+    ]);
+
+    const rows = store.listTaskMessages(task.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ toolCallId: "tc_1", status: "completed", type: "tool_result", output: "ok" });
+    expect(rows[0]!.meta).toMatchObject({ duration_ms: 42 });
+    expect(fired).toEqual([1, 1]);
+    unsub();
+  });
+
+  it("masks sensitive keys and byte-caps oversized fields on the message ingress", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_caps", name: "caps", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Caps Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "Caps", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
+
+    const big = "a".repeat(200_000);
+    store.appendTaskMessages(task.id, [
+      { type: "tool_result", tool: "Bash", output: big, status: "not-a-real-status" },
+    ]);
+    const row = store.listTaskMessages(task.id)[0]!;
+    expect((row.output ?? "").length).toBeLessThan(big.length);
+    expect(row.output).toContain("[truncated]");
+    // an unknown status is dropped to null
+    expect(row.status).toBeNull();
+  });
+
   it("posts the agent's final reply as an issue comment on completion", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_reply_comment", name: "reply comment", provider: "claude", workspaceId: "local" });

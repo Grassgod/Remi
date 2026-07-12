@@ -164,6 +164,33 @@ describe("Multiremi multi-user auth", () => {
     expect((await usePrivate.json()).error).toContain("private");
   });
 
+  it("transcript messages of a private agent's task are owner/admin-only, not workspace-wide", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const owner = await login(store, { externalId: OWNER_OPEN_ID, email: "hehuajie@feishu.local", name: "贺华杰" });
+    const b = await login(store, { externalId: "ou_b2", email: "b2@corp.com", name: "B" });
+
+    // B joins the workspace as a plain member.
+    const invite = await app.request("/api/workspaces/local/members", {
+      method: "POST", headers: jsonAuth(owner.token), body: JSON.stringify({ email: "b2@corp.com", role: "member" }),
+    });
+    const invitation = await invite.json();
+    await app.request(`/api/invitations/${invitation.id}/accept`, { method: "POST", ...bearer(b.token) });
+
+    // Owner's PRIVATE agent runs a task that records transcript messages.
+    const agent = store.createAgent({ name: "Secret", provider: "claude", workspaceId: "local", ownerId: "local", visibility: "private" });
+    const issue = store.createIssue({ title: "secret work", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "x" });
+    store.appendTaskMessages(task.id, [{ type: "tool_use", tool: "Bash", input: { command: "cat ~/.aws/credentials" } }]);
+
+    // B (member, not owner/admin) is denied; owner sees the messages.
+    const bResp = await app.request(`/api/tasks/${task.id}/messages`, bearer(b.token));
+    expect(bResp.status).toBe(403);
+    const ownerResp = await app.request(`/api/tasks/${task.id}/messages`, bearer(owner.token));
+    expect(ownerResp.status).toBe(200);
+    expect((await ownerResp.json()).length).toBe(1);
+  });
+
   it("FR4: a new user creates a workspace, becomes its owner, and can open it with their login token", async () => {
     const store = seedDeployment();
     const app = createMultiremiApp({ store, authToken: "root-secret" });

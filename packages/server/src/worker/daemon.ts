@@ -870,18 +870,20 @@ export class MultiremiDaemon {
     this.attachHumanInputHandlers(provider, task, signal, nextSeq);
     let finalSessionId: string | null = task.sessionId;
     let usage: TaskUsageEntry[] = [];
+    const toMessages = createEventMapper();
 
     try {
       const session = new AgentSession(provider as any, config);
       const prompt = buildTaskPrompt(task);
       for await (const event of session.run(prompt)) {
-        const message = eventToTaskMessage(event, nextSeq());
-        if (message) {
-          // eventToTaskMessage reports assistant text as type "text" — this is
-          // what becomes the task result / issue activity body on completion.
+        // One event may yield several messages (e.g. a completed tool_call →
+        // tool_use + tool_result). Each gets its own seq so none collides.
+        const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));
+        for (const message of emitted) {
+          // Assistant text becomes the task result / issue activity body.
           if (message.type === "text" && message.content) output += message.content;
-          await this.client.reportTaskMessages(task.id, [message]);
         }
+        if (emitted.length) await this.client.reportTaskMessages(task.id, emitted);
       }
       const last = provider.getLastResponse?.() as AgentResponse | null | undefined;
       finalSessionId = last?.sessionId ?? finalSessionId;
@@ -1121,34 +1123,138 @@ function formatDuration(ms: number): string {
   return `${seconds}s`;
 }
 
-function eventToTaskMessage(event: ProviderEvent, seq: number): TaskMessageInput | null {
-  const raw = event as Record<string, any>;
-  if (raw.sessionUpdate === "agent_message_chunk" || raw.sessionUpdate === "agent_thought_chunk") {
-    const content = extractText(raw.content);
-    if (!content) return null;
-    return {
-      seq,
-      type: raw.sessionUpdate === "agent_thought_chunk" ? "thinking" : "text",
-      content,
-    };
+interface ToolCallState {
+  name: string;
+  kind?: string;
+  input?: Record<string, unknown>;
+  status: string;
+  startMs: number;
+  terminalEmitted: boolean;
+  lastFingerprint?: string;
+}
+
+const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
+
+/**
+ * A stateful ACP-event → task-message mapper. Unlike the old one-in-one-out
+ * function it can emit 0..N messages per event (an initial tool_call that
+ * already carries output produces both a tool_use and its paired tool_result),
+ * and it preserves the ACP semantics the flat schema used to drop:
+ * toolCallId (for pairing), status, kind, locations, plan snapshots. The caller
+ * assigns a distinct seq to every emitted message — reusing one seq for two
+ * messages would collide on UNIQUE(task_id, seq).
+ */
+function createEventMapper(): (event: ProviderEvent) => TaskMessageInput[] {
+  const tools = new Map<string, ToolCallState>();
+  let synCounter = 0;
+
+  return (event: ProviderEvent): TaskMessageInput[] => {
+    const raw = event as Record<string, any>;
+    const su = raw.sessionUpdate;
+
+    if (su === "agent_message_chunk" || su === "agent_thought_chunk") {
+      const content = extractText(raw.content);
+      if (!content) return [];
+      return [{ type: su === "agent_thought_chunk" ? "thinking" : "text", content }];
+    }
+
+    if (su === "usage_update") {
+      // Snapshot (not a delta) — keep the whole event's usage numbers in meta;
+      // the frontend takes the last snapshot, never a sum.
+      const meta = raw.usage && typeof raw.usage === "object" ? { ...raw.usage } : { ...raw };
+      delete (meta as Record<string, unknown>).sessionUpdate;
+      return [{ type: "usage", meta }];
+    }
+
+    if (su === "plan") {
+      const entries = Array.isArray(raw.entries) ? raw.entries : [];
+      const done = entries.filter((e: any) => e?.status === "completed").length;
+      // New seq every time — the frontend dedups by seq, so a same-seq upsert
+      // would drop later plan snapshots; it renders the last one.
+      return [{ type: "plan", content: `${done}/${entries.length} completed`, meta: { entries } }];
+    }
+
+    if (su === "tool_call" || su === "tool_call_update") {
+      return mapToolEvent(raw, su === "tool_call", tools, () => `syn_${synCounter++}`);
+    }
+
+    return [];
+  };
+}
+
+function mapToolEvent(
+  raw: Record<string, any>,
+  isInitial: boolean,
+  tools: Map<string, ToolCallState>,
+  synthId: () => string,
+): TaskMessageInput[] {
+  const id: string = typeof raw.toolCallId === "string" && raw.toolCallId ? raw.toolCallId : synthId();
+  const name =
+    raw._meta?.claudeCode?.toolName ??
+    raw.kind ??
+    raw.title ??
+    tools.get(id)?.name ??
+    "tool";
+  const input = raw.rawInput != null ? parseMaybeJson(raw.rawInput) : undefined;
+  const status: string | undefined = typeof raw.status === "string" ? raw.status : undefined;
+  const output = raw.rawOutput != null ? JSON.stringify(raw.rawOutput) : extractText(raw.content) || undefined;
+  const meta: Record<string, unknown> = {};
+  if (raw.title) meta.title = raw.title;
+  if (raw.kind) meta.kind = raw.kind;
+  if (Array.isArray(raw.locations) && raw.locations.length) meta.locations = raw.locations;
+
+  const messages: TaskMessageInput[] = [];
+  const existing = tools.get(id);
+  const state: ToolCallState = existing ?? {
+    name,
+    kind: raw.kind,
+    input,
+    status: status ?? "pending",
+    startMs: Date.now(),
+    terminalEmitted: false,
+  };
+  // Merge late-arriving fields; keep the first non-empty input.
+  state.name = name;
+  if (raw.kind) state.kind = raw.kind;
+  if (input && !state.input) state.input = input;
+  if (status) state.status = status;
+  tools.set(id, state);
+
+  if (isInitial) {
+    messages.push({
+      type: "tool_use",
+      toolCallId: id,
+      status: status ?? "pending",
+      tool: state.name,
+      input: state.input,
+      meta: Object.keys(meta).length ? meta : undefined,
+    });
   }
-  if (raw.sessionUpdate === "tool_call" || raw.sessionUpdate === "tool_call_update") {
-    return {
-      seq,
-      type: raw.sessionUpdate === "tool_call_update" ? "tool_result" : "tool_use",
-      tool: raw.title ?? raw.kind ?? raw.toolCallId ?? null,
-      input: raw.rawInput ? parseMaybeJson(raw.rawInput) : undefined,
-      output: raw.rawOutput ? JSON.stringify(raw.rawOutput) : extractText(raw.content),
-    };
+
+  // Emit a tool_result whenever this event carries output or reached a terminal
+  // status — including an initial tool_call that's already complete. Idempotent
+  // by fingerprint so a repeat of the same terminal frame doesn't double-post,
+  // but a real statusless→terminal transition still lands once.
+  const isTerminal = status != null && TERMINAL_TOOL_STATUS.has(status);
+  if (output != null || isTerminal) {
+    const fingerprint = `${status ?? ""}:${output ?? ""}`;
+    if (!(state.terminalEmitted && state.lastFingerprint === fingerprint)) {
+      state.lastFingerprint = fingerprint;
+      if (isTerminal) state.terminalEmitted = true;
+      const resultMeta: Record<string, unknown> = { ...meta };
+      if (isTerminal) resultMeta.duration_ms = Date.now() - state.startMs;
+      messages.push({
+        type: "tool_result",
+        toolCallId: id,
+        status: status ?? state.status,
+        tool: state.name,
+        output,
+        meta: Object.keys(resultMeta).length ? resultMeta : undefined,
+      });
+    }
   }
-  if (raw.sessionUpdate === "usage_update") {
-    return {
-      seq,
-      type: "usage",
-      content: JSON.stringify(raw),
-    };
-  }
-  return null;
+
+  return messages;
 }
 
 function extractText(content: unknown): string {

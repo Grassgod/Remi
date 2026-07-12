@@ -815,6 +815,9 @@ export function runMigrations(db: SqlDatabase): void {
       content TEXT,
       input TEXT,
       output TEXT,
+      tool_call_id TEXT,
+      status TEXT,
+      meta TEXT,
       created_at TEXT NOT NULL,
       UNIQUE(task_id, seq),
       FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
@@ -899,6 +902,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "parent_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
+  addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
+  addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
+  addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");

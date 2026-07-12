@@ -1225,6 +1225,12 @@ export interface MultiremiTaskMessage {
   content: string | null;
   input: Record<string, unknown> | null;
   output: string | null;
+  /** ACP tool call id — pairs a tool_use with its tool_result. */
+  toolCallId: string | null;
+  /** ACP tool status: pending | in_progress | completed | failed. */
+  status: string | null;
+  /** Low-frequency display semantics: title/kind/locations/content_blocks/duration_ms/entries/usage. */
+  meta: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -1938,6 +1944,9 @@ export interface TaskMessageInput {
   content?: string | null;
   input?: Record<string, unknown> | null;
   output?: string | null;
+  toolCallId?: string | null;
+  status?: string | null;
+  meta?: Record<string, unknown> | null;
 }
 
 export interface CreateChatSessionInput {

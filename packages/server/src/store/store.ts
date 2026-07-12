@@ -301,6 +301,7 @@ interface AgentCreatedAnalyticsInput {
 
 type TaskEnqueuedListener = (task: MultiremiTask) => void;
 type TaskEventListener = (event: { type: string; task: MultiremiTask }) => void;
+type TaskMessagesListener = (event: { task: MultiremiTask; messages: MultiremiTaskMessage[] }) => void;
 type WorkspaceEventListener = (event: {
   type: string;
   workspaceId: string;
@@ -332,6 +333,7 @@ export class MultiremiStore {
   private cloudNodes: CloudRuntimeNodesRepo;
   private taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
   private taskEventListeners = new Set<TaskEventListener>();
+  private taskMessagesListeners = new Set<TaskMessagesListener>();
   private workspaceEventListeners = new Set<WorkspaceEventListener>();
   private analyticsEvents: MultiremiAnalyticsEvent[] = [];
   private metricCounters = new Map<string, MultiremiMetricCounter>();
@@ -355,6 +357,13 @@ export class MultiremiStore {
     this.taskEventListeners.add(listener);
     return () => {
       this.taskEventListeners.delete(listener);
+    };
+  }
+
+  onTaskMessages(listener: TaskMessagesListener): () => void {
+    this.taskMessagesListeners.add(listener);
+    return () => {
+      this.taskMessagesListeners.delete(listener);
     };
   }
 
@@ -6462,21 +6471,25 @@ runMigrations(this.db);
 
   appendTaskMessages(taskId: string, messages: TaskMessageInput[]): MultiremiTaskMessage[] {
     if (messages.length === 0) return [];
-    if (!this.getTask(taskId)) throw new Error(`Task not found: ${taskId}`);
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
     const current = this.db.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_task_messages WHERE task_id = ?")
       .get(taskId) as { seq: number } | null;
     let nextSeq = Number(current?.seq ?? 0) + 1;
     const insertedSeqs: number[] = [];
     const insert = this.db.prepare(
       `INSERT INTO multiremi_task_messages (
-        id, task_id, seq, type, tool, content, input, output, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, task_id, seq, type, tool, content, input, output, tool_call_id, status, meta, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id, seq) DO UPDATE SET
         type = excluded.type,
         tool = excluded.tool,
         content = excluded.content,
         input = excluded.input,
-        output = excluded.output`,
+        output = excluded.output,
+        tool_call_id = excluded.tool_call_id,
+        status = excluded.status,
+        meta = excluded.meta`,
     );
     const tx = this.db.transaction(() => {
       for (const message of messages) {
@@ -6488,10 +6501,13 @@ runMigrations(this.db);
           taskId,
           seq,
           message.type,
-          message.tool ?? null,
-          message.content ?? null,
-          message.input == null ? null : toJson(message.input),
-          message.output ?? null,
+          truncateUtf8(cleanTaskMessageField(message.tool), TASK_MESSAGE_TOOL_MAX),
+          truncateUtf8(cleanTaskMessageField(message.content), TASK_MESSAGE_TEXT_MAX),
+          message.input == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.input)), TASK_MESSAGE_INPUT_MAX),
+          truncateUtf8(cleanTaskMessageField(message.output), TASK_MESSAGE_OUTPUT_MAX),
+          cleanTaskMessageField(message.toolCallId),
+          normalizeTaskMessageStatus(message.status),
+          message.meta == null ? null : truncateUtf8(toJson(sanitizeTaskMessageJson(message.meta)), TASK_MESSAGE_META_MAX),
           nowIso(),
         );
       }
@@ -6505,6 +6521,9 @@ runMigrations(this.db);
       ).get(taskId, seq) as Row | null;
       if (row) inserted.push(toTaskMessage(row));
     }
+    // Re-read the task so listeners see the bumped updated_at, then broadcast
+    // the actual persisted rows (post-truncation / post-upsert).
+    this.notifyTaskMessages(this.getTask(taskId) ?? task, inserted);
     return inserted;
   }
 
@@ -7432,6 +7451,17 @@ runMigrations(this.db);
         listener(task);
       } catch {
         // Wakeup listeners are best-effort and must not roll back task enqueue.
+      }
+    }
+  }
+
+  private notifyTaskMessages(task: MultiremiTask, messages: MultiremiTaskMessage[]): void {
+    if (messages.length === 0) return;
+    for (const listener of [...this.taskMessagesListeners]) {
+      try {
+        listener({ task, messages });
+      } catch {
+        // Realtime broadcast is best-effort and must not roll back the append.
       }
     }
   }
@@ -9971,8 +10001,70 @@ function toTaskMessage(row: Row): MultiremiTaskMessage {
     content: nullableString(row.content),
     input: row.input == null ? null : parseJson(row.input, null),
     output: nullableString(row.output),
+    toolCallId: nullableString(row.tool_call_id),
+    status: nullableString(row.status),
+    meta: row.meta == null ? null : parseJson(row.meta, null),
     createdAt: String(row.created_at),
   };
+}
+
+// ── Task-message sanitization / size caps ──────────────────────────────────
+// The daemon POST path is untrusted-ish (a compromised or buggy agent could
+// send megabytes). These are the server-side backstop; the API layer also
+// caps total request size. Byte counts, not code-point counts, because SQLite
+// TEXT is bytes and that's what actually bloats the DB / WS frames.
+
+const TASK_MESSAGE_STATUSES = new Set(["pending", "in_progress", "completed", "failed"]);
+const TASK_MESSAGE_TOOL_MAX = 512;
+const TASK_MESSAGE_TEXT_MAX = 256 * 1024;
+const TASK_MESSAGE_OUTPUT_MAX = 64 * 1024;
+const TASK_MESSAGE_INPUT_MAX = 256 * 1024;
+const TASK_MESSAGE_META_MAX = 64 * 1024;
+const TASK_MESSAGE_JSON_MAX_DEPTH = 8;
+const TASK_MESSAGE_JSON_MAX_ARRAY = 256;
+
+function cleanTaskMessageField(value: unknown): string | null {
+  if (value == null) return null;
+  const s = String(value);
+  return s.length > 0 ? s : null;
+}
+
+function normalizeTaskMessageStatus(value: unknown): string | null {
+  const s = cleanTaskMessageField(value);
+  return s && TASK_MESSAGE_STATUSES.has(s) ? s : null;
+}
+
+function truncateUtf8(value: string | null, maxBytes: number): string | null {
+  if (value == null) return null;
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(value);
+  if (bytes.length <= maxBytes) return value;
+  // Cut on a char boundary at or below the limit, then flag the truncation.
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const head = decoder.decode(bytes.slice(0, maxBytes)).replace(/�+$/, "");
+  return head + "… [truncated]";
+}
+
+// Drop image/base64 payloads and cap depth/array width so a huge structured
+// input/meta blob can't blow up the DB or the WS broadcast.
+function sanitizeTaskMessageJson(value: unknown, depth = 0): unknown {
+  if (depth > TASK_MESSAGE_JSON_MAX_DEPTH) return "[depth-limited]";
+  if (value == null || typeof value !== "object") {
+    if (typeof value === "string" && value.length > 4096 && /^[A-Za-z0-9+/=]+$/.test(value)) {
+      return "[base64-elided]";
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const out = value.slice(0, TASK_MESSAGE_JSON_MAX_ARRAY).map((v) => sanitizeTaskMessageJson(v, depth + 1));
+    if (value.length > TASK_MESSAGE_JSON_MAX_ARRAY) out.push(`[+${value.length - TASK_MESSAGE_JSON_MAX_ARRAY} more]`);
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = sanitizeTaskMessageJson(v, depth + 1);
+  }
+  return out;
 }
 
 function toTaskHumanRequest(row: Row): MultiremiTaskHumanRequest {
