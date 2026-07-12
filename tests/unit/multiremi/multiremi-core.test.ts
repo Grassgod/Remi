@@ -10,7 +10,7 @@ import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
 let previousUploadDir: string | undefined;
@@ -257,6 +257,54 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(anyRuntime.id)?.id).toBe(thirdTask.id);
   });
 
+  it("keeps private runtimes from claiming other members' agent tasks", () => {
+    const store = createStore();
+    const bobPrivate = store.registerRuntime({
+      id: "rt_own_bob_private",
+      name: "bob private",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "bob",
+      visibility: "private",
+    });
+    const bobPublic = store.registerRuntime({
+      id: "rt_own_bob_public",
+      name: "bob public",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "bob",
+      visibility: "public",
+    });
+    const aliceAgent = store.createAgent({ name: "Alice codex", provider: "codex", workspaceId: "local", ownerId: "alice" });
+    const issueA = store.createIssue({ title: "alice a", workspaceId: "local" });
+    const task = store.createTask({ agentId: aliceAgent.id, issueId: issueA.id, prompt: "alice work", workspaceId: "local" });
+
+    // Bob's private machine must not receive alice's agent (custom_env /
+    // mcp_config ride along with a claim); his public one may.
+    expect(store.claimTask(bobPrivate.id)).toBeNull();
+    expect(store.claimTask(bobPublic.id)?.id).toBe(task.id);
+
+    // Explicitly stamped tasks stay claimable — the stamp implies a prior
+    // authorized placement (legacy pin or session affinity).
+    const issueB = store.createIssue({ title: "alice b", workspaceId: "local" });
+    const pinned = store.createTask({
+      agentId: aliceAgent.id,
+      issueId: issueB.id,
+      prompt: "pinned",
+      workspaceId: "local",
+      runtimeId: bobPrivate.id,
+    });
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(pinned.id);
+    // Free bobPrivate's single concurrency slot before the next claim.
+    store.startTask(pinned.id);
+    store.completeTask(pinned.id, { output: "done" });
+
+    // Bob's own agents still flow to his private machine.
+    const bobAgent = store.createAgent({ name: "Bob codex", provider: "codex", workspaceId: "local", ownerId: "bob" });
+    const bobTask = store.createTask({ agentId: bobAgent.id, prompt: "bob work", workspaceId: "local" });
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(bobTask.id);
+  });
+
   it("keeps unbound agents unbound when a daemon registers", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Pool stays unbound", provider: "codex", workspaceId: "local" });
@@ -318,6 +366,9 @@ describe("Bun Multiremi core store", () => {
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in the local dir" });
     expect(task.runtimeId).toBe(dirRuntime.id);
 
+    // A directory on a daemon with no runtime row (never registered / GC'd)
+    // stamps the deterministic id that daemon's runtime WILL get, so the
+    // task waits for the right machine instead of running elsewhere.
     const orphanProject = store.createProject({ title: "Orphan project", workspaceId: "local" });
     store.createProjectResource(orphanProject.id, {
       resourceType: "local_directory",
@@ -325,7 +376,17 @@ describe("Bun Multiremi core store", () => {
     });
     const orphanIssue = store.createIssue({ title: "orphan issue", workspaceId: "local", projectId: orphanProject.id });
     const orphanTask = store.createTask({ agentId: agent.id, issueId: orphanIssue.id, prompt: "no machine has this" });
-    expect(orphanTask.runtimeId).toBeNull();
+    expect(orphanTask.runtimeId).toBe(daemonRuntimeId("daemon-gone", "codex"));
+    // Not claimable by machines that don't have the directory.
+    expect(store.claimTask(dirRuntime.id)?.id).not.toBe(orphanTask.id);
+    // Once the daemon registers (same deterministic id), the task dispatches there.
+    const lateRuntime = store.registerRuntime({
+      id: daemonRuntimeId("daemon-gone", "codex"),
+      name: "late arrival",
+      provider: "codex",
+      daemonId: "daemon-gone",
+    });
+    expect(store.claimTask(lateRuntime.id)?.id).toBe(orphanTask.id);
   });
 
   it("frees resume-unsafe retries to the pool while resume-safe retries stay pinned", () => {
@@ -349,6 +410,85 @@ describe("Bun Multiremi core store", () => {
     store.failTask(unsafeTask.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });
     const unsafeRetry = store.listTasks().find((task) => task.parentTaskId === unsafeTask.id)!;
     expect(unsafeRetry.runtimeId).toBeNull();
+  });
+
+  it("keeps another member's private default agent out of the default endpoint", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
+    const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
+    const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const jsonHeaders = (token: string) => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` });
+
+    // Alice seeds the workspace default (created workspace-visible), then
+    // locks it down and stores secrets on it.
+    const seeded = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(aliceToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(seeded.status).toBe(201);
+    const aliceAgent = (await seeded.json()).agent;
+    expect(aliceAgent.visibility).toBe("workspace");
+    expect(aliceAgent.ownerId).toBe("alice");
+    store.updateAgent(aliceAgent.id, { visibility: "private", customEnv: { SECRET_TOKEN: "s3cret-value" } });
+
+    // Bob's provider-only call must neither return alice's private agent nor
+    // leak her custom_env — he gets his own default under a distinct id.
+    const bobSeed = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(bobSeed.status).toBe(201);
+    const bobBody = await bobSeed.json();
+    expect(bobBody.agent.id).not.toBe(aliceAgent.id);
+    expect(bobBody.agent.ownerId).toBe("bob");
+    expect(JSON.stringify(bobBody)).not.toContain("s3cret-value");
+
+    // Alice keeps resolving to her own (now private) default.
+    const aliceAgain = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(aliceToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(aliceAgain.status).toBe(200);
+    expect((await aliceAgain.json()).agent.id).toBe(aliceAgent.id);
+  });
+
+  it("rejects unknown providers smuggled through an any-provider runtime", async () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_any_gate", name: "any gate", provider: "any", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+
+    const smuggled = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Gemini smuggle", runtime_id: anyRuntime.id, provider: "gemini" }),
+    });
+    expect(smuggled.status).toBe(400);
+    expect(await smuggled.json()).toEqual({ error: 'unknown provider "gemini"' });
+
+    // Omitting the provider falls back to the default engine.
+    const defaulted = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Any default", runtime_id: anyRuntime.id }),
+    });
+    expect(defaulted.status).toBe(201);
+    expect(store.getAgent((await defaulted.json()).id)?.provider).toBe("claude");
+  });
+
+  it("surfaces engines through an any-provider runtime in the fleet catalog", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_fleet_any_only", name: "fleet any only", provider: "any", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/models");
+    const body = await response.json();
+    const providers = new Map(body.providers.map((entry: any) => [entry.provider, entry]));
+    expect((providers.get("claude") as any)?.online_runtime_count).toBe(1);
+    expect((providers.get("codex") as any)?.online_runtime_count).toBe(1);
   });
 
   it("serves the fleet model catalog grouped by provider", async () => {
@@ -3125,15 +3265,37 @@ describe("Bun Multiremi core store", () => {
     expect(duplicateName.status).toBe(409);
     expect(await duplicateName.json()).toEqual({ error: "an agent named \"Bob public agent\" already exists in this workspace" });
 
-    // Machine binding is gone: legacy runtime moves are dropped, not rejected.
-    const ignoredMove = await app.request(`/api/agents/${bobAgent.id}`, {
+    // Machine binding is gone, but a legacy "move" keeps its engine-switch
+    // effect and the private-runtime gate: bob still can't reference alice's
+    // private runtime.
+    const forbiddenMove = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
       body: JSON.stringify({ runtime_id: alicePrivate.id }),
     });
-    expect(ignoredMove.status).toBe(200);
-    expect((await ignoredMove.json()).runtime_id).toBe("");
+    expect(forbiddenMove.status).toBe(403);
+
+    // A legal legacy move switches the engine (and resets the model) without
+    // binding the agent to the machine.
+    store.updateAgent(bobAgent.id, { model: "claude-opus-4-8" });
+    const codexPublic = store.registerRuntime({
+      id: "rt_gate_codex_public",
+      name: "Codex public",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "alice",
+      visibility: "public",
+    });
+    const legacyMove = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ runtime_id: codexPublic.id }),
+    });
+    expect(legacyMove.status).toBe(200);
+    expect((await legacyMove.json()).runtime_id).toBe("");
     expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
+    expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
+    expect(store.getAgent(bobAgent.id)?.model).toBe("");
 
     // Provider is editable on unbound agents (and round-trips cleanly).
     const providerOnlyUpdate = await app.request(`/api/agents/${bobAgent.id}`, {

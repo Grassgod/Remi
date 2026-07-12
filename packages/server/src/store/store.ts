@@ -765,7 +765,7 @@ runMigrations(this.db);
   ): MultiremiAgent {
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
-    const existing = this.getDefaultAgent(workspaceId, provider);
+    const existing = this.getDefaultAgent(workspaceId, provider, { visibleTo: ownerId });
     if (existing) {
       if (existing.archivedAt) {
         this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
@@ -773,13 +773,22 @@ runMigrations(this.db);
       }
       return existing;
     }
+    // The canonical id may be held by a default agent the caller can't see
+    // (someone flipped theirs private). Mint an owner-scoped id instead of
+    // colliding — the LIKE lookup above still finds it on the next call.
+    const canonicalId = `agt_default_${safeIdSegment(workspaceId)}_${provider}`;
+    const id = this.getAgent(canonicalId) ? `${canonicalId}_${safeIdSegment(ownerId)}` : canonicalId;
     return this.createAgent({
-      id: `agt_default_${safeIdSegment(workspaceId)}_${provider}`,
+      id,
       name: provider === "codex" ? "Codex" : "Claude",
       description: provider === "codex" ? "Default Codex agent" : "Default Claude agent",
       provider,
       workspaceId,
       ownerId,
+      // Default agents are shared workspace infrastructure, not a personal
+      // secret store — workspace visibility keeps the singleton reusable by
+      // every member without leaking anyone's private agent.
+      visibility: "workspace",
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
   }
@@ -788,13 +797,24 @@ runMigrations(this.db);
    * Find the workspace's default agent for a provider. Matches legacy ids too
    * (`agt_default_<provider>`, `agt_default_<ws>_<runtime>`) so pre-pool
    * deployments reuse their default agent instead of growing a twin.
+   *
+   * `visibleTo` scopes the lookup to agents that member may use: non-private
+   * ones, plus their own private ones. Passing it is what keeps this from
+   * handing member B another member's private agent (with its custom_env /
+   * mcp_config) just because its id matches the default pattern.
    */
-  getDefaultAgent(workspaceId: string, provider: string): MultiremiAgent | null {
+  getDefaultAgent(
+    workspaceId: string,
+    provider: string,
+    options: { visibleTo?: string | null } = {},
+  ): MultiremiAgent | null {
+    const visibleTo = cleanOptionalString(options.visibleTo);
     const row = this.db.query(
       `SELECT * FROM multiremi_agents
        WHERE id LIKE 'agt_default_%' AND workspace_id = ? AND provider = ?
+         AND (visibility <> 'private' OR owner_id = ?)
        ORDER BY archived_at IS NOT NULL, created_at ASC LIMIT 1`,
-    ).get(workspaceId, provider) as Row | null;
+    ).get(workspaceId, provider, visibleTo ?? "") as Row | null;
     return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
@@ -6064,6 +6084,11 @@ runMigrations(this.db);
         if (!daemonId) continue;
         const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
         if (runtime) return runtime.id;
+        // No runtime row for that daemon (never registered, or GC'd while
+        // offline): stamp the deterministic id its runtime WILL get on
+        // registration, so the task waits for the machine that has the
+        // directory instead of running in a scratch dir somewhere else.
+        return daemonRuntimeId(daemonId, agent.provider);
       }
     }
     return null;
@@ -6248,6 +6273,17 @@ runMigrations(this.db);
     const tx = this.db.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+      // Serialize concurrent claims per workspace. Postgres evaluates each
+      // statement on its own snapshot, so two runtimes claiming at once could
+      // both pass an agent's max_concurrent_tasks / issue-serialization
+      // guards before either commits. Taking the workspace row lock first
+      // makes the second claimant wait and re-read committed state. On
+      // SQLite the single writer already guarantees this; the self-write is
+      // a no-op there.
+      this.db.run(
+        "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+        [runtime.workspaceId ?? "local"],
+      );
       this.heartbeatRuntime(runtimeId, { claimPending: false });
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
@@ -6286,6 +6322,12 @@ runMigrations(this.db);
   private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
     const now = nowIso();
     const workspaceFilter = runtime.workspaceId ? "AND t.workspace_id = ?" : "";
+    const ownershipParams = [
+      runtime.visibility,
+      runtime.ownerId,
+      runtime.ownerId,
+      runtime.id,
+    ];
     const params = runtime.workspaceId
       ? [
           runtime.id,
@@ -6298,6 +6340,7 @@ runMigrations(this.db);
           runtime.id,
           runtime.provider,
           runtime.provider,
+          ...ownershipParams,
         ]
       : [
           runtime.id,
@@ -6309,6 +6352,7 @@ runMigrations(this.db);
           runtime.id,
           runtime.provider,
           runtime.provider,
+          ...ownershipParams,
         ];
     const row = this.db.query(
       `UPDATE multiremi_tasks
@@ -6329,6 +6373,11 @@ runMigrations(this.db);
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
+           -- A private runtime only executes its owner's agents (it would
+           -- receive the agent's custom_env / mcp_config). Tasks explicitly
+           -- stamped to this runtime stay claimable: the stamp came from a
+           -- prior authorized placement (legacy pin or session affinity).
+           AND (? = 'public' OR CAST(? AS TEXT) IS NULL OR a.owner_id = ? OR t.runtime_id = ?)
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks running
@@ -8784,6 +8833,22 @@ function normalizeJsonArray(value: unknown): unknown[] {
 
 function hasAnyField(target: object, ...keys: string[]): boolean {
   return keys.some((key) => Object.prototype.hasOwnProperty.call(target, key));
+}
+
+/**
+ * Deterministic runtime id for a (daemon, provider) pair — FNV-1a over
+ * "<daemonId>:<provider>". Daemon registration (registerDaemonRuntimes in
+ * api.ts) derives runtime ids the same way, which is what makes a stamp on a
+ * not-yet-registered daemon resolve once the machine comes online.
+ */
+export function daemonRuntimeId(daemonId: string, provider: string): string {
+  const key = `${daemonId}:${provider}`.toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `rt_${(hash >>> 0).toString(36)}`;
 }
 
 function resolveOptionalStringField(

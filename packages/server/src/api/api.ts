@@ -9,7 +9,7 @@ import { createLogger } from "@shared/logger.js";
 import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
-import { MultiremiStore } from "@multiremi/store/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store/store.js";
 import {
   agentSkillCompatibilitySummary,
   skillCompatibilityResponse,
@@ -1019,11 +1019,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const provider = resolveAgentRequestProvider(c, store, workspaceId, body);
     if (provider instanceof Response) return provider;
-    const before = store.getDefaultAgent(workspaceId, provider);
+    const actingUserId = currentRequestUserId(c);
+    const before = store.getDefaultAgent(workspaceId, provider, { visibleTo: actingUserId });
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
     const agent = store.ensureDefaultAgent(provider, {
       workspaceId,
-      ownerId: currentRequestUserId(c),
+      ownerId: actingUserId,
     });
     if (!before) {
       recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
@@ -5901,6 +5902,9 @@ function fleetModelsResponse(runtimes: MultiremiRuntime[]): Array<Record<string,
   };
   for (const runtime of runtimes) {
     if (runtime.provider && runtime.provider !== "any") bucket(runtime.provider);
+    // An "any" runtime can execute every known engine — surface those engines
+    // (with its capacity counted below) even when no dedicated runtime exists.
+    if (runtime.provider === "any") for (const provider of MULTIREMI_DAEMON_PROVIDERS) bucket(provider);
     if (runtime.status !== "online") continue;
     for (const model of runtime.models ?? []) {
       const provider = model.provider || (runtime.provider !== "any" ? runtime.provider : "");
@@ -6507,20 +6511,34 @@ function withAgentUpdateRequestContext(
   }
   let targetProvider = current.provider;
   let providerChanged = false;
-  // Agents are pool workers now — machine binding is gone. Legacy clients may
-  // still send runtime_id; it is dropped rather than rejected.
-  if (hasRequestField(input, "runtimeId", "runtime_id")) {
-    delete next.runtimeId;
-    delete next.runtime_id;
-  }
+  const applyProvider = (provider: string) => {
+    targetProvider = provider;
+    providerChanged = provider !== current.provider;
+    next.provider = provider;
+  };
   if (hasRequestField(input, "provider")) {
     const provider = cleanString(typeof input.provider === "string" ? input.provider : null);
     if (!provider || !MULTIREMI_DAEMON_PROVIDERS.has(provider)) {
       return c.json({ error: `unknown provider "${provider ?? ""}"` }, 400);
     }
-    targetProvider = provider;
-    providerChanged = provider !== current.provider;
-    next.provider = provider;
+    applyProvider(provider);
+  }
+  // Agents are pool workers now — machine binding is gone. A legacy "move to
+  // runtime" request keeps its one observable effect, switching the agent's
+  // engine, with full legacy validation (existence, workspace, the
+  // private-runtime gate). The binding itself is dropped.
+  if (hasRequestField(input, "runtimeId", "runtime_id")) {
+    const legacyRuntimeId = cleanString(input.runtimeId ?? input.runtime_id);
+    delete next.runtimeId;
+    delete next.runtime_id;
+    if (legacyRuntimeId) {
+      const provider = resolveAgentRequestProvider(c, store, current.workspaceId, {
+        runtime_id: legacyRuntimeId,
+        provider: input.provider,
+      });
+      if (provider instanceof Response) return provider;
+      applyProvider(provider);
+    }
   }
   if (hasRequestField(input, "thinkingLevel", "thinking_level")) {
     const thinkingLevel = agentRequestThinkingLevel(input);
@@ -6531,6 +6549,12 @@ function withAgentUpdateRequestContext(
     return c.json({
       error: `existing thinking_level "${current.thinkingLevel}" is not valid for provider "${targetProvider}"; pass thinking_level="" to clear or set a value valid for the new provider`,
     }, 400);
+  }
+  // A model id is engine-specific — carrying e.g. a claude model onto codex
+  // would hand the codex CLI an unknown model. Unless the request also picks
+  // a model, an engine switch resets it to the engine default.
+  if (providerChanged && !hasRequestField(input, "model")) {
+    next.model = "";
   }
   if (hasRequestField(input, "maxConcurrentTasks", "max_concurrent_tasks")) {
     const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
@@ -6601,7 +6625,13 @@ function resolveAgentRequestProvider(
     if (!canCurrentUserUseRuntime(c, store, runtime)) {
       return c.json({ error: "this runtime is private; only its owner or a workspace admin can create agents on it" }, 403);
     }
-    return agentProviderForRuntime(input.provider, runtime);
+    // An "any" runtime contributes no provider of its own — the requested one
+    // falls through and must still pass the whitelist.
+    const derived = agentProviderForRuntime(input.provider, runtime);
+    if (!MULTIREMI_DAEMON_PROVIDERS.has(derived)) {
+      return c.json({ error: `unknown provider "${derived}"` }, 400);
+    }
+    return derived;
   }
   const provider = cleanString(typeof input.provider === "string" ? input.provider : null) ?? "claude";
   if (!MULTIREMI_DAEMON_PROVIDERS.has(provider)) {
@@ -8487,11 +8517,12 @@ function safeRuntimeOnboardingBootstrap(
   const runtime = store.getRuntime(runtimeId);
   if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
   const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
-  const before = store.getDefaultAgent(workspaceId, provider);
+  const bootstrapUserId = store.getCurrentUser().id;
+  const before = store.getDefaultAgent(workspaceId, provider, { visibleTo: bootstrapUserId });
   const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
   const agent = store.ensureDefaultAgent(provider, {
     workspaceId,
-    ownerId: store.getCurrentUser().id,
+    ownerId: bootstrapUserId,
   });
   if (!before) {
     recordSystemAgentCreatedAnalytics(store, agent, runtime, {
@@ -9573,7 +9604,18 @@ function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, t
   if (!agent || agent.archivedAt) return false;
   if (task.runtimeId && task.runtimeId !== runtime.id) return false;
   if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
-  return runtime.provider === "any" || agent.provider === runtime.provider;
+  if (runtime.provider !== "any" && agent.provider !== runtime.provider) return false;
+  // Mirrors the claim SQL's ownership predicate: a private runtime only runs
+  // its owner's agents unless the task is explicitly stamped to it.
+  if (
+    runtime.visibility !== "public" &&
+    runtime.ownerId != null &&
+    agent.ownerId !== runtime.ownerId &&
+    task.runtimeId !== runtime.id
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isDaemonPendingTaskForRuntime(task: MultiremiTask, runtimeId: string): boolean {
@@ -9601,16 +9643,6 @@ function isInFlightTaskStatus(status: MultiremiTaskStatus): boolean {
     || status === "running"
     || status === "waiting_local_directory"
     || status === "awaiting_human";
-}
-
-function daemonRuntimeId(daemonId: string, provider: string): string {
-  const key = `${daemonId}:${provider}`.toLowerCase();
-  let hash = 2166136261;
-  for (let i = 0; i < key.length; i += 1) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `rt_${(hash >>> 0).toString(36)}`;
 }
 
 function launchHeader(provider: string): string {

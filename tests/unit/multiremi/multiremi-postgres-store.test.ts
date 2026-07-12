@@ -295,6 +295,28 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const issue = store.createIssue({ title: "pg dir issue", workspaceId: ws, projectId: project.id });
     const dirTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in dir", workspaceId: ws });
     expect(dirTask.runtimeId).toBe(codex.id);
+
+    // Ownership predicate: another member's private runtime can't claim the
+    // pool task; a public one can. (Same SQL path as SQLite — this guards the
+    // translated Postgres form.)
+    const privateRt = store.registerRuntime({
+      name: "rt-pool-private",
+      provider: "codex",
+      workspaceId: ws,
+      ownerId: "someone-else",
+      visibility: "private",
+    });
+    const publicRt = store.registerRuntime({
+      name: "rt-pool-public",
+      provider: "codex",
+      workspaceId: ws,
+      ownerId: "someone-else",
+      visibility: "public",
+    });
+    const ownedIssue = store.createIssue({ title: "pg owned", workspaceId: ws });
+    const ownedTask = store.createTask({ agentId: agent.id, issueId: ownedIssue.id, prompt: "owned", workspaceId: ws });
+    expect(store.claimTask(privateRt.id)).toBeNull();
+    expect(store.claimTask(publicRt.id)?.id).toBe(ownedTask.id);
   });
 
   it("creates and lists workspace members", () => {
