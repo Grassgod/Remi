@@ -892,6 +892,11 @@ export function runMigrations(db: SqlDatabase): void {
   ensureIssueSubscriberTypedSchema(db);
   addColumnIfMissing(db, "multiremi_chat_sessions", "creator_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "unread_since TEXT");
+  // Pool scheduling records the machine + engine that produced the promoted
+  // provider session as atomic metadata on the session itself, so follow-ups
+  // don't have to (mis)infer them from "the latest task with a runtime_id".
+  addColumnIfMissing(db, "multiremi_chat_sessions", "session_runtime_id TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "session_provider TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
@@ -905,6 +910,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");
+  // Engine the task actually EXECUTED under, snapshotted at claim time. The
+  // agent's provider can change mid-run, so the promoted session's engine must
+  // come from this snapshot, not the agent's current provider.
+  addColumnIfMissing(db, "multiremi_tasks", "provider TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");
@@ -933,6 +942,17 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_attachments_chat_message ON multiremi_attachments(chat_message_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_resolved ON multiremi_issue_comments(issue_id, resolved_at)");
   db.run("UPDATE multiremi_issues SET status = 'todo' WHERE status = 'open'");
+  // Pool scheduling: agents are logical workers and never bind to a machine.
+  // Runs every startup so legacy pins converge back into the pool.
+  db.run("UPDATE multiremi_agents SET runtime_id = NULL WHERE runtime_id IS NOT NULL");
+  // NOTE: we deliberately do NOT unpin existing queued TASKS here. This
+  // migration runs on every startup, and a task's runtime_id can legitimately
+  // be an explicit pin, a resume-safe retry pin, or a session/local_directory
+  // affinity — none distinguishable from a pre-pool agent-inherited pin at the
+  // SQL level, so a blanket unpin would keep clobbering valid pins on every
+  // boot. Pre-pool tasks keep their pin (claimable by their original machine);
+  // new tasks are already unbound by createTask. Only the agent binding above
+  // is cleared, which is the invariant the pool model needs.
   backfillIssueKeys(db);
 }
 

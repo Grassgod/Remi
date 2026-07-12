@@ -8,6 +8,7 @@ import { agentTaskSnapshotOptions } from "./queries";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
+  resolveAgentRuntimes,
 } from "./derive-presence";
 import type { AgentPresenceDetail } from "./types";
 
@@ -151,12 +152,12 @@ export function useAgentPresenceDetail(
     // archived assignee on an old issue). Render a gray-offline fallback
     // instead of looping in "loading".
     if (!agent) return MISSING_AGENT_DETAIL;
-    // Missing runtime is a legitimate state (offline) — pass null and let
-    // derive handle it.
-    const runtime = safeRuntimes.find((r) => r.id === agent.runtime_id) ?? null;
+    // An empty candidate set is a legitimate state (offline) — derive
+    // handles it.
+    const candidates = resolveAgentRuntimes(agent, safeRuntimes);
 
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
-    return deriveAgentPresenceDetail({ agent, runtime, tasks, now: Date.now() });
+    return deriveAgentPresenceDetail({ agent, runtimes: candidates, tasks, now: Date.now() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wsId, agentId, agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
 }

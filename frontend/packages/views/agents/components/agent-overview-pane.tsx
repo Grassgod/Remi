@@ -124,8 +124,16 @@ export function AgentOverviewPane({
   // "open".
   const [pendingTab, setPendingTab] = useState<DetailTab | null>(null);
 
-  const runtime = agent.runtime_id
-    ? runtimes.find((r) => r.id === agent.runtime_id) ?? null
+  // Pool model: the agent carries an engine; any runtime of that engine
+  // stands in where machine-flavored display data is needed (launch
+  // header). Legacy rows without a provider fall back to the old binding.
+  const engine =
+    agent.provider ||
+    (agent.runtime_id
+      ? runtimes.find((r) => r.id === agent.runtime_id)?.provider ?? ""
+      : "");
+  const engineRuntime = engine
+    ? runtimes.find((r) => r.provider === engine) ?? null
     : null;
 
   // Cached per-workspace and shared with the inspector's bind button, so this
@@ -147,13 +155,13 @@ export function AgentOverviewPane({
   // deployments without Lark are the common case, so flashing the tab on
   // then off would be the worse flicker.
   const visibleTabs = useMemo(() => {
-    const showMcp = runtime ? providerSupportsMcpConfig(runtime.provider) : true;
+    const showMcp = engine ? providerSupportsMcpConfig(engine) : true;
     return detailTabs.filter((tab) => {
       if (tab.id === "mcp_config") return showMcp;
       if (tab.id === "integrations") return larkConfigured;
       return true;
     });
-  }, [runtime, larkConfigured]);
+  }, [engine, larkConfigured]);
 
   // If the active tab disappears (e.g. user just switched the agent's
   // runtime to one that doesn't read mcp_config), fall back to Activity
@@ -251,7 +259,7 @@ export function AgentOverviewPane({
           <TabContent>
             <CustomArgsTab
               agent={agent}
-              runtimeDevice={runtime ?? undefined}
+              runtimeDevice={engineRuntime ?? undefined}
               onSave={(updates) => onUpdate(agent.id, updates)}
               onDirtyChange={setActiveDirty}
             />

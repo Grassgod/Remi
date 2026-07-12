@@ -10,7 +10,7 @@ import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { buildTaskPrompt } from "@multiremi/prompt.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 
 let db: Database | null = null;
 let previousUploadDir: string | undefined;
@@ -232,6 +232,1079 @@ describe("Bun Multiremi core store", () => {
     expect(store.claimTask(secondRuntime.id)?.id).toBe(task.id);
   });
 
+  it("claims unbound agents' tasks from any provider-matching runtime and stamps the claimer", () => {
+    const store = createStore();
+    const claude = store.registerRuntime({ id: "rt_pool_claude", name: "pool claude", provider: "claude" });
+    const codexA = store.registerRuntime({ id: "rt_pool_codex_a", name: "pool codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_pool_codex_b", name: "pool codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Pool Codex", provider: "codex" });
+    expect(agent.runtimeId).toBeNull();
+    const task = store.createTask({ agentId: agent.id, prompt: "run anywhere" });
+    expect(task.runtimeId).toBeNull();
+
+    expect(store.claimTask(claude.id)).toBeNull();
+    expect(store.claimTask(codexA.id)?.id).toBe(task.id);
+    expect(store.getTask(task.id)?.runtimeId).toBe(codexA.id);
+
+    const secondAgent = store.createAgent({ name: "Pool Codex 2", provider: "codex" });
+    const secondTask = store.createTask({ agentId: secondAgent.id, prompt: "second machine" });
+    expect(store.claimTask(codexB.id)?.id).toBe(secondTask.id);
+    expect(store.getTask(secondTask.id)?.runtimeId).toBe(codexB.id);
+
+    const anyRuntime = store.registerRuntime({ id: "rt_pool_any", name: "pool any", provider: "any" });
+    const thirdAgent = store.createAgent({ name: "Pool Codex 3", provider: "codex" });
+    const thirdTask = store.createTask({ agentId: thirdAgent.id, prompt: "any provider" });
+    expect(store.claimTask(anyRuntime.id)?.id).toBe(thirdTask.id);
+  });
+
+  it("keeps private runtimes from claiming other members' agent tasks", () => {
+    const store = createStore();
+    const bobPrivate = store.registerRuntime({
+      id: "rt_own_bob_private",
+      name: "bob private",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "bob",
+      visibility: "private",
+    });
+    const bobPublic = store.registerRuntime({
+      id: "rt_own_bob_public",
+      name: "bob public",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "bob",
+      visibility: "public",
+    });
+    const aliceAgent = store.createAgent({ name: "Alice codex", provider: "codex", workspaceId: "local", ownerId: "alice" });
+    const issueA = store.createIssue({ title: "alice a", workspaceId: "local" });
+    const task = store.createTask({ agentId: aliceAgent.id, issueId: issueA.id, prompt: "alice work", workspaceId: "local" });
+
+    // Bob's private machine must not receive alice's agent (custom_env /
+    // mcp_config ride along with a claim); his public one may.
+    expect(store.claimTask(bobPrivate.id)).toBeNull();
+    expect(store.claimTask(bobPublic.id)?.id).toBe(task.id);
+
+    // A stamp is NOT an escape hatch: the unauthenticated /tasks API lets any
+    // member stamp an arbitrary agent+runtime, so bob stamping alice's private
+    // agent to his own private runtime must still be refused at claim time.
+    const issueB = store.createIssue({ title: "alice b", workspaceId: "local" });
+    store.createTask({
+      agentId: aliceAgent.id,
+      issueId: issueB.id,
+      prompt: "stamped-steal",
+      workspaceId: "local",
+      runtimeId: bobPrivate.id,
+    });
+    expect(store.claimTask(bobPrivate.id)).toBeNull();
+
+    // Bob's own agents still flow to his private machine.
+    const bobAgent = store.createAgent({ name: "Bob codex", provider: "codex", workspaceId: "local", ownerId: "bob" });
+    const bobTask = store.createTask({ agentId: bobAgent.id, prompt: "bob work", workspaceId: "local" });
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(bobTask.id);
+  });
+
+  it("pairs an owner-null private runtime with local agents but not multi-user ones", () => {
+    const store = createStore();
+    // Single-machine shape: runtime registered without auth (owner null),
+    // default agent owner "local" — must still pair.
+    const localRuntime = store.registerRuntime({ id: "rt_null_owner", name: "local box", provider: "codex", visibility: "private" });
+    expect(localRuntime.ownerId).toBeNull();
+    const localAgent = store.createAgent({ name: "Local codex", provider: "codex" });
+    expect(localAgent.ownerId).toBe("local");
+    const localTask = store.createTask({ agentId: localAgent.id, prompt: "local work" });
+    expect(store.claimTask(localRuntime.id)?.id).toBe(localTask.id);
+    store.startTask(localTask.id);
+    store.completeTask(localTask.id, { output: "done" });
+
+    // Multi-user shape: a real member's agent must NOT be swept up by the same
+    // owner-null private runtime.
+    const aliceAgent = store.createAgent({ name: "Alice codex", provider: "codex", ownerId: "alice" });
+    store.createTask({ agentId: aliceAgent.id, prompt: "alice work" });
+    expect(store.claimTask(localRuntime.id)).toBeNull();
+  });
+
+  it("re-pools and abandons the session when the chat runtime can no longer run the agent", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_repool_a", name: "codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_repool_b", name: "codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Repool", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codexA.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_repool", workDir: "/tmp/repool" });
+
+    // The machine that holds the session is deleted → its runtime row is gone.
+    store.deleteRuntime(codexA.id);
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    // Task re-pools (not pinned to the dead runtime) and drops the now-orphan
+    // session/work_dir so the new machine doesn't resume a vanished session.
+    expect(followUp.runtimeId).toBeNull();
+    expect(followUp.sessionId).toBeNull();
+    expect(followUp.workDir).toBeNull();
+    expect(store.claimTask(codexB.id)?.id).toBe(followUp.id);
+  });
+
+  it("truly abandons the provider session on a resume-unsafe chat retry", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_unsafe_a", name: "codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_unsafe_b", name: "codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Unsafe", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codexA.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_unsafe", workDir: "/tmp/unsafe" });
+
+    const second = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(store.claimTask(codexA.id)?.id).toBe(second.id);
+    store.startTask(second.id);
+    // Resume-unsafe failure → retry must drop the session and re-pool, not
+    // resume the failed session on codexA.
+    store.failTask(second.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });
+    const retry = store.listTasks().find((task) => task.parentTaskId === second.id)!;
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+    expect(retry.workDir).toBeNull();
+    // Any codex machine can pick it up (fresh session), including a different one.
+    expect(store.claimTask(codexB.id)?.id).toBe(retry.id);
+  });
+
+  it("forces a task into its agent's workspace, blocking cross-workspace claims", () => {
+    const store = createStore();
+    // Alice's agent lives in workspace "wsA" and carries a secret.
+    const secretAgent = store.createAgent({ name: "Secret", provider: "codex", workspaceId: "wsA", ownerId: "alice", customEnv: { SECRET: "leak-me" } });
+    // Attacker (workspace "wsB") tries to create a task in their own workspace
+    // referencing the other workspace's agent, then claim it from their runtime.
+    const task = store.createTask({ agentId: secretAgent.id, workspaceId: "wsB", prompt: "steal" });
+    // The task is forced into the agent's workspace, not the caller-supplied one.
+    expect(task.workspaceId).toBe("wsA");
+    const attackerRuntime = store.registerRuntime({ id: "rt_attacker", name: "attacker", provider: "codex", workspaceId: "wsB", visibility: "public" });
+    expect(store.claimTask(attackerRuntime.id)).toBeNull();
+  });
+
+  it("re-pools queued tasks pinned to a runtime when it is deleted or turned private", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_drift_a", name: "codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_drift_b", name: "codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Drift", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codexA.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_drift", workDir: "/tmp/drift" });
+    // Follow-up is pinned to codexA by session affinity while codexA is alive.
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(codexA.id);
+
+    // Deleting codexA re-pools the queued follow-up (and drops the orphan session).
+    store.deleteRuntime(codexA.id);
+    const repooled = store.getTask(followUp.id)!;
+    expect(repooled.runtimeId).toBeNull();
+    expect(repooled.sessionId).toBeNull();
+    expect(store.claimTask(codexB.id)?.id).toBe(followUp.id);
+  });
+
+  it("re-pools a queued task when its pinned runtime turns private under another owner", () => {
+    const store = createStore();
+    const shared = store.registerRuntime({ id: "rt_flip", name: "shared", provider: "codex", ownerId: "bob", visibility: "public" });
+    const codexOther = store.registerRuntime({ id: "rt_flip_other", name: "other", provider: "codex" });
+    const agent = store.createAgent({ name: "Flip", provider: "codex", ownerId: "alice" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(shared.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_flip", workDir: "/tmp/flip" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(shared.id);
+
+    // Bob makes the runtime private → alice's pinned task must re-pool, not hang.
+    store.updateRuntime(shared.id, { visibility: "private" });
+    expect(store.getTask(followUp.id)?.runtimeId).toBeNull();
+    // codexOther (owner null → 'local' ... vs alice) can't run it, but a public
+    // machine could; here it stays unclaimable by the now-private one.
+    expect(store.claimTask(shared.id)).toBeNull();
+  });
+
+  it("keeps a NULL-workspace runtime from claiming other workspaces' tasks", () => {
+    const store = createStore();
+    // A runtime registered without a workspace (stored NULL) must only claim
+    // local-workspace tasks, not every workspace's.
+    const looseRuntime = store.registerRuntime({ id: "rt_no_ws", name: "loose", provider: "codex", visibility: "public" });
+    expect(looseRuntime.workspaceId).toBeNull();
+    const otherAgent = store.createAgent({ name: "Other ws", provider: "codex", workspaceId: "wsX" });
+    store.createTask({ agentId: otherAgent.id, prompt: "in wsX" });
+    expect(store.claimTask(looseRuntime.id)).toBeNull();
+    // A local-workspace task it can claim.
+    const localAgent = store.createAgent({ name: "Local ws", provider: "codex" });
+    const localTask = store.createTask({ agentId: localAgent.id, prompt: "in local" });
+    expect(store.claimTask(looseRuntime.id)?.id).toBe(localTask.id);
+  });
+
+  it("forces a task into its agent's workspace and rejects cross-workspace issue links", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "WS agent", provider: "codex", workspaceId: "wsA" });
+    // An issue in a different workspace can't be linked to this agent's task.
+    const foreignIssue = store.createIssue({ title: "foreign", workspaceId: "wsB" });
+    expect(() => store.createTask({ agentId: agent.id, issueId: foreignIssue.id, prompt: "x" })).toThrow(/workspace/i);
+    // A same-workspace issue is fine, and the task lands in the agent's workspace.
+    const ownIssue = store.createIssue({ title: "own", workspaceId: "wsA" });
+    const task = store.createTask({ agentId: agent.id, issueId: ownIssue.id, workspaceId: "wsB", prompt: "x" });
+    expect(task.workspaceId).toBe("wsA");
+  });
+
+  it("rejects a cross-workspace autopilot assignee", () => {
+    const store = createStore();
+    const foreignAgent = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "wsB" });
+    expect(() =>
+      store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: foreignAgent.id }),
+    ).toThrow(/different workspace/i);
+    // Same-workspace assignee is accepted.
+    const ownAgent = store.createAgent({ name: "Own", provider: "codex", workspaceId: "wsA" });
+    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: ownAgent.id });
+    expect(ap.assigneeId).toBe(ownAgent.id);
+  });
+
+  it("does not persist a squad with a cross-workspace leader", () => {
+    const store = createStore();
+    const foreignLeader = store.createAgent({ name: "Foreign lead", provider: "codex", workspaceId: "wsB" });
+    expect(() => store.createSquad({ name: "S", workspaceId: "wsA", leaderId: foreignLeader.id })).toThrow(/different workspace/i);
+    // No squad row was written.
+    expect(store.listSquads().find((sq) => sq.name === "S")).toBeUndefined();
+  });
+
+  it("drops an explicitly-passed old-engine session when the agent switched engines", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_drop_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_drop_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Dropper", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+
+    // Switch to claude, then a chat send re-passes the old session fields explicitly.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const next = store.createTask({
+      agentId: agent.id,
+      chatSessionId: session.id,
+      sessionId: "codex-session",
+      workDir: "/tmp/codex",
+      prompt: "after switch",
+    });
+    // The old-engine session/work_dir must be dropped, and it re-pools onto claude.
+    expect(next.runtimeId).toBeNull();
+    expect(next.sessionId).toBeNull();
+    expect(next.workDir).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(next.id);
+  });
+
+  it("promotes session metadata atomically — a sessionless task can't mislabel the old session's engine", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_atomic_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_atomic_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Atomic", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    expect(store.getChatSession(session.id)?.sessionProvider).toBe("codex");
+
+    // Agent switches to claude; a claude task runs and completes WITHOUT a new
+    // session id (e.g. it produced no provider session). It must NOT overwrite
+    // the session's runtime/provider while leaving the old codex session_id.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const noSess = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "no session" });
+    // (this claude task re-pools; the codex session is not resumable for claude)
+    expect(store.claimTask(claude.id)?.id).toBe(noSess.id);
+    store.startTask(noSess.id);
+    store.completeTask(noSess.id, { output: "done" }); // no sessionId
+    const meta = store.getChatSession(session.id)!;
+    // The old codex session stays consistently labelled as codex (not claude).
+    expect(meta.sessionId).toBe("codex-session");
+    expect(meta.sessionProvider).toBe("codex");
+    expect(meta.sessionRuntimeId).toBe(codex.id);
+  });
+
+  it("fails closed on a missing execution snapshot for resume-safe retries", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_failclosed", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "FailClosed", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // Simulate a pre-snapshot in-flight task (rolling upgrade): clear provider.
+    db!.run("UPDATE multiremi_tasks SET provider = NULL WHERE id = ?", [task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // Unknown execution engine → can't prove resume-safety → fresh re-pool.
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+  });
+
+  it("snapshots the execution engine so a mid-run agent switch can't mislabel an any-runtime session", () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_snap_any", name: "any", provider: "any" });
+    const agent = store.createAgent({ name: "MidSwitch", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    // Claim snapshots the execution engine (codex) onto the task.
+    const claimed = store.claimTask(anyRuntime.id)!;
+    expect(claimed.provider).toBe("codex");
+    store.startTask(task.id);
+    // Agent switches to claude WHILE the task runs, then it completes.
+    store.updateAgent(agent.id, { provider: "claude" });
+    store.completeTask(task.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    // The session is labelled with the engine it actually ran under (codex),
+    // not the agent's now-current provider (claude).
+    expect(store.getChatSession(session.id)?.sessionProvider).toBe("codex");
+    // A claude follow-up therefore does NOT resume the codex session.
+    const next = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "next" });
+    expect(next.sessionId).toBeNull();
+  });
+
+  it("moves chat-session runtime metadata when a runtime id is merged", () => {
+    const store = createStore();
+    const oldRuntime = store.registerRuntime({ id: "rt_merge_old", name: "old", provider: "codex", daemonId: "daemon-old", legacyDaemonId: "legacy-x" });
+    const agent = store.createAgent({ name: "Merger", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(oldRuntime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "ok", sessionId: "sess_merge", workDir: "/tmp/merge" });
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(oldRuntime.id);
+    // Merge the old runtime id into a new one; the session metadata follows.
+    const newRuntime = store.registerRuntime({ id: "rt_merge_new", name: "new", provider: "codex", daemonId: "daemon-old" });
+    store.mergeRuntimeInto(oldRuntime.id, newRuntime.id);
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(newRuntime.id);
+    // A follow-up still resumes the session (its machine didn't "vanish").
+    const next = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(next.runtimeId).toBe(newRuntime.id);
+    expect(next.sessionId).toBe("sess_merge");
+  });
+
+  it("records the session's runtime and engine as chat-session metadata on promotion", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_meta", name: "r", provider: "codex" });
+    const agent = store.createAgent({ name: "Meta", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    expect(store.getChatSession(session.id)?.sessionRuntimeId).toBeNull();
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "ok", sessionId: "sess_meta", workDir: "/tmp/meta" });
+    const promoted = store.getChatSession(session.id)!;
+    expect(promoted.sessionId).toBe("sess_meta");
+    expect(promoted.sessionRuntimeId).toBe(runtime.id);
+    expect(promoted.sessionProvider).toBe("codex");
+  });
+
+  it("resumes an any-runtime session only while the engine matches (recorded per session)", () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_any_sess", name: "any", provider: "any" });
+    const claude = store.registerRuntime({ id: "rt_any_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "AnySwitcher", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(anyRuntime.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "codex-session", workDir: "/tmp/codex" });
+    // The session records the engine that produced it (codex), so a same-engine
+    // follow-up resumes it even though the runtime itself is "any".
+    const same = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(same.sessionId).toBe("codex-session");
+    expect(same.runtimeId).toBe(anyRuntime.id);
+
+    // Switch to claude: the recorded codex session no longer matches and must
+    // not carry over, even though the any runtime could run claude.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const afterSwitch = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "switched" });
+    expect(afterSwitch.sessionId).toBeNull();
+    // Unpinned → any claude machine can take it (starting a fresh session).
+    expect(afterSwitch.runtimeId).toBeNull();
+    expect(store.claimTask(claude.id)).not.toBeNull();
+  });
+
+  it("prefers local_directory affinity over chat session affinity", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_pref_dir", name: "dir", provider: "codex", daemonId: "daemon-pref-dir" });
+    const sessRuntime = store.registerRuntime({ id: "rt_pref_sess", name: "sess", provider: "codex", daemonId: "daemon-pref-sess" });
+    const agent = store.createAgent({ name: "Pref", provider: "codex" });
+    // Establish a chat session whose provider session lives on sessRuntime.
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const warmup = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(sessRuntime.id)?.id).toBe(warmup.id);
+    store.startTask(warmup.id);
+    store.completeTask(warmup.id, { output: "ok", sessionId: "sess_pref", workDir: "/tmp/pref" });
+
+    // A follow-up that is ALSO a directory-project issue must go to the
+    // directory machine, not the session machine, and must not inherit the
+    // foreign-machine session.
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-pref-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(task.sessionId).toBeNull();
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("degrades a resume-safe retry to a fresh re-pool when the agent's engine changed", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_retry_codex2", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_retry_claude2", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "RetrySwitch", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // Switch the agent to claude, THEN the codex run fails with a resume-safe reason.
+    store.updateAgent(agent.id, { provider: "claude" });
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // The parent's codex runtime can't run a claude agent → retry re-pools fresh.
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+    expect(store.claimTask(claude.id)?.id).toBe(retry.id);
+  });
+
+  it("lets local_directory affinity override an explicit runtime override", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_ovr_dir", name: "dir", provider: "codex", daemonId: "daemon-ovr" });
+    const wrongRuntime = store.registerRuntime({ id: "rt_ovr_wrong", name: "wrong", provider: "codex", daemonId: "daemon-wrong" });
+    const agent = store.createAgent({ name: "Ovr", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-ovr" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    // Explicitly try to pin the task to the WRONG machine.
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, runtimeId: wrongRuntime.id, prompt: "work" });
+    // The directory affinity wins — the task is pinned to the machine that
+    // holds the directory, not the caller-supplied one.
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(wrongRuntime.id)).toBeNull();
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("keeps the directory pin on a stale task whose agent was archived", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_arch_dir", name: "dir", provider: "codex", daemonId: "daemon-arch-dir" });
+    const agent = store.createAgent({ name: "ArchDir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-arch-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    store.archiveAgent(agent.id);
+    // Stale recovery keeps the directory pin (archived_at parks the claim), so
+    // a restore lands it back on the directory's machine, not elsewhere.
+    expect(store.claimTask(dirRuntime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
+    store.restoreAgent(agent.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+  });
+
+  it("does not redeliver a stale dispatched task after its agent is archived", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_arch_stale", name: "r", provider: "codex" });
+    const agent = store.createAgent({ name: "Archiving", provider: "codex" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    store.archiveAgent(agent.id);
+    // Stale recovery must mirror the normal claim's archived-agent exclusion.
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBeNull();
+  });
+
+  it("re-pins (not re-pools) a stale local_directory task off an ineligible machine", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_stale_dir", name: "dir", provider: "codex", daemonId: "daemon-stale-dir" });
+    store.registerRuntime({ id: "rt_stale_other", name: "other", provider: "codex", daemonId: "daemon-other" });
+    const agent = store.createAgent({ name: "Dir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-stale-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    // Owner change makes dirRuntime ineligible; stale recovery must re-pin to
+    // the directory's daemon (never re-pool onto a machine without the dir).
+    store.updateAgent(agent.id, { ownerId: "someone" });
+    expect(store.claimTask(dirRuntime.id)).toBeNull();
+    expect(store.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
+    expect(store.getTask(task.id)?.status).toBe("queued");
+  });
+
+  it("fully cancels (terminal) an agent's tasks on workspace move, ending autopilot runs", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_wsm_full", name: "a", provider: "codex", workspaceId: "wsA" });
+    const agent = store.createAgent({ name: "Mover2", provider: "codex", workspaceId: "wsA" });
+    const events: string[] = [];
+    const off = store.onTaskEvent(({ type }) => { if (type === "task:cancelled") events.push(type); });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    off();
+    const cancelled = store.getTask(task.id)!;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancelledAt).not.toBeNull();
+    expect(events).toContain("task:cancelled");
+  });
+
+
+  it("keeps a local_directory task's pin through the startup migration", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_mig_dir", name: "dir", provider: "codex", daemonId: "daemon-mig-dir" });
+    const agent = store.createAgent({ name: "DirLegacy", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-mig-dir" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    // local_directory task is pinned to the directory's runtime and has no session.
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(task.sessionId).toBeNull();
+    // Re-running migrations must NOT unpin it (the directory only exists there).
+    const reopened = new MultiremiStore(db!);
+    expect(reopened.getTask(task.id)?.runtimeId).toBe(dirRuntime.id);
+  });
+
+  it("fails a resume-safe retry closed when the parent has neither a runtime stamp nor an engine snapshot", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_fc_nostamp", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "NoStamp", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // An unpinned, pre-snapshot in-flight parent that nonetheless carries a
+    // provider session: no runtime stamp AND no engine snapshot. Its engine
+    // can't be proven to match the agent, so the resume must fail closed rather
+    // than let the `!runtimeId` branch treat it as resumable.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, provider = NULL, session_id = ? WHERE id = ?", ["stale-session", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+  });
+
+  it("never resumes an unpinned parent's machine-local session (fail-closed even when the engine matches)", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_unpinned_sess", name: "codex", provider: "codex" });
+    const agent = store.createAgent({ name: "Unpinned", provider: "codex" });
+    const issue = store.createIssue({ title: "i", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // A parent that kept its engine snapshot AND a machine-local session but
+    // lost its runtime pin. We no longer know which machine holds the session,
+    // so the retry must NOT stay unpinned-yet-resuming (any pool machine would
+    // then resume a foreign machine's session) — it fails closed and re-pools.
+    db!.run("UPDATE multiremi_tasks SET runtime_id = NULL, session_id = ?, work_dir = ? WHERE id = ?", ["orphan-session", "/tmp/orphan", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    expect(retry.runtimeId).toBeNull();
+    expect(retry.sessionId).toBeNull();
+    expect(retry.workDir).toBeNull();
+  });
+
+  it("does not stamp a machine-local agent.cwd onto an unpinned pool task", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_cwd_pool", name: "r", provider: "codex" });
+    // An agent configured with a fixed cwd. In the pool model that path is
+    // machine-local, so it must NOT ride along on the unpinned task's work_dir
+    // (the daemon applies agent.cwd only if it exists on the claiming machine).
+    const agent = store.createAgent({ name: "CwdAgent", provider: "codex", cwd: "/only/on/one/machine" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(task.runtimeId).toBeNull();
+    expect(task.workDir).toBeNull();
+  });
+
+  it("resumes an issue-only local_directory retry's session with no chat session to inherit from", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_dir_resume", name: "dir", provider: "codex", daemonId: "daemon-dir-resume" });
+    const agent = store.createAgent({ name: "DirResume", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-dir-resume" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+    expect(store.claimTask(dirRuntime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    // The run produced a provider session on the directory machine.
+    db!.run("UPDATE multiremi_tasks SET session_id = ? WHERE id = ?", ["dir-session", task.id]);
+    store.failTask(task.id, { error: "offline", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((t) => t.parentTaskId === task.id)!;
+    // Resume-safe (same machine still eligible, engine matches) → keep the pin
+    // AND the session, even though there is no chat session gating inheritance.
+    expect(retry.runtimeId).toBe(dirRuntime.id);
+    expect(retry.sessionId).toBe("dir-session");
+  });
+
+  it("re-pins a local_directory task to the daemon's engine runtime when the pinned runtime changes provider", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_repin", name: "r", provider: "codex", daemonId: "daemon-repin" });
+    const agent = store.createAgent({ name: "RepinDir", provider: "codex" });
+    const project = store.createProject({
+      title: "P",
+      workspaceId: "local",
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/p", daemon_id: "daemon-repin" } }],
+    });
+    const issue = store.createIssue({ title: "dir", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(task.runtimeId).toBe("rt_repin");
+    // The same-id runtime re-registers under a different engine. The codex
+    // agent's directory task must not be stranded on the now-claude runtime; it
+    // re-pins to the daemon's codex runtime id (deterministic), which a codex
+    // runtime coming up on that daemon can then claim. Skipping it would leave
+    // it pinned to a runtime the claim predicate rejects forever.
+    store.registerRuntime({ id: "rt_repin", name: "r", provider: "claude", daemonId: "daemon-repin" });
+    const repinned = store.getTask(task.id)!;
+    expect(repinned.runtimeId).toBe(daemonRuntimeId("daemon-repin", "codex"));
+    expect(repinned.status).toBe("queued");
+    const codex2 = store.registerRuntime({ id: daemonRuntimeId("daemon-repin", "codex"), name: "codex2", provider: "codex", daemonId: "daemon-repin" });
+    expect(store.claimTask(codex2.id)?.id).toBe(task.id);
+  });
+
+  it("rejects an archived squad leader without persisting the squad", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Lead", provider: "codex", workspaceId: "local" });
+    store.archiveAgent(agent.id);
+    expect(() => store.createSquad({ name: "S2", workspaceId: "local", leaderId: agent.id })).toThrow(/archived/i);
+    expect(store.listSquads().find((sq) => sq.name === "S2")).toBeUndefined();
+  });
+
+  it("re-pools a stale dispatched task the runtime may no longer run", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_stale", name: "stale", provider: "codex", ownerId: "alice", visibility: "private" });
+    const agent = store.createAgent({ name: "Stale", provider: "codex", ownerId: "alice" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    // The dispatch response was lost (never started) and the recovery window passed.
+    db!.run("UPDATE multiremi_tasks SET dispatched_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", task.id]);
+    // Meanwhile the agent changed owner, so this runtime may no longer run it.
+    store.updateAgent(agent.id, { ownerId: "bob" });
+    // The stale re-claim must NOT hand the task back to the now-ineligible runtime.
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+    expect(store.getTask(task.id)?.runtimeId).toBeNull();
+  });
+
+  it("rejects an autopilot whose project is in another workspace", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "AP agent", provider: "codex", workspaceId: "wsA" });
+    const foreignProject = store.createProject({ title: "Foreign", workspaceId: "wsB" });
+    expect(() =>
+      store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id, projectId: foreignProject.id }),
+    ).toThrow(/project is in a different workspace/i);
+  });
+
+  it("allows pausing an autopilot without re-validating an unchanged assignee", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "AP agent", provider: "codex", workspaceId: "wsA" });
+    const ap = store.createAutopilot({ title: "AP", workspaceId: "wsA", assigneeType: "agent", assigneeId: agent.id });
+    // Simulate drift: the agent later moves to another workspace.
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    // A status-only update must still succeed (no assignee re-validation).
+    const paused = store.updateAutopilot(ap.id, { status: "paused" });
+    expect(paused.status).toBe("paused");
+  });
+
+  it("rejects a cross-workspace squad member", () => {
+    const store = createStore();
+    const squad = store.createSquad({ name: "Squad", workspaceId: "wsA" });
+    const foreignAgent = store.createAgent({ name: "Foreign", provider: "codex", workspaceId: "wsB" });
+    expect(() =>
+      store.addSquadMember(squad.id, { memberType: "agent", memberId: foreignAgent.id }),
+    ).toThrow(/different workspace/i);
+  });
+
+  it("re-homes an agent's queued tasks when its owner changes", () => {
+    const store = createStore();
+    const alicePrivate = store.registerRuntime({ id: "rt_owner_alice", name: "alice", provider: "codex", ownerId: "alice", visibility: "private" });
+    const bobPrivate = store.registerRuntime({ id: "rt_owner_bob", name: "bob", provider: "codex", ownerId: "bob", visibility: "private" });
+    const agent = store.createAgent({ name: "Owned", provider: "codex", ownerId: "alice" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(alicePrivate.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_owner", workDir: "/tmp/owner" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(alicePrivate.id);
+
+    // Reassign the agent to bob → the queued task must leave alice's private pin.
+    store.updateAgent(agent.id, { ownerId: "bob" });
+    expect(store.getTask(followUp.id)?.runtimeId).toBeNull();
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(followUp.id);
+  });
+
+  it("cancels an agent's queued tasks when its workspace changes", () => {
+    const store = createStore();
+    const codexA = store.registerRuntime({ id: "rt_wsmove_a", name: "a", provider: "codex", workspaceId: "wsA" });
+    const codexB = store.registerRuntime({ id: "rt_wsmove_b", name: "b", provider: "codex", workspaceId: "wsB" });
+    const agent = store.createAgent({ name: "Mover", provider: "codex", workspaceId: "wsA" });
+    const task = store.createTask({ agentId: agent.id, prompt: "work" });
+    expect(task.workspaceId).toBe("wsA");
+    // Moving the agent to wsB cancels the orphaned wsA task (rather than
+    // migrating it and leaving a cross-workspace link); neither runtime claims it.
+    store.updateAgent(agent.id, { workspaceId: "wsB" });
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    expect(store.claimTask(codexA.id)).toBeNull();
+    expect(store.claimTask(codexB.id)).toBeNull();
+  });
+
+  it("re-homes an agent's queued tasks when its engine switches", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_switch_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_switch_claude", name: "claude", provider: "claude" });
+    const agent = store.createAgent({ name: "Switcher", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "s" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "ok", sessionId: "sess_switch", workDir: "/tmp/switch" });
+    // A follow-up is queued and pinned to the codex machine by session affinity.
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(followUp.runtimeId).toBe(codex.id);
+
+    // Switching the agent to claude re-homes the queued task off the codex pin.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const rehomed = store.getTask(followUp.id)!;
+    expect(rehomed.runtimeId).toBeNull();
+    expect(rehomed.sessionId).toBeNull();
+    // The claude machine can now claim it.
+    expect(store.claimTask(claude.id)?.id).toBe(followUp.id);
+  });
+
+  it("gives each owner their own default agent so a private runtime can run it", () => {
+    const store = createStore();
+    const bobPrivate = store.registerRuntime({ id: "rt_def_bob", name: "bob", provider: "claude", ownerId: "bob", visibility: "private" });
+    const bobDefault = store.ensureDefaultAgent("claude", { workspaceId: "local", ownerId: "bob" });
+    const aliceDefault = store.ensureDefaultAgent("claude", { workspaceId: "local", ownerId: "alice" });
+    // Distinct per-owner agents, each owned by that member.
+    expect(bobDefault.id).not.toBe(aliceDefault.id);
+    expect(bobDefault.ownerId).toBe("bob");
+    // Bob's private runtime can run Bob's own default agent's task.
+    const task = store.createTask({ agentId: bobDefault.id, prompt: "onboard" });
+    expect(store.claimTask(bobPrivate.id)?.id).toBe(task.id);
+  });
+
+  it("keeps unbound agents unbound when a daemon registers", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Pool stays unbound", provider: "codex", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+    const register = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daemon_id: "daemon-pool", workspace_id: "local", runtimes: [{ name: "", type: "codex" }] }),
+    });
+    expect(register.status).toBe(200);
+    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
+  });
+
+  it("unpins legacy agent runtime bindings at startup", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_legacy_pin", name: "legacy pin", provider: "codex" });
+    const agent = store.createAgent({ name: "Legacy pinned", provider: "codex", runtimeId: runtime.id });
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
+    const reopened = new MultiremiStore(db!);
+    expect(reopened.getAgent(agent.id)?.runtimeId).toBeNull();
+  });
+
+  it("keeps follow-up chat messages on the machine that holds the provider session", () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_chat_codex_a", name: "chat codex a", provider: "codex" });
+    const codexB = store.registerRuntime({ id: "rt_chat_codex_b", name: "chat codex b", provider: "codex" });
+    const agent = store.createAgent({ name: "Chat pool", provider: "codex" });
+    const session = store.createChatSession({ agentId: agent.id, title: "hello" });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
+    expect(first.runtimeId).toBeNull();
+
+    expect(store.claimTask(codexB.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "done", sessionId: "sess_chat_affinity", workDir: "/tmp/chat" });
+    expect(store.getChatSession(session.id)?.sessionId).toBe("sess_chat_affinity");
+
+    const second = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
+    expect(second.runtimeId).toBe(codexB.id);
+    // Same-engine follow-up resumes the promoted provider session + work_dir.
+    expect(second.sessionId).toBe("sess_chat_affinity");
+    expect(second.workDir).toBe("/tmp/chat");
+
+    // A provider switch drops the affinity — a codex-machine stamp would make
+    // the task unclaimable by any claude runtime — AND abandons the codex
+    // session/work_dir so the claude engine doesn't resume a foreign session.
+    store.updateAgent(agent.id, { provider: "claude" });
+    const third = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "after switch" });
+    expect(third.runtimeId).toBeNull();
+    expect(third.sessionId).toBeNull();
+    expect(third.workDir).toBeNull();
+  });
+
+  it("routes project tasks to the machine holding the local directory", () => {
+    const store = createStore();
+    const dirRuntime = store.registerRuntime({ id: "rt_dir_codex", name: "dir codex", provider: "codex", daemonId: "daemon-dir" });
+    store.registerRuntime({ id: "rt_dir_claude", name: "dir claude", provider: "claude", daemonId: "daemon-dir" });
+    store.registerRuntime({ id: "rt_elsewhere_codex", name: "elsewhere codex", provider: "codex", daemonId: "daemon-elsewhere" });
+    const agent = store.createAgent({ name: "Dir pool", provider: "codex" });
+    const project = store.createProject({ title: "Local project", workspaceId: "local" });
+    store.createProjectResource(project.id, {
+      resourceType: "local_directory",
+      resourceRef: { local_path: "/abs/project", daemon_id: "daemon-dir" },
+    });
+    const issue = store.createIssue({ title: "dir issue", workspaceId: "local", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in the local dir" });
+    expect(task.runtimeId).toBe(dirRuntime.id);
+
+    // A directory on a daemon with no runtime row (never registered / GC'd)
+    // stamps the deterministic id that daemon's runtime WILL get, so the
+    // task waits for the right machine instead of running elsewhere.
+    const orphanProject = store.createProject({ title: "Orphan project", workspaceId: "local" });
+    store.createProjectResource(orphanProject.id, {
+      resourceType: "local_directory",
+      resourceRef: { local_path: "/abs/orphan", daemon_id: "daemon-gone" },
+    });
+    const orphanIssue = store.createIssue({ title: "orphan issue", workspaceId: "local", projectId: orphanProject.id });
+    const orphanTask = store.createTask({ agentId: agent.id, issueId: orphanIssue.id, prompt: "no machine has this" });
+    expect(orphanTask.runtimeId).toBe(daemonRuntimeId("daemon-gone", "codex"));
+    // Not claimable by machines that don't have the directory.
+    expect(store.claimTask(dirRuntime.id)?.id).not.toBe(orphanTask.id);
+    // Once the daemon registers (same deterministic id), the task dispatches there.
+    const lateRuntime = store.registerRuntime({
+      id: daemonRuntimeId("daemon-gone", "codex"),
+      name: "late arrival",
+      provider: "codex",
+      daemonId: "daemon-gone",
+    });
+    expect(store.claimTask(lateRuntime.id)?.id).toBe(orphanTask.id);
+  });
+
+  it("frees resume-unsafe retries to the pool while resume-safe retries stay pinned", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_retry_codex", name: "retry codex", provider: "codex" });
+    const agent = store.createAgent({ name: "Retry pool", provider: "codex" });
+
+    const offlineIssue = store.createIssue({ title: "offline retry", workspaceId: "local" });
+    const offlineTask = store.createTask({ agentId: agent.id, issueId: offlineIssue.id, prompt: "fails offline" });
+    expect(store.claimTask(runtime.id)?.id).toBe(offlineTask.id);
+    store.startTask(offlineTask.id);
+    store.failTask(offlineTask.id, { error: "runtime went away", failureReason: "runtime_offline" });
+    const offlineRetry = store.listTasks().find((task) => task.parentTaskId === offlineTask.id)!;
+    expect(offlineRetry.runtimeId).toBe(runtime.id);
+
+    const unsafeIssue = store.createIssue({ title: "unsafe retry", workspaceId: "local" });
+    // Priority beats the queued offline retry in the claim ordering.
+    const unsafeTask = store.createTask({ agentId: agent.id, issueId: unsafeIssue.id, prompt: "fails unsafely", priority: 100 });
+    expect(store.claimTask(runtime.id)?.id).toBe(unsafeTask.id);
+    store.startTask(unsafeTask.id);
+    store.failTask(unsafeTask.id, { error: "stalled", failureReason: "codex_semantic_inactivity" });
+    const unsafeRetry = store.listTasks().find((task) => task.parentTaskId === unsafeTask.id)!;
+    expect(unsafeRetry.runtimeId).toBeNull();
+  });
+
+  it("keeps another member's private default agent out of the default endpoint", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
+    const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
+    const bobToken = await store.createAccessToken({ name: "Bob", type: "pat", workspaceId: "local", userId: "bob" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const jsonHeaders = (token: string) => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` });
+
+    // Alice seeds her default agent (per-owner) and stores a secret on it.
+    const seeded = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(aliceToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(seeded.status).toBe(201);
+    const aliceAgent = (await seeded.json()).agent;
+    expect(aliceAgent.ownerId).toBe("alice");
+    store.updateAgent(aliceAgent.id, { customEnv: { SECRET_TOKEN: "s3cret-value" } });
+
+    // Bob's provider-only call resolves to HIS own default agent — a distinct
+    // id owned by bob — never alice's, so her custom_env can't leak.
+    const bobSeed = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(bobSeed.status).toBe(201);
+    const bobBody = await bobSeed.json();
+    expect(bobBody.agent.id).not.toBe(aliceAgent.id);
+    expect(bobBody.agent.ownerId).toBe("bob");
+    expect(JSON.stringify(bobBody)).not.toContain("s3cret-value");
+
+    // Each keeps resolving to their own default agent on repeat calls.
+    const aliceAgain = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(aliceToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(aliceAgain.status).toBe(200);
+    expect((await aliceAgain.json()).agent.id).toBe(aliceAgent.id);
+  });
+
+  it("rejects unknown providers smuggled through an any-provider runtime", async () => {
+    const store = createStore();
+    const anyRuntime = store.registerRuntime({ id: "rt_any_gate", name: "any gate", provider: "any", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+
+    const smuggled = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Gemini smuggle", runtime_id: anyRuntime.id, provider: "gemini" }),
+    });
+    expect(smuggled.status).toBe(400);
+    expect(await smuggled.json()).toEqual({ error: 'unknown provider "gemini"' });
+
+    // Omitting the provider falls back to the default engine.
+    const defaulted = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Any default", runtime_id: anyRuntime.id }),
+    });
+    expect(defaulted.status).toBe(201);
+    expect(store.getAgent((await defaulted.json()).id)?.provider).toBe("claude");
+  });
+
+  it("surfaces engines through an any-provider runtime in the fleet catalog", async () => {
+    const store = createStore();
+    store.registerRuntime({ id: "rt_fleet_any_only", name: "fleet any only", provider: "any", workspaceId: "local" });
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/models");
+    const body = await response.json();
+    const providers = new Map(body.providers.map((entry: any) => [entry.provider, entry]));
+    expect((providers.get("claude") as any)?.online_runtime_count).toBe(1);
+    expect((providers.get("codex") as any)?.online_runtime_count).toBe(1);
+  });
+
+  it("maps an any-runtime's vendor models onto the right engine buckets", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_any_models",
+      name: "any with models",
+      provider: "any",
+      workspaceId: "local",
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true },
+        { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "anthropic", default: true },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const codex = body.providers.find((e: any) => e.provider === "codex");
+    const claude = body.providers.find((e: any) => e.provider === "claude");
+    expect(codex.models.map((m: any) => m.id)).toEqual(["gpt-5.5"]);
+    expect(claude.models.map((m: any) => m.id)).toEqual(["claude-sonnet-4-6"]);
+    // No vendor buckets leak into the response.
+    expect(body.providers.find((e: any) => e.provider === "openai")).toBeUndefined();
+    expect(body.providers.find((e: any) => e.provider === "anthropic")).toBeUndefined();
+  });
+
+  it("buckets fleet models by the runtime engine, not the model vendor", async () => {
+    const store = createStore();
+    // Production shape: codex runtime reports models with vendor provider "openai".
+    store.registerRuntime({
+      id: "rt_engine_bucket",
+      name: "codex box",
+      provider: "codex",
+      workspaceId: "local",
+      models: [
+        { id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true },
+        { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", default: false },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    // Models land in the codex (engine) bucket, not an "openai" bucket.
+    expect(codex.online_runtime_count).toBe(1);
+    expect(codex.models.map((m: any) => m.id).sort()).toEqual(["gpt-5.4", "gpt-5.5"]);
+    expect(body.providers.find((entry: any) => entry.provider === "openai")).toBeUndefined();
+  });
+
+  it("counts only the caller's usable runtimes in the fleet catalog", async () => {
+    const store = createStore();
+    store.createWorkspaceMember({ workspaceId: "local", userId: "alice", name: "Alice", role: "member" });
+    store.createWorkspaceMember({ workspaceId: "local", userId: "bob", name: "Bob", role: "member" });
+    const aliceToken = await store.createAccessToken({ name: "Alice", type: "pat", workspaceId: "local", userId: "alice" });
+    // Alice's private codex runtime + Bob's private codex runtime + a public one.
+    store.registerRuntime({ id: "rt_cap_alice", name: "alice codex", provider: "codex", workspaceId: "local", ownerId: "alice", visibility: "private" });
+    store.registerRuntime({ id: "rt_cap_bob", name: "bob codex", provider: "codex", workspaceId: "local", ownerId: "bob", visibility: "private" });
+    store.registerRuntime({ id: "rt_cap_pub", name: "shared codex", provider: "codex", workspaceId: "local", ownerId: "bob", visibility: "public" });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/models", { headers: { Authorization: `Bearer ${aliceToken.token}` } });
+    const body = await response.json();
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    // Alice sees her own private + the public one, NOT bob's private one.
+    expect(codex.online_runtime_count).toBe(2);
+  });
+
+  it("serves the fleet model catalog grouped by provider", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_fleet_claude_a",
+      name: "fleet claude a",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        { id: "claude-opus-4-8", label: "Opus 4.8", provider: "claude", default: true },
+        { id: "claude-sonnet-5", label: "Sonnet 5", provider: "claude", default: false },
+      ],
+    });
+    store.registerRuntime({
+      id: "rt_fleet_claude_b",
+      name: "fleet claude b",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{ id: "claude-sonnet-5", label: "Sonnet 5", provider: "claude", default: false }],
+    });
+    const offline = store.registerRuntime({
+      id: "rt_fleet_codex",
+      name: "fleet codex",
+      provider: "codex",
+      workspaceId: "local",
+      models: [{ id: "gpt-5.2", label: "GPT-5.2", provider: "codex", default: true }],
+    });
+    db!.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", offline.id]);
+
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/models");
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const claude = body.providers.find((entry: any) => entry.provider === "claude");
+    expect(claude.online_runtime_count).toBe(2);
+    expect(claude.models.map((model: any) => model.id).sort()).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
+    expect(claude.models.find((model: any) => model.id === "claude-opus-4-8").default).toBe(true);
+    // Offline runtimes still surface their provider (capacity 0) but not a catalog.
+    const codex = body.providers.find((entry: any) => entry.provider === "codex");
+    expect(codex.online_runtime_count).toBe(0);
+    expect(codex.models).toEqual([]);
+  });
+
   it("claims runtime tasks atomically across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-task-claim-"));
     const path = join(dir, "multiremi.db");
@@ -337,7 +1410,9 @@ describe("Bun Multiremi core store", () => {
 
   it("serves daemon claim responses in Go wire shape and normalizes them for the Bun daemon", async () => {
     const store = createStore();
-    const runtime = store.registerRuntime({ id: "rt_claim_shape", name: "claim shape", provider: "codex", workspaceId: "local", ownerId: "local", maxConcurrency: 2 });
+    // The runtime IS the machine that holds the project's local_directory
+    // (daemon-claim), so the directory affinity resolves to it.
+    const runtime = store.registerRuntime({ id: "rt_claim_shape", name: "claim shape", provider: "codex", workspaceId: "local", ownerId: "local", daemonId: "daemon-claim", maxConcurrency: 2 });
     const agent = store.createAgent({
       id: "agt_claim_shape",
       name: "Claim Shape Codex",
@@ -2730,9 +3805,11 @@ describe("Bun Multiremi core store", () => {
     expect(createdAgent.status).toBe(201);
     const agent = await createdAgent.json();
     expect(agent.owner_id).toBe("alice");
-    expect(agent.runtime_id).toBe(aliceRuntime.id);
-    expect(agent.provider).toBeUndefined();
+    // Pool model: the legacy runtime_id only picks the provider; no binding.
+    expect(agent.runtime_id).toBe("");
+    expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
+    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
     expect(agent.visibility).toBe("private");
 
     expect((await app.request(`/api/agents/${agent.id}`, { headers: aliceAuthHeaders })).status).toBe(200);
@@ -2844,13 +3921,13 @@ describe("Bun Multiremi core store", () => {
     expect(invalidCreate.status).toBe(400);
     expect(await invalidCreate.json()).toEqual({ error: "invalid request body" });
 
-    const missingRuntime = await app.request("/api/agents", {
+    const unknownProvider = await app.request("/api/agents", {
       method: "POST",
       headers: jsonHeaders(aliceToken.token),
-      body: JSON.stringify({ name: "No runtime", provider: "codex" }),
+      body: JSON.stringify({ name: "Bad provider", provider: "gemini" }),
     });
-    expect(missingRuntime.status).toBe(400);
-    expect(await missingRuntime.json()).toEqual({ error: "runtime_id is required" });
+    expect(unknownProvider.status).toBe(400);
+    expect(await unknownProvider.json()).toEqual({ error: 'unknown provider "gemini"' });
 
     const crossWorkspaceRuntime = await app.request("/api/agents", {
       method: "POST",
@@ -2902,13 +3979,15 @@ describe("Bun Multiremi core store", () => {
     });
     expect(bobPublicRuntime.status).toBe(201);
     const bobAgent = await bobPublicRuntime.json();
-    expect(bobAgent.provider).toBeUndefined();
+    // Legacy runtime_id still forces the provider but no longer binds.
+    expect(bobAgent.provider).toBe("claude");
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
     expect(store.getAgent(bobAgent.id)?.description).toBe("Bob public description");
     expect(store.getAgent(bobAgent.id)?.avatarUrl).toBe("https://example.com/bob-agent.png");
     expect(bobAgent.description).toBe("Bob public description");
     expect(bobAgent.avatar_url).toBe("https://example.com/bob-agent.png");
-    expect(bobAgent.runtime_id).toBe(bobPublic.id);
+    expect(bobAgent.runtime_id).toBe("");
     expect(bobAgent.owner_id).toBe("bob");
     expect(bobAgent.max_concurrent_tasks).toBe(6);
     const bobAgentCreated = store.listAnalyticsEvents({ name: "agent_created" })[0]!;
@@ -2935,14 +4014,7 @@ describe("Bun Multiremi core store", () => {
     expect(invalidDefaultJson.status).toBe(400);
     expect(await invalidDefaultJson.json()).toEqual({ error: "invalid request body" });
 
-    const providerOnlyDefault = await app.request("/api/multiremi/agents/default", {
-      method: "POST",
-      headers: jsonHeaders(bobToken.token),
-      body: JSON.stringify({ provider: "claude" }),
-    });
-    expect(providerOnlyDefault.status).toBe(400);
-    expect(await providerOnlyDefault.json()).toEqual({ error: "runtime_id is required" });
-
+    // Pool model: the default agent seeds without a runtime and stays unbound.
     const defaultSeed = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
@@ -2951,18 +4023,19 @@ describe("Bun Multiremi core store", () => {
     expect(defaultSeed.status).toBe(201);
     const defaultSeedBody = await defaultSeed.json();
     expect(defaultSeedBody.agent).toMatchObject({
-      id: "agt_default_local_rt_gate_bob_public",
+      id: "agt_default_local_claude_bob",
       name: "Claude",
       provider: "claude",
-      runtimeId: bobPublic.id,
+      runtimeId: null,
       workspaceId: "local",
       ownerId: "bob",
+      visibility: "private",
       description: "Default Claude agent",
     });
     const agentCreatedEventsAfterDefault = store.listAnalyticsEvents({ name: "agent_created" });
     expect(agentCreatedEventsAfterDefault).toHaveLength(2);
     expect(agentCreatedEventsAfterDefault[1]!.properties).toMatchObject({
-      agent_id: "agt_default_local_rt_gate_bob_public",
+      agent_id: "agt_default_local_claude_bob",
       provider: "claude",
       runtime_mode: "local",
       template: "default",
@@ -2972,13 +4045,22 @@ describe("Bun Multiremi core store", () => {
     });
     expect(metricValue(store, "multiremi_agent_created_total", { runtime_mode: "local", source: "manual" })).toBe(2);
 
+    // Provider-only seeding works and reuses the same default agent.
+    const providerOnlyDefault = await app.request("/api/multiremi/agents/default", {
+      method: "POST",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(providerOnlyDefault.status).toBe(200);
+    expect((await providerOnlyDefault.json()).agent.id).toBe("agt_default_local_claude_bob");
+
     const defaultSeedAgain = await app.request("/api/multiremi/agents/default", {
       method: "POST",
       headers: jsonHeaders(bobToken.token),
       body: JSON.stringify({ runtime_id: bobPublic.id }),
     });
     expect(defaultSeedAgain.status).toBe(200);
-    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_rt_gate_bob_public");
+    expect((await defaultSeedAgain.json()).agent.id).toBe("agt_default_local_claude_bob");
     expect(store.listAnalyticsEvents({ name: "agent_created" })).toHaveLength(2);
 
     const invalidNativeUpdate = await app.request(`/api/multiremi/agents/${bobAgent.id}`, {
@@ -3023,16 +4105,39 @@ describe("Bun Multiremi core store", () => {
     expect(duplicateName.status).toBe(409);
     expect(await duplicateName.json()).toEqual({ error: "an agent named \"Bob public agent\" already exists in this workspace" });
 
+    // Machine binding is gone, but a legacy "move" keeps its engine-switch
+    // effect and the private-runtime gate: bob still can't reference alice's
+    // private runtime.
     const forbiddenMove = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
       body: JSON.stringify({ runtime_id: alicePrivate.id }),
     });
     expect(forbiddenMove.status).toBe(403);
-    expect(await forbiddenMove.json()).toEqual({
-      error: "this runtime is private; only its owner or a workspace admin can move agents onto it",
-    });
 
+    // A legal legacy move switches the engine (and resets the model) without
+    // binding the agent to the machine.
+    store.updateAgent(bobAgent.id, { model: "claude-opus-4-8" });
+    const codexPublic = store.registerRuntime({
+      id: "rt_gate_codex_public",
+      name: "Codex public",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "alice",
+      visibility: "public",
+    });
+    const legacyMove = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ runtime_id: codexPublic.id }),
+    });
+    expect(legacyMove.status).toBe(200);
+    expect((await legacyMove.json()).runtime_id).toBe("");
+    expect(store.getAgent(bobAgent.id)?.runtimeId).toBeNull();
+    expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
+    expect(store.getAgent(bobAgent.id)?.model).toBe("");
+
+    // Provider is editable on unbound agents (and round-trips cleanly).
     const providerOnlyUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
       headers: jsonHeaders(bobToken.token),
@@ -3040,8 +4145,46 @@ describe("Bun Multiremi core store", () => {
     });
     expect(providerOnlyUpdate.status).toBe(200);
     const providerOnlyUpdateBody = await providerOnlyUpdate.json();
-    expect(providerOnlyUpdateBody.provider).toBeUndefined();
+    expect(providerOnlyUpdateBody.provider).toBe("codex");
+    expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
+
+    const unknownProviderUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "gemini" }),
+    });
+    expect(unknownProviderUpdate.status).toBe(400);
+    expect(await unknownProviderUpdate.json()).toEqual({ error: 'unknown provider "gemini"' });
+
+    const providerRestore = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ provider: "claude" }),
+    });
+    expect(providerRestore.status).toBe(200);
     expect(store.getAgent(bobAgent.id)?.provider).toBe("claude");
+
+    // A legacy move to an any-provider runtime must keep the agent's current
+    // provider (not silently default to claude).
+    store.updateAgent(bobAgent.id, { provider: "codex", model: "gpt-5.2" });
+    const anyRuntime = store.registerRuntime({
+      id: "rt_gate_any",
+      name: "any gate",
+      provider: "any",
+      workspaceId: "local",
+      ownerId: "bob",
+      visibility: "public",
+    });
+    const anyMove = await app.request(`/api/agents/${bobAgent.id}`, {
+      method: "PUT",
+      headers: jsonHeaders(bobToken.token),
+      body: JSON.stringify({ runtime_id: anyRuntime.id }),
+    });
+    expect(anyMove.status).toBe(200);
+    expect(store.getAgent(bobAgent.id)?.provider).toBe("codex");
+    // Provider unchanged → model is preserved (no engine switch reset).
+    expect(store.getAgent(bobAgent.id)?.model).toBe("gpt-5.2");
+    store.updateAgent(bobAgent.id, { provider: "claude", model: "" });
 
     const descriptionUpdate = await app.request(`/api/agents/${bobAgent.id}`, {
       method: "PUT",
@@ -3066,7 +4209,9 @@ describe("Bun Multiremi core store", () => {
       body: JSON.stringify({ name: "Admin private agent", runtime_id: alicePrivate.id }),
     });
     expect(adminPrivateRuntime.status).toBe(201);
-    expect((await adminPrivateRuntime.json()).runtime_id).toBe(alicePrivate.id);
+    const adminAgent = await adminPrivateRuntime.json();
+    expect(adminAgent.runtime_id).toBe("");
+    expect(adminAgent.provider).toBe("codex");
   });
 
   it("redacts agent mcp_config like the Go server", async () => {
@@ -4086,7 +5231,10 @@ describe("Bun Multiremi API", () => {
       local.send(JSON.stringify({ type: "unsubscribe", payload: { scope: "task", id: localTask.id } }));
       expect(await nextWebSocketMessage(local)).toEqual({ type: "unsubscribe_ack", payload: { scope: "task", id: localTask.id } });
 
-      const remoteTask = store.createTask({ agentId: agent.id, workspaceId: remoteWorkspace.id, prompt: "remote browser realtime" });
+      // A task inherits its agent's workspace, so the remote-workspace task
+      // needs an agent that actually lives in the remote workspace.
+      const remoteAgent = store.createAgent({ name: "Browser Remote", provider: "claude", workspaceId: remoteWorkspace.id });
+      const remoteTask = store.createTask({ agentId: remoteAgent.id, prompt: "remote browser realtime" });
       expect(await nextWebSocketMessage(remote)).toMatchObject({
         type: "task:queued",
         payload: {
@@ -5211,6 +6359,9 @@ describe("Bun Multiremi API", () => {
       name: "Task token agent",
       provider: "codex",
       workspaceId: "local",
+      // Owner matches the private runtime's owner so the ownership guard lets
+      // the claim through — this case exercises task tokens, not scheduling.
+      ownerId: "usr_runtime_owner",
       runtimeId: ownerRuntimeId,
     });
     const taskTokenIssue = store.createIssue({
@@ -5383,8 +6534,10 @@ describe("Bun Multiremi API", () => {
     expect(localHeartbeat.status).toBe(200);
 
     store.registerRuntime({ id: "rt_remote_auth", name: "Remote runtime", provider: "codex", workspaceId: "remote" });
-    const remoteAgent = store.createAgent({ name: "Remote Codex", provider: "codex" });
-    const remoteTask = store.createTask({ agentId: remoteAgent.id, workspaceId: "remote", prompt: "remote task" });
+    // The agent lives in the remote workspace, so its task does too — a task
+    // always inherits its agent's workspace (see createTask).
+    const remoteAgent = store.createAgent({ name: "Remote Codex", provider: "codex", workspaceId: "remote" });
+    const remoteTask = store.createTask({ agentId: remoteAgent.id, prompt: "remote task" });
 
     const remoteRuntimeRegister = await app.request("/api/multiremi/runtimes", {
       method: "POST",
@@ -5909,13 +7062,13 @@ describe("Bun Multiremi API", () => {
     expect(invalidNativeTemplateCreate.status).toBe(400);
     expect(await invalidNativeTemplateCreate.json()).toEqual({ error: "invalid request body" });
 
-    const missingRuntime = await app.request("/api/agents/from-template", {
+    const unknownProviderTemplate = await app.request("/api/agents/from-template", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ template_slug: "summarizer", name: "No Runtime", provider: "codex" }),
+      body: JSON.stringify({ template_slug: "summarizer", name: "No Runtime", provider: "gemini" }),
     });
-    expect(missingRuntime.status).toBe(400);
-    expect(await missingRuntime.json()).toMatchObject({ error: "runtime_id is required" });
+    expect(unknownProviderTemplate.status).toBe(400);
+    expect(await unknownProviderTemplate.json()).toMatchObject({ error: 'unknown provider "gemini"' });
 
     const multiremiTemplates = await app.request("/api/multiremi/agent-templates");
     const multiremiTemplatesBody = await multiremiTemplates.json();
@@ -5936,9 +7089,10 @@ describe("Bun Multiremi API", () => {
     expect(created.status).toBe(201);
     const createdBody = await created.json();
     expect(createdBody.agent.name).toBe("Bug Fixer Agent");
-    expect(createdBody.agent.provider).toBeUndefined();
+    expect(createdBody.agent.provider).toBe("codex");
     expect(store.getAgent(createdBody.agent.id)?.provider).toBe("codex");
-    expect(createdBody.agent.runtime_id).toBe(codexRuntime.id);
+    expect(createdBody.agent.runtime_id).toBe("");
+    expect(store.getAgent(createdBody.agent.id)?.runtimeId).toBeNull();
     expect(createdBody.agent.avatar_url).toBe("https://example.com/template-bug-fixer.png");
     expect(store.getAgent(createdBody.agent.id)?.avatarUrl).toBe("https://example.com/template-bug-fixer.png");
     expect(createdBody.agent.max_concurrent_tasks).toBe(6);
@@ -8151,10 +9305,10 @@ describe("Bun Multiremi API", () => {
     const runtimeBootstrapBody = await runtimeBootstrap.json();
     expect(runtimeBootstrap.status).toBe(200);
     expect(runtimeBootstrapBody.workspace_id).toBe(workspace.id);
-    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_${runtime.id}`);
+    expect(runtimeBootstrapBody.agent_id).toBe(`agt_default_${workspace.id}_codex_local`);
     expect(store.getAgent(runtimeBootstrapBody.agent_id)).toMatchObject({
       provider: "codex",
-      runtimeId: runtime.id,
+      runtimeId: null,
       workspaceId: workspace.id,
     });
     const onboardingAgentCreated = store.listAnalyticsEvents({ name: "agent_created" })[0]!;
@@ -10388,12 +11542,12 @@ describe("Bun Multiremi API", () => {
     });
     const agent = await createdAgent.json();
     expect(createdAgent.status).toBe(201);
-    expect(agent.provider).toBeUndefined();
+    expect(agent.provider).toBe("codex");
     expect(store.getAgent(agent.id)?.provider).toBe("codex");
     expect(Object.keys(agent).filter((key) => /[A-Z]/.test(key))).toEqual([]);
     expect(agent).toMatchObject({
       workspace_id: "local",
-      runtime_id: runtime.id,
+      runtime_id: "",
       max_concurrent_tasks: 6,
       has_custom_env: true,
       custom_env_key_count: 1,

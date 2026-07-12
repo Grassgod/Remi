@@ -1100,6 +1100,12 @@ export interface MultiremiChatSession {
   status: MultiremiChatSessionStatus;
   sessionId: string | null;
   workDir: string | null;
+  /** Runtime that produced the promoted provider session (sessionId). */
+  sessionRuntimeId: string | null;
+  /** Engine that produced the promoted provider session — the sessionId is
+   *  specific to it, so a follow-up only resumes when the agent's current
+   *  provider still matches. */
+  sessionProvider: string | null;
   latestTaskId: string | null;
   unreadSince: string | null;
   hasUnread: boolean;
@@ -1122,6 +1128,11 @@ export interface MultiremiTask {
   id: string;
   agentId: string;
   runtimeId: string | null;
+  /** Engine the task executed under, snapshotted at claim time (the agent's
+   *  provider can change mid-run). Null until the task is claimed. Optional on
+   *  the wire — it's a server-internal scheduling field the daemon doesn't
+   *  receive, so a claim-response task may omit it. */
+  provider?: string | null;
   issueId: string | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
@@ -1935,6 +1946,13 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /**
+   * Resume-unsafe retry: abandon the chat session's promoted provider session.
+   * Skips session/work_dir inheritance and chat-session runtime affinity so the
+   * task truly restarts in the pool rather than resuming the failed session on
+   * the original machine. local_directory affinity still applies.
+   */
+  resetProviderSession?: boolean;
 }
 
 export interface TaskMessageInput {

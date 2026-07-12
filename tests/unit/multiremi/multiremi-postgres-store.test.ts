@@ -20,7 +20,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 
 // ────────────────────────────── translateSqliteToPg ──────────────────────────────
 
@@ -258,6 +258,83 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(claimed?.agent?.id).toBe(agent.id);
     // Nothing left queued → second claim yields null.
     expect(store.claimTask(runtime.id)).toBeNull();
+  });
+
+  it("pool-claims unbound agents' tasks and stamps affinity (chat session + local directory)", () => {
+    const ws = freshWorkspace();
+    const codex = store.registerRuntime({ name: "rt-pool-codex", provider: "codex", workspaceId: ws, daemonId: "daemon-pg-pool" });
+    const claude = store.registerRuntime({ name: "rt-pool-claude", provider: "claude", workspaceId: ws });
+    const agent = store.createAgent({ name: "PG Pool", provider: "codex", workspaceId: ws });
+    expect(agent.runtimeId).toBeNull();
+
+    // Unbound task: claude can't claim it, codex can, and the claim stamps it.
+    const task = store.createTask({ agentId: agent.id, prompt: "pooled", workspaceId: ws });
+    expect(task.runtimeId).toBeNull();
+    expect(store.claimTask(claude.id)).toBeNull();
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+    expect(store.getTask(task.id)?.runtimeId).toBe(codex.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "done" });
+
+    // Chat affinity: a promoted provider session pins follow-ups to its machine.
+    const session = store.createChatSession({ agentId: agent.id, title: "pg chat", workspaceId: ws });
+    const first = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi", workspaceId: ws });
+    expect(first.runtimeId).toBeNull();
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "done", sessionId: "sess_pg_chat", workDir: "/tmp/pg-chat" });
+    const followUp = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again", workspaceId: ws });
+    expect(followUp.runtimeId).toBe(codex.id);
+
+    // local_directory affinity resolves the daemon's provider-matching runtime.
+    const project = store.createProject({
+      title: "PG local dir",
+      workspaceId: ws,
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-project", daemon_id: "daemon-pg-pool" } }],
+    });
+    const issue = store.createIssue({ title: "pg dir issue", workspaceId: ws, projectId: project.id });
+    const dirTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work in dir", workspaceId: ws });
+    expect(dirTask.runtimeId).toBe(codex.id);
+
+    // Ownership predicate: another member's private runtime can't claim the
+    // pool task; a public one can. (Same SQL path as SQLite — this guards the
+    // translated Postgres form.)
+    const privateRt = store.registerRuntime({
+      name: "rt-pool-private",
+      provider: "codex",
+      workspaceId: ws,
+      ownerId: "someone-else",
+      visibility: "private",
+    });
+    const publicRt = store.registerRuntime({
+      name: "rt-pool-public",
+      provider: "codex",
+      workspaceId: ws,
+      ownerId: "someone-else",
+      visibility: "public",
+    });
+    const ownedIssue = store.createIssue({ title: "pg owned", workspaceId: ws });
+    const ownedTask = store.createTask({ agentId: agent.id, issueId: ownedIssue.id, prompt: "owned", workspaceId: ws });
+    expect(store.claimTask(privateRt.id)).toBeNull();
+    expect(store.claimTask(publicRt.id)?.id).toBe(ownedTask.id);
+  });
+
+  it("re-pins a local_directory task when its runtime re-registers under a new engine", () => {
+    const ws = freshWorkspace();
+    store.registerRuntime({ id: "rt-pg-repin", name: "rt-pg-repin", provider: "codex", workspaceId: ws, daemonId: "daemon-pg-repin" });
+    const agent = store.createAgent({ name: "PG Repin", provider: "codex", workspaceId: ws });
+    const project = store.createProject({
+      title: "PG repin dir",
+      workspaceId: ws,
+      resources: [{ resourceType: "local_directory", resourceRef: { local_path: "/abs/pg-repin", daemon_id: "daemon-pg-repin" } }],
+    });
+    const issue = store.createIssue({ title: "pg repin issue", workspaceId: ws, projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work", workspaceId: ws });
+    expect(task.runtimeId).toBe("rt-pg-repin");
+    // Same-id re-registration flips the engine → the codex directory task re-pins
+    // to the daemon's codex runtime id (exercises the repool UPDATE on Postgres).
+    store.registerRuntime({ id: "rt-pg-repin", name: "rt-pg-repin", provider: "claude", workspaceId: ws, daemonId: "daemon-pg-repin" });
+    expect(store.getTask(task.id)?.runtimeId).toBe(daemonRuntimeId("daemon-pg-repin", "codex"));
   });
 
   it("creates and lists workspace members", () => {

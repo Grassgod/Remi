@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Cpu, Loader2, Plus, Check, Info } from "lucide-react";
-import { runtimeModelsOptions } from "@multiremi/core/runtimes";
-import type { RuntimeModel } from "@multiremi/core/types";
+import { useMemo, useState } from "react";
+import { ChevronDown, Cpu, Loader2, Plus, Check } from "lucide-react";
+import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import {
   Popover,
   PopoverTrigger,
@@ -15,66 +13,36 @@ import { Label } from "@multiremi/ui/components/ui/label";
 import { useT } from "../../i18n";
 
 // ModelDropdown renders a searchable, creatable model picker for an agent.
-// It fetches the supported-model catalog from the selected runtime — the
-// daemon enumerates models on demand via heartbeat piggyback. Providers
-// that don't honour per-agent model selection at runtime (currently
-// antigravity — `agy` has no `--model` flag and reads selection from
-// its own settings) return supported=false, and the dropdown renders
-// disabled with an explanation instead of silently accepting a value
-// the backend would ignore.
+// Pool model: there is no machine to pick — the catalog is the fleet-level
+// union of what the workspace's online runtimes reported for the chosen
+// engine (provider). Free-text entry stays available so a model the fleet
+// hasn't discovered yet can still be pinned.
 export function ModelDropdown({
-  runtimeId,
-  runtimeOnline,
+  wsId,
+  provider,
   value,
   onChange,
-  disabled,
 }: {
-  runtimeId: string | null;
-  runtimeOnline: boolean;
+  wsId: string;
+  provider: string;
   value: string;
   onChange: (value: string) => void;
-  disabled?: boolean;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
-  const modelsQuery = useQuery(
-    runtimeModelsOptions(runtimeOnline ? runtimeId : null),
-  );
-
-  const supported = modelsQuery.data?.supported ?? true;
-  // Stable reference for the model list — `?? []` would mint a fresh
-  // array each render and force every downstream useMemo to invalidate.
-  const models = useMemo(
-    () => modelsQuery.data?.models ?? [],
-    [modelsQuery.data],
-  );
-  const grouped = useMemo(() => groupByProvider(models), [models]);
-
-  // When the selected runtime reports it doesn't support per-agent
-  // model selection, clear any previously-saved value so we don't
-  // persist a ghost configuration that never takes effect.
-  useEffect(() => {
-    if (!supported && value !== "") {
-      onChange("");
-    }
-  }, [supported, value, onChange]);
+  const { models, isLoading, isError } = useFleetProviderModels(wsId, provider);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return grouped;
-    const needle = search.toLowerCase();
-    const out: Record<string, RuntimeModel[]> = {};
-    for (const [provider, list] of Object.entries(grouped)) {
-      const matches = list.filter(
-        (m) =>
-          m.id.toLowerCase().includes(needle) ||
-          m.label.toLowerCase().includes(needle),
-      );
-      if (matches.length > 0) out[provider] = matches;
-    }
-    return out;
-  }, [grouped, search]);
+    const needle = search.trim().toLowerCase();
+    if (!needle) return models;
+    return models.filter(
+      (m) =>
+        m.id.toLowerCase().includes(needle) ||
+        m.label.toLowerCase().includes(needle),
+    );
+  }, [models, search]);
 
   const trimmedSearch = search.trim();
   const exactMatch = models.some(
@@ -88,57 +56,28 @@ export function ModelDropdown({
     setSearch("");
   };
 
-  const triggerLabel =
-    value ||
-    (disabled
-      ? t(($) => $.model_dropdown.select_runtime_first)
-      : runtimeOnline
-        ? t(($) => $.model_dropdown.default_provider)
-        : t(($) => $.model_dropdown.runtime_offline_manual));
-
-  if (!supported && !modelsQuery.isLoading) {
-    return (
-      <div className="flex flex-col min-w-0">
-        <div className="flex h-6 items-center">
-          <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        </div>
-        <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2.5 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div className="min-w-0">
-            <div>{t(($) => $.model_dropdown.managed_by_runtime_title)}</div>
-            <div className="mt-0.5 text-xs">
-              {t(($) => $.model_dropdown.managed_by_runtime_hint)}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const triggerLabel = value || t(($) => $.model_dropdown.default_provider);
 
   return (
     <div className="flex flex-col min-w-0">
       <div className="flex h-6 items-center justify-between">
         <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        {modelsQuery.isError && (
+        {isError && (
           <span className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.discovery_failed)}</span>
         )}
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          disabled={disabled}
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
-            {/* Wrapped in flex to mirror RuntimePicker's trigger DOM. The
-                two pickers sit side-by-side; inline-in-flex vs block-line-
-                box height calc would otherwise leave them ~1px misaligned. */}
             <div className="flex items-center gap-2">
               <span className="truncate font-medium">{triggerLabel}</span>
             </div>
             {value && (
               <div className="truncate text-xs text-muted-foreground">
-                {modelLabel(models, value)}
+                {provider}
               </div>
             )}
           </div>
@@ -160,53 +99,42 @@ export function ModelDropdown({
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
-            {modelsQuery.isLoading && (
+            {isLoading && (
               <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t(($) => $.pickers.model_discovering)}
               </div>
             )}
 
-            {!modelsQuery.isLoading &&
-              Object.entries(filtered).map(([provider, list]) => (
-                <div key={provider} className="mb-1">
-                  {provider && (
-                    <div className="px-2 pt-1.5 pb-0.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      {provider}
-                    </div>
-                  )}
-                  {list.map((m) => (
-                    <button
-                      type="button"
-                      key={m.id}
-                      onClick={() => select(m.id)}
-                      className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
-                        m.id === value ? "bg-accent" : "hover:bg-accent/50"
-                      }`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium">{m.label}</div>
-                        {m.label !== m.id && (
-                          <div className="truncate text-xs text-muted-foreground">
-                            {m.id}
-                          </div>
-                        )}
+            {!isLoading &&
+              filtered.map((m) => (
+                <button
+                  type="button"
+                  key={m.id}
+                  onClick={() => select(m.id)}
+                  className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                    m.id === value ? "bg-accent" : "hover:bg-accent/50"
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium">{m.label}</div>
+                    {m.label !== m.id && (
+                      <div className="truncate text-xs text-muted-foreground">
+                        {m.id}
                       </div>
-                      {m.id === value && (
-                        <Check className="h-4 w-4 shrink-0 text-primary" />
-                      )}
-                    </button>
-                  ))}
-                </div>
+                    )}
+                  </div>
+                  {m.id === value && (
+                    <Check className="h-4 w-4 shrink-0 text-primary" />
+                  )}
+                </button>
               ))}
 
-            {!modelsQuery.isLoading &&
-              Object.keys(filtered).length === 0 &&
-              !canCreate && (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  {t(($) => $.pickers.model_empty_with_dot)}
-                </div>
-              )}
+            {!isLoading && filtered.length === 0 && !canCreate && (
+              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                {t(($) => $.pickers.model_empty_with_dot)}
+              </div>
+            )}
 
             {canCreate && (
               <button
@@ -235,20 +163,4 @@ export function ModelDropdown({
       </Popover>
     </div>
   );
-}
-
-function groupByProvider(models: RuntimeModel[]): Record<string, RuntimeModel[]> {
-  const out: Record<string, RuntimeModel[]> = {};
-  for (const m of models) {
-    const key = m.provider ?? "";
-    if (!out[key]) out[key] = [];
-    out[key].push(m);
-  }
-  return out;
-}
-
-function modelLabel(models: RuntimeModel[], id: string): string {
-  const found = models.find((m) => m.id === id);
-  if (!found) return "custom";
-  return found.provider ? found.provider : "model";
 }

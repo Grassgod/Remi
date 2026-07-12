@@ -48,33 +48,24 @@
     "search_active": "No agents match \"{{query}}\".",
     "search_active_filtered": "No agents match \"{{query}}\" in this filter.",
     "no_filter_match": "No agents match this filter.",
-    "search_runtime_filtered": "No agents on \"{{machine}}\" match \"{{query}}\".",
-    "runtime_filtered": "No agents on \"{{machine}}\"."
-  },
-  "runtime_filter": {
-    "all": "All runtimes",
-    "section_local": "Local",
-    "section_remote": "Remote",
-    "section_cloud": "Cloud",
-    "agent_count_one": "{{count}} agent",
-    "agent_count_other": "{{count}} agents",
-    "empty": "No machines yet"
+    "search_engine_filtered": "No {{engine}} agents match \"{{query}}\".",
+    "engine_filtered": "No agents on the {{engine}} engine."
   },
   "columns": {
     "agent": "Agent",
     "status": "Status",
     "workload": "Workload",
-    "runtime": "Runtime",
     "activity_7d": "Activity (7d)",
-    "runs": "Runs"
+    "runs": "Runs",
+    "engine": "Engine"
   },
   "row": {
     "you": "You",
     "archived": "Archived",
     "no_description": "No description",
-    "fallback_runtime_cloud": "Cloud",
-    "fallback_runtime_local": "Local",
-    "actions_aria": "Row actions"
+    "actions_aria": "Row actions",
+    "fallback_engine": "Unknown",
+    "engine_tooltip": "Runs on any online {{engine}} machine"
   },
   "activity_tooltip": {
     "created_today": "Created today",
@@ -141,7 +132,6 @@
     "section_details": "Details",
     "section_skills": "Skills",
     "section_integrations": "Integrations",
-    "prop_runtime": "Runtime",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
     "prop_visibility": "Visibility",
@@ -159,7 +149,8 @@
     "edit_description_title": "Edit description",
     "description_placeholder": "What does this agent do?",
     "save": "Save",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "prop_engine": "Engine"
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",
@@ -168,16 +159,8 @@
   "pickers": {
     "concurrency_tooltip": "Concurrency · {{value}} max concurrent tasks",
     "concurrency_range": "Max concurrent tasks ({{min}}–{{max}})",
-    "runtime_none": "No runtime",
-    "runtime_tooltip": "Runtime · {{name}} · {{status}}",
-    "runtime_tooltip_none": "Runtime · none selected",
-    "runtime_online": "online",
-    "runtime_offline": "offline",
-    "runtime_owned_by": "owned by {{name}}",
-    "runtime_empty": "No runtimes",
     "model_default": "Default",
     "model_tooltip": "Model · {{value}}",
-    "model_managed_by_runtime": "Managed by runtime",
     "model_search_placeholder": "Search or type a model ID",
     "model_discovering": "Discovering models…",
     "model_empty": "No models available",
@@ -189,15 +172,13 @@
     "thinking_default": "Follow CLI config",
     "thinking_tooltip": "Thinking · {{value}}",
     "thinking_clear": "Follow CLI config",
-    "thinking_clear_title": "Clear the override and let the local CLI config (claude/codex) decide the reasoning level"
+    "thinking_clear_title": "Clear the override and let the local CLI config (claude/codex) decide the reasoning level",
+    "engine_tooltip": "Engine: {{value}}",
+    "engine_hint": "Tasks run on any online machine of this engine."
   },
   "model_dropdown": {
     "label": "Model",
-    "select_runtime_first": "Select a runtime first",
     "default_provider": "Default (provider)",
-    "runtime_offline_manual": "Runtime offline — enter manually",
-    "managed_by_runtime_title": "Model selection is managed by this runtime.",
-    "managed_by_runtime_hint": "Configure the model on the runtime host (e.g. Hermes reads it from its own config file).",
     "discovery_failed": "discovery failed",
     "clear_full": "Clear selection (use provider default)"
   },
@@ -225,14 +206,6 @@
     "description_label": "Description",
     "description_placeholder": "What does this agent do?",
     "visibility_label": "Visibility",
-    "runtime_label": "Runtime",
-    "runtime_filter_mine": "Mine",
-    "runtime_filter_all": "All",
-    "runtime_loading": "Loading runtimes...",
-    "runtime_none": "No runtime available",
-    "runtime_cloud_badge": "Cloud",
-    "runtime_private_badge": "Private",
-    "runtime_private_locked_tooltip": "Private runtime — only its owner or a workspace admin can create agents on it. Ask the owner to switch it to Public to share.",
     "duplicate_copy_suffix": " (Copy)",
     "create": "Create",
     "creating": "Creating...",
@@ -265,7 +238,9 @@
       "remove_aria": "Remove avatar",
       "select_image_toast": "Please select an image file.",
       "upload_failed_toast": "Avatar upload failed"
-    }
+    },
+    "engine_label": "Engine",
+    "engine_no_capacity": "No online machine for this engine right now — new tasks will queue until one connects."
   },
   "tab_body": {
     "common": {
@@ -405,10 +380,9 @@
   "profile_card": {
     "unavailable": "Agent unavailable",
     "detail_link": "Detail →",
-    "runtime_label": "Runtime",
     "skills_label": "Skills",
     "owner_label": "Owner",
-    "unknown_runtime": "Unknown runtime"
+    "engine_label": "Engine"
   },
   "live_peek": {
     "current_issue_label": "Now on",
@@ -448,5 +422,10 @@
     "runtime_offline": "Daemon offline",
     "runtime_recovery": "Daemon restarted",
     "manual": "Cancelled by user"
+  },
+  "engine_filter": {
+    "all": "All engines",
+    "agent_count_one": "{{count}} agent",
+    "agent_count_other": "{{count}} agents"
   }
 }

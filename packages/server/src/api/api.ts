@@ -9,7 +9,7 @@ import { createLogger } from "@shared/logger.js";
 import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgentTemplates } from "./agent-templates.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
-import { MultiremiStore } from "@multiremi/store/store.js";
+import { daemonRuntimeId, MultiremiStore } from "@multiremi/store/store.js";
 import {
   agentSkillCompatibilitySummary,
   skillCompatibilityResponse,
@@ -792,13 +792,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/me/onboarding/runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string }>(c);
-    const result = safeRuntimeOnboardingBootstrap(store, body);
+    const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    const result = safeRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/api/me/onboarding/no-runtime-bootstrap", async (c) => {
     const body = await readJson<{ workspace_id?: string; workspaceId?: string }>(c);
-    const result = safeNoRuntimeOnboardingBootstrap(store, body);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "");
+    if (denied) return denied;
+    const result = safeNoRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -1005,7 +1010,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const agent = store.createAgent(input);
-    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
       template: input.template,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1018,18 +1023,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const workspaceId = requestedAgentWorkspaceId(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const runtime = loadRuntimeForAgentRequest(c, store, workspaceId, body.runtimeId ?? body.runtime_id, "create");
-    if (runtime instanceof Response) return runtime;
-    const provider = agentProviderForRuntime(body.provider, runtime);
-    const before = store.getAgent(defaultAgentId(workspaceId, runtime.id));
+    const provider = resolveAgentRequestProvider(c, store, workspaceId, body);
+    if (provider instanceof Response) return provider;
+    const actingUserId = currentRequestUserId(c);
+    const before = store.getDefaultAgent(workspaceId, provider, actingUserId);
     const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
     const agent = store.ensureDefaultAgent(provider, {
       workspaceId,
-      runtimeId: runtime.id,
-      ownerId: currentRequestUserId(c),
+      ownerId: actingUserId,
     });
     if (!before) {
-      recordAgentCreatedAnalytics(c, store, agent, runtime, {
+      recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
         template: "default",
         isFirstAgentInWorkspace: isFirstAgent,
       });
@@ -1150,7 +1154,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const agent = store.createAgent(input);
-    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, agent, runtimeForAgentInput(store, body), {
       template: input.template,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1164,7 +1168,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const result = await createAgentFromTemplate(store, input);
-    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, body), {
       template: input.templateSlug ?? input.template_slug,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -1217,7 +1221,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (input instanceof Response) return input;
     const isFirstAgent = isFirstAgentInWorkspace(store, input.workspaceId ?? input.workspace_id ?? "local");
     const result = await createAgentFromTemplate(store, input);
-    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, input), {
+    recordAgentCreatedAnalytics(c, store, result.agent, runtimeForAgentInput(store, body), {
       template: input.templateSlug ?? input.template_slug,
       isFirstAgentInWorkspace: isFirstAgent,
     });
@@ -2016,6 +2020,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (loaded instanceof Response) return loaded;
     return c.json(loaded.runtimes.map(runtimeCompatibilityResponse));
   });
+  const fleetModelsHandler = (c: Context) => {
+    const loaded = listRuntimesForCurrentUser(c, store);
+    if (loaded instanceof Response) return loaded;
+    return c.json({ providers: fleetModelsResponse(loaded.runtimes, currentRequestUserId(c)) });
+  };
+  app.get("/api/models", fleetModelsHandler);
+  app.get("/api/multiremi/models", fleetModelsHandler);
   app.get("/api/runtimes/:id", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
     if (loaded instanceof Response) return loaded;
@@ -4161,6 +4172,26 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/tasks", async (c) => {
     const body = await readJson<CreateTaskInput>(c);
+    // Gate on the target agent: without this, any member could create a task
+    // for another workspace's (private) agent and drive its machine +
+    // credentials. The task always runs in the agent's workspace, so that's
+    // the workspace whose membership must be checked.
+    const agentId = cleanString(body.agentId);
+    const agent = agentId ? store.getAgent(agentId) : null;
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, agent.workspaceId);
+    if (denied) return denied;
+    if (!canCurrentUserAccessAgent(c, store, agent)) {
+      return c.json({ error: "you do not have access to this agent" }, 403);
+    }
+    // Injecting into another user's chat session (same workspace) would pollute
+    // and potentially resume their provider session — gate on the session's
+    // creator, the same rule the chat read/send routes enforce.
+    const sessionId = cleanString(body.chatSessionId);
+    if (sessionId) {
+      const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
+      if (loaded instanceof Response) return loaded;
+    }
     return c.json({ task: store.createTask(body) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
@@ -4868,6 +4899,7 @@ function agentCompatibilityResponse(store: MultiremiStore, agent: MultiremiAgent
     id: agent.id,
     workspace_id: agent.workspaceId,
     runtime_id: agent.runtimeId ?? "",
+    provider: agent.provider,
     name: agent.name,
     description: agent.description,
     instructions: agent.instructions,
@@ -5895,6 +5927,69 @@ function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<string,
   };
 }
 
+/**
+ * Union of the online runtimes' model catalogs, grouped by provider — the
+ * fleet-level catalog behind machine-less agent creation. A bucket exists for
+ * every provider that has a runtime at all (even offline, count 0) so the UI
+ * can still offer the engine with a capacity hint.
+ *
+ * Only runtimes the caller's agents could actually be claimed by are counted:
+ * a private runtime an agent's task can never reach (different owner) must not
+ * inflate the engine's online capacity. `callerOwnerId` is the acting user —
+ * the owner their newly created agents will carry.
+ */
+// Maps a model's vendor (as the daemon reports it) to the engine that runs it,
+// for the rare "any" runtime that carries a model catalog but no fixed engine.
+const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
+
+function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): Array<Record<string, unknown>> {
+  const usable = runtimes.filter(
+    (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
+  );
+  const buckets = new Map<string, { online: number; models: Map<string, MultiremiRuntimeModel> }>();
+  const bucket = (provider: string) => {
+    let entry = buckets.get(provider);
+    if (!entry) {
+      entry = { online: 0, models: new Map() };
+      buckets.set(provider, entry);
+    }
+    return entry;
+  };
+  for (const runtime of usable) {
+    if (runtime.provider && runtime.provider !== "any") bucket(runtime.provider);
+    // An "any" runtime can execute every known engine — surface those engines
+    // (with its capacity counted below) even when no dedicated runtime exists.
+    if (runtime.provider === "any") for (const provider of MULTIREMI_DAEMON_PROVIDERS) bucket(provider);
+    if (runtime.status !== "online") continue;
+    for (const model of runtime.models ?? []) {
+      // Bucket by the runtime's ENGINE, not model.provider. The daemon reports
+      // model.provider as the model vendor ("openai" / "anthropic"), but the
+      // UI (and scheduling) key on the engine that runs it ("codex" / "claude").
+      // An "any" runtime has no single engine, so map the vendor to its engine;
+      // a vendor we don't recognise is skipped rather than minting a phantom
+      // bucket the UI never queries.
+      const engine = runtime.provider !== "any" ? runtime.provider : MODEL_VENDOR_TO_ENGINE[model.provider ?? ""];
+      if (!engine) continue;
+      const entry = bucket(engine);
+      const existing = entry.models.get(model.id);
+      if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
+    }
+  }
+  for (const runtime of usable) {
+    if (runtime.status !== "online") continue;
+    for (const [provider, entry] of buckets) {
+      if (runtime.provider === provider || runtime.provider === "any") entry.online += 1;
+    }
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([provider, entry]) => ({
+      provider,
+      online_runtime_count: entry.online,
+      models: [...entry.models.values()].map(runtimeModelCompatibilityResponse),
+    }));
+}
+
 function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel): Record<string, unknown> {
   const response: Record<string, unknown> = {
     id: model.id,
@@ -6422,15 +6517,14 @@ function withAgentRequestContext(c: Context, store: MultiremiStore, input: Creat
   if (denied) return denied;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
-  const runtime = loadRuntimeForAgentRequest(c, store, workspaceId, input.runtimeId ?? input.runtime_id, "create");
-  if (runtime instanceof Response) return runtime;
+  const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
+  if (provider instanceof Response) return provider;
   const conflict = store.getAgentByWorkspaceAndName(workspaceId, name);
   if (conflict) return agentNameConflict(c, name);
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description);
   if (description instanceof Response) return description;
-  const provider = agentProviderForRuntime(input.provider, runtime);
   const thinkingLevel = agentRequestThinkingLevel(input);
   if (!isKnownThinkingValue(provider, thinkingLevel)) {
     return agentThinkingLevelError(c, thinkingLevel, provider);
@@ -6445,8 +6539,8 @@ function withAgentRequestContext(c: Context, store: MultiremiStore, input: Creat
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: runtime.id,
-    runtime_id: runtime.id,
+    runtimeId: null,
+    runtime_id: null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
   };
@@ -6477,27 +6571,54 @@ function withAgentUpdateRequestContext(
     next.description = description;
   }
   let targetProvider = current.provider;
-  let runtimeChanged = false;
+  let providerChanged = false;
+  const applyProvider = (provider: string) => {
+    targetProvider = provider;
+    providerChanged = provider !== current.provider;
+    next.provider = provider;
+  };
+  if (hasRequestField(input, "provider")) {
+    const provider = cleanString(typeof input.provider === "string" ? input.provider : null);
+    if (!provider || !MULTIREMI_DAEMON_PROVIDERS.has(provider)) {
+      return c.json({ error: `unknown provider "${provider ?? ""}"` }, 400);
+    }
+    applyProvider(provider);
+  }
+  // Agents are pool workers now — machine binding is gone. A legacy "move to
+  // runtime" request keeps its one observable effect, switching the agent's
+  // engine, with full legacy validation (existence, workspace, the
+  // private-runtime gate). The binding itself is dropped.
   if (hasRequestField(input, "runtimeId", "runtime_id")) {
-    const runtime = loadRuntimeForAgentRequest(c, store, current.workspaceId, input.runtimeId ?? input.runtime_id, "move");
-    if (runtime instanceof Response) return runtime;
-    targetProvider = agentProviderForRuntime(input.provider, runtime);
-    runtimeChanged = true;
-    next.provider = targetProvider;
-    next.runtimeId = runtime.id;
-    next.runtime_id = runtime.id;
-  } else if (hasRequestField(input, "provider")) {
-    delete next.provider;
+    const legacyRuntimeId = cleanString(input.runtimeId ?? input.runtime_id);
+    delete next.runtimeId;
+    delete next.runtime_id;
+    if (legacyRuntimeId) {
+      const provider = resolveAgentRequestProvider(c, store, current.workspaceId, {
+        runtime_id: legacyRuntimeId,
+        // On an "any" runtime the request's provider falls through; default it
+        // to the agent's CURRENT provider (not "claude") so a legacy move to an
+        // any-runtime doesn't silently flip a Codex agent to Claude.
+        provider: input.provider ?? current.provider,
+      });
+      if (provider instanceof Response) return provider;
+      applyProvider(provider);
+    }
   }
   if (hasRequestField(input, "thinkingLevel", "thinking_level")) {
     const thinkingLevel = agentRequestThinkingLevel(input);
     if (!isKnownThinkingValue(targetProvider, thinkingLevel)) {
       return agentThinkingLevelError(c, thinkingLevel, targetProvider);
     }
-  } else if (runtimeChanged && current.thinkingLevel && !isKnownThinkingValue(targetProvider, current.thinkingLevel)) {
+  } else if (providerChanged && current.thinkingLevel && !isKnownThinkingValue(targetProvider, current.thinkingLevel)) {
     return c.json({
-      error: `existing thinking_level "${current.thinkingLevel}" is not valid for runtime "${targetProvider}"; pass thinking_level="" to clear or set a value valid for the new runtime`,
+      error: `existing thinking_level "${current.thinkingLevel}" is not valid for provider "${targetProvider}"; pass thinking_level="" to clear or set a value valid for the new provider`,
     }, 400);
+  }
+  // A model id is engine-specific — carrying e.g. a claude model onto codex
+  // would hand the codex CLI an unknown model. Unless the request also picks
+  // a model, an engine switch resets it to the engine default.
+  if (providerChanged && !hasRequestField(input, "model")) {
+    next.model = "";
   }
   if (hasRequestField(input, "maxConcurrentTasks", "max_concurrent_tasks")) {
     const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
@@ -6518,16 +6639,14 @@ function withAgentTemplateRequestContext(
   if (denied) return denied;
   const name = cleanString(typeof input.name === "string" ? input.name : null);
   if (!name) return c.json({ error: "name is required" }, 400);
-  const runtimeId = cleanString(input.runtimeId ?? input.runtime_id);
-  if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
   const templateSlug = cleanString(input.templateSlug ?? input.template_slug);
   if (!templateSlug) return c.json({ error: "template_slug is required" }, 400);
   const template = getAgentTemplate(templateSlug);
   if (!template) return c.json({ error: `template not found: ${templateSlug}` }, 400);
   const conflict = store.getAgentByWorkspaceAndName(workspaceId, name);
   if (conflict) return agentNameConflict(c, name);
-  const runtime = loadRuntimeForAgentRequest(c, store, workspaceId, runtimeId, "create");
-  if (runtime instanceof Response) return runtime;
+  const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
+  if (provider instanceof Response) return provider;
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description ?? template.description);
@@ -6537,36 +6656,52 @@ function withAgentTemplateRequestContext(
     ...input,
     name,
     description,
-    provider: agentProviderForRuntime(input.provider ?? null, runtime),
+    provider,
     workspaceId,
     workspace_id: workspaceId,
     ownerId,
     owner_id: ownerId,
-    runtimeId: runtime.id,
-    runtime_id: runtime.id,
+    runtimeId: null,
+    runtime_id: null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
   };
 }
 
-function loadRuntimeForAgentRequest(
+/**
+ * Resolve the provider for an agent create request. Agents are pool workers —
+ * they never bind to a runtime — but legacy clients still send runtime_id, so
+ * a supplied one keeps its full validation (existence, workspace, visibility)
+ * and contributes only its provider.
+ */
+function resolveAgentRequestProvider(
   c: Context,
   store: MultiremiStore,
   workspaceId: string,
-  runtimeId: string | null | undefined,
-  action: "create" | "move",
-): MultiremiRuntime | Response {
-  const id = cleanString(runtimeId);
-  if (!id) return c.json({ error: "runtime_id is required" }, 400);
-  const runtime = store.getRuntime(id);
-  if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
-    return c.json({ error: "invalid runtime_id" }, 400);
+  input: { runtimeId?: string | null; runtime_id?: string | null; provider?: unknown },
+): string | Response {
+  const runtimeId = cleanString(input.runtimeId ?? input.runtime_id);
+  if (runtimeId) {
+    const runtime = store.getRuntime(runtimeId);
+    if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
+      return c.json({ error: "invalid runtime_id" }, 400);
+    }
+    if (!canCurrentUserUseRuntime(c, store, runtime)) {
+      return c.json({ error: "this runtime is private; only its owner or a workspace admin can create agents on it" }, 403);
+    }
+    // An "any" runtime contributes no provider of its own — the requested one
+    // falls through and must still pass the whitelist.
+    const derived = agentProviderForRuntime(input.provider, runtime);
+    if (!MULTIREMI_DAEMON_PROVIDERS.has(derived)) {
+      return c.json({ error: `unknown provider "${derived}"` }, 400);
+    }
+    return derived;
   }
-  if (!canCurrentUserUseRuntime(c, store, runtime)) {
-    const verb = action === "move" ? "move agents onto it" : "create agents on it";
-    return c.json({ error: `this runtime is private; only its owner or a workspace admin can ${verb}` }, 403);
+  const provider = cleanString(typeof input.provider === "string" ? input.provider : null) ?? "claude";
+  if (!MULTIREMI_DAEMON_PROVIDERS.has(provider)) {
+    return c.json({ error: `unknown provider "${provider}"` }, 400);
   }
-  return runtime;
+  return provider;
 }
 
 function canCurrentUserUseRuntime(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): boolean {
@@ -6580,14 +6715,6 @@ function canCurrentUserUseRuntime(c: Context, store: MultiremiStore, runtime: Mu
 function agentProviderForRuntime(provider: unknown, runtime: MultiremiRuntime): CreateAgentInput["provider"] {
   if (runtime.provider && runtime.provider !== "any") return runtime.provider;
   return cleanString(typeof provider === "string" ? provider : null) ?? "claude";
-}
-
-function defaultAgentId(workspaceId: string, runtimeId: string): string {
-  return `agt_default_${safeIdSegment(workspaceId)}_${safeIdSegment(runtimeId)}`;
-}
-
-function safeIdSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "local";
 }
 
 function normalizeAgentRequestDescription(c: Context, value: unknown): string | Response {
@@ -8543,42 +8670,45 @@ function safeJoinCloudWaitlist(
 function safeRuntimeOnboardingBootstrap(
   store: MultiremiStore,
   body: { workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string },
+  bootstrapUserId: string,
 ): { workspace_id: string; agent_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
   const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
   const runtimeId = body.runtime_id ?? body.runtimeId ?? "";
   if (!workspaceId) return { error: "workspace_id is required", status: 400 };
   if (!runtimeId) return { error: "runtime_id is required", status: 400 };
   const runtime = store.getRuntime(runtimeId);
-  if (!runtime || runtime.workspaceId !== workspaceId) return { error: "invalid runtime_id", status: 400 };
+  // COALESCE(...,'local') so a workspace-less runtime is treated as local,
+  // matching how the claim predicate (and the rest of the system) reads it.
+  if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) return { error: "invalid runtime_id", status: 400 };
   const provider = runtime.provider === "claude" || runtime.provider === "codex" ? runtime.provider : "codex";
-  const before = store.getAgent(defaultAgentId(workspaceId, runtime.id));
+  const before = store.getDefaultAgent(workspaceId, provider, bootstrapUserId);
   const isFirstAgent = isFirstAgentInWorkspace(store, workspaceId);
   const agent = store.ensureDefaultAgent(provider, {
     workspaceId,
-    runtimeId: runtime.id,
-    ownerId: store.getCurrentUser().id,
+    ownerId: bootstrapUserId,
   });
   if (!before) {
     recordSystemAgentCreatedAnalytics(store, agent, runtime, {
-      actorId: store.getCurrentUser().id,
+      actorId: bootstrapUserId,
       template: "multiremi_helper",
       isFirstAgentInWorkspace: isFirstAgent,
     });
   }
-  const issue = createOnboardingIssue(store, workspaceId, "Connect your local runtime", `Use ${runtime.name} to run your first task.`);
+  const issue = createOnboardingIssue(store, workspaceId, "Connect your local runtime", `Use ${runtime.name} to run your first task.`, bootstrapUserId);
   store.createTask({
     agentId: agent.id,
     issueId: issue.id,
     workspaceId,
     prompt: "Help complete onboarding and verify the local runtime is ready.",
   });
-  store.markCurrentUserOnboarded();
+  store.markCurrentUserOnboarded(bootstrapUserId);
   return { workspace_id: workspaceId, agent_id: agent.id, issue_id: issue.id };
 }
 
 function safeNoRuntimeOnboardingBootstrap(
   store: MultiremiStore,
   body: { workspace_id?: string; workspaceId?: string },
+  bootstrapUserId: string,
 ): { workspace_id: string; issue_id: string } | { error: string; status: 400 | 404 } {
   const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
   if (!workspaceId) return { error: "workspace_id is required", status: 400 };
@@ -8588,8 +8718,9 @@ function safeNoRuntimeOnboardingBootstrap(
     workspaceId,
     "Install a local runtime",
     "Install and register a local Claude or Codex runtime to start running tasks.",
+    bootstrapUserId,
   );
-  store.markCurrentUserOnboarded();
+  store.markCurrentUserOnboarded(bootstrapUserId);
   return { workspace_id: workspaceId, issue_id: issue.id };
 }
 
@@ -8598,6 +8729,7 @@ function createOnboardingIssue(
   workspaceId: string,
   title: string,
   description: string,
+  createdBy = "local",
 ): ReturnType<MultiremiStore["createIssue"]> {
   const existing = store.listIssues({ workspaceId }).find((issue) => issue.title === title);
   if (existing) return existing;
@@ -8605,7 +8737,7 @@ function createOnboardingIssue(
     title,
     description,
     workspaceId,
-    createdBy: "local",
+    createdBy,
     priority: "medium",
     contextRefs: [{ type: "onboarding" }],
   });
@@ -8691,7 +8823,6 @@ function registerDaemonRuntimes(
     }
     if (runtime.status === "offline") store.setRuntimeOffline(saved.id);
     mergeLegacyDaemonRuntimes(store, saved, provider, legacyDaemonIds);
-    store.bindUnboundAgentsToRuntime(saved);
     const current = store.getRuntime(saved.id) ?? saved;
     registered.push(daemonRuntimeResponse(current, {
       daemonId,
@@ -9653,7 +9784,12 @@ function safeRerunIssue(
   if (!issue) return { error: "issue not found", status: 404 };
   const agentId = body.agent_id ?? body.agentId ?? issue.assigneeId;
   if (!agentId) return { error: "issue has no agent assignee", status: 400 };
-  if (!store.getAgent(agentId)) return { error: "agent not found", status: 404 };
+  const agent = store.getAgent(agentId);
+  if (!agent) return { error: "agent not found", status: 404 };
+  // The rerun agent must live in the issue's workspace — a caller with issue
+  // access can't redirect the run to another workspace's agent (createTask
+  // would reject the cross-workspace link, but fail loudly here first).
+  if (agent.workspaceId !== issue.workspaceId) return { error: "agent not found", status: 404 };
   const task = store.createTask({
     agentId,
     issueId: issue.id,
@@ -9664,14 +9800,25 @@ function safeRerunIssue(
 }
 
 function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, task: MultiremiTask): boolean {
-  if (runtime.workspaceId && task.workspaceId !== runtime.workspaceId) return false;
+  if ((runtime.workspaceId ?? "local") !== (task.workspaceId ?? "local")) return false;
   if (isInFlightTaskStatus(task.status)) return task.runtimeId === runtime.id;
   if (task.status !== "queued") return false;
   const agent = store.getAgent(task.agentId);
   if (!agent || agent.archivedAt) return false;
   if (task.runtimeId && task.runtimeId !== runtime.id) return false;
   if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
-  return runtime.provider === "any" || agent.provider === runtime.provider;
+  if (runtime.provider !== "any" && agent.provider !== runtime.provider) return false;
+  // Mirrors the claim SQL's ownership predicate: a private runtime only runs
+  // its owner's agents (COALESCE(...,'local') so single-machine NULL owners
+  // still pair). A task stamp is deliberately NOT an escape hatch — the /tasks
+  // API lets any member stamp an arbitrary agent+runtime.
+  if (
+    runtime.visibility !== "public" &&
+    (runtime.ownerId ?? "local") !== (agent.ownerId ?? "local")
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isDaemonPendingTaskForRuntime(task: MultiremiTask, runtimeId: string): boolean {
@@ -9699,16 +9846,6 @@ function isInFlightTaskStatus(status: MultiremiTaskStatus): boolean {
     || status === "running"
     || status === "waiting_local_directory"
     || status === "awaiting_human";
-}
-
-function daemonRuntimeId(daemonId: string, provider: string): string {
-  const key = `${daemonId}:${provider}`.toLowerCase();
-  let hash = 2166136261;
-  for (let i = 0; i < key.length; i += 1) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `rt_${(hash >>> 0).toString(36)}`;
 }
 
 function launchHeader(provider: string): string {

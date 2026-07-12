@@ -48,32 +48,24 @@
     "search_active": "没有智能体匹配\"{{query}}\"。",
     "search_active_filtered": "在该筛选下没有智能体匹配\"{{query}}\"。",
     "no_filter_match": "该筛选下没有匹配的智能体。",
-    "search_runtime_filtered": "\"{{machine}}\"上没有匹配\"{{query}}\"的智能体。",
-    "runtime_filtered": "\"{{machine}}\"上还没有智能体。"
-  },
-  "runtime_filter": {
-    "all": "全部运行时",
-    "section_local": "本机",
-    "section_remote": "远程",
-    "section_cloud": "云端",
-    "agent_count_other": "{{count}} 个智能体",
-    "empty": "还没有机器"
+    "search_engine_filtered": "没有匹配“{{query}}”的 {{engine}} 智能体。",
+    "engine_filtered": "{{engine}} 引擎下暂无智能体。"
   },
   "columns": {
     "agent": "智能体",
     "status": "状态",
     "workload": "工作负载",
-    "runtime": "运行时",
     "activity_7d": "活动（7 天）",
-    "runs": "运行次数"
+    "runs": "运行次数",
+    "engine": "引擎"
   },
   "row": {
     "you": "你",
     "archived": "已归档",
     "no_description": "暂无描述",
-    "fallback_runtime_cloud": "云端",
-    "fallback_runtime_local": "本地",
-    "actions_aria": "行操作"
+    "actions_aria": "行操作",
+    "fallback_engine": "未知",
+    "engine_tooltip": "在任意在线的 {{engine}} 机器上运行"
   },
   "activity_tooltip": {
     "created_today": "今天创建",
@@ -136,7 +128,6 @@
     "section_details": "详情",
     "section_skills": "Skills",
     "section_integrations": "外部集成",
-    "prop_runtime": "运行时",
     "prop_model": "模型",
     "prop_thinking": "思考",
     "prop_visibility": "可见性",
@@ -154,7 +145,8 @@
     "edit_description_title": "编辑描述",
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
-    "cancel": "取消"
+    "cancel": "取消",
+    "prop_engine": "引擎"
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",
@@ -163,16 +155,8 @@
   "pickers": {
     "concurrency_tooltip": "并发 · 最多 {{value}} 个并行 task",
     "concurrency_range": "最大并行 task 数（{{min}}–{{max}}）",
-    "runtime_none": "无运行时",
-    "runtime_tooltip": "运行时 · {{name}} · {{status}}",
-    "runtime_tooltip_none": "运行时 · 未选择",
-    "runtime_online": "在线",
-    "runtime_offline": "离线",
-    "runtime_owned_by": "{{name}} 的",
-    "runtime_empty": "暂无运行时",
     "model_default": "默认",
     "model_tooltip": "模型 · {{value}}",
-    "model_managed_by_runtime": "由运行时管理",
     "model_search_placeholder": "搜索或输入模型 ID",
     "model_discovering": "正在发现模型...",
     "model_empty": "暂无可用模型",
@@ -184,15 +168,13 @@
     "thinking_default": "跟随 CLI 配置",
     "thinking_tooltip": "思考 · {{value}}",
     "thinking_clear": "跟随 CLI 配置",
-    "thinking_clear_title": "清除覆盖，让本地 CLI（claude/codex）的配置决定推理级别"
+    "thinking_clear_title": "清除覆盖，让本地 CLI（claude/codex）的配置决定推理级别",
+    "engine_tooltip": "引擎：{{value}}",
+    "engine_hint": "任务将在该引擎的任意在线机器上运行。"
   },
   "model_dropdown": {
     "label": "模型",
-    "select_runtime_first": "请先选择运行时",
     "default_provider": "默认（提供方）",
-    "runtime_offline_manual": "运行时离线 —— 请手动输入",
-    "managed_by_runtime_title": "模型选择由该运行时管理。",
-    "managed_by_runtime_hint": "请在运行时主机上配置模型（例如 Hermes 会从自身配置文件读取）。",
     "discovery_failed": "发现失败",
     "clear_full": "清除选择（使用提供方默认）"
   },
@@ -220,14 +202,6 @@
     "description_label": "描述",
     "description_placeholder": "这个智能体做什么？",
     "visibility_label": "可见性",
-    "runtime_label": "运行时",
-    "runtime_filter_mine": "我的",
-    "runtime_filter_all": "全部",
-    "runtime_loading": "加载运行时...",
-    "runtime_none": "暂无可用运行时",
-    "runtime_cloud_badge": "云端",
-    "runtime_private_badge": "私有",
-    "runtime_private_locked_tooltip": "私有运行时——只有 runtime 所有者或工作区管理员可在其上创建智能体。如果需要共享，请联系所有者切换为「公开」。",
     "duplicate_copy_suffix": "（副本）",
     "create": "创建",
     "creating": "创建中...",
@@ -259,7 +233,9 @@
       "remove_aria": "移除头像",
       "select_image_toast": "请选择图片文件。",
       "upload_failed_toast": "头像上传失败"
-    }
+    },
+    "engine_label": "引擎",
+    "engine_no_capacity": "该引擎当前没有在线机器——新任务将排队，直到有机器上线。"
   },
   "tab_body": {
     "common": {
@@ -395,10 +371,9 @@
   "profile_card": {
     "unavailable": "智能体不可用",
     "detail_link": "详情 →",
-    "runtime_label": "运行时",
     "skills_label": "Skills",
     "owner_label": "所有者",
-    "unknown_runtime": "未知运行时"
+    "engine_label": "引擎"
   },
   "live_peek": {
     "current_issue_label": "正在处理",
@@ -436,5 +411,10 @@
     "runtime_offline": "守护进程离线",
     "runtime_recovery": "守护进程已重启",
     "manual": "用户取消"
+  },
+  "engine_filter": {
+    "all": "全部引擎",
+    "agent_count_one": "{{count}} 个智能体",
+    "agent_count_other": "{{count}} 个智能体"
   }
 }

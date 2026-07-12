@@ -546,7 +546,68 @@ runMigrations(this.db);
         id,
       ],
     );
-    return this.getAgent(id)!;
+    const updated = this.getAgent(id)!;
+    // Changing a scheduling-relevant field (engine, owner, or workspace)
+    // strands the agent's already-queued tasks: a task pinned to a runtime
+    // that no longer matches the agent (provider/owner) can't be claimed, and
+    // a workspace change leaves the task's workspace stale versus the claim
+    // predicate. Re-home them.
+    const providerChanged = input.provider !== undefined && input.provider !== current.provider;
+    const ownerChanged = (updated.ownerId ?? "local") !== (current.ownerId ?? "local");
+    const workspaceChanged = updated.workspaceId !== current.workspaceId;
+    if (providerChanged || ownerChanged || workspaceChanged) {
+      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged });
+    }
+    return updated;
+  }
+
+  private rescheduleAgentQueuedTasks(agent: MultiremiAgent, opts: { workspaceChanged: boolean }): void {
+    const now = nowIso();
+    // A workspace move makes the agent's in-flight/queued tasks orphans: they
+    // serve the OLD workspace's issues/chats/autopilots. Migrating their
+    // workspace column would leave a task in wsB linked to a wsA issue/project
+    // — a cross-tenant execution context. Cancel them via cancelTask so the
+    // full terminal handling runs (cancelled_at, afterTaskTerminal, the
+    // task:cancelled event, issue/autopilot-run wrap-up). Include dispatched
+    // tasks: an agent workspace move must not leave one stuck in the old
+    // workspace where nothing can reclaim it. The agent picks up fresh work in
+    // its new workspace.
+    if (opts.workspaceChanged) {
+      const active = this.db
+        .query("SELECT id FROM multiremi_tasks WHERE agent_id = ? AND status IN ('queued', 'dispatched', 'waiting_local_directory')")
+        .all(agent.id) as Row[];
+      for (const row of active) this.cancelTask(String(row.id));
+      return;
+    }
+    // Include tasks with only a session/work_dir (no runtime pin) — a chat
+    // send can queue a task carrying the promoted provider session without a
+    // runtime stamp, and that session is also void after an engine/owner change.
+    const rows = this.db
+      .query(
+        "SELECT * FROM multiremi_tasks WHERE agent_id = ? AND status = 'queued' AND (runtime_id IS NOT NULL OR session_id IS NOT NULL)",
+      )
+      .all(agent.id) as Row[];
+    for (const row of rows) {
+      const daemonId = this.localDirectoryDaemonForTask(row);
+      if (daemonId) {
+        // local_directory task: keep it on the machine that holds the
+        // directory, under the runtime id for the agent's current provider.
+        // Drop the provider session — an engine/owner change invalidates it —
+        // while keeping work_dir (the directory itself is unchanged).
+        const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+        const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
+        this.db.run(
+          "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+          [newRuntimeId, now, String(row.id)],
+        );
+      } else {
+        // Session/other pin: the old session is void — re-pool it.
+        this.db.run(
+          "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+          [now, String(row.id)],
+        );
+      }
+    }
   }
 
   archiveAgent(id: string): MultiremiAgent {
@@ -770,21 +831,29 @@ runMigrations(this.db);
 
   ensureDefaultAgent(
     provider = "claude",
-    options: { runtimeId?: string | null; workspaceId?: string | null; ownerId?: string | null } = {},
+    options: { workspaceId?: string | null; ownerId?: string | null } = {},
   ): MultiremiAgent {
-    const runtimeId = cleanOptionalString(options.runtimeId);
     const workspaceId = cleanOptionalString(options.workspaceId) ?? "local";
     const ownerId = cleanOptionalString(options.ownerId) ?? "local";
-    const id = runtimeId ? `agt_default_${safeIdSegment(workspaceId)}_${safeIdSegment(runtimeId)}` : `agt_default_${provider}`;
-    const existing = this.getAgent(id);
+    const existing = this.getDefaultAgent(workspaceId, provider, ownerId);
     if (existing) {
       if (existing.archivedAt) {
-        const now = nowIso();
-        this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
-        return this.getAgent(id)!;
+        this.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [nowIso(), existing.id]);
+        return this.getAgent(existing.id)!;
       }
       return existing;
     }
+    // Per-owner default agent: each member gets their own, owned by them. This
+    // is what lets a member's PRIVATE runtime run their default/onboarding task
+    // (the claim ownership predicate requires runtime owner == agent owner) —
+    // a single workspace-shared default owned by whoever created it first would
+    // be rejected by every other member's private machine. It also means the
+    // /agents/default endpoint can never hand one member another member's
+    // default agent (with its custom_env / mcp_config). Walk past any taken id
+    // (legacy/imported rows) so createAgent can't hit a UNIQUE violation.
+    const base = `agt_default_${safeIdSegment(workspaceId)}_${provider}_${safeIdSegment(ownerId)}`;
+    let id = base;
+    for (let n = 2; this.getAgent(id); n += 1) id = `${base}_${n}`;
     return this.createAgent({
       id,
       name: provider === "codex" ? "Codex" : "Claude",
@@ -792,9 +861,24 @@ runMigrations(this.db);
       provider,
       workspaceId,
       ownerId,
-      runtimeId,
       instructions: "You are an autonomous coding agent. Complete the task and report the result clearly.",
     });
+  }
+
+  /**
+   * Find a member's default agent for a provider. Matches legacy ids too
+   * (`agt_default_<provider>`, `agt_default_<ws>_<provider>`) so pre-pool
+   * deployments reuse their default agent instead of growing a twin. Scoped to
+   * `ownerId` (exact match) — default agents are per-owner, so this never
+   * returns another member's default agent (with its custom_env / mcp_config).
+   */
+  getDefaultAgent(workspaceId: string, provider: string, ownerId: string): MultiremiAgent | null {
+    const row = this.db.query(
+      `SELECT * FROM multiremi_agents
+       WHERE id LIKE 'agt_default_%' AND workspace_id = ? AND provider = ? AND owner_id = ?
+       ORDER BY archived_at IS NOT NULL, created_at ASC LIMIT 1`,
+    ).get(workspaceId, provider, ownerId) as Row | null;
+    return row ? this.hydrateAgent(toAgent(row)) : null;
   }
 
   getAgent(id: string): MultiremiAgent | null {
@@ -1128,14 +1212,14 @@ runMigrations(this.db);
     return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire });
   }
 
-  markCurrentUserOnboarded(): MultiremiUser {
-    const current = this.getCurrentUser();
+  markCurrentUserOnboarded(userId?: string | null): MultiremiUser {
+    const id = cleanOptionalString(userId) ?? this.getCurrentUser().id;
     const now = nowIso();
     this.db.run(
       "UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",
-      [now, now, current.id],
+      [now, now, id],
     );
-    return this.getUser(current.id)!;
+    return this.getUser(id)!;
   }
 
   listWorkspaces(): MultiremiWorkspace[] {
@@ -1729,20 +1813,20 @@ runMigrations(this.db);
     if (!current) {
       this.recordRuntimeRegisteredAnalytics(runtime);
       if (runtime.status === "online") this.recordRuntimeReadyAnalytics(runtime, 0);
+    } else if (
+      // A re-registration under the same id that changes a scheduling-relevant
+      // field (provider / workspace / owner / visibility) can strand queued
+      // tasks pinned here that this runtime may no longer claim. Re-pool the
+      // ineligible ones. (setRuntimeOffline is intentionally NOT treated this
+      // way — offline is a recoverable transient state; the task waits.)
+      current.provider !== runtime.provider ||
+      (current.workspaceId ?? "local") !== (runtime.workspaceId ?? "local") ||
+      current.visibility !== runtime.visibility ||
+      (current.ownerId ?? "local") !== (runtime.ownerId ?? "local")
+    ) {
+      this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(runtime, agent));
     }
     return runtime;
-  }
-
-  bindUnboundAgentsToRuntime(runtime: MultiremiRuntime): number {
-    const now = nowIso();
-    const result = this.db.run(
-      `UPDATE multiremi_agents SET runtime_id = ?, updated_at = ?
-       WHERE workspace_id = ? AND provider = ?
-         AND (runtime_id IS NULL OR runtime_id = '')
-         AND archived_at IS NULL`,
-      [runtime.id, now, runtime.workspaceId, runtime.provider],
-    );
-    return result.changes;
   }
 
   getRuntime(id: string): MultiremiRuntime | null {
@@ -1811,7 +1895,14 @@ runMigrations(this.db);
       ],
     );
     if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, current.provider, now);
-    return this.getRuntime(id)!;
+    const updated = this.getRuntime(id)!;
+    // Ownership/visibility just changed → re-pool any queued task pinned here
+    // that the runtime may no longer run, so it isn't stranded on a machine the
+    // claim predicate now rejects.
+    if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local")) {
+      this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(updated, agent));
+    }
+    return updated;
   }
 
   setRuntimeOffline(id: string): MultiremiRuntime | null {
@@ -1871,8 +1962,79 @@ runMigrations(this.db);
   }
 
   deleteRuntime(id: string): boolean {
+    // Free any queued task pinned to this runtime before it disappears — a
+    // chat-session / local_directory follow-up stamped here would otherwise be
+    // unclaimable forever (its runtime is gone, and the stamp blocks every
+    // other machine). Drop the orphaned provider session too so the re-pooled
+    // task starts fresh rather than resuming a session on a vanished machine.
+    this.repoolQueuedTasksForRuntime(id);
     const result = this.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]);
     return result.changes > 0;
+  }
+
+  /**
+   * Unpin queued tasks stamped to a runtime that can no longer run them (the
+   * runtime is being deleted, or `stillEligible` reports it turned private /
+   * changed owner / changed provider). Clears runtime_id + the promoted
+   * session_id / work_dir so the task re-enters the pool cleanly. In-flight
+   * tasks are left to orphan recovery.
+   *
+   * local_directory-affine tasks are NEVER unpinned: their directory lives on
+   * that specific machine, so re-pooling would let a provider-matching machine
+   * WITHOUT the directory claim them and run in a scratch checkout of the wrong
+   * repo. They stay pinned and park until the correct machine is available
+   * again — the safe failure.
+   */
+  private repoolQueuedTasksForRuntime(
+    runtimeId: string,
+    stillEligible?: (agent: MultiremiAgent) => boolean,
+  ): void {
+    const rows = this.db
+      .query("SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'")
+      .all(runtimeId) as Row[];
+    const now = nowIso();
+    for (const row of rows) {
+      const agent = this.getAgent(String(row.agent_id));
+      if (stillEligible && agent && stillEligible(agent)) continue;
+      const daemonId = this.localDirectoryDaemonForTask(row);
+      if (daemonId) {
+        // A local_directory task is never re-pooled (its directory only exists
+        // on that daemon). But if THIS runtime is being retired/changed and the
+        // directory's daemon now has a different-id runtime for the agent's
+        // engine (e.g. a re-registration changed the provider → a new
+        // deterministic id), re-pin to it so the task isn't stranded on the old
+        // id. Otherwise leave it pinned to wait for the right machine.
+        if (agent) {
+          const rt = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+          const targetId = rt ? rt.id : daemonRuntimeId(daemonId, agent.provider);
+          if (targetId !== runtimeId) {
+            this.db.run(
+              "UPDATE multiremi_tasks SET runtime_id = ?, session_id = NULL, updated_at = ? WHERE id = ?",
+              [targetId, now, String(row.id)],
+            );
+          }
+        }
+        continue;
+      }
+      this.db.run(
+        "UPDATE multiremi_tasks SET runtime_id = NULL, session_id = NULL, work_dir = NULL, updated_at = ? WHERE id = ?",
+        [now, String(row.id)],
+      );
+    }
+  }
+
+  /** The daemon id a task is bound to by a local_directory resource, or null. */
+  private localDirectoryDaemonForTask(taskRow: Row): string | null {
+    const issueId = cleanOptionalString(taskRow.issue_id);
+    if (!issueId) return null;
+    const issue = this.getIssue(issueId);
+    if (!issue?.projectId) return null;
+    for (const resource of this.listProjectResources(issue.projectId)) {
+      if (resource.resourceType !== "local_directory") continue;
+      const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+      if (daemonId) return daemonId;
+    }
+    return null;
   }
 
   deleteRuntimeWithArchivedAgentCleanup(id: string): boolean {
@@ -1994,6 +2156,13 @@ runMigrations(this.db);
         "UPDATE multiremi_tasks SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       ).changes;
+      // Move the chat-session affinity metadata too, or the follow-up would
+      // think the session's machine vanished once the old runtime is deleted
+      // and needlessly abandon a still-resumable session.
+      this.db.run(
+        "UPDATE multiremi_chat_sessions SET session_runtime_id = ?, updated_at = ? WHERE session_runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
       const deleted = this.deleteRuntime(oldRuntimeId);
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
@@ -4691,7 +4860,16 @@ runMigrations(this.db);
 
   createSquad(input: CreateSquadInput): MultiremiSquad {
     if (!input.name?.trim()) throw new Error("Squad name is required");
-    if (input.leaderId && !this.getAgent(input.leaderId)) throw new Error(`Agent not found: ${input.leaderId}`);
+    const workspaceId = input.workspaceId ?? "local";
+    // Validate the leader (and its workspace) BEFORE inserting the squad row —
+    // otherwise a foreign leader leaves a persisted squad with a cross-workspace
+    // leader_id after addSquadMember later throws.
+    if (input.leaderId) {
+      const leader = this.getAgent(input.leaderId);
+      if (!leader) throw new Error(`Agent not found: ${input.leaderId}`);
+      if (leader.archivedAt) throw new Error(`Agent is archived: ${input.leaderId}`);
+      if (leader.workspaceId !== workspaceId) throw new Error("Squad member is in a different workspace");
+    }
     const id = input.id ?? createId("sqd");
     const now = nowIso();
     this.db.run(
@@ -4704,7 +4882,7 @@ runMigrations(this.db);
         input.name.trim(),
         input.description ?? "",
         input.instructions ?? "",
-        input.workspaceId ?? "local",
+        workspaceId,
         input.leaderId ?? null,
         input.creatorId ?? null,
         now,
@@ -4772,7 +4950,12 @@ runMigrations(this.db);
   updateSquad(id: string, input: UpdateSquadInput): MultiremiSquad {
     const current = this.getSquad(id);
     if (!current) throw new Error(`Squad not found: ${id}`);
-    if (input.leaderId && !this.getAgent(input.leaderId)) throw new Error(`Agent not found: ${input.leaderId}`);
+    if (input.leaderId) {
+      const leader = this.getAgent(input.leaderId);
+      if (!leader) throw new Error(`Agent not found: ${input.leaderId}`);
+      if (leader.archivedAt) throw new Error(`Agent is archived: ${input.leaderId}`);
+      if (leader.workspaceId !== current.workspaceId) throw new Error("Squad member is in a different workspace");
+    }
     const now = nowIso();
     this.db.run(
       `UPDATE multiremi_squads SET
@@ -4809,6 +4992,10 @@ runMigrations(this.db);
       const agent = this.getAgent(input.memberId);
       if (!agent) throw new Error(`Agent not found: ${input.memberId}`);
       if (agent.archivedAt) throw new Error(`Agent is archived: ${input.memberId}`);
+      // A squad and its agents must share a workspace — a cross-workspace
+      // leader/member would let squad-driven tasks target another tenant's
+      // agent (whose task the runnable-agent resolver would then dispatch).
+      if (agent.workspaceId !== squad.workspaceId) throw new Error("Squad member is in a different workspace");
     } else if (input.memberType === "member") {
       const member = this.getWorkspaceMember(input.memberId);
       if (!member) throw new Error(`Member not found: ${input.memberId}`);
@@ -5096,11 +5283,22 @@ runMigrations(this.db);
     const assigneeType = input.assigneeType ?? input.assignee_type ?? "agent";
     const assigneeId = input.assigneeId ?? input.assignee_id;
     if (!assigneeId) throw new Error("Autopilot assignee is required");
-    if (assigneeType === "agent" && !this.getAgent(assigneeId)) throw new Error(`Agent not found: ${assigneeId}`);
-    if (assigneeType === "squad" && !this.getSquad(assigneeId)) throw new Error(`Squad not found: ${assigneeId}`);
-    const projectId = input.projectId ?? input.project_id ?? null;
-    if (projectId && !this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    // The assignee must live in the autopilot's workspace — otherwise a
+    // run_only autopilot (no issue/chat, so the createTask workspace check
+    // never fires) would drive another workspace's agent + machine.
+    const assigneeAgent = assigneeType === "agent" ? this.getAgent(assigneeId) : null;
+    const assigneeSquad = assigneeType === "squad" ? this.getSquad(assigneeId) : null;
+    if (assigneeType === "agent" && !assigneeAgent) throw new Error(`Agent not found: ${assigneeId}`);
+    if (assigneeType === "squad" && !assigneeSquad) throw new Error(`Squad not found: ${assigneeId}`);
+    if (assigneeAgent && assigneeAgent.workspaceId !== workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+    if (assigneeSquad && assigneeSquad.workspaceId !== workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+    const projectId = input.projectId ?? input.project_id ?? null;
+    if (projectId) {
+      const project = this.getProject(projectId);
+      if (!project) throw new Error(`Project not found: ${projectId}`);
+      if (project.workspaceId !== workspaceId) throw new Error("Autopilot project is in a different workspace");
+    }
     const createdByType = normalizeAutopilotCreatorType(input.createdByType ?? input.created_by_type);
     const createdById = cleanOptionalString(input.createdById ?? input.created_by_id) ?? "local";
     const id = input.id ?? createId("aut");
@@ -5154,9 +5352,27 @@ runMigrations(this.db);
     if (!current) throw new Error(`Autopilot not found: ${id}`);
     const nextAssigneeType = input.assigneeType ?? current.assigneeType;
     const nextAssigneeId = input.assigneeId ?? current.assigneeId;
-    if (nextAssigneeType === "agent" && !this.getAgent(nextAssigneeId)) throw new Error(`Agent not found: ${nextAssigneeId}`);
-    if (nextAssigneeType === "squad" && !this.getSquad(nextAssigneeId)) throw new Error(`Squad not found: ${nextAssigneeId}`);
-    if (input.projectId && !this.getProject(input.projectId)) throw new Error(`Project not found: ${input.projectId}`);
+    // Only validate the assignee when the request actually CHANGES it — the
+    // edit dialog re-sends the current assignee_type/id on every save, so a
+    // title/status/pause/archive update must not fail just because legacy or
+    // since-moved data has a cross-workspace assignee. Compare values, not
+    // mere field presence.
+    const assigneeChanged =
+      (input.assigneeType !== undefined && input.assigneeType !== current.assigneeType) ||
+      (input.assigneeId !== undefined && input.assigneeId !== current.assigneeId);
+    if (assigneeChanged) {
+      const nextAgent = nextAssigneeType === "agent" ? this.getAgent(nextAssigneeId) : null;
+      const nextSquad = nextAssigneeType === "squad" ? this.getSquad(nextAssigneeId) : null;
+      if (nextAssigneeType === "agent" && !nextAgent) throw new Error(`Agent not found: ${nextAssigneeId}`);
+      if (nextAssigneeType === "squad" && !nextSquad) throw new Error(`Squad not found: ${nextAssigneeId}`);
+      if (nextAgent && nextAgent.workspaceId !== current.workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+      if (nextSquad && nextSquad.workspaceId !== current.workspaceId) throw new Error("Autopilot assignee is in a different workspace");
+    }
+    if (input.projectId) {
+      const project = this.getProject(input.projectId);
+      if (!project) throw new Error(`Project not found: ${input.projectId}`);
+      if (project.workspaceId !== current.workspaceId) throw new Error("Autopilot project is in a different workspace");
+    }
     const now = nowIso();
     this.db.run(
       `UPDATE multiremi_autopilots SET
@@ -6007,8 +6223,35 @@ runMigrations(this.db);
     const chatSession = input.chatSessionId ? this.getChatSession(input.chatSessionId) : null;
     if (input.chatSessionId && !chatSession) throw new Error(`Chat session not found: ${input.chatSessionId}`);
     if (chatSession && chatSession.agentId !== input.agentId) throw new Error("Chat session agent does not match task agent");
-    const runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
+    // The task always runs in the agent's workspace (stamped below). Reject any
+    // issue / chat session from a DIFFERENT workspace so we never create a task
+    // in workspace B linked to an issue/project in workspace A (a cross-tenant
+    // reference that would drive B's agent + machine + credentials from A).
+    if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
+    if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
+    let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
+    // Pool scheduling: tasks stay unbound so any provider-matching runtime can
+    // claim them. Two machine-local realities still force a stamp: a promoted
+    // provider session lives on the machine that ran it, and a local_directory
+    // project resource only exists on its daemon.
+    //
+    // resetProviderSession (a resume-unsafe chat retry) means the caller has
+    // deliberately given up the provider session — passing null runtime/
+    // session/work_dir. Because null reads as "unspecified" to the `??`
+    // fallbacks below, honour the intent explicitly: skip chat-session runtime
+    // affinity and session/work_dir inheritance, but keep local_directory
+    // affinity (the directory constraint is independent of the session).
+    let inheritChatSession = !input.resetProviderSession;
+    // Always compute affinity — a strong machine affinity (promoted session /
+    // local_directory) must OVERRIDE an explicit runtimeId, not just fill in
+    // when one is absent. Otherwise a caller could pin a directory task to the
+    // wrong machine (it would run in a scratch checkout of the wrong repo) or
+    // carry another machine's provider session. An explicit runtimeId is only
+    // honoured when there is no strong affinity to respect.
+    const affinity = this.resolveTaskAffinity(agent, input.resetProviderSession ? null : chatSession, issue);
+    if (affinity.runtimeId) runtimeId = affinity.runtimeId;
+    if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
 
     const id = input.id ?? createId("tsk");
     const now = nowIso();
@@ -6028,14 +6271,37 @@ runMigrations(this.db);
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
-        input.workspaceId ?? issue?.workspaceId ?? chatSession?.workspaceId ?? "local",
+        // A task ALWAYS belongs to its agent's workspace — never the
+        // caller-supplied one. Otherwise a member could create a task in
+        // their own workspace referencing another workspace's agent, then
+        // claim it from their own runtime and receive that agent's
+        // custom_env / mcp_config. (Pre-pool the agent's runtime binding
+        // blocked this; unbinding reopened it.)
+        agent.workspaceId,
         input.priority ?? 0,
         input.prompt,
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
-        input.sessionId ?? chatSession?.sessionId ?? null,
-        input.workDir ?? chatSession?.workDir ?? agent.cwd ?? null,
+        // The inheritChatSession gate applies only to a task that HAS a chat
+        // session: when false the promoted session belongs to a machine we
+        // can't return to (engine switched / runtime gone) — dropped, even if a
+        // chat send re-sends the old fields. A task WITHOUT a chat session
+        // (e.g. an issue-only resume-safe retry) carries its session explicitly,
+        // already gated by maybeRetryFailedTask, so honour it directly.
+        chatSession
+          ? (inheritChatSession ? (input.sessionId ?? chatSession.sessionId ?? null) : null)
+          : (input.sessionId ?? null),
+        // Only a machine-affine work_dir is stamped here: a session/directory
+        // work_dir reaches only the machine pinned to run it. agent.cwd is NOT
+        // applied — it is a machine-local path that would ride along on an
+        // unpinned pool task and could point nowhere on the claiming machine.
+        // The daemon owns the agent.cwd fallback and guards it against the
+        // local filesystem (resolveWorkDir), then reports the resolved dir back
+        // via pinTaskSession, so session promotion still records the real path.
+        chatSession
+          ? (inheritChatSession ? (input.workDir ?? chatSession.workDir ?? null) : null)
+          : (input.workDir ?? null),
         now,
         now,
       ],
@@ -6043,6 +6309,99 @@ runMigrations(this.db);
     const task = this.getTask(id)!;
     this.notifyTaskEnqueued(task);
     return task;
+  }
+
+  /**
+   * Where a pooled task should be pinned, and whether it may inherit the chat
+   * session's promoted provider session. `inheritChatSession` goes false when
+   * the session was produced by a different provider than the agent now runs
+   * (the user switched engines): that session id / work_dir belong to the old
+   * engine's runtime and must not be handed to the new one.
+   */
+  private resolveTaskAffinity(
+    agent: MultiremiAgent,
+    chatSession: MultiremiChatSession | null,
+    issue: MultiremiIssue | null,
+  ): { runtimeId: string | null; inheritChatSession: boolean } {
+    // local_directory affinity is checked FIRST and outranks session affinity:
+    // the directory only exists on that daemon (a hard data constraint), while
+    // a provider session is a soft constraint that can be restarted elsewhere.
+    // A task carrying both a chat session and a directory issue must go to the
+    // directory's machine; the session is only inherited if that machine is
+    // also where the session lives.
+    if (issue?.projectId) {
+      for (const resource of this.listProjectResources(issue.projectId)) {
+        if (resource.resourceType !== "local_directory") continue;
+        const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+        if (!daemonId) continue;
+        const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+        // Always pin to the machine that holds the directory, even if it can't
+        // currently run this agent (turned private / wrong owner). Leaving it
+        // unpinned would let a provider-matching machine WITHOUT the directory
+        // claim it and silently run in a scratch checkout of the wrong repo.
+        // No runtime row yet → the deterministic id its runtime WILL get on
+        // registration, so the task waits for that machine.
+        const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
+        // Inherit the session only if it was produced on THIS directory machine
+        // AND by the agent's current engine (see sessionResumable).
+        const inheritChatSession = this.sessionResumable(chatSession, agent) && chatSession?.sessionRuntimeId === dirRuntimeId;
+        return { runtimeId: dirRuntimeId, inheritChatSession };
+      }
+    }
+    if (chatSession?.sessionId) {
+      // Resume the session on the machine that produced it — but only when that
+      // machine can still run this agent AND the session's recorded engine
+      // matches the agent's current one. Otherwise abandon the session and
+      // re-pool (the claim predicate would reject a stale/foreign pin forever).
+      if (this.sessionResumable(chatSession, agent) && chatSession.sessionRuntimeId) {
+        const runtime = this.getRuntime(chatSession.sessionRuntimeId);
+        if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
+          return { runtimeId: runtime.id, inheritChatSession: true };
+        }
+      }
+      return { runtimeId: null, inheritChatSession: false };
+    }
+    return { runtimeId: null, inheritChatSession: true };
+  }
+
+  /**
+   * Can this chat session's promoted provider session be resumed by the agent
+   * as it stands now? The session id is specific to the engine that produced
+   * it, recorded as session_provider — so it only resumes when the agent's
+   * current provider still matches (an engine switch voids it). Sessions from
+   * before this metadata existed (null session_provider) are treated as
+   * non-resumable to stay safe.
+   */
+  private sessionResumable(chatSession: MultiremiChatSession | null, agent: MultiremiAgent): boolean {
+    return !!chatSession?.sessionId && chatSession.sessionProvider === agent.provider;
+  }
+
+  /**
+   * May this runtime execute this agent? A claim hands the runtime the agent's
+   * custom_env / mcp_config, so a private runtime is restricted to its owner's
+   * agents. Mirrors the claim SQL's ownership predicate (COALESCE(...,'local')
+   * so single-machine NULL owners still pair). The provider must also match.
+   */
+  runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
+    // A task runs in its agent's workspace and the claim SQL requires the
+    // runtime's workspace to match, so a runtime in a different workspace can
+    // never run this agent (COALESCE(...,'local') for NULL-workspace runtimes).
+    if ((runtime.workspaceId ?? "local") !== (agent.workspaceId ?? "local")) return false;
+    if (runtime.visibility === "public") return true;
+    return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
+  }
+
+  getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
+    const rows = this.db
+      .query(
+        `SELECT * FROM multiremi_runtimes
+         WHERE (daemon_id = ? OR legacy_daemon_id = ? OR id = ?)
+           AND (provider = ? OR provider = 'any')`,
+      )
+      .all(daemonId, daemonId, daemonId, provider) as Row[];
+    const runtimes = rows.map((row) => withRuntimeLiveness(this.hydrateRuntime(toRuntime(row))));
+    return runtimes.find((runtime) => runtime.status === "online") ?? runtimes[0] ?? null;
   }
 
   getTask(id: string): MultiremiTask | null {
@@ -6212,14 +6571,41 @@ runMigrations(this.db);
     const tx = this.db.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+      // Serialize concurrent claims per workspace. Postgres evaluates each
+      // statement on its own snapshot, so two runtimes claiming at once could
+      // both pass an agent's max_concurrent_tasks / issue-serialization
+      // guards before either commits. Taking the workspace row lock first
+      // makes the second claimant wait and re-read committed state. On
+      // SQLite the single writer already guarantees this; the self-write is
+      // a no-op there.
+      this.db.run(
+        "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+        [runtime.workspaceId ?? "local"],
+      );
       this.heartbeatRuntime(runtimeId, { claimPending: false });
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
-      if (stale) return stale;
+      if (stale) return this.snapshotTaskProvider(stale, runtime);
 
-      return this.claimNextTaskForRuntime(runtime);
+      const claimed = this.claimNextTaskForRuntime(runtime);
+      return claimed ? this.snapshotTaskProvider(claimed, runtime) : null;
     });
     return tx();
+  }
+
+  /**
+   * Record the engine this task is executing under, at claim time. A concrete
+   * runtime fixes the engine; an "any" runtime runs whatever the agent's
+   * provider is right now. The promoted session's engine (session_provider)
+   * comes from this snapshot, not the agent's later-mutable provider.
+   */
+  private snapshotTaskProvider(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
+    const provider = runtime.provider !== "any" ? runtime.provider : (task.agent?.provider ?? null);
+    if (provider && task.provider !== provider) {
+      this.db.run("UPDATE multiremi_tasks SET provider = ? WHERE id = ?", [provider, task.id]);
+      return { ...task, provider };
+    }
+    return task;
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
@@ -6244,36 +6630,84 @@ runMigrations(this.db);
        RETURNING *`,
     ).get(now, now, runtimeId, cutoff) as Row | null;
     if (!row) return null;
-    return this.getTaskWithAgent(String(row.id));
+    const task = this.getTaskWithAgent(String(row.id));
+    // The re-claim above matches only on runtime_id, so a task whose agent or
+    // runtime changed while it sat dispatched could be handed back to a runtime
+    // that may no longer run it. Re-check the full eligibility the normal claim
+    // enforces — the agent must still exist, be unarchived, and be runnable by
+    // this runtime. If not, don't return it here.
+    const runtime = this.getRuntime(runtimeId);
+    const eligible = task?.agent != null
+      && !task.agent.archivedAt
+      && runtime != null
+      && this.runtimeCanRunAgent(runtime, task.agent);
+    if (task && !eligible) {
+      const now = nowIso();
+      const repool = () =>
+        this.db.run(
+          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = NULL, session_id = NULL, work_dir = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          [now, String(row.id)],
+        );
+      // local_directory is checked FIRST, before archived/agent-missing — the
+      // directory pin must survive even while the agent is archived (archived_at
+      // keeps the normal claim from picking it up; if the agent is restored the
+      // task must still land on the machine that holds the directory, not a
+      // scratch checkout elsewhere).
+      const daemonId = task.agent ? this.localDirectoryDaemonForTask(row) : null;
+      if (daemonId && task.agent) {
+        const rt = this.getRuntimeByDaemonAndProvider(daemonId, task.agent.provider);
+        const newRuntimeId = rt ? rt.id : daemonRuntimeId(daemonId, task.agent.provider);
+        this.db.run(
+          "UPDATE multiremi_tasks SET status = 'queued', runtime_id = ?, session_id = NULL, dispatched_at = NULL, updated_at = ? WHERE id = ?",
+          [newRuntimeId, now, String(row.id)],
+        );
+      } else if (!task.agent || task.agent.archivedAt || !runtime) {
+        // No agent / archived agent / runtime gone, and no directory pin to
+        // preserve — re-pool; the normal claim's archived guard parks it.
+        repool();
+      } else if ((runtime.workspaceId ?? "local") !== (task.agent.workspaceId ?? "local")) {
+        // The agent moved workspace while dispatched — cancel it (it picks up
+        // fresh work in its new workspace; re-pooling into a foreign workspace
+        // would strand it).
+        this.cancelTask(String(row.id));
+      } else {
+        repool(); // owner/provider drift — another eligible machine can take it
+      }
+      return null;
+    }
+    return task;
   }
 
   private claimNextTaskForRuntime(runtime: MultiremiRuntime): MultiremiTaskWithAgent | null {
     const now = nowIso();
-    const workspaceFilter = runtime.workspaceId ? "AND t.workspace_id = ?" : "";
-    const params = runtime.workspaceId
-      ? [
-          runtime.id,
-          now,
-          now,
-          runtime.id,
-          runtime.maxConcurrency,
-          runtime.workspaceId,
-          runtime.id,
-          runtime.id,
-          runtime.provider,
-          runtime.provider,
-        ]
-      : [
-          runtime.id,
-          now,
-          now,
-          runtime.id,
-          runtime.maxConcurrency,
-          runtime.id,
-          runtime.id,
-          runtime.provider,
-          runtime.provider,
-        ];
+    // Always constrain by workspace, COALESCE(...,'local') so a runtime with
+    // NULL workspace only claims local-workspace tasks instead of every
+    // workspace's (the old `runtime.workspaceId ? ... : ""` dropped the filter
+    // entirely for NULL-workspace runtimes, letting one claim across tenants).
+    const workspaceFilter = "AND COALESCE(t.workspace_id, 'local') = ?";
+    const params = [
+      runtime.id,
+      now,
+      now,
+      runtime.id,
+      runtime.maxConcurrency,
+      runtime.workspaceId ?? "local",
+      runtime.id,
+      runtime.id,
+      runtime.provider,
+      runtime.provider,
+      runtime.visibility,
+      runtime.ownerId,
+    ];
+    // Ownership guard: a private runtime only executes its owner's agents — a
+    // claim hands the runtime the agent's custom_env / mcp_config. Owner match
+    // uses COALESCE(...,'local') so a single-machine deployment (runtime owner
+    // NULL, agent owner 'local') still pairs, while a NULL-owner PRIVATE
+    // runtime in a multi-user workspace no longer sweeps up every member's
+    // agents. NOT relaxed for tasks stamped to this runtime: the /tasks API
+    // lets any member stamp an arbitrary agent+runtime (a stamp is not proof
+    // of authorization). Kept as a JS comment, not inline SQL: an apostrophe
+    // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
     const row = this.db.query(
       `UPDATE multiremi_tasks
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ?
@@ -6283,6 +6717,7 @@ runMigrations(this.db);
          JOIN multiremi_agents a ON a.id = t.agent_id
          WHERE t.status = 'queued'
            AND a.archived_at IS NULL
+           AND a.workspace_id = t.workspace_id
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks runtime_active
@@ -6293,6 +6728,7 @@ runMigrations(this.db);
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
+           AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks running
@@ -6677,10 +7113,36 @@ runMigrations(this.db);
     if (parent.autopilotRunId) return null;
     if (!parent.issueId && !parent.chatSessionId) return null;
 
-    const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason);
+    // Resume-safe only if the parent's machine can STILL run this agent. If the
+    // agent switched engine/owner (or the runtime changed) since the parent ran,
+    // its session/runtime are void — degrade to resume-unsafe so the retry
+    // re-pools and starts fresh instead of being pinned to a machine the claim
+    // predicate would reject forever.
+    const agent = this.getAgent(parent.agentId);
+    const parentRuntime = parent.runtimeId ? this.getRuntime(parent.runtimeId) : null;
+    // A resume carries the parent's provider session and work_dir — both are
+    // machine-local files. It is only safe when we KNOW that machine and it can
+    // still run the agent: the parent must be pinned to a live runtime, that
+    // runtime must still be able to run the agent, AND the engine the parent
+    // EXECUTED under (provider snapshot — an 'any' runtime passes
+    // runtimeCanRunAgent for every provider, so the snapshot is what actually
+    // guards a mid-run engine switch) must still match. A missing pin or a
+    // missing/mismatched snapshot can't be proven machine-safe, so it fails
+    // closed to a fresh re-pool that clears session/work_dir. (A resume-unsafe
+    // parent with no session takes the same fresh-re-pool path here.)
+    const parentRuntimeUsable =
+      parent.runtimeId != null
+      && parentRuntime != null
+      && agent != null
+      && parent.provider != null
+      && parent.provider === agent.provider
+      && this.runtimeCanRunAgent(parentRuntime, agent);
+    const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
     const retry = this.createTask({
       agentId: parent.agentId,
-      runtimeId: parent.runtimeId,
+      // Resume-safe failures must go back to the machine holding the session;
+      // once the session is abandoned, any pool machine may pick up the retry.
+      runtimeId: resumeSafe ? parent.runtimeId : null,
       issueId: parent.issueId,
       chatSessionId: parent.chatSessionId,
       triggerCommentId: parent.triggerCommentId,
@@ -6690,6 +7152,9 @@ runMigrations(this.db);
       prompt: parent.prompt,
       sessionId: resumeSafe ? parent.sessionId : null,
       workDir: resumeSafe ? parent.workDir : null,
+      // Without this, createTask would re-derive the session/work_dir/runtime
+      // from the chat session and silently resume the failed session anyway.
+      resetProviderSession: !resumeSafe,
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
       parentTaskId: parent.id,
@@ -7121,7 +7586,7 @@ runMigrations(this.db);
   }
 
   private triggerCommentMentions(issue: MultiremiIssue, comment: MultiremiIssueComment): MultiremiTask[] {
-    const targets = this.resolveCommentMentionTargets(comment.body);
+    const targets = this.resolveCommentMentionTargets(comment.body, issue.workspaceId);
     if (!targets.length) return [];
 
     const tasks: MultiremiTask[] = [];
@@ -7156,7 +7621,7 @@ runMigrations(this.db);
     return tasks;
   }
 
-  private resolveCommentMentionTargets(body: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
+  private resolveCommentMentionTargets(body: string, workspaceId: string): Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> {
     const targets: Array<{ assigneeType: "agent" | "squad"; assigneeId: string }> = [];
     const seen = new Set<string>();
     const addTarget = (assigneeType: "agent" | "squad", assigneeId: string) => {
@@ -7166,17 +7631,26 @@ runMigrations(this.db);
       targets.push({ assigneeType, assigneeId });
     };
 
+    // A comment can only mention agents/squads in its own workspace — otherwise
+    // an explicit mention:// id (or a name collision) would spawn a task for
+    // another workspace's agent, and createTask would then reject the
+    // cross-workspace issue link anyway.
+    const inWorkspaceAgent = (id: string) => this.getAgent(id)?.workspaceId === workspaceId;
+    const inWorkspaceSquad = (id: string) => this.getSquad(id)?.workspaceId === workspaceId;
+
     const markdownMention = /mention:\/\/(agent|squad)\/([A-Za-z0-9_-]+)/g;
     for (const match of body.matchAll(markdownMention)) {
-      addTarget(match[1] as "agent" | "squad", match[2]);
+      const kind = match[1] as "agent" | "squad";
+      const id = match[2]!;
+      if (kind === "agent" ? inWorkspaceAgent(id) : inWorkspaceSquad(id)) addTarget(kind, id);
     }
 
     const withoutLinks = body.replace(/\[[^\]]+\]\(mention:\/\/[^)]+\)/g, " ");
     for (const agent of this.listAgents()) {
-      if (hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
+      if (agent.workspaceId === workspaceId && hasPlainMention(withoutLinks, agent.name)) addTarget("agent", agent.id);
     }
     for (const squad of this.listSquads()) {
-      if (hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
+      if (squad.workspaceId === workspaceId && hasPlainMention(withoutLinks, squad.name)) addTarget("squad", squad.id);
     }
     return targets;
   }
@@ -7224,16 +7698,37 @@ runMigrations(this.db);
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [messageId, task.chatSessionId, task.id, role, messageBody, failureReason, elapsedMs, now],
       );
-      const promoteSession = status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "");
+      // Promote the session ATOMICALLY as one unit — session_id together with
+      // its machine (runtime) and engine (provider) — and ONLY when this task
+      // actually produced a new session id. Otherwise a task that promotes but
+      // carries no sessionId (e.g. a non-retryable failure) would leave the old
+      // session_id in place while overwriting session_runtime_id/provider with
+      // this task's, mislabelling the old session's engine. The engine comes
+      // from the task's execution snapshot (task.provider), not the agent's
+      // now-mutable provider. Snapshot missing → derive from a concrete runtime,
+      // else leave null (fail-closed: an unknown-engine session isn't resumed).
+      const promoteSession =
+        (status !== "failed" || !RESUME_UNSAFE_FAILURE_REASONS.has(task.failureReason ?? "")) &&
+        !!cleanOptionalString(task.sessionId);
+      const runtimeProvider = task.runtimeId ? this.getRuntime(task.runtimeId)?.provider : null;
+      const sessionProvider = task.provider ?? (runtimeProvider && runtimeProvider !== "any" ? runtimeProvider : null);
       this.db.run(
         `UPDATE multiremi_chat_sessions
-         SET session_id = CASE WHEN ? = 1 THEN COALESCE(?, session_id) ELSE session_id END,
-             work_dir = CASE WHEN ? = 1 THEN COALESCE(?, work_dir) ELSE work_dir END,
+         SET session_id = CASE WHEN ? = 1 THEN ? ELSE session_id END,
+             work_dir = CASE WHEN ? = 1 THEN ? ELSE work_dir END,
+             session_runtime_id = CASE WHEN ? = 1 THEN ? ELSE session_runtime_id END,
+             session_provider = CASE WHEN ? = 1 THEN ? ELSE session_provider END,
              latest_task_id = ?,
              unread_since = COALESCE(unread_since, ?),
              updated_at = ?
          WHERE id = ?`,
-        [promoteSession ? 1 : 0, task.sessionId ?? null, promoteSession ? 1 : 0, task.workDir ?? null, task.id, now, now, task.chatSessionId],
+        [
+          promoteSession ? 1 : 0, task.sessionId ?? null,
+          promoteSession ? 1 : 0, task.workDir ?? null,
+          promoteSession ? 1 : 0, task.runtimeId ?? null,
+          promoteSession ? 1 : 0, sessionProvider,
+          task.id, now, now, task.chatSessionId,
+        ],
       );
       if (status === "completed") {
         const session = this.getChatSession(task.chatSessionId);
@@ -8787,6 +9282,22 @@ function hasAnyField(target: object, ...keys: string[]): boolean {
   return keys.some((key) => Object.prototype.hasOwnProperty.call(target, key));
 }
 
+/**
+ * Deterministic runtime id for a (daemon, provider) pair — FNV-1a over
+ * "<daemonId>:<provider>". Daemon registration (registerDaemonRuntimes in
+ * api.ts) derives runtime ids the same way, which is what makes a stamp on a
+ * not-yet-registered daemon resolve once the machine comes online.
+ */
+export function daemonRuntimeId(daemonId: string, provider: string): string {
+  const key = `${daemonId}:${provider}`.toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `rt_${(hash >>> 0).toString(36)}`;
+}
+
 function resolveOptionalStringField(
   target: object,
   camelKey: string,
@@ -9909,6 +10420,8 @@ function toChatSession(row: Row): MultiremiChatSession {
     status: String(row.status ?? "active") as MultiremiChatSession["status"],
     sessionId: nullableString(row.session_id),
     workDir: nullableString(row.work_dir),
+    sessionRuntimeId: nullableString(row.session_runtime_id),
+    sessionProvider: nullableString(row.session_provider),
     latestTaskId: nullableString(row.latest_task_id),
     unreadSince: nullableString(row.unread_since),
     hasUnread: Boolean(row.unread_since),
@@ -9936,6 +10449,7 @@ function toTask(row: Row): MultiremiTask {
     id: String(row.id),
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
+    provider: nullableString(row.provider),
     issueId: nullableString(row.issue_id),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),

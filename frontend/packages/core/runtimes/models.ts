@@ -1,12 +1,54 @@
-import { queryOptions } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import type { RuntimeModelsResult } from "../types/agent";
+import type { RuntimeModel, RuntimeModelsResult } from "../types/agent";
 
 export const runtimeModelsKeys = {
   all: () => ["runtimes", "models"] as const,
   forRuntime: (runtimeId: string) =>
     [...runtimeModelsKeys.all(), runtimeId] as const,
+  fleet: (wsId: string) => [...runtimeModelsKeys.all(), "fleet", wsId] as const,
 };
+
+// Fleet-level catalog: the stored model lists of the workspace's online
+// runtimes, unioned per provider server-side. Unlike resolveRuntimeModels
+// this never fans out to a daemon — it reads what the daemons last
+// reported, so it works before any machine is picked (there is none to
+// pick anymore).
+export function fleetModelsOptions(wsId: string) {
+  return queryOptions({
+    queryKey: runtimeModelsKeys.fleet(wsId),
+    queryFn: () => api.listFleetModels({ workspace_id: wsId }),
+    staleTime: 60_000,
+  });
+}
+
+const NO_MODELS: RuntimeModel[] = [];
+
+// One provider's slice of the fleet catalog, for the components that let the
+// user pick an engine + model without ever seeing a machine. Memoised so the
+// returned references stay stable across renders.
+export function useFleetProviderModels(
+  wsId: string,
+  provider: string,
+): {
+  models: RuntimeModel[];
+  onlineRuntimeCount: number;
+  isLoading: boolean;
+  isError: boolean;
+} {
+  const query = useQuery(fleetModelsOptions(wsId));
+  const bucket = useMemo(
+    () => query.data?.providers.find((entry) => entry.provider === provider) ?? null,
+    [query.data, provider],
+  );
+  return {
+    models: bucket?.models ?? NO_MODELS,
+    onlineRuntimeCount: bucket?.online_runtime_count ?? 0,
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
 
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;

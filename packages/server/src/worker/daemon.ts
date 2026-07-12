@@ -823,7 +823,11 @@ export class MultiremiDaemon {
     }
 
     const workDir = resolvedWorkDir.workDir;
-    if (!resolvedWorkDir.localDirectory) mkdirSync(workDir, { recursive: true });
+    // Only create dirs the daemon owns (default per-task dir / machine-affine
+    // task.workDir). A validated agent.cwd (ensureDir=false) is never recreated
+    // — if it vanished post-resolve the run fails loudly instead of mkdir-ing a
+    // machine-local path on a pool machine that shouldn't have it.
+    if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
     try {
       writeTaskContext(workDir, task);

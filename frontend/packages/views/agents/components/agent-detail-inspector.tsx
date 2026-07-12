@@ -8,16 +8,13 @@ import {
 } from "react";
 import { Camera, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
-import type {
-  Agent,
-  AgentRuntime,
-  MemberWithUser,
-} from "@multiremi/core/types";
+import type { Agent, MemberWithUser } from "@multiremi/core/types";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
   type AgentPresenceDetail,
 } from "@multiremi/core/agents";
 import { api } from "@multiremi/core/api";
+import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
@@ -41,8 +38,8 @@ import { availabilityConfig } from "../presence";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
+import { EnginePicker } from "./inspector/engine-picker";
 import { ModelPicker } from "./inspector/model-picker";
-import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { VisibilityPicker } from "./inspector/visibility-picker";
@@ -50,15 +47,8 @@ import { LarkAgentBindButton } from "../../settings/components/lark-tab";
 
 interface InspectorProps {
   agent: Agent;
-  runtime: AgentRuntime | null;
   owner: MemberWithUser | null;
   presence: AgentPresenceDetail | null | undefined;
-  // Below: needed for inline edit. The inspector now owns the editing surface
-  // (no Settings tab anymore), so the parent has to pass through everything
-  // a write needs.
-  runtimes: AgentRuntime[];
-  members: MemberWithUser[];
-  currentUserId: string | null;
   /**
    * Computed by the parent via `useAgentPermissions(agent).canEdit.allowed`.
    * When false the inspector renders all editable surfaces as static
@@ -90,20 +80,17 @@ interface InspectorProps {
  */
 export function AgentDetailInspector({
   agent,
-  runtime,
   owner,
   presence,
-  runtimes,
-  members,
-  currentUserId,
   canEdit,
   onUpdate,
   onShowIntegrations,
 }: InspectorProps) {
   const { t } = useT("agents");
   const timeAgo = useTimeAgo();
+  const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
-  const isOnline = runtime?.status === "online";
+  const provider = agent.provider || "claude";
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
@@ -122,28 +109,25 @@ export function AgentDetailInspector({
           permission, each picker self-renders a static read-only display so
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          <RuntimePicker
-            value={agent.runtime_id}
-            runtimes={runtimes}
-            members={members}
-            currentUserId={currentUserId}
+        <PropRow label={t(($) => $.inspector.prop_engine)} interactive={false}>
+          <EnginePicker
+            value={provider}
             canEdit={canEdit}
-            onChange={(id) => update({ runtime_id: id })}
+            onChange={(next) => update({ provider: next })}
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
           <ModelPicker
-            runtimeId={agent.runtime_id}
-            runtimeOnline={!!isOnline}
+            wsId={wsId ?? ""}
+            provider={provider}
             value={agent.model ?? ""}
             canEdit={canEdit}
             onChange={(m) => update({ model: m })}
           />
         </PropRow>
         <ThinkingPropRow
-          runtimeId={agent.runtime_id}
-          runtimeOnline={!!isOnline}
+          wsId={wsId ?? ""}
+          provider={provider}
           model={agent.model ?? ""}
           value={agent.thinking_level ?? ""}
           canEdit={canEdit}

@@ -19,19 +19,50 @@ import type {
   Workload,
 } from "./types";
 
+// Pool model: agents are logical workers, not bound to a machine — any
+// runtime whose provider matches AND which is allowed to run this agent can
+// claim it. This resolves an agent's candidate set. Older backends omit
+// `provider`, in which case the legacy runtime_id binding is the candidate set.
+//
+// The ownership filter mirrors the server claim predicate: a private runtime
+// only runs its owner's agents (COALESCE(...,'local') so single-machine NULL
+// owners still pair). Without it, a private runtime the agent can never reach
+// would show as available capacity and the dot would read "online" for work
+// that can't actually be claimed.
+export function resolveAgentRuntimes(
+  agent: Pick<Agent, "provider" | "runtime_id" | "owner_id">,
+  runtimes: readonly AgentRuntime[],
+): AgentRuntime[] {
+  if (agent.provider) {
+    const agentOwner = agent.owner_id ?? "local";
+    return runtimes.filter(
+      (r) =>
+        (r.provider === agent.provider || r.provider === "any") &&
+        (r.visibility === "public" || (r.owner_id ?? "local") === agentOwner),
+    );
+  }
+  const pinned = runtimes.find((r) => r.id === agent.runtime_id);
+  return pinned ? [pinned] : [];
+}
+
 // AgentAvailability mirrors RuntimeHealth's reachability buckets but folds
 // `about_to_gc` into `offline` — both mean "long unreachable" from the
 // user's standpoint; the GC-warning copy belongs to the runtime card, not
-// the agent dot.
+// the agent dot. Takes the agent's candidate runtimes (see
+// resolveAgentRuntimes) and reports the best health among them: one online
+// machine is enough to run the agent's work.
 export function deriveAgentAvailability(
-  runtime: AgentRuntime | null,
+  runtimes: readonly AgentRuntime[],
   now: number,
 ): AgentAvailability {
-  if (!runtime) return "offline";
-  const health = deriveRuntimeHealth(runtime, now);
-  if (health === "online") return "online";
-  if (health === "recently_lost") return "unstable";
-  return "offline"; // offline | about_to_gc collapse here
+  let best: AgentAvailability = "offline";
+  for (const runtime of runtimes) {
+    const health = deriveRuntimeHealth(runtime, now);
+    if (health === "online") return "online";
+    if (health === "recently_lost") best = "unstable";
+    // offline | about_to_gc collapse into the "offline" floor
+  }
+  return best;
 }
 
 // Atomic workload derivation: pure 3-way classification of running/queued
@@ -84,7 +115,9 @@ export function deriveWorkloadDetail(tasks: readonly AgentTask[]): WorkloadDetai
 
 interface DerivePresenceInput {
   agent: Agent;
-  runtime: AgentRuntime | null;
+  // The agent's candidate runtimes (resolveAgentRuntimes) — provider-matching
+  // pool machines, or the single legacy-pinned runtime on older backends.
+  runtimes: readonly AgentRuntime[];
   // Tasks for THIS agent only. Callers (buildPresenceMap, hooks) pre-filter
   // by agent_id — we don't re-check here.
   tasks: readonly AgentTask[];
@@ -108,7 +141,7 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
     };
   }
 
-  const availability = deriveAgentAvailability(input.runtime, input.now);
+  const availability = deriveAgentAvailability(input.runtimes, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
 
   return {
@@ -134,8 +167,6 @@ export function buildPresenceMap(args: {
   now: number;
 }): Map<string, AgentPresenceDetail> {
   const out = new Map<string, AgentPresenceDetail>();
-  const runtimesById = new Map<string, AgentRuntime>();
-  for (const r of args.runtimes) runtimesById.set(r.id, r);
 
   // Group tasks by agent_id once — O(N) — so per-agent derivation is O(1)
   // task scans rather than O(N×M).
@@ -147,9 +178,9 @@ export function buildPresenceMap(args: {
   }
 
   for (const agent of args.agents) {
-    const runtime = runtimesById.get(agent.runtime_id) ?? null;
+    const runtimes = resolveAgentRuntimes(agent, args.runtimes);
     const tasks = tasksByAgent.get(agent.id) ?? [];
-    out.set(agent.id, deriveAgentPresenceDetail({ agent, runtime, tasks, now: args.now }));
+    out.set(agent.id, deriveAgentPresenceDetail({ agent, runtimes, tasks, now: args.now }));
   }
   return out;
 }

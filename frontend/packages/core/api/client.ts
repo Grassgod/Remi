@@ -24,6 +24,7 @@ import type {
   AgentActivityBucket,
   AgentRunCount,
   AgentRuntime,
+  FleetModelsResponse,
   InboxItem,
   IssueSubscriber,
   Comment,
@@ -150,6 +151,8 @@ import {
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  EMPTY_FLEET_MODELS,
+  FleetModelsResponseSchema,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SQUAD,
@@ -843,6 +846,19 @@ export class ApiClient {
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.owner) search.set("owner", params.owner);
     return this.fetch(`/api/runtimes?${search}`);
+  }
+
+  // Fleet-level model catalog: the union of the online runtimes' models,
+  // grouped by provider, with online-capacity counts. Powers the
+  // machine-less agent creation flow (engine toggle + model dropdown).
+  async listFleetModels(params?: { workspace_id?: string }): Promise<FleetModelsResponse> {
+    const search = new URLSearchParams();
+    if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(`/api/models${query ? `?${query}` : ""}`);
+    return parseWithFallback(raw, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, {
+      endpoint: "GET /api/models",
+    });
   }
 
   async listCloudRuntimeNodes(
