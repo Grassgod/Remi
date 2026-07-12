@@ -1929,6 +1929,13 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  /**
+   * Resume-unsafe retry: abandon the chat session's promoted provider session.
+   * Skips session/work_dir inheritance and chat-session runtime affinity so the
+   * task truly restarts in the pool rather than resuming the failed session on
+   * the original machine. local_directory affinity still applies.
+   */
+  resetProviderSession?: boolean;
 }
 
 export interface TaskMessageInput {

@@ -20,16 +20,25 @@ import type {
 } from "./types";
 
 // Pool model: agents are logical workers, not bound to a machine — any
-// runtime whose provider matches can run them. This resolves an agent's
-// candidate set. Older backends omit `provider`, in which case the legacy
-// runtime_id binding is the candidate set.
+// runtime whose provider matches AND which is allowed to run this agent can
+// claim it. This resolves an agent's candidate set. Older backends omit
+// `provider`, in which case the legacy runtime_id binding is the candidate set.
+//
+// The ownership filter mirrors the server claim predicate: a private runtime
+// only runs its owner's agents (COALESCE(...,'local') so single-machine NULL
+// owners still pair). Without it, a private runtime the agent can never reach
+// would show as available capacity and the dot would read "online" for work
+// that can't actually be claimed.
 export function resolveAgentRuntimes(
-  agent: Pick<Agent, "provider" | "runtime_id">,
+  agent: Pick<Agent, "provider" | "runtime_id" | "owner_id">,
   runtimes: readonly AgentRuntime[],
 ): AgentRuntime[] {
   if (agent.provider) {
+    const agentOwner = agent.owner_id ?? "local";
     return runtimes.filter(
-      (r) => r.provider === agent.provider || r.provider === "any",
+      (r) =>
+        (r.provider === agent.provider || r.provider === "any") &&
+        (r.visibility === "public" || (r.owner_id ?? "local") === agentOwner),
     );
   }
   const pinned = runtimes.find((r) => r.id === agent.runtime_id);

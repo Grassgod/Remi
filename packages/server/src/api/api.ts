@@ -2017,7 +2017,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const fleetModelsHandler = (c: Context) => {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;
-    return c.json({ providers: fleetModelsResponse(loaded.runtimes) });
+    return c.json({ providers: fleetModelsResponse(loaded.runtimes, currentRequestUserId(c)) });
   };
   app.get("/api/models", fleetModelsHandler);
   app.get("/api/multiremi/models", fleetModelsHandler);
@@ -5889,8 +5889,16 @@ function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<string,
  * fleet-level catalog behind machine-less agent creation. A bucket exists for
  * every provider that has a runtime at all (even offline, count 0) so the UI
  * can still offer the engine with a capacity hint.
+ *
+ * Only runtimes the caller's agents could actually be claimed by are counted:
+ * a private runtime an agent's task can never reach (different owner) must not
+ * inflate the engine's online capacity. `callerOwnerId` is the acting user —
+ * the owner their newly created agents will carry.
  */
-function fleetModelsResponse(runtimes: MultiremiRuntime[]): Array<Record<string, unknown>> {
+function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): Array<Record<string, unknown>> {
+  const usable = runtimes.filter(
+    (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
+  );
   const buckets = new Map<string, { online: number; models: Map<string, MultiremiRuntimeModel> }>();
   const bucket = (provider: string) => {
     let entry = buckets.get(provider);
@@ -5900,7 +5908,7 @@ function fleetModelsResponse(runtimes: MultiremiRuntime[]): Array<Record<string,
     }
     return entry;
   };
-  for (const runtime of runtimes) {
+  for (const runtime of usable) {
     if (runtime.provider && runtime.provider !== "any") bucket(runtime.provider);
     // An "any" runtime can execute every known engine — surface those engines
     // (with its capacity counted below) even when no dedicated runtime exists.
@@ -5914,7 +5922,7 @@ function fleetModelsResponse(runtimes: MultiremiRuntime[]): Array<Record<string,
       if (!existing || (model.default && !existing.default)) entry.models.set(model.id, model);
     }
   }
-  for (const runtime of runtimes) {
+  for (const runtime of usable) {
     if (runtime.status !== "online") continue;
     for (const [provider, entry] of buckets) {
       if (runtime.provider === provider || runtime.provider === "any") entry.online += 1;
@@ -6534,7 +6542,10 @@ function withAgentUpdateRequestContext(
     if (legacyRuntimeId) {
       const provider = resolveAgentRequestProvider(c, store, current.workspaceId, {
         runtime_id: legacyRuntimeId,
-        provider: input.provider,
+        // On an "any" runtime the request's provider falls through; default it
+        // to the agent's CURRENT provider (not "claude") so a legacy move to an
+        // any-runtime doesn't silently flip a Codex agent to Claude.
+        provider: input.provider ?? current.provider,
       });
       if (provider instanceof Response) return provider;
       applyProvider(provider);
@@ -9606,12 +9617,12 @@ function isPendingForRuntime(store: MultiremiStore, runtime: MultiremiRuntime, t
   if (agent.runtimeId && agent.runtimeId !== runtime.id) return false;
   if (runtime.provider !== "any" && agent.provider !== runtime.provider) return false;
   // Mirrors the claim SQL's ownership predicate: a private runtime only runs
-  // its owner's agents. A task stamp is deliberately NOT an escape hatch — the
-  // /tasks API lets any member stamp an arbitrary agent+runtime.
+  // its owner's agents (COALESCE(...,'local') so single-machine NULL owners
+  // still pair). A task stamp is deliberately NOT an escape hatch — the /tasks
+  // API lets any member stamp an arbitrary agent+runtime.
   if (
     runtime.visibility !== "public" &&
-    runtime.ownerId != null &&
-    agent.ownerId !== runtime.ownerId
+    (runtime.ownerId ?? "local") !== (agent.ownerId ?? "local")
   ) {
     return false;
   }

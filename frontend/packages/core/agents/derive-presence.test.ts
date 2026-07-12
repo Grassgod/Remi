@@ -445,6 +445,32 @@ describe("buildPresenceMap", () => {
     expect(map.get("via-any")?.availability).toBe("online");
   });
 
+  it("excludes private runtimes the agent's owner can't use (capacity mirrors claim)", () => {
+    const alice = makeAgent({ id: "alice-agent", runtime_id: "", provider: "codex", owner_id: "alice" });
+    const map = buildPresenceMap({
+      agents: [alice],
+      runtimes: [
+        // Bob's private codex machine — online, but alice's task can never
+        // be claimed by it, so it must NOT count as available capacity.
+        makeRuntime({ id: "rt-bob-priv", provider: "codex", owner_id: "bob", visibility: "private" }),
+      ],
+      snapshot: [],
+      now: NOW,
+    });
+    expect(map.get("alice-agent")?.availability).toBe("offline");
+
+    // A public codex machine (any owner) does count.
+    const map2 = buildPresenceMap({
+      agents: [alice],
+      runtimes: [
+        makeRuntime({ id: "rt-bob-pub", provider: "codex", owner_id: "bob", visibility: "public" }),
+      ],
+      snapshot: [],
+      now: NOW,
+    });
+    expect(map2.get("alice-agent")?.availability).toBe("online");
+  });
+
   it("keeps the legacy single-runtime binding when the agent has no provider", () => {
     const legacy = makeAgent({ id: "legacy", runtime_id: "rt-dead" });
     const map = buildPresenceMap({

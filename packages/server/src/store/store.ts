@@ -775,9 +775,15 @@ runMigrations(this.db);
     }
     // The canonical id may be held by a default agent the caller can't see
     // (someone flipped theirs private). Mint an owner-scoped id instead of
-    // colliding — the LIKE lookup above still finds it on the next call.
+    // colliding — the LIKE lookup above still finds it on the next call. Walk
+    // past any id already taken (owner-scoped could also be held by imported
+    // data or a prior record) so createAgent never hits a UNIQUE violation.
     const canonicalId = `agt_default_${safeIdSegment(workspaceId)}_${provider}`;
-    const id = this.getAgent(canonicalId) ? `${canonicalId}_${safeIdSegment(ownerId)}` : canonicalId;
+    let id = canonicalId;
+    if (this.getAgent(id)) {
+      id = `${canonicalId}_${safeIdSegment(ownerId)}`;
+      for (let n = 2; this.getAgent(id); n += 1) id = `${canonicalId}_${safeIdSegment(ownerId)}_${n}`;
+    }
     return this.createAgent({
       id,
       name: provider === "codex" ? "Codex" : "Claude",
@@ -6022,11 +6028,18 @@ runMigrations(this.db);
     // claim them. Two machine-local realities still force a stamp: a promoted
     // provider session lives on the machine that ran it, and a local_directory
     // project resource only exists on its daemon.
-    let inheritChatSession = true;
+    //
+    // resetProviderSession (a resume-unsafe chat retry) means the caller has
+    // deliberately given up the provider session — passing null runtime/
+    // session/work_dir. Because null reads as "unspecified" to the `??`
+    // fallbacks below, honour the intent explicitly: skip chat-session runtime
+    // affinity and session/work_dir inheritance, but keep local_directory
+    // affinity (the directory constraint is independent of the session).
+    let inheritChatSession = !input.resetProviderSession;
     if (!runtimeId) {
-      const affinity = this.resolveTaskAffinity(agent, chatSession, issue);
+      const affinity = this.resolveTaskAffinity(agent, input.resetProviderSession ? null : chatSession, issue);
       runtimeId = affinity.runtimeId;
-      inheritChatSession = affinity.inheritChatSession;
+      if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
     }
 
     const id = input.id ?? createId("tsk");
@@ -6086,13 +6099,16 @@ runMigrations(this.db);
         )
         .get(chatSession.id) as Row | null;
       const runtime = row ? this.getRuntime(String(row.runtime_id)) : null;
-      if (runtime) {
-        const providerOk = runtime.provider === "any" || runtime.provider === agent.provider;
-        if (providerOk) return { runtimeId: runtime.id, inheritChatSession: true };
-        // Engine switched since the session was promoted — abandon it so the
-        // new engine starts fresh rather than resuming a foreign session.
-        inheritChatSession = false;
+      // Only follow the session back to its machine when that machine can still
+      // run this agent (provider still matches AND ownership still permits). If
+      // the runtime was deleted, the engine switched, or the runtime turned
+      // private under a different owner, the promoted session/work_dir belong
+      // to a machine we can't return to — abandon them and re-pool so the task
+      // isn't pinned to a runtime the claim predicate would reject forever.
+      if (runtime && this.runtimeCanRunAgent(runtime, agent)) {
+        return { runtimeId: runtime.id, inheritChatSession: true };
       }
+      inheritChatSession = false;
     }
     if (issue?.projectId) {
       for (const resource of this.listProjectResources(issue.projectId)) {
@@ -6100,7 +6116,15 @@ runMigrations(this.db);
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
         if (!daemonId) continue;
         const runtime = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
-        if (runtime) return { runtimeId: runtime.id, inheritChatSession };
+        // Only pin to the directory's machine when it may run this agent —
+        // otherwise the claim predicate would reject it and the task would
+        // hang. Leaving it unpinned lets the pool surface it (it still won't
+        // find the directory elsewhere, but that's a project-config problem,
+        // not a task pinned to a runtime that can never claim it).
+        if (runtime) {
+          if (this.runtimeCanRunAgent(runtime, agent)) return { runtimeId: runtime.id, inheritChatSession };
+          return { runtimeId: null, inheritChatSession };
+        }
         // No runtime row for that daemon (never registered, or GC'd while
         // offline): stamp the deterministic id its runtime WILL get on
         // registration, so the task waits for the machine that has the
@@ -6109,6 +6133,18 @@ runMigrations(this.db);
       }
     }
     return { runtimeId: null, inheritChatSession };
+  }
+
+  /**
+   * May this runtime execute this agent? A claim hands the runtime the agent's
+   * custom_env / mcp_config, so a private runtime is restricted to its owner's
+   * agents. Mirrors the claim SQL's ownership predicate (COALESCE(...,'local')
+   * so single-machine NULL owners still pair). The provider must also match.
+   */
+  runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
+    if (runtime.provider !== "any" && runtime.provider !== agent.provider) return false;
+    if (runtime.visibility === "public") return true;
+    return (runtime.ownerId ?? "local") === (agent.ownerId ?? "local");
   }
 
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null {
@@ -6342,7 +6378,6 @@ runMigrations(this.db);
     const ownershipParams = [
       runtime.visibility,
       runtime.ownerId,
-      runtime.ownerId,
     ];
     const params = runtime.workspaceId
       ? [
@@ -6371,13 +6406,14 @@ runMigrations(this.db);
           ...ownershipParams,
         ];
     // Ownership guard: a private runtime only executes its owner's agents — a
-    // claim hands the runtime the agent's custom_env / mcp_config. It is NOT
-    // relaxed for tasks stamped to this runtime, because the /tasks API lets
-    // any member stamp an arbitrary agent+runtime (a stamp is not proof of
-    // authorization). Legitimate affinity (session / local_directory) to one's
-    // own private machine still passes via owner_id equality. Kept as a JS
-    // comment, not inline SQL: an apostrophe in an in-string `--` comment
-    // corrupts the sqlite→pg placeholder scanner.
+    // claim hands the runtime the agent's custom_env / mcp_config. Owner match
+    // uses COALESCE(...,'local') so a single-machine deployment (runtime owner
+    // NULL, agent owner 'local') still pairs, while a NULL-owner PRIVATE
+    // runtime in a multi-user workspace no longer sweeps up every member's
+    // agents. NOT relaxed for tasks stamped to this runtime: the /tasks API
+    // lets any member stamp an arbitrary agent+runtime (a stamp is not proof
+    // of authorization). Kept as a JS comment, not inline SQL: an apostrophe
+    // in an in-string `--` comment corrupts the sqlite→pg placeholder scanner.
     const row = this.db.query(
       `UPDATE multiremi_tasks
        SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ?
@@ -6397,7 +6433,7 @@ runMigrations(this.db);
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
-           AND (? = 'public' OR CAST(? AS TEXT) IS NULL OR a.owner_id = ?)
+           AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks running
@@ -6787,6 +6823,9 @@ runMigrations(this.db);
       prompt: parent.prompt,
       sessionId: resumeSafe ? parent.sessionId : null,
       workDir: resumeSafe ? parent.workDir : null,
+      // Without this, createTask would re-derive the session/work_dir/runtime
+      // from the chat session and silently resume the failed session anyway.
+      resetProviderSession: !resumeSafe,
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
       parentTaskId: parent.id,
