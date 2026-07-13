@@ -1728,6 +1728,14 @@ runMigrations(this.db);
     return this.accessTokens.createAccessToken(input);
   }
 
+  async createLoginSessionToken(input: {
+    userId: string;
+    name: string;
+    expiresInDays?: number | null;
+  }): Promise<MultiremiCreatedAccessToken> {
+    return this.accessTokens.createLoginSessionToken(input);
+  }
+
   async createTaskAccessToken(
     task: Pick<MultiremiTask, "id" | "agentId" | "workspaceId">,
     userId: string,

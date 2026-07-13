@@ -38,11 +38,9 @@ async function login(
   identity: { externalId?: string; email: string; name?: string },
 ): Promise<{ userId: string; token: string }> {
   const user = store.getOrCreateUser(identity);
-  const created = await store.createAccessToken({
-    workspaceId: "local",
+  const created = await store.createLoginSessionToken({
     userId: user.id,
     name: `Login ${user.id}`,
-    type: "pat",
     expiresInDays: 30,
   });
   return { userId: user.id, token: created.token };
@@ -78,6 +76,144 @@ describe("Multiremi multi-user auth", () => {
     expect(masterResponse.status).toBe(200);
     expect(await masterResponse.json()).toMatchObject({ id: "local", email: localUser.email });
     expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("marks a real local-id login as a session without unscoping ordinary workspace PATs", async () => {
+    process.env.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN = "1";
+    // On a fresh self-hosted install the first email login legitimately resolves
+    // to the seed user whose stable id is `local`.
+    const store = freshStore();
+    store.ensureLocalWorkspace();
+    const localUser = store.getCurrentUser();
+    const workspace = store.createWorkspace({ name: "Owner Team", slug: "owner-team" }, localUser.id);
+    const runtime = store.registerRuntime({
+      id: "rt_owner_team",
+      name: "Owner Team Runtime",
+      provider: "codex",
+      workspaceId: workspace.id,
+      ownerId: localUser.id,
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const sent = await app.request("/auth/send-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: localUser.email }),
+    });
+    const { code } = await sent.json();
+    const verified = await app.request("/auth/verify-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: localUser.email, code }),
+    });
+    const session = await verified.json();
+
+    expect(verified.status).toBe(200);
+    expect(session.user.id).toBe("local");
+    const verifiedSession = await store.verifyAccessToken(session.token);
+    expect(verifiedSession).toMatchObject({ purpose: "session", userId: "local" });
+    expect((await app.request(`/api/workspaces/${workspace.id}`, bearer(session.token))).status).toBe(200);
+    expect((await app.request(`/api/multiremi/runtimes/${runtime.id}`, bearer(session.token))).status).toBe(200);
+    const cliResponse = await app.request("/api/cli-token", { method: "POST", ...bearer(session.token) });
+    const cliToken = await store.verifyAccessToken((await cliResponse.json()).token);
+    expect(cliToken).toMatchObject({ purpose: "workspace", userId: "local", workspaceId: "local" });
+    const renewedSession = await store.renewAccessTokenExpiry(verifiedSession!.id, { thresholdDays: 31, extensionDays: 90 });
+    expect(renewedSession?.token.purpose).toBe("session");
+
+    const workspacePat = await store.createAccessToken({
+      workspaceId: "local",
+      userId: localUser.id,
+      name: "Local workspace PAT",
+      type: "pat",
+    });
+    expect(workspacePat.purpose).toBe("workspace");
+    expect((await app.request(`/api/workspaces/${workspace.id}`, bearer(workspacePat.token))).status).toBe(404);
+    expect((await app.request(`/api/multiremi/runtimes/${runtime.id}`, bearer(workspacePat.token))).status).toBe(404);
+  });
+
+  it("lets the migrated Feishu owner whose user id is local use their member workspaces", async () => {
+    const store = seedDeployment();
+    const localUser = store.getCurrentUser();
+    const owner = await login(store, {
+      externalId: OWNER_OPEN_ID,
+      email: localUser.email,
+      name: localUser.name,
+    });
+    const workspace = store.createWorkspace({ name: "Migrated Owner Team", slug: "migrated-owner-team" }, owner.userId);
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    expect(owner.userId).toBe("local");
+    expect((await app.request(`/api/workspaces/${workspace.id}`, bearer(owner.token))).status).toBe(200);
+  });
+
+  it("keeps a non-local user's ordinary PAT scoped to its minted workspace", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const b = store.getOrCreateUser({ externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const first = store.createWorkspace({ name: "First", slug: "first" }, b.id);
+    const second = store.createWorkspace({ name: "Second", slug: "second" }, b.id);
+    const workspacePat = await store.createAccessToken({
+      workspaceId: first.id,
+      userId: b.id,
+      name: "First workspace PAT",
+      type: "pat",
+    });
+
+    expect((await app.request(`/api/workspaces/${first.id}`, bearer(workspacePat.token))).status).toBe(200);
+    expect((await app.request(`/api/workspaces/${second.id}`, bearer(workspacePat.token))).status).toBe(404);
+  });
+
+  it("migrates historical access tokens as workspace-scoped instead of guessing sessions", () => {
+    db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE multiremi_access_tokens (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        daemon_id TEXT,
+        task_id TEXT,
+        agent_id TEXT,
+        user_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'pat',
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        last_used_at TEXT,
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO multiremi_access_tokens (
+        id, workspace_id, user_id, name, type, token_hash, token_prefix, created_at
+      ) VALUES (
+        'pat_legacy_login', 'local', 'local', 'Login for local@multiremi.local',
+        'pat', 'legacy-hash', 'mul_legacy', '2026-01-01T00:00:00.000Z'
+      );
+    `);
+
+    const store = new MultiremiStore(db);
+
+    expect(store.getAccessToken("pat_legacy_login")?.purpose).toBe("workspace");
+  });
+
+  it("forces pre-purpose login tokens to reauthenticate instead of partially logging in", async () => {
+    const store = seedDeployment();
+    const user = store.getCurrentUser();
+    const legacyLogin = await store.createAccessToken({
+      workspaceId: "local",
+      userId: user.id,
+      name: `Login for ${user.email}`,
+      type: "pat",
+      expiresInDays: 30,
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/me", bearer(legacyLogin.token));
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "login session must be refreshed",
+      code: "reauth_required",
+    });
   });
 
   it("updates only the authenticated user's profile through PATCH /api/me", async () => {
@@ -275,6 +411,12 @@ describe("Multiremi multi-user auth", () => {
     const store = seedDeployment();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const victimToken = await store.createAccessToken({
+      workspaceId: "local",
+      userId: b.userId,
+      name: "Victim workspace token",
+      type: "pat",
+    });
     const taskToken = await store.createAccessToken({
       workspaceId: "local",
       userId: b.userId,
@@ -318,11 +460,49 @@ describe("Multiremi multi-user auth", () => {
         body: JSON.stringify({ workspace_id: "local" }),
       }),
     ]);
+    const tokenMintResponses = await Promise.all([
+      app.request("/api/tokens?workspace_id=local", bearer(taskToken.token)),
+      app.request("/api/multiremi/tokens?workspace_id=local", bearer(taskToken.token)),
+      app.request("/api/cli-token", { method: "POST", ...bearer(taskToken.token) }),
+      app.request("/api/tokens", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ name: "persist task access" }),
+      }),
+      app.request("/api/%74okens", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ name: "encoded persist task access" }),
+      }),
+      app.request("/api/tokens/", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ name: "trailing-slash persist task access" }),
+      }),
+      app.request("/api/tokens/current/renew", { method: "POST", ...bearer(taskToken.token) }),
+      app.request("/api/multiremi/tokens", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ name: "native persist task access", workspaceId: "local" }),
+      }),
+      app.request("/api/multiremi/install/daemon", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ workspaceId: "local" }),
+      }),
+      app.request(`/api/tokens/${victimToken.id}`, { method: "DELETE", ...bearer(taskToken.token) }),
+      app.request(`/api/%74okens/${victimToken.id}`, { method: "DELETE", ...bearer(taskToken.token) }),
+      app.request(`/api/multiremi/tokens/${victimToken.id}`, { method: "DELETE", ...bearer(taskToken.token) }),
+    ]);
 
     expect(readResponse.status).toBe(403);
     expect(writeResponse.status).toBe(403);
     expect(encodedWriteResponse.status).toBe(403);
     expect(onboardingResponses.map((response) => response.status)).toEqual([403, 403, 403, 403, 403]);
+    expect(tokenMintResponses.map((response) => response.status)).toEqual([
+      403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403, 403,
+    ]);
+    expect(store.getAccessToken(victimToken.id)?.revokedAt).toBeNull();
     expect(store.getUser(b.userId)?.name).toBe("B");
   });
 
@@ -614,9 +794,18 @@ describe("Multiremi multi-user auth", () => {
     const spoofed = await app.request("/api/tokens", {
       method: "POST",
       headers: { ...jsonAuth(b.token), "X-Workspace-Slug": workspace.slug },
-      body: JSON.stringify({ name: "spoof", userId: "local" }),
+      body: JSON.stringify({ name: "spoof", userId: "local", purpose: "session" }),
     });
-    expect((await spoofed.json()).userId).toBe(b.userId);
+    expect(await spoofed.json()).toMatchObject({ userId: b.userId, purpose: "workspace" });
+    const nativeSpoofed = await app.request("/api/multiremi/tokens", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "native spoof", workspaceId: workspace.id, userId: "local", purpose: "session" }),
+    });
+    expect(await nativeSpoofed.json()).toMatchObject({
+      token: { userId: b.userId, workspaceId: workspace.id, purpose: "workspace" },
+    });
+    expect((await app.request("/api/cli-token", { method: "POST", ...bearer(b.token) })).status).toBe(404);
 
     // Without any workspace context the default is still the local workspace,
     // which stays members-only.

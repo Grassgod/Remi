@@ -277,6 +277,7 @@ export function runMigrations(db: SqlDatabase): void {
       user_id TEXT NOT NULL DEFAULT 'local',
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'pat',
+      purpose TEXT NOT NULL DEFAULT 'workspace',
       token_hash TEXT NOT NULL UNIQUE,
       token_prefix TEXT NOT NULL,
       last_used_at TEXT,
@@ -870,6 +871,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
+  // Login credentials are user sessions, while all historical/general PATs are
+  // workspace-scoped. Existing sessions remain safely scoped until the user
+  // signs in again and receives an explicitly marked session token.
+  addColumnIfMissing(db, "multiremi_access_tokens", "purpose TEXT NOT NULL DEFAULT 'workspace'");
   addColumnIfMissing(db, "multiremi_issues", "assignee_type TEXT");
   addColumnIfMissing(db, "multiremi_issues", "assignee_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
