@@ -2080,6 +2080,46 @@ describe("Bun Multiremi core store", () => {
     expect(store.listIssueComments(issue.id)).toHaveLength(afterSelfReply);
   });
 
+  // Agent-driven writes bypass the HTTP layer, where issue events are normally
+  // published — the store must broadcast them itself or open issue pages only
+  // see the result after a manual refresh.
+  it("broadcasts comment:created / activity:created / issue:updated when an agent completes an issue task", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_ws_events", name: "ws events", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Event Bot", provider: "claude", runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "实时推送", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "回答" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+
+    const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+    store.completeTask(task.id, { output: "答案在此。" });
+
+    const commentEvent = events.find((e) => e.type === "comment:created");
+    expect(commentEvent?.workspaceId).toBe("local");
+    expect(commentEvent?.payload.comment).toMatchObject({
+      issue_id: issue.id,
+      content: "答案在此。",
+      author_type: "agent",
+      author_id: agent.id,
+    });
+
+    const activityEvent = events.find((e) => e.type === "activity:created");
+    expect(activityEvent?.payload.issue_id).toBe(issue.id);
+    expect(activityEvent?.payload.entry).toMatchObject({
+      type: "activity",
+      action: "task_completed",
+      actor_type: "agent",
+      actor_id: agent.id,
+    });
+
+    const issueEvent = events.find((e) => e.type === "issue:updated");
+    expect(issueEvent?.workspaceId).toBe("local");
+    expect(issueEvent?.payload.issue).toMatchObject({ id: issue.id, status: "done" });
+    expect(issueEvent?.payload.status_changed).toBe(true);
+  });
+
   it("accepts comments authored with a user id when the member row uses the mem_<ws>_<uid> convention", () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_uid_comment", name: "uid comment", provider: "claude", workspaceId: "local" });

@@ -3795,6 +3795,16 @@ runMigrations(this.db);
       data: { commentId: id },
     });
     const comment = this.getIssueComment(id)!;
+    // Live-update open issue pages. Emitted from the store (not the HTTP
+    // layer) because agent replies and system comments are created directly
+    // through the store and would otherwise never reach the browser.
+    this.emitWorkspaceEvent({
+      type: "comment:created",
+      workspaceId: issue.workspaceId,
+      actorType: authorType,
+      actorId: input.authorId ?? null,
+      payload: { comment },
+    });
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
     this.notifySubscribedMembers(issue, "comment_created", "New comment", body, authorType, input.authorId ?? null, mentionedMemberIds);
     this.triggerCommentMentions(issue, comment);
@@ -4596,20 +4606,46 @@ runMigrations(this.db);
     body?: string | null;
     data?: unknown | null;
   }): void {
+    const id = createId("act");
+    const now = nowIso();
     this.db.run(
       `INSERT INTO multiremi_issue_activity (id, issue_id, actor_type, actor_id, type, body, data, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        createId("act"),
+        id,
         issueId,
         input.actorType,
         input.actorId ?? null,
         input.type,
         input.body ?? null,
         input.data == null ? null : toJson(input.data),
-        nowIso(),
+        now,
       ],
     );
+    // Browsers listen for activity:created to append the timeline row live.
+    // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
+    // which never pass through an HTTP mutation. `entry` mirrors the activity
+    // shape of GET /api/issues/:id/timeline.
+    const issue = this.getIssue(issueId);
+    if (!issue) return;
+    this.emitWorkspaceEvent({
+      type: "activity:created",
+      workspaceId: issue.workspaceId,
+      actorType: input.actorType,
+      actorId: input.actorId ?? null,
+      payload: {
+        issue_id: issueId,
+        entry: {
+          type: "activity",
+          id,
+          actor_type: input.actorType,
+          actor_id: input.actorId ?? null,
+          created_at: now,
+          action: input.type,
+          details: input.data ?? (input.body == null ? null : { body: input.body }),
+        },
+      },
+    });
   }
 
   createProject(input: CreateProjectInput): MultiremiProject {
@@ -7752,11 +7788,28 @@ runMigrations(this.db);
 
     if (task.issueId) {
       const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry);
+      const issue = this.getIssue(task.issueId);
       if (issueStatus) {
         this.db.run(
           "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
           [issueStatus, now, task.issueId],
         );
+        // Agent-driven status flips bypass the HTTP layer (where issue:updated
+        // is normally published), so boards/pages would only see the change on
+        // a manual refresh. The frontend accepts a partial issue patch.
+        if (issue) {
+          this.emitWorkspaceEvent({
+            type: "issue:updated",
+            workspaceId: issue.workspaceId,
+            actorType: "agent",
+            actorId: task.agentId,
+            payload: {
+              issue: { id: task.issueId, status: issueStatus, updated_at: now },
+              status_changed: issue.status !== issueStatus,
+              prev_status: issue.status,
+            },
+          });
+        }
       }
       this.appendIssueActivity(task.issueId, {
         actorType: "agent",
@@ -7766,7 +7819,6 @@ runMigrations(this.db);
         data: { taskId: task.id, runtimeId: task.runtimeId },
       });
       if (status === "completed") this.postAgentReplyComment(task, body);
-      const issue = this.getIssue(task.issueId);
       if (issue?.projectId) this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
     }
 
