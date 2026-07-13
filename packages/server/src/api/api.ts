@@ -385,8 +385,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       // downloads) can't attach an Authorization header. Accept the HttpOnly
       // auth cookie set at login — mirroring the Go server's multimira_auth —
       // but only for safe methods, so cookie auth can never mutate state and
-      // no CSRF machinery is needed.
-      if (!token && (c.req.method === "GET" || c.req.method === "HEAD")) {
+      // no CSRF machinery is needed. Only when the header is entirely absent:
+      // a malformed or non-Bearer Authorization must fail, not fall back.
+      if (!header && (c.req.method === "GET" || c.req.method === "HEAD")) {
         token = getCookie(c, AUTH_COOKIE_NAME) ?? "";
       }
       if (token === authToken) {
@@ -792,9 +793,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     // Sessions that predate cookie auth carry only the localStorage token.
     // The app calls /api/me on boot with the Bearer header (already verified
     // by the auth gate), so mirror it into the cookie — existing logins get
-    // working <img> loads without re-authenticating.
+    // working <img> loads without re-authenticating. Never mirror the master
+    // token: it is a non-expiring deployment-wide admin secret, and an
+    // ambient host-wide cookie would broaden its exposure for no benefit.
     const header = c.req.header("Authorization") ?? "";
-    if (header.startsWith("Bearer ")) setAuthCookie(c, header.slice("Bearer ".length));
+    const bearer = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+    if (bearer && bearer !== authToken) setAuthCookie(c, bearer);
     return c.json(store.getCurrentUser());
   });
   app.patch("/api/me", async (c) => {

@@ -6325,11 +6325,24 @@ describe("Bun Multiremi API", () => {
     const badCookie = await app.request("/api/issues", { headers: { Cookie: "multimira_auth=nope" } });
     expect(badCookie.status).toBe(401);
 
+    // A malformed/non-Bearer Authorization header must fail, not silently
+    // fall back to the cookie — header presence wins.
+    const basicHeader = await app.request("/api/issues", {
+      headers: { ...cookie, Authorization: "Basic dXNlcjpwdw==" },
+    });
+    expect(basicHeader.status).toBe(401);
+
     // /api/me mirrors a verified bearer token into the cookie so sessions
     // that predate cookie auth pick it up without re-logging in.
     const me = await app.request("/api/me", { headers: { Authorization: `Bearer ${login.token}` } });
     expect(me.status).toBe(200);
     expect(me.headers.get("set-cookie") ?? "").toContain(`multimira_auth=${login.token}`);
+
+    // …but never the master token: a non-expiring deployment-wide admin
+    // secret must not become an ambient cookie.
+    const meMaster = await app.request("/api/me", { headers: { Authorization: "Bearer root-secret" } });
+    expect(meMaster.status).toBe(200);
+    expect(meMaster.headers.get("set-cookie") ?? "").not.toContain("multimira_auth");
 
     // Logout clears the cookie.
     const logout = await app.request("/auth/logout", { method: "POST", headers: cookie });
