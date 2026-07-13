@@ -426,4 +426,32 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(() => store.createProjectResource(main.id, { resourceType: "project_ref", resourceRef: { projectId: lib.id } }))
       .toThrow("duplicate key value violates unique constraint");
   });
+
+  // Regression: agentCommentedSince used `(? IS NULL OR created_at >= ?)`,
+  // which Postgres rejects ("could not determine data type of parameter") —
+  // the throw escaped postAgentReplyComment's try, so completing an issue task
+  // never posted the agent's reply comment in production.
+  it("posts the agent's final reply as an issue comment on completion (PG)", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({ name: "rt-reply-pg", provider: "claude", workspaceId: ws });
+    const agent = store.createAgent({ name: "Reply PG", provider: "claude", workspaceId: ws, runtimeId: runtime.id });
+    const issue = store.createIssue({ title: "统计后端文件", workspaceId: ws });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "统计后端文件", workspaceId: ws });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "后端共 119 个文件。" });
+
+    const comments = store.listIssueComments(issue.id);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ authorType: "agent", authorId: agent.id, body: "后端共 119 个文件。" });
+
+    // Self-replied run: completion must not double-post.
+    const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "再来一次", workspaceId: ws });
+    expect(store.claimTask(runtime.id)?.id).toBe(second.id);
+    store.startTask(second.id);
+    store.createIssueComment(issue.id, { authorType: "agent", authorId: agent.id, body: "自己发的回复" });
+    const before = store.listIssueComments(issue.id).length;
+    store.completeTask(second.id, { output: "narration text" });
+    expect(store.listIssueComments(issue.id)).toHaveLength(before);
+  });
 });

@@ -7806,15 +7806,15 @@ runMigrations(this.db);
     if (!task.issueId || !task.agentId) return;
     const body = (output ?? "").trim();
     if (!body || body === "Task completed.") return;
-    // If the agent already posted its own comment during this run (the normal
-    // path for @mention/comment-triggered tasks — it replies in-thread via a
-    // tool), don't also post the accumulated transcript text: that double-posts
-    // and the auto-reply is the lower-quality, narration-heavy version. The
-    // auto-reply stays for direct assignments where the agent doesn't comment.
-    if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt)) {
-      return;
-    }
     try {
+      // If the agent already posted its own comment during this run (the normal
+      // path for @mention/comment-triggered tasks — it replies in-thread via a
+      // tool), don't also post the accumulated transcript text: that double-posts
+      // and the auto-reply is the lower-quality, narration-heavy version. The
+      // auto-reply stays for direct assignments where the agent doesn't comment.
+      if (this.agentCommentedSince(task.issueId, task.agentId, task.dispatchedAt ?? task.startedAt ?? task.createdAt)) {
+        return;
+      }
       const parent = task.triggerCommentId ? this.getIssueComment(task.triggerCommentId) : null;
       this.createIssueComment(task.issueId, {
         authorType: "agent",
@@ -7829,12 +7829,14 @@ runMigrations(this.db);
   }
 
   private agentCommentedSince(issueId: string, agentId: string, since: string | null): boolean {
-    const row = this.db.query(
-      `SELECT 1 AS present FROM multiremi_issue_comments
-       WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'
-         AND (? IS NULL OR created_at >= ?)
-       LIMIT 1`,
-    ).get(issueId, agentId, since, since) as { present: number } | null;
+    // Branch on `since` in JS rather than `(? IS NULL OR …)` in SQL: Postgres
+    // cannot infer the type of a placeholder that only appears in IS NULL and
+    // rejects the whole query ("could not determine data type of parameter").
+    const base = `SELECT 1 AS present FROM multiremi_issue_comments
+       WHERE issue_id = ? AND author_type = 'agent' AND author_id = ? AND type = 'comment'`;
+    const row = (since == null
+      ? this.db.query(`${base} LIMIT 1`).get(issueId, agentId)
+      : this.db.query(`${base} AND created_at >= ? LIMIT 1`).get(issueId, agentId, since)) as { present: number } | null;
     return Boolean(row);
   }
 
