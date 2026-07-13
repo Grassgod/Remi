@@ -6301,6 +6301,41 @@ describe("Bun Multiremi API", () => {
     expect(multiremiActivityBody.activity.find((row: any) => row.agentId === agentA.id)?.failedCount).toBe(1);
   });
 
+  // Native browser loads (<img src="/api/attachments/…/content">) cannot set
+  // an Authorization header — they authenticate via the HttpOnly login cookie,
+  // accepted for safe methods only so cookie auth can never mutate state.
+  it("accepts the multimira_auth cookie for GET requests only", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const login = await store.createAccessToken({ name: "Login", type: "pat", workspaceId: "local", userId: "local" });
+    const cookie = { Cookie: `multimira_auth=${login.token}` };
+
+    expect((await app.request("/api/issues")).status).toBe(401);
+    expect((await app.request("/api/issues", { headers: cookie })).status).toBe(200);
+
+    // Unsafe methods must still require the Authorization header.
+    const post = await app.request("/api/issues", {
+      method: "POST",
+      headers: { ...cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "cookie post" }),
+    });
+    expect(post.status).toBe(401);
+
+    // A bad cookie value stays unauthorized.
+    const badCookie = await app.request("/api/issues", { headers: { Cookie: "multimira_auth=nope" } });
+    expect(badCookie.status).toBe(401);
+
+    // /api/me mirrors a verified bearer token into the cookie so sessions
+    // that predate cookie auth pick it up without re-logging in.
+    const me = await app.request("/api/me", { headers: { Authorization: `Bearer ${login.token}` } });
+    expect(me.status).toBe(200);
+    expect(me.headers.get("set-cookie") ?? "").toContain(`multimira_auth=${login.token}`);
+
+    // Logout clears the cookie.
+    const logout = await app.request("/auth/logout", { method: "POST", headers: cookie });
+    expect(logout.headers.get("set-cookie") ?? "").toContain("multimira_auth=;");
+  });
+
   it("protects APIs with bearer auth and scopes daemon tokens to daemon routes", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });

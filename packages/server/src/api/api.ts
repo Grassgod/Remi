@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
@@ -379,7 +380,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         return;
       }
       const header = c.req.header("Authorization") ?? "";
-      const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      let token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      // Native browser loads (<img src="/api/attachments/…/content">, file
+      // downloads) can't attach an Authorization header. Accept the HttpOnly
+      // auth cookie set at login — mirroring the Go server's multimira_auth —
+      // but only for safe methods, so cookie auth can never mutate state and
+      // no CSRF machinery is needed.
+      if (!token && (c.req.method === "GET" || c.req.method === "HEAD")) {
+        token = getCookie(c, AUTH_COOKIE_NAME) ?? "";
+      }
       if (token === authToken) {
         await next();
         return;
@@ -441,7 +450,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     });
     return c.json({ token: token.token });
   });
-  app.post("/auth/logout", (c) => c.json({ message: "logged out" }));
+  app.post("/auth/logout", (c) => {
+    deleteCookie(c, AUTH_COOKIE_NAME, { path: "/" });
+    return c.json({ message: "logged out" });
+  });
   app.post("/auth/send-code", async (c) => {
     if (!isEmailCodeLoginEnabled()) return c.json({ error: "email code login is disabled" }, 403);
     const result = sendLocalAuthCode(store, await readJson(c));
@@ -452,12 +464,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!isEmailCodeLoginEnabled()) return c.json({ error: "email code login is disabled" }, 403);
     const result = await verifyLocalAuthCode(store, await readJson(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
+    setAuthCookie(c, result.token);
     return c.json(result);
   });
   app.post("/auth/google", async (c) => {
     if (!isEmailCodeLoginEnabled()) return c.json({ error: "email login is disabled" }, 403);
     const result = await localGoogleAuthFallback(store, await readJson(c));
     if ("error" in result) return c.json({ error: result.error }, result.status);
+    setAuthCookie(c, result.token);
     return c.json(result);
   });
   app.get("/auth/lark/url", (c) => {
@@ -482,7 +496,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       // open_id is the stable per-user identity; Feishu often returns no email,
       // so synthesize one from open_id purely for display/uniqueness.
       const email = profile.email ?? `${profile.openId ?? "feishu-user"}@feishu.local`;
-      return c.json(await localAuthResponse(store, { externalId: profile.openId, email, name: profile.name }));
+      const payload = await localAuthResponse(store, { externalId: profile.openId, email, name: profile.name });
+      setAuthCookie(c, payload.token);
+      return c.json(payload);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : "Feishu login failed" }, 401);
     }
@@ -772,7 +788,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       request: body,
     }, 201);
   });
-  app.get("/api/me", (c) => c.json(store.getCurrentUser()));
+  app.get("/api/me", (c) => {
+    // Sessions that predate cookie auth carry only the localStorage token.
+    // The app calls /api/me on boot with the Bearer header (already verified
+    // by the auth gate), so mirror it into the cookie — existing logins get
+    // working <img> loads without re-authenticating.
+    const header = c.req.header("Authorization") ?? "";
+    if (header.startsWith("Bearer ")) setAuthCookie(c, header.slice("Bearer ".length));
+    return c.json(store.getCurrentUser());
+  });
   app.patch("/api/me", async (c) => {
     const body = await readJson<any>(c);
     const result = safeUpdateCurrentUser(store, body);
@@ -9054,6 +9078,22 @@ async function localGoogleAuthFallback(
   const email = normalizeAuthEmail(body.email ?? store.getCurrentUser().email);
   if (typeof email !== "string") return email;
   return localAuthResponse(store, { email, name: body.name });
+}
+
+// HttpOnly login cookie (same name as the Go server's) so native browser
+// loads — <img> tags, downloads — carry a credential; the auth middleware
+// accepts it for GET/HEAD only. Not marked Secure: the deployment fronts
+// plain HTTP, and browsers drop Secure cookies set over http.
+const AUTH_COOKIE_NAME = "multimira_auth";
+const AUTH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // matches the 30-day login PAT
+
+function setAuthCookie(c: Context, token: string): void {
+  setCookie(c, AUTH_COOKIE_NAME, token, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "Strict",
+    maxAge: AUTH_COOKIE_MAX_AGE_SECONDS,
+  });
 }
 
 async function localAuthResponse(
