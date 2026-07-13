@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHmac } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 
@@ -50,7 +51,372 @@ async function login(
 const bearer = (token: string) => ({ headers: { Authorization: `Bearer ${token}` } });
 const jsonAuth = (token: string) => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` });
 
+function signTestJwt(payload: Record<string, unknown>, secret = "multiremi-dev-secret-change-in-production"): string {
+  const encodedHeader = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = createHmac("sha256", secret).update(signingInput).digest("base64url");
+  return `${signingInput}.${signature}`;
+}
+
 describe("Multiremi multi-user auth", () => {
+  it("returns the authenticated user from /api/me without replacing the legacy local user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+
+    const response = await app.request("/api/me", bearer(b.token));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: b.userId,
+      name: "B",
+      email: "b@corp.com",
+    });
+    const masterResponse = await app.request("/api/me", bearer("root-secret"));
+    expect(masterResponse.status).toBe(200);
+    expect(await masterResponse.json()).toMatchObject({ id: "local", email: localUser.email });
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("updates only the authenticated user's profile through PATCH /api/me", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const workspace = store.createWorkspace({ name: "B Team", slug: "b-team" }, b.userId);
+    const legacyWorkspace = store.createWorkspace({ name: "Legacy B Team", slug: "legacy-b-team" }, b.userId);
+    const legacyMember = store.listWorkspaceMembers(legacyWorkspace.id).find((member) => member.userId === b.userId)!;
+    db!.run("UPDATE multiremi_workspace_members SET user_id = NULL WHERE id = ?", [legacyMember.id]);
+
+    const response = await app.request("/api/me", {
+      method: "PATCH",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ name: "B Updated", language: "zh-Hans" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: b.userId, name: "B Updated", language: "zh-Hans" });
+    expect(store.getUser(b.userId)).toMatchObject({ name: "B Updated", language: "zh-Hans" });
+    expect(store.listWorkspaceMembers(workspace.id).find((member) => member.userId === b.userId)?.name).toBe("B Updated");
+    expect(store.getWorkspaceMember(legacyMember.id)?.name).toBe("B Updated");
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("updates only the authenticated user's onboarding questionnaire", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+
+    const response = await app.request("/api/me/onboarding", {
+      method: "PATCH",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ questionnaire: { role: "builder" } }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: b.userId,
+      onboarding_questionnaire: { role: "builder" },
+    });
+    expect(store.getUser(b.userId)?.onboardingQuestionnaire).toEqual({ role: "builder" });
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("marks only the authenticated user as onboarded", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+
+    const response = await app.request("/api/me/onboarding/complete", {
+      method: "POST",
+      ...bearer(b.token),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: b.userId, onboarded_at: expect.any(String) });
+    expect(store.getUser(b.userId)?.onboardedAt).toBeString();
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("stores cloud waitlist data on the authenticated user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+
+    const response = await app.request("/api/me/onboarding/cloud-waitlist", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ email: "b@example.com", reason: "cloud runtime" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: b.userId,
+      onboarding_questionnaire: {
+        cloud_waitlist_email: "b@example.com",
+        cloud_waitlist_reason: "cloud runtime",
+      },
+    });
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("attributes runtime onboarding resources to the authenticated user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const workspace = store.createWorkspace({ name: "B Team", slug: "b-team" }, b.userId);
+    const runtime = store.registerRuntime({
+      id: "rt_b",
+      name: "B Runtime",
+      provider: "codex",
+      workspaceId: workspace.id,
+      ownerId: b.userId,
+    });
+
+    const response = await app.request("/api/me/onboarding/runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ workspace_id: workspace.id, runtime_id: runtime.id }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(store.getAgent(body.agent_id)?.ownerId).toBe(b.userId);
+    expect(store.getIssue(body.issue_id)?.createdBy).toBe(b.userId);
+    expect(store.getUser(b.userId)?.onboardedAt).toBeString();
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("attributes no-runtime onboarding to the authenticated user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const workspace = store.createWorkspace({ name: "B Team", slug: "b-team" }, b.userId);
+
+    const response = await app.request("/api/me/onboarding/no-runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ workspace_id: workspace.id }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(store.getIssue(body.issue_id)?.createdBy).toBe(b.userId);
+    expect(store.getUser(b.userId)?.onboardedAt).toBeString();
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("blocks onboarding bootstrap writes to workspaces the authenticated user cannot access", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const runtime = store.registerRuntime({
+      id: "rt_local",
+      name: "Local Runtime",
+      provider: "codex",
+      workspaceId: "local",
+      ownerId: "local",
+    });
+
+    const runtimeResponse = await app.request("/api/me/onboarding/runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ workspace_id: "local", runtime_id: runtime.id }),
+    });
+    const noRuntimeResponse = await app.request("/api/me/onboarding/no-runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ workspace_id: "local" }),
+    });
+
+    expect(runtimeResponse.status).toBe(404);
+    expect(noRuntimeResponse.status).toBe(404);
+  });
+
+  it("blocks members from bootstrapping agents on another user's private runtime", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const owner = await login(store, { externalId: "ou_owner", email: "owner@corp.com", name: "Owner" });
+    const member = await login(store, { externalId: "ou_member", email: "member@corp.com", name: "Member" });
+    const workspace = store.createWorkspace({ name: "Team", slug: "team" }, owner.userId);
+    store.createWorkspaceMember({
+      workspaceId: workspace.id,
+      userId: member.userId,
+      name: "Member",
+      email: "member@corp.com",
+      role: "member",
+    });
+    const runtime = store.registerRuntime({
+      id: "rt_private",
+      name: "Private Runtime",
+      provider: "codex",
+      workspaceId: workspace.id,
+      ownerId: owner.userId,
+      visibility: "private",
+    });
+
+    const response = await app.request("/api/me/onboarding/runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(member.token),
+      body: JSON.stringify({ workspace_id: workspace.id, runtime_id: runtime.id }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("blocks task tokens from current-user profile endpoints", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const taskToken = await store.createAccessToken({
+      workspaceId: "local",
+      userId: b.userId,
+      taskId: "tsk_profile_guard",
+      agentId: "agt_profile_guard",
+      name: "Task profile guard",
+      type: "task",
+    });
+
+    const readResponse = await app.request("/api/me", bearer(taskToken.token));
+    const writeResponse = await app.request("/api/me", {
+      method: "PATCH",
+      headers: jsonAuth(taskToken.token),
+      body: JSON.stringify({ name: "Compromised" }),
+    });
+    const encodedWriteResponse = await app.request("/api/%6de", {
+      method: "PATCH",
+      headers: jsonAuth(taskToken.token),
+      body: JSON.stringify({ name: "Compromised Encoded" }),
+    });
+    const onboardingResponses = await Promise.all([
+      app.request("/api/me/onboarding", {
+        method: "PATCH",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ questionnaire: { compromised: true } }),
+      }),
+      app.request("/api/me/onboarding/complete", { method: "POST", ...bearer(taskToken.token) }),
+      app.request("/api/me/onboarding/cloud-waitlist", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ email: "task@example.com" }),
+      }),
+      app.request("/api/me/onboarding/runtime-bootstrap", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ workspace_id: "local", runtime_id: "rt_missing" }),
+      }),
+      app.request("/api/me/onboarding/no-runtime-bootstrap", {
+        method: "POST",
+        headers: jsonAuth(taskToken.token),
+        body: JSON.stringify({ workspace_id: "local" }),
+      }),
+    ]);
+
+    expect(readResponse.status).toBe(403);
+    expect(writeResponse.status).toBe(403);
+    expect(encodedWriteResponse.status).toBe(403);
+    expect(onboardingResponses.map((response) => response.status)).toEqual([403, 403, 403, 403, 403]);
+    expect(store.getUser(b.userId)?.name).toBe("B");
+  });
+
+  it("does not treat an authenticated local JWT as the master user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const b = store.getOrCreateUser({ externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const workspace = store.createWorkspace({ name: "B Team", slug: "b-team" }, b.id);
+    const runtime = store.registerRuntime({
+      id: "rt_b",
+      name: "B Runtime",
+      provider: "codex",
+      workspaceId: workspace.id,
+      ownerId: b.id,
+    });
+    const jwt = signTestJwt({ sub: "local", exp: Math.floor(Date.now() / 1000) + 60 });
+
+    const response = await app.request("/api/me/onboarding/runtime-bootstrap", {
+      method: "POST",
+      headers: jsonAuth(jwt),
+      body: JSON.stringify({ workspace_id: workspace.id, runtime_id: runtime.id }),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("uses the JWT subject for current-user reads and writes", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const localUser = store.getCurrentUser();
+    const b = store.getOrCreateUser({ externalId: "ou_b", email: "b@corp.com", name: "B" });
+    const jwt = signTestJwt({ sub: b.id, exp: Math.floor(Date.now() / 1000) + 60 });
+
+    const readResponse = await app.request("/api/me", bearer(jwt));
+    const writeResponse = await app.request("/api/me", {
+      method: "PATCH",
+      headers: jsonAuth(jwt),
+      body: JSON.stringify({ name: "B via JWT" }),
+    });
+
+    expect(readResponse.status).toBe(200);
+    expect(await readResponse.json()).toMatchObject({ id: b.id, name: "B" });
+    expect(writeResponse.status).toBe(200);
+    expect(await writeResponse.json()).toMatchObject({ id: b.id, name: "B via JWT" });
+    expect(store.getCurrentUser()).toEqual(localUser);
+  });
+
+  it("isolates current-user state between two non-local PAT sessions", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const a = await login(store, { externalId: "ou_a", email: "a@corp.com", name: "A" });
+    const b = await login(store, { externalId: "ou_b", email: "b@corp.com", name: "B" });
+
+    const [aRead, bRead] = await Promise.all([
+      app.request("/api/me", bearer(a.token)),
+      app.request("/api/me", bearer(b.token)),
+    ]);
+    const aWrite = await app.request("/api/me", {
+      method: "PATCH",
+      headers: jsonAuth(a.token),
+      body: JSON.stringify({ name: "A Updated" }),
+    });
+    const bOnboarding = await app.request("/api/me/onboarding", {
+      method: "PATCH",
+      headers: jsonAuth(b.token),
+      body: JSON.stringify({ questionnaire: { role: "reviewer" } }),
+    });
+
+    expect(await aRead.json()).toMatchObject({ id: a.userId, name: "A" });
+    expect(await bRead.json()).toMatchObject({ id: b.userId, name: "B" });
+    expect(await aWrite.json()).toMatchObject({ id: a.userId, name: "A Updated" });
+    expect(await bOnboarding.json()).toMatchObject({
+      id: b.userId,
+      onboarding_questionnaire: { role: "reviewer" },
+    });
+    expect(store.getUser(a.userId)?.onboardingQuestionnaire).toEqual({});
+    expect(store.getUser(b.userId)?.name).toBe("B");
+  });
+
+  it("keeps master-token current-user writes on the legacy local user", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/me", {
+      method: "PATCH",
+      headers: jsonAuth("root-secret"),
+      body: JSON.stringify({ name: "Master Local" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ id: "local", name: "Master Local" });
+    expect(store.getCurrentUser().name).toBe("Master Local");
+  });
+
   it("AC1/AC7: preserves the existing owner and creates a distinct user for a second login", async () => {
     const store = freshStore();
     store.getCurrentUser(); // seed the legacy single-user "local" record

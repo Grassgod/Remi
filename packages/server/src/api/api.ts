@@ -772,38 +772,71 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       request: body,
     }, 201);
   });
-  app.get("/api/me", (c) => c.json(store.getCurrentUser()));
+  app.get("/api/me", (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
+    return c.json(user);
+  });
   app.patch("/api/me", async (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
     const body = await readJson<any>(c);
-    const result = safeUpdateCurrentUser(store, body);
+    const result = safeUpdateUser(store, user.id, body);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.patch("/api/me/onboarding", async (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
     const body = await readJson<{ questionnaire?: Record<string, unknown>; onboarding_questionnaire?: Record<string, unknown> }>(c);
-    return c.json(store.patchCurrentUserOnboarding(body.questionnaire ?? body.onboarding_questionnaire ?? {}));
+    return c.json(store.patchUserOnboarding(user.id, body.questionnaire ?? body.onboarding_questionnaire ?? {}));
   });
-  app.post("/api/me/onboarding/complete", (c) => c.json(store.markCurrentUserOnboarded()));
+  app.post("/api/me/onboarding/complete", (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
+    return c.json(store.markUserOnboarded(user.id));
+  });
   app.post("/api/me/onboarding/cloud-waitlist", async (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
     const body = await readJson<{ email?: string; reason?: string }>(c);
-    const result = safeJoinCloudWaitlist(body, store);
+    const result = safeJoinCloudWaitlist(body, store, user.id);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/api/me/onboarding/runtime-bootstrap", async (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
     const body = await readJson<{ workspace_id?: string; workspaceId?: string; runtime_id?: string; runtimeId?: string }>(c);
-    const workspaceId = body.workspace_id ?? body.workspaceId ?? "";
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
-    if (denied) return denied;
-    const result = safeRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
+    const workspaceId = body.workspace_id ?? body.workspaceId;
+    if (workspaceId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+      if (denied) return denied;
+      const runtimeId = cleanString(body.runtime_id ?? body.runtimeId);
+      if (runtimeId) {
+        const runtime = store.getRuntime(runtimeId);
+        if (!runtime || runtimeWorkspaceId(runtime) !== workspaceId) {
+          return c.json({ error: "invalid runtime_id" }, 400);
+        }
+        if (!canCurrentUserUseRuntime(c, store, runtime)) {
+          return c.json({ error: "this runtime is private; only its owner or a workspace admin can create agents on it" }, 403);
+        }
+      }
+    }
+    const result = safeRuntimeOnboardingBootstrap(store, body, user.id);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
   app.post("/api/me/onboarding/no-runtime-bootstrap", async (c) => {
+    const user = currentRequestUser(c, store);
+    if (!user) return c.json({ error: "user not found" }, 404);
     const body = await readJson<{ workspace_id?: string; workspaceId?: string }>(c);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspace_id ?? body.workspaceId ?? "");
-    if (denied) return denied;
-    const result = safeNoRuntimeOnboardingBootstrap(store, body, currentRequestUserId(c));
+    const workspaceId = body.workspace_id ?? body.workspaceId;
+    if (workspaceId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+      if (denied) return denied;
+    }
+    const result = safeNoRuntimeOnboardingBootstrap(store, body, user.id);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -4730,8 +4763,14 @@ function isDaemonTokenAllowedRequest(request: Request): boolean {
 
 function isTaskTokenForbiddenRequest(request: Request): boolean {
   const url = new URL(request.url);
-  const path = url.pathname;
+  let path = url.pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Leave malformed paths untouched; Hono will reject them during routing.
+  }
   const method = request.method.toUpperCase();
+  if (path === "/api/me" || path.startsWith("/api/me/")) return true;
   if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
@@ -4764,6 +4803,11 @@ function currentJwtUserId(c: Context): string | null {
 
 function currentRequestUserId(c: Context): string {
   return currentAuth(c).requestUserId;
+}
+
+function currentRequestUser(c: Context, store: MultiremiStore) {
+  const userId = currentRequestUserId(c);
+  return userId === "local" ? store.getCurrentUser() : store.getUser(userId);
 }
 
 function authenticatedRequestUserId(c: Context): string | null {
@@ -6886,6 +6930,7 @@ function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, works
   // credential, not a scope — the membership check below is the authority for
   // real users, otherwise they could never open a workspace created after login.
   const humanPat = token?.type === "pat" && userId && userId !== "local";
+  const memberScopedIdentity = currentJwtUserId(c) !== null || Boolean(humanPat);
   if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
     return c.json({ error: "workspace not found" }, 404);
   }
@@ -6896,7 +6941,7 @@ function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, works
   // non-members get 404 (existence hidden). No user id (or the synthetic "local"
   // admin identity carried by user-less workspace access tokens) => master token /
   // open mode => full admin access.
-  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+  if (memberScopedIdentity && !store.getUserRoleInWorkspace(userId, workspaceId)) {
     return c.json({ error: "workspace not found" }, 404);
   }
   return null;
@@ -8421,12 +8466,13 @@ function createFeedbackOrApiError(store: MultiremiStore, input: CreateFeedbackIn
   }
 }
 
-function safeUpdateCurrentUser(
+function safeUpdateUser(
   store: MultiremiStore,
+  userId: string,
   input: any,
-): ReturnType<MultiremiStore["updateCurrentUser"]> | { error: string; status: 400 } {
+): ReturnType<MultiremiStore["updateUser"]> | { error: string; status: 400 } {
   try {
-    return store.updateCurrentUser(input);
+    return store.updateUser(userId, input);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (
@@ -8650,15 +8696,16 @@ function safeDeclineInvitation(
 function safeJoinCloudWaitlist(
   body: { email?: string; reason?: string },
   store: MultiremiStore,
-): ReturnType<MultiremiStore["updateCurrentUser"]> | { error: string; status: 400 } {
+  userId: string,
+): ReturnType<MultiremiStore["updateUser"]> | { error: string; status: 400 } {
   const email = String(body.email ?? "").trim().toLowerCase();
   if (!email) return { error: "email is required", status: 400 };
   if (email.length > 254) return { error: "email is too long", status: 400 };
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is invalid", status: 400 };
   const reason = String(body.reason ?? "").trim();
   if (reason.length > 1000) return { error: "reason is too long", status: 400 };
-  const user = store.getCurrentUser();
-  return store.updateCurrentUser({
+  const user = store.getUser(userId)!;
+  return store.updateUser(userId, {
     onboardingQuestionnaire: {
       ...user.onboardingQuestionnaire,
       cloud_waitlist_email: email,
