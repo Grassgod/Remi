@@ -529,6 +529,7 @@ export interface MultiremiWorkspaceInvitation {
 }
 
 export type MultiremiAccessTokenType = "pat" | "daemon" | "task";
+export type MultiremiAccessTokenPurpose = "workspace" | "session";
 
 export interface MultiremiAccessToken {
   id: string;
@@ -539,6 +540,7 @@ export interface MultiremiAccessToken {
   userId: string;
   name: string;
   type: MultiremiAccessTokenType;
+  purpose: MultiremiAccessTokenPurpose;
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;

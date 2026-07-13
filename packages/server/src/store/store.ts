@@ -1158,7 +1158,12 @@ runMigrations(this.db);
   }
 
   updateCurrentUser(input: UpdateMultiremiUserInput): MultiremiUser {
-    const current = this.getCurrentUser();
+    return this.updateUser("local", input);
+  }
+
+  updateUser(userId: string, input: UpdateMultiremiUserInput): MultiremiUser {
+    const current = this.getUser(userId);
+    if (!current) throw new Error(`User not found: ${userId}`);
     const name = input.name === undefined ? current.name : String(input.name).trim();
     if (!name) throw new Error("name is required");
     const email = input.email === undefined ? current.email : normalizeEmail(input.email);
@@ -1205,21 +1210,39 @@ runMigrations(this.db);
         current.id,
       ],
     );
+    if (name !== current.name || email !== current.email) {
+      this.db.run(
+        `UPDATE multiremi_workspace_members
+         SET name = ?, email = ?, updated_at = ?
+         WHERE user_id = ?
+            OR ((user_id IS NULL OR user_id = '') AND id = 'mem_' || workspace_id || '_' || ?)`,
+        [name, email, now, current.id, current.id],
+      );
+    }
     return this.getUser(current.id)!;
   }
 
   patchCurrentUserOnboarding(questionnaire: Record<string, unknown>): MultiremiUser {
-    return this.updateCurrentUser({ onboardingQuestionnaire: questionnaire });
+    return this.patchUserOnboarding("local", questionnaire);
+  }
+
+  patchUserOnboarding(userId: string, questionnaire: Record<string, unknown>): MultiremiUser {
+    return this.updateUser(userId, { onboardingQuestionnaire: questionnaire });
   }
 
   markCurrentUserOnboarded(userId?: string | null): MultiremiUser {
-    const id = cleanOptionalString(userId) ?? this.getCurrentUser().id;
+    return this.markUserOnboarded(cleanOptionalString(userId) ?? this.getCurrentUser().id);
+  }
+
+  markUserOnboarded(userId: string): MultiremiUser {
+    const current = this.getUser(userId);
+    if (!current) throw new Error(`User not found: ${userId}`);
     const now = nowIso();
     this.db.run(
       "UPDATE multiremi_users SET onboarded_at = COALESCE(onboarded_at, ?), updated_at = ? WHERE id = ?",
-      [now, now, id],
+      [now, now, current.id],
     );
-    return this.getUser(id)!;
+    return this.getUser(current.id)!;
   }
 
   listWorkspaces(): MultiremiWorkspace[] {
@@ -1703,6 +1726,14 @@ runMigrations(this.db);
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {
     return this.accessTokens.createAccessToken(input);
+  }
+
+  async createLoginSessionToken(input: {
+    userId: string;
+    name: string;
+    expiresInDays?: number | null;
+  }): Promise<MultiremiCreatedAccessToken> {
+    return this.accessTokens.createLoginSessionToken(input);
   }
 
   async createTaskAccessToken(

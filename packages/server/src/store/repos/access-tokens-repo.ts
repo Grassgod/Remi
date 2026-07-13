@@ -5,6 +5,7 @@ import { cleanOptionalString, nullableString } from "@multiremi/store/helpers.js
 import type {
   CreateAccessTokenInput,
   MultiremiAccessToken,
+  MultiremiAccessTokenPurpose,
   MultiremiAccessTokenType,
   MultiremiCreatedAccessToken,
   MultiremiTask,
@@ -16,6 +17,27 @@ export class AccessTokensRepo {
   constructor(private db: SqlDatabase) {}
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {
+    return this.insertAccessToken(input, "workspace");
+  }
+
+  async createLoginSessionToken(input: {
+    userId: string;
+    name: string;
+    expiresInDays?: number | null;
+  }): Promise<MultiremiCreatedAccessToken> {
+    return this.insertAccessToken({
+      workspaceId: "local",
+      userId: input.userId,
+      name: input.name,
+      type: "pat",
+      expiresInDays: input.expiresInDays,
+    }, "session");
+  }
+
+  private async insertAccessToken(
+    input: CreateAccessTokenInput,
+    purpose: MultiremiAccessTokenPurpose,
+  ): Promise<MultiremiCreatedAccessToken> {
     const name = input.name?.trim();
     if (!name) throw new Error("Token name is required");
     const type = normalizeAccessTokenType(input.type);
@@ -32,9 +54,9 @@ export class AccessTokensRepo {
     const expiresAt = normalizeAccessTokenExpiry(input.expiresInDays ?? input.expires_in_days ?? null);
     this.db.run(
       `INSERT INTO multiremi_access_tokens (
-        id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, token_hash, token_prefix, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, workspaceId, daemonId, taskId, agentId, userId, name, type, hash, token.slice(0, 12), expiresAt, now],
+        id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, purpose, token_hash, token_prefix, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, daemonId, taskId, agentId, userId, name, type, purpose, hash, token.slice(0, 12), expiresAt, now],
     );
     return {
       ...this.getAccessToken(id)!,
@@ -145,6 +167,7 @@ function toAccessToken(row: Row): MultiremiAccessToken {
     userId: String(row.user_id ?? "local"),
     name: String(row.name ?? ""),
     type: normalizeAccessTokenType(String(row.type ?? "pat")),
+    purpose: normalizeAccessTokenPurpose(String(row.purpose ?? "workspace")),
     tokenPrefix: String(row.token_prefix ?? ""),
     lastUsedAt: nullableString(row.last_used_at),
     expiresAt: nullableString(row.expires_at),
@@ -166,6 +189,10 @@ function normalizeAccessTokenType(value: string | undefined): MultiremiAccessTok
   const type = String(value ?? "pat").trim().toLowerCase();
   if (type === "pat" || type === "daemon" || type === "task") return type;
   throw new Error("token type must be pat, daemon, or task");
+}
+
+function normalizeAccessTokenPurpose(value: string | undefined): MultiremiAccessTokenPurpose {
+  return String(value ?? "workspace").trim().toLowerCase() === "session" ? "session" : "workspace";
 }
 
 function normalizeAccessTokenExpiry(days: number | null | undefined): string | null {
