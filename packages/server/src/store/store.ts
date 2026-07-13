@@ -3545,7 +3545,24 @@ runMigrations(this.db);
       body,
       data: { commentId: id, comment_id: id, ...data },
     });
-    return this.getIssueComment(id)!;
+    const comment = this.getIssueComment(id)!;
+    // Same live-update contract as createIssueComment — system comments are
+    // store-internal and never pass through the HTTP layer. Best-effort.
+    try {
+      const workspaceId = this.issueWorkspaceId(issueId);
+      if (workspaceId) {
+        this.emitWorkspaceEvent({
+          type: "comment:created",
+          workspaceId,
+          actorType: "system",
+          actorId: SYSTEM_AUTHOR_ID,
+          payload: { comment },
+        });
+      }
+    } catch (err) {
+      log.warn(`comment:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return comment;
   }
 
   private triggerParentAssigneeForChildDone(parent: MultiremiIssue, child: MultiremiIssue, systemComment: MultiremiIssueComment): void {
@@ -4625,27 +4642,40 @@ runMigrations(this.db);
     // Browsers listen for activity:created to append the timeline row live.
     // Emitting here (not in the HTTP layer) covers agent/daemon-driven writes,
     // which never pass through an HTTP mutation. `entry` mirrors the activity
-    // shape of GET /api/issues/:id/timeline.
-    const issue = this.getIssue(issueId);
-    if (!issue) return;
-    this.emitWorkspaceEvent({
-      type: "activity:created",
-      workspaceId: issue.workspaceId,
-      actorType: input.actorType,
-      actorId: input.actorId ?? null,
-      payload: {
-        issue_id: issueId,
-        entry: {
-          type: "activity",
-          id,
-          actor_type: input.actorType,
-          actor_id: input.actorId ?? null,
-          created_at: now,
-          action: input.type,
-          details: input.data ?? (input.body == null ? null : { body: input.body }),
+    // shape of GET /api/issues/:id/timeline. Best-effort: the activity is
+    // already persisted, so a lookup/broadcast failure must not escape and
+    // fail the caller's mutation after the fact.
+    try {
+      const workspaceId = this.issueWorkspaceId(issueId);
+      if (!workspaceId) return;
+      this.emitWorkspaceEvent({
+        type: "activity:created",
+        workspaceId,
+        actorType: input.actorType,
+        actorId: input.actorId ?? null,
+        payload: {
+          issue_id: issueId,
+          entry: {
+            type: "activity",
+            id,
+            actor_type: input.actorType,
+            actor_id: input.actorId ?? null,
+            created_at: now,
+            action: input.type,
+            details: input.data ?? (input.body == null ? null : { body: input.body }),
+          },
         },
-      },
-    });
+      });
+    } catch (err) {
+      log.warn(`activity:created broadcast skipped for ${issueId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Lightweight workspace lookup for realtime broadcasts — the hydrated
+  // getIssue() runs several queries, which is wasted work on hot write paths.
+  private issueWorkspaceId(issueId: string): string | null {
+    const row = this.db.query("SELECT workspace_id FROM multiremi_issues WHERE id = ?").get(issueId) as { workspace_id?: unknown } | null;
+    return row ? String(row.workspace_id ?? "local") : null;
   }
 
   createProject(input: CreateProjectInput): MultiremiProject {
