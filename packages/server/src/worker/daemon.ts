@@ -20,6 +20,7 @@ import {
   normalizeSkillFilePath,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
+import { syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
@@ -338,6 +339,7 @@ export class MultiremiDaemon {
     this.workspaceRepoUrls.set(workspaceId, new Set(repos.map((repo) => repo.url.trim()).filter(Boolean)));
     this.workspaceSettings.set(workspaceId, response.settings ?? {});
     this.repoCache.sync(workspaceId, repos);
+    syncRelayConfigs(response.relay, workspaceId);
   }
 
   /** Version of this runtime's ACP bridge (claude-agent-acp / codex-acp), or null. */
@@ -1027,6 +1029,7 @@ export class MultiremiDaemon {
       this.workspaceRepoUrls.set(workspaceId, new Set(response.repos.map((repo) => repo.url.trim()).filter(Boolean)));
       this.workspaceSettings.set(workspaceId, response.settings ?? {});
       this.repoCache.sync(workspaceId, response.repos);
+      syncRelayConfigs(response.relay, workspaceId);
     } catch (err) {
       log.warn(`Workspace repo sync failed for ${workspaceId}: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -326,6 +326,34 @@ export interface MultiremiAutopilotFailureThresholdCandidate {
   failRatio: number;
 }
 
+export type RelayEngine = "claude" | "codex";
+export interface RelayEngineConfig {
+  fragment: string;
+  authToken: string;
+  revision: number;
+}
+export interface RelayEngineBrowser {
+  fragment: string;
+  hasToken: boolean;
+  revision: number;
+}
+export interface RelayConfigForDaemon {
+  claude: RelayEngineConfig | null;
+  codex: RelayEngineConfig | null;
+  modelDiscovery: boolean;
+}
+export interface RelayConfigForBrowser {
+  claude: RelayEngineBrowser | null;
+  codex: RelayEngineBrowser | null;
+  modelDiscovery: boolean;
+}
+export interface GatewayModelsSnapshot {
+  models: Array<{ id: string; label: string }>;
+  sourceRevision: number;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+}
+
 export class MultiremiStore {
   private db: SqlDatabase;
   private feedback: FeedbackRepo;
@@ -1333,6 +1361,138 @@ runMigrations(this.db);
     const existing = this.getWorkspace("local");
     if (existing) return existing;
     return this.createWorkspace({ id: "local", name: "Local Workspace", slug: "local", issuePrefix: "MUL" });
+  }
+
+  // ── Model gateway: relay config ────────────────────────────────
+
+  private relayRow(workspaceId: string, engine: RelayEngine): RelayEngineConfig | null {
+    const row = this.db
+      .query("SELECT fragment, auth_token, revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?")
+      .get(workspaceId, engine) as Row | null;
+    if (!row) return null;
+    return {
+      fragment: String(row.fragment ?? ""),
+      authToken: String(row.auth_token ?? ""),
+      revision: Number(row.revision ?? 0),
+    };
+  }
+
+  /** Full config incl. plaintext tokens — daemon-facing only. */
+  getRelayConfigForDaemon(workspaceId: string): RelayConfigForDaemon {
+    return {
+      claude: this.relayRow(workspaceId, "claude"),
+      codex: this.relayRow(workspaceId, "codex"),
+      modelDiscovery: this.getRelayModelDiscovery(workspaceId),
+    };
+  }
+
+  /** Browser-facing: fragment (non-secret) is returned, token is masked to a boolean. */
+  getRelayConfigForBrowser(workspaceId: string): RelayConfigForBrowser {
+    const mask = (r: RelayEngineConfig | null): RelayEngineBrowser | null =>
+      r ? { fragment: r.fragment, hasToken: r.authToken.length > 0, revision: r.revision } : null;
+    return {
+      claude: mask(this.relayRow(workspaceId, "claude")),
+      codex: mask(this.relayRow(workspaceId, "codex")),
+      modelDiscovery: this.getRelayModelDiscovery(workspaceId),
+    };
+  }
+
+  revealRelayToken(workspaceId: string, engine: RelayEngine): string | null {
+    return this.relayRow(workspaceId, engine)?.authToken ?? null;
+  }
+
+  /** Fragment must be pre-validated by the caller (whitelist + JSON/TOML). Returns the new revision. */
+  upsertRelayConfig(
+    workspaceId: string,
+    engine: RelayEngine,
+    input: { fragment: string; tokenOp: "keep" | "set" | "clear"; authToken?: string; actor?: string | null },
+  ): number {
+    const now = nowIso();
+    let revision = 1;
+    // Bump revision atomically at the DB so concurrent writers stay monotonic
+    // (never two writers computing the same "existing + 1" in JS). The token for
+    // "keep" is read inside the same transaction to avoid a lost update.
+    this.db.transaction(() => {
+      const existing = this.relayRow(workspaceId, engine);
+      let token = existing?.authToken ?? "";
+      if (input.tokenOp === "set") token = String(input.authToken ?? "");
+      else if (input.tokenOp === "clear") token = "";
+      this.db.run(
+        `INSERT INTO multiremi_relay_config (workspace_id, engine, fragment, auth_token, revision, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, 1, ?, ?)
+         ON CONFLICT(workspace_id, engine) DO UPDATE SET
+           fragment = excluded.fragment,
+           auth_token = excluded.auth_token,
+           revision = multiremi_relay_config.revision + 1,
+           updated_at = excluded.updated_at,
+           updated_by = excluded.updated_by`,
+        [workspaceId, engine, input.fragment, token, now, input.actor ?? null],
+      );
+      const row = this.db
+        .query("SELECT revision FROM multiremi_relay_config WHERE workspace_id = ? AND engine = ?")
+        .get(workspaceId, engine) as Row | null;
+      revision = Number(row?.revision ?? 1);
+    })();
+    return revision;
+  }
+
+  getRelayModelDiscovery(workspaceId: string): boolean {
+    const settings = this.getWorkspace(workspaceId)?.settings as Record<string, unknown> | undefined;
+    return Boolean(settings?.relay_model_discovery);
+  }
+
+  setRelayModelDiscovery(workspaceId: string, enabled: boolean): void {
+    const workspace = this.getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    const settings = { ...(workspace.settings as Record<string, unknown>), relay_model_discovery: !!enabled };
+    this.updateWorkspace(workspaceId, { settings });
+  }
+
+  // ── Model gateway: server-discovered model snapshot ────────────
+
+  getGatewayModels(workspaceId: string, engine: RelayEngine): GatewayModelsSnapshot | null {
+    const row = this.db
+      .query("SELECT * FROM multiremi_gateway_models WHERE workspace_id = ? AND engine = ?")
+      .get(workspaceId, engine) as Row | null;
+    if (!row) return null;
+    return {
+      models: parseJson<Array<{ id: string; label: string }>>(row.models, []),
+      sourceRevision: Number(row.source_revision ?? 0),
+      lastSuccessAt: nullableString(row.last_success_at),
+      lastError: nullableString(row.last_error),
+    };
+  }
+
+  /** Revision fencing: never let a stale discovery run overwrite a newer config's result. */
+  saveGatewayModels(
+    workspaceId: string,
+    engine: RelayEngine,
+    input: { models?: Array<{ id: string; label: string }>; sourceRevision: number; error?: string | null },
+  ): void {
+    const now = nowIso();
+    // Read the fence and write in one transaction so a slow, stale discovery run
+    // can never overwrite a newer config's result (TOCTOU on source_revision).
+    this.db.transaction(() => {
+      const existing = this.getGatewayModels(workspaceId, engine);
+      if (existing && input.sourceRevision < existing.sourceRevision) return;
+      const success = input.models !== undefined;
+      const models = success ? input.models! : existing?.models ?? [];
+      const lastSuccessAt = success ? now : existing?.lastSuccessAt ?? null;
+      // On a FAILED discovery keep the source_revision of the last SUCCESS, so a
+      // stale catalog can never masquerade as freshly discovered for a new config.
+      const sourceRevision = success ? input.sourceRevision : (existing?.sourceRevision ?? input.sourceRevision);
+      this.db.run(
+        `INSERT INTO multiremi_gateway_models (workspace_id, engine, models, source_revision, last_success_at, last_error, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(workspace_id, engine) DO UPDATE SET
+           models = excluded.models,
+           source_revision = excluded.source_revision,
+           last_success_at = excluded.last_success_at,
+           last_error = excluded.last_error,
+           updated_at = excluded.updated_at`,
+        [workspaceId, engine, toJson(models), sourceRevision, lastSuccessAt, input.error ?? null, now],
+      );
+    })();
   }
 
   createWorkspaceInvitation(workspaceId: string, input: CreateWorkspaceInvitationInput, inviterUserId?: string | null): MultiremiWorkspaceInvitation {

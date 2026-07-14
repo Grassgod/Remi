@@ -326,6 +326,26 @@ export const FleetModelsResponseSchema = z.object({
 export const EMPTY_FLEET_MODELS: FleetModelsResponse = { providers: [] };
 
 // ---------------------------------------------------------------------------
+// Model gateway (relay config) schemas
+// ---------------------------------------------------------------------------
+
+const RelayEngineConfigSchema = z.object({
+  fragment: z.string().default(""),
+  hasToken: z.boolean().default(false),
+  revision: z.number().default(0),
+}).loose().nullable();
+
+export const RelayConfigResponseSchema = z.object({
+  claude: RelayEngineConfigSchema.default(null),
+  codex: RelayEngineConfigSchema.default(null),
+  modelDiscovery: z.boolean().default(false),
+}).loose();
+
+export type RelayConfigResponse = z.infer<typeof RelayConfigResponseSchema>;
+export type RelayEngineConfig = z.infer<typeof RelayEngineConfigSchema>;
+export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: null, modelDiscovery: false };
+
+// ---------------------------------------------------------------------------
 // Workspace dashboard schemas
 //
 // The dashboard hits three independent rollup endpoints. Each returns a flat

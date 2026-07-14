@@ -34,6 +34,7 @@
       "repositories": "リポジトリ",
       "github": "GitHub",
       "integrations": "連携",
+      "model_gateway": "モデルゲートウェイ",
       "labs": "ラボ",
       "members": "メンバー"
     }
@@ -368,5 +369,22 @@
         "description": "イシューの作成と作業"
       }
     }
+  },
+  "modelGateway": {
+    "description": "全エージェントで共有するゲートウェイ認証情報。保存すると、各エージェントのデーモンが次のハートビートでローカルの CLI 設定にディープマージします。",
+    "discovery_title": "モデルを自動検出",
+    "discovery_desc": "ゲートウェイの /v1/models と /models を照会し、エージェント作成のドロップダウンに実際のモデルを表示します。両エンジンに適用。",
+    "fragment_label": "設定フラグメント（ディープマージ・非機密）",
+    "token_label": "認証トークン",
+    "claude_hint": "settings.json の env（ANTHROPIC_AUTH_TOKEN）にマージされます。API_KEY ではなく AUTH_TOKEN を使用。",
+    "codex_hint": "auth.json の OPENAI_API_KEY に書き込みます（リレー推奨）。config.toml の provider ブロックはフラグメントから。",
+    "save": "保存",
+    "saving": "保存中…",
+    "reveal": "表示",
+    "hide": "非表示",
+    "saved": "保存しました",
+    "save_failed": "保存に失敗しました",
+    "applied_note": "リレー関連のキーのみ上書きされ、各マシンの他の設定は保持されます。エージェントは次のハートビートで適用します。",
+    "insufficient": "モデルゲートウェイを管理できるのはワークスペースのオーナーと管理者のみです。"
   }
 }

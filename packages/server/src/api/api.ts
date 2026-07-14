@@ -11,6 +11,8 @@ import { AgentTemplateError, createAgentFromTemplate, getAgentTemplate, listAgen
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store/store.js";
+import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
+import { refreshStaleGatewayModels, triggerGatewayDiscovery } from "@multiremi/relay/discovery.js";
 import {
   agentSkillCompatibilitySummary,
   skillCompatibilityResponse,
@@ -657,7 +659,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const owner = daemonRegisterOwnerContext(c, store, body.workspace_id);
     if ("error" in owner) return c.json({ error: owner.error }, owner.status);
-    const result = registerDaemonRuntimes(store, body, owner);
+    const isDaemon = currentAccessToken(c)?.type === "daemon";
+    const result = registerDaemonRuntimes(store, body, owner, isDaemon);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -686,7 +689,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     const denied = denyDaemonTokenWorkspace(c, c.req.param("workspaceId"));
     if (denied) return denied;
-    const response = workspaceReposResponse(store, c.req.param("workspaceId"));
+    const isDaemon = currentAccessToken(c)?.type === "daemon";
+    const response = workspaceReposResponse(store, c.req.param("workspaceId"), isDaemon);
     if (!response) return c.json({ error: "workspace not found" }, 404);
     return c.json(response);
   });
@@ -875,6 +879,67 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const deleted = store.deleteWorkspace(c.req.param("id"));
     if (!deleted) return c.json({ error: "workspace not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ── Model gateway: relay config (owner/admin only) ─────────────
+  app.get("/api/workspaces/:id/relay-config", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    return c.json(store.getRelayConfigForBrowser(workspaceId));
+  });
+  // Registered before the `/:engine` route so Hono's param matcher doesn't treat
+  // "discovery" as an engine name.
+  app.put("/api/workspaces/:id/relay-config/discovery", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ enabled?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    store.setRelayModelDiscovery(workspaceId, Boolean(body.enabled));
+    if (body.enabled) triggerGatewayDiscovery(store, workspaceId);
+    return c.json({ model_discovery: store.getRelayModelDiscovery(workspaceId) });
+  });
+  app.put("/api/workspaces/:id/relay-config/:engine", async (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ fragment?: string; token_op?: string; auth_token?: string }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const fragment = String(body.fragment ?? "");
+    const validation = validateRelayFragment(engine, fragment);
+    if (!validation.ok) return c.json({ error: validation.error }, 400);
+    const tokenOp = body.token_op === "set" || body.token_op === "clear" ? body.token_op : "keep";
+    // A token must always ship with its gateway URL so the daemon never pairs the
+    // central token with a stale local base_url. If the config will carry a token,
+    // the fragment must define the gateway base_url.
+    const willHaveToken = tokenOp === "set"
+      ? Boolean(body.auth_token)
+      : tokenOp === "keep"
+        ? Boolean(store.getRelayConfigForDaemon(workspaceId)[engine]?.authToken)
+        : false;
+    if (willHaveToken && !extractBaseUrl(engine, fragment)) {
+      return c.json({ error: "fragment must define the gateway base_url when a token is set" }, 400);
+    }
+    store.upsertRelayConfig(workspaceId, engine, {
+      fragment,
+      tokenOp,
+      authToken: body.auth_token,
+      actor: currentRequestUserId(c),
+    });
+    triggerGatewayDiscovery(store, workspaceId, engine);
+    return c.json(store.getRelayConfigForBrowser(workspaceId));
+  });
+  app.post("/api/workspaces/:id/relay-config/:engine/reveal", (c) => {
+    const workspaceId = c.req.param("id");
+    const engine = c.req.param("engine");
+    if (engine !== "claude" && engine !== "codex") return c.json({ error: "invalid engine" }, 400);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    c.header("Cache-Control", "no-store");
+    return c.json({ token: store.revealRelayToken(workspaceId, engine) ?? "" });
   });
   app.post("/api/workspaces/:id/leave", async (c) => {
     const workspaceId = c.req.param("id");
@@ -2051,7 +2116,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const fleetModelsHandler = (c: Context) => {
     const loaded = listRuntimesForCurrentUser(c, store);
     if (loaded instanceof Response) return loaded;
-    return c.json({ providers: fleetModelsResponse(loaded.runtimes, currentRequestUserId(c)) });
+    const providers = fleetModelsResponse(loaded.runtimes, currentRequestUserId(c));
+    // Prefer the explicitly requested workspace over reverse-deriving from the
+    // first runtime (which is wrong / absent when the workspace has no runtimes).
+    const workspaceId = cleanString(c.req.query("workspace_id")) ?? loaded.runtimes[0]?.workspaceId ?? "local";
+    refreshStaleGatewayModels(store, workspaceId);
+    return c.json({ providers: overlayGatewayModels(store, workspaceId, providers) });
   };
   app.get("/api/models", fleetModelsHandler);
   app.get("/api/multiremi/models", fleetModelsHandler);
@@ -5970,6 +6040,39 @@ function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<string,
 // for the rare "any" runtime that carries a model catalog but no fixed engine.
 const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
 
+/**
+ * Prefer server-discovered gateway models per engine when a snapshot exists (so the
+ * dropdown reflects the real gateway even with zero online runtimes); otherwise keep
+ * the per-runtime union. online_runtime_count still comes from the runtime buckets.
+ */
+function overlayGatewayModels(
+  store: MultiremiStore,
+  workspaceId: string,
+  providers: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
+  // to the per-runtime union so turning the toggle off actually hides the models.
+  if (!store.getRelayModelDiscovery(workspaceId)) return providers;
+  const config = store.getRelayConfigForDaemon(workspaceId);
+  const byEngine = new Map<string, Record<string, unknown>>();
+  for (const provider of providers) byEngine.set(String(provider.provider), provider);
+  for (const engine of ["claude", "codex"] as const) {
+    const engineConfig = config[engine];
+    // No live gateway credential → don't surface any (possibly stale) snapshot.
+    if (!engineConfig || !engineConfig.authToken) continue;
+    const snapshot = store.getGatewayModels(workspaceId, engine);
+    if (!snapshot || snapshot.models.length === 0) continue;
+    // Only show a snapshot discovered for the CURRENT config revision — a changed
+    // gateway/token invalidates the old catalog until rediscovery catches up.
+    if (snapshot.sourceRevision !== engineConfig.revision) continue;
+    const models = snapshot.models.map((model) => ({ id: model.id, label: model.label, provider: engine }));
+    const existing = byEngine.get(engine);
+    if (existing) existing.models = models;
+    else byEngine.set(engine, { provider: engine, online_runtime_count: 0, models });
+  }
+  return [...byEngine.values()].sort((a, b) => String(a.provider).localeCompare(String(b.provider)));
+}
+
 function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): Array<Record<string, unknown>> {
   const usable = runtimes.filter(
     (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
@@ -6848,6 +6951,23 @@ function currentWorkspaceRoleStrict(c: Context, store: MultiremiStore, workspace
   if (member) return member.role;
   if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
   return null;
+}
+
+/** owner/admin human actor gate for workspace-scoped config (relay config). */
+function requireWorkspaceAdmin(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
+  if (currentAccessToken(c)?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  if (role === "owner" || role === "admin") return null;
+  return c.json({ error: "insufficient permissions" }, 403);
+}
+
+/** Snake-case wire shape of relay config for the daemon register response. */
+function relayForDaemonWire(store: MultiremiStore, workspaceId: string): Record<string, unknown> {
+  const config = store.getRelayConfigForDaemon(workspaceId);
+  const engine = (e: { fragment: string; authToken: string; revision: number } | null) =>
+    e ? { fragment: e.fragment, auth_token: e.authToken, revision: e.revision } : null;
+  return { claude: engine(config.claude), codex: engine(config.codex), model_discovery: config.modelDiscovery };
 }
 
 function currentWorkspaceMember(
@@ -8775,12 +8895,14 @@ function registerDaemonRuntimes(
   store: MultiremiStore,
   body: DaemonRegisterRequestBody,
   auth: { ownerId: string | null } = { ownerId: null },
+  includeRelay = false,
 ):
   | {
     runtimes: ReturnType<typeof daemonRuntimeResponse>[];
     repos: WorkspaceRepoData[];
     repos_version: string;
     settings: Record<string, unknown>;
+    relay: Record<string, unknown>;
   }
   | { error: string; status: 400 | 404 | 500 } {
   // Older self-host clients (e.g. the v0.2.0 `remi` release) omit workspace_id
@@ -8798,7 +8920,7 @@ function registerDaemonRuntimes(
   const cliVersion = String(body.cli_version ?? "").trim();
   const launchedBy = String(body.launched_by ?? "").trim();
   const legacyDaemonIds = uniqueStrings(body.legacy_daemon_ids ?? []);
-  const repos = workspaceReposResponse(store, workspaceId);
+  const repos = workspaceReposResponse(store, workspaceId, includeRelay);
   if (!repos) return { error: "workspace not found", status: 404 };
   const registered: ReturnType<typeof daemonRuntimeResponse>[] = [];
   for (const runtime of runtimes) {
@@ -8880,6 +9002,7 @@ function registerDaemonRuntimes(
     repos: repos.repos,
     repos_version: repos.repos_version,
     settings: repos.settings,
+    relay: repos.relay,
   };
 }
 
@@ -8959,11 +9082,16 @@ type WorkspaceRepoData = {
   description?: string;
 };
 
-function workspaceReposResponse(store: MultiremiStore, workspaceId: string): {
+function workspaceReposResponse(
+  store: MultiremiStore,
+  workspaceId: string,
+  includeRelaySecrets: boolean,
+): {
   workspace_id: string;
   repos: WorkspaceRepoData[];
   repos_version: string;
   settings: Record<string, unknown>;
+  relay: Record<string, unknown>;
 } | null {
   const workspace = workspaceId === "local" ? store.ensureLocalWorkspace() : store.getWorkspace(workspaceId);
   if (!workspace) return null;
@@ -8973,6 +9101,9 @@ function workspaceReposResponse(store: MultiremiStore, workspaceId: string): {
     repos,
     repos_version: workspaceReposVersion(repos),
     settings: workspace.settings,
+    // The relay payload carries PLAINTEXT gateway tokens — only a daemon token
+    // may receive it. A human JWT hitting this path (member, not admin) must not.
+    relay: includeRelaySecrets ? relayForDaemonWire(store, workspace.id) : {},
   };
 }
 

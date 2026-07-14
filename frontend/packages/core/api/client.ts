@@ -153,6 +153,9 @@ import {
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
   EMPTY_FLEET_MODELS,
   FleetModelsResponseSchema,
+  EMPTY_RELAY_CONFIG,
+  RelayConfigResponseSchema,
+  type RelayConfigResponse,
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SQUAD,
@@ -858,6 +861,44 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/models${query ? `?${query}` : ""}`);
     return parseWithFallback(raw, FleetModelsResponseSchema, EMPTY_FLEET_MODELS, {
       endpoint: "GET /api/models",
+    });
+  }
+
+  // Model gateway: fleet-wide relay config (owner/admin only). Tokens are masked
+  // (hasToken boolean); the fragment is non-secret and returned in full.
+  async getRelayConfig(workspaceId: string): Promise<RelayConfigResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/relay-config`);
+    return parseWithFallback(raw, RelayConfigResponseSchema, EMPTY_RELAY_CONFIG, {
+      endpoint: "GET /api/workspaces/:id/relay-config",
+    });
+  }
+
+  async updateRelayConfig(
+    workspaceId: string,
+    engine: "claude" | "codex",
+    data: { fragment: string; token_op: "keep" | "set" | "clear"; auth_token?: string },
+  ): Promise<RelayConfigResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/relay-config/${engine}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, RelayConfigResponseSchema, EMPTY_RELAY_CONFIG, {
+      endpoint: "PUT /api/workspaces/:id/relay-config/:engine",
+    });
+  }
+
+  async revealRelayToken(workspaceId: string, engine: "claude" | "codex"): Promise<string> {
+    const raw = await this.fetch<{ token?: unknown }>(
+      `/api/workspaces/${workspaceId}/relay-config/${engine}/reveal`,
+      { method: "POST" },
+    );
+    return typeof raw?.token === "string" ? raw.token : "";
+  }
+
+  async setRelayDiscovery(workspaceId: string, enabled: boolean): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/relay-config/discovery`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
     });
   }
 

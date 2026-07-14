@@ -34,6 +34,7 @@
       "repositories": "代码仓库",
       "github": "GitHub",
       "integrations": "集成",
+      "model_gateway": "模型网关",
       "labs": "实验室",
       "members": "成员"
     }
@@ -368,5 +369,22 @@
         "description": "创建并处理 issue"
       }
     }
+  },
+  "modelGateway": {
+    "description": "全工作区共享的网关鉴权。保存后，每台 agent 的守护进程会在下次心跳把这些配置深合并进本机 CLI 配置。",
+    "discovery_title": "自动发现模型",
+    "discovery_desc": "查询网关的 /v1/models 与 /models，让创建 agent 的模型下拉框显示网关真实模型。两个引擎统一。",
+    "fragment_label": "配置片段（deep-merge、非密）",
+    "token_label": "鉴权 Token",
+    "claude_hint": "合并进 settings.json 的 env（ANTHROPIC_AUTH_TOKEN）。用 AUTH_TOKEN，不用 API_KEY。",
+    "codex_hint": "写入 auth.json 的 OPENAI_API_KEY（relay 官方推荐）。config.toml provider 块来自片段。",
+    "save": "保存",
+    "saving": "保存中…",
+    "reveal": "显示",
+    "hide": "隐藏",
+    "saved": "已保存",
+    "save_failed": "保存失败",
+    "applied_note": "只覆盖 relay 相关 key，各机器的其它设置原样保留。agent 会在下次心跳应用。",
+    "insufficient": "仅工作区所有者和管理员可管理模型网关。"
   }
 }

@@ -144,6 +144,30 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_runtime_model_list_runtime ON multiremi_runtime_model_list_requests(runtime_id, status, created_at);
 
+    -- Model gateway: fleet-wide relay config per workspace × engine (deep-merge fragment + secret token).
+    CREATE TABLE IF NOT EXISTS multiremi_relay_config (
+      workspace_id TEXT NOT NULL,
+      engine TEXT NOT NULL,
+      fragment TEXT NOT NULL DEFAULT '',
+      auth_token TEXT NOT NULL DEFAULT '',
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT,
+      PRIMARY KEY(workspace_id, engine)
+    );
+
+    -- Model gateway: server-side model discovery cache (one JSON snapshot per workspace × engine).
+    CREATE TABLE IF NOT EXISTS multiremi_gateway_models (
+      workspace_id TEXT NOT NULL,
+      engine TEXT NOT NULL,
+      models TEXT NOT NULL DEFAULT '[]',
+      source_revision INTEGER NOT NULL DEFAULT 0,
+      last_success_at TEXT,
+      last_error TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(workspace_id, engine)
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_runtime_update_requests (
       id TEXT PRIMARY KEY,
       runtime_id TEXT NOT NULL,

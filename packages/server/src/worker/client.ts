@@ -18,6 +18,7 @@ export interface MultiremiWorkspaceReposResponse {
   repos: MultiremiRepoData[];
   repos_version: string;
   settings?: Record<string, unknown>;
+  relay?: MultiremiRelayWire;
 }
 
 export interface MultiremiDaemonRegisterRuntimeInput {
@@ -37,11 +38,23 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   };
 }
 
+export interface MultiremiRelayEngineWire {
+  fragment: string;
+  auth_token: string;
+  revision: number;
+}
+export interface MultiremiRelayWire {
+  claude: MultiremiRelayEngineWire | null;
+  codex: MultiremiRelayEngineWire | null;
+  model_discovery?: boolean;
+}
+
 export interface MultiremiDaemonRegisterResponse {
   workspace_id?: string;
   repos: MultiremiRepoData[];
   repos_version: string;
   settings?: Record<string, unknown>;
+  relay?: MultiremiRelayWire;
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
 }
 
