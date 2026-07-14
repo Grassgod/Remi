@@ -11,10 +11,13 @@ async function setup() {
     tokenOp: "set",
     authToken: "TOPSECRET",
   });
-  const daemon = await store.createAccessToken({ workspaceId: "local", type: "daemon", name: "d" });
-  const human = await store.createAccessToken({ workspaceId: "local", type: "pat", name: "h" });
+  // Real agents authenticate as the workspace owner (a PAT for the "local" owner).
+  const owner = await store.createAccessToken({ workspaceId: "local", type: "pat", name: "agent", userId: "local" });
+  // A non-admin member of the same workspace must never receive the fleet secret.
+  store.createWorkspaceMember({ id: "mem_local_bob", workspaceId: "local", userId: "bob", name: "Bob", email: "bob@example.com", role: "member" });
+  const member = await store.createAccessToken({ workspaceId: "local", type: "pat", name: "bob", userId: "bob" });
   const app = createMultiremiApp({ store, authToken: "MASTER" });
-  return { store, app, daemonToken: daemon.token, humanToken: human.token };
+  return { store, app, ownerToken: owner.token, memberToken: member.token };
 }
 
 function register(app: ReturnType<typeof createMultiremiApp>, token: string) {
@@ -26,16 +29,17 @@ function register(app: ReturnType<typeof createMultiremiApp>, token: string) {
 }
 
 describe("relay config API — security", () => {
-  it("only a daemon token receives the plaintext relay token on register", async () => {
-    const { app, daemonToken, humanToken } = await setup();
+  it("gives the plaintext relay token to an owner/admin daemon but not a non-admin member", async () => {
+    const { app, ownerToken, memberToken } = await setup();
 
-    const asDaemon = await (await register(app, daemonToken)).json();
-    expect(asDaemon.relay?.claude?.auth_token).toBe("TOPSECRET");
+    // The agent (owner PAT) legitimately needs the token to configure its CLIs.
+    const asOwner = await (await register(app, ownerToken)).json();
+    expect(asOwner.relay?.claude?.auth_token).toBe("TOPSECRET");
 
-    // A human PAT (workspace member, not necessarily admin) must NOT get the token.
-    const asHuman = await (await register(app, humanToken)).json();
-    expect(JSON.stringify(asHuman.relay)).not.toContain("TOPSECRET");
-    expect(asHuman.relay?.claude ?? null).toBeNull();
+    // A non-admin member's token must NOT leak the fleet secret.
+    const asMember = await (await register(app, memberToken)).json();
+    expect(JSON.stringify(asMember.relay)).not.toContain("TOPSECRET");
+    expect(asMember.relay?.claude ?? null).toBeNull();
   });
 
   it("the discovery toggle route is reachable (not shadowed by /:engine)", async () => {

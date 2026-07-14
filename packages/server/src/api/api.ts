@@ -659,8 +659,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (denied) return denied;
     const owner = daemonRegisterOwnerContext(c, store, body.workspace_id);
     if ("error" in owner) return c.json({ error: owner.error }, owner.status);
-    const isDaemon = currentAccessToken(c)?.type === "daemon";
-    const result = registerDaemonRuntimes(store, body, owner, isDaemon);
+    const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
+    const includeRelay = callerCanReceiveRelay(c, store, registerWorkspace);
+    const result = registerDaemonRuntimes(store, body, owner, includeRelay);
     if ("error" in result) return c.json({ error: result.error }, result.status);
     return c.json(result);
   });
@@ -689,8 +690,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
     const denied = denyDaemonTokenWorkspace(c, c.req.param("workspaceId"));
     if (denied) return denied;
-    const isDaemon = currentAccessToken(c)?.type === "daemon";
-    const response = workspaceReposResponse(store, c.req.param("workspaceId"), isDaemon);
+    const includeRelay = callerCanReceiveRelay(c, store, c.req.param("workspaceId"));
+    const response = workspaceReposResponse(store, c.req.param("workspaceId"), includeRelay);
     if (!response) return c.json({ error: "workspace not found" }, 404);
     return c.json(response);
   });
@@ -6951,6 +6952,17 @@ function currentWorkspaceRoleStrict(c: Context, store: MultiremiStore, workspace
   if (member) return member.role;
   if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
   return null;
+}
+
+/**
+ * A caller may receive the PLAINTEXT relay token on the daemon register/repos
+ * response only if their token maps to a workspace owner/admin. This covers both
+ * daemon tokens and the owner/admin PAT that real agents authenticate with, while
+ * still withholding the secret from a non-admin member's token.
+ */
+function callerCanReceiveRelay(c: Context, store: MultiremiStore, workspaceId: string): boolean {
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  return role === "owner" || role === "admin";
 }
 
 /** owner/admin human actor gate for workspace-scoped config (relay config). */
