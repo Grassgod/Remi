@@ -17,9 +17,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.10
 
-      - run: bun install
+      - run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Build release archive
         run: bun run build
