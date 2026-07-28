@@ -1374,6 +1374,7 @@ describe("Bun Multiremi core store", () => {
       "error",
       "id",
       "issue_id",
+      "issue_session_id",
       "kind",
       "max_attempts",
       "priority",

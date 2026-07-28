@@ -400,9 +400,122 @@ export function runMigrations(db: SqlDatabase): void {
       FOREIGN KEY(parent_issue_id) REFERENCES multiremi_issues(id) ON DELETE SET NULL
     );
 
+    -- Product-level collaboration sessions. These are intentionally distinct
+    -- from ACP/provider session ids stored on tasks and agent lanes.
+    CREATE TABLE IF NOT EXISTS multiremi_issue_sessions (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      title TEXT NOT NULL DEFAULT 'Main',
+      status TEXT NOT NULL DEFAULT 'active',
+      is_default INTEGER NOT NULL DEFAULT 0,
+      summary TEXT,
+      created_by_type TEXT NOT NULL DEFAULT 'member',
+      created_by_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_sessions_issue
+      ON multiremi_issue_sessions(issue_id, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_sessions_workspace
+      ON multiremi_issue_sessions(workspace_id, updated_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_issue_sessions_default
+      ON multiremi_issue_sessions(issue_id) WHERE is_default = 1;
+
+    CREATE TABLE IF NOT EXISTS multiremi_session_participants (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      participant_type TEXT NOT NULL,
+      participant_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'participant',
+      status TEXT NOT NULL DEFAULT 'active',
+      joined_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(session_id, participant_type, participant_id),
+      FOREIGN KEY(session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_participants_session
+      ON multiremi_session_participants(session_id, status, joined_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_participants_actor
+      ON multiremi_session_participants(participant_type, participant_id, status);
+
+    -- Canonical append-only source of truth for a product session. Rows are
+    -- never edited in place; corrections and summaries are appended events.
+    CREATE TABLE IF NOT EXISTS multiremi_session_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      author_type TEXT NOT NULL,
+      author_id TEXT,
+      kind TEXT NOT NULL DEFAULT 'message',
+      body TEXT NOT NULL DEFAULT '',
+      task_id TEXT,
+      source_comment_id TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      UNIQUE(session_id, seq),
+      UNIQUE(source_comment_id),
+      FOREIGN KEY(session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_events_session
+      ON multiremi_session_events(session_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_events_task
+      ON multiremi_session_events(task_id, seq);
+
+    -- One provider/ACP lineage per (product session, agent). provider_session_id
+    -- and cursor_seq form one atomic cache checkpoint.
+    CREATE TABLE IF NOT EXISTS multiremi_session_agent_lanes (
+      session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      provider_session_id TEXT,
+      runtime_id TEXT,
+      provider TEXT,
+      work_dir TEXT,
+      cursor_seq INTEGER NOT NULL DEFAULT 0,
+      generation INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'active',
+      last_task_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(session_id, agent_id),
+      FOREIGN KEY(session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_agent_lanes_runtime
+      ON multiremi_session_agent_lanes(runtime_id, status);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_agent_lanes_agent
+      ON multiremi_session_agent_lanes(agent_id, updated_at);
+
+    -- Cross-session output is explicit and immutable. Other sessions see
+    -- published results/summaries, not the source session's private event log.
+    CREATE TABLE IF NOT EXISTS multiremi_session_results (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      source_session_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      published_by_type TEXT NOT NULL DEFAULT 'agent',
+      published_by_id TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(source_session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_results_issue
+      ON multiremi_session_results(issue_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_session_results_source
+      ON multiremi_session_results(source_session_id, created_at);
+
     CREATE TABLE IF NOT EXISTS multiremi_issue_comments (
       id TEXT PRIMARY KEY,
       issue_id TEXT NOT NULL,
+      issue_session_id TEXT,
       author_type TEXT NOT NULL DEFAULT 'member',
       author_id TEXT,
       parent_id TEXT,
@@ -414,6 +527,7 @@ export function runMigrations(db: SqlDatabase): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(issue_session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE CASCADE,
       FOREIGN KEY(parent_id) REFERENCES multiremi_issue_comments(id) ON DELETE CASCADE
     );
 
@@ -789,6 +903,7 @@ export function runMigrations(db: SqlDatabase): void {
       agent_id TEXT NOT NULL,
       runtime_id TEXT,
       issue_id TEXT,
+      issue_session_id TEXT,
       chat_session_id TEXT,
       trigger_comment_id TEXT,
       trigger_summary TEXT,
@@ -799,6 +914,10 @@ export function runMigrations(db: SqlDatabase): void {
       attempt INTEGER NOT NULL DEFAULT 1,
       max_attempts INTEGER NOT NULL DEFAULT 3,
       parent_task_id TEXT,
+      assignment_event_id TEXT,
+      projection_from_seq INTEGER,
+      projection_to_seq INTEGER,
+      projection_mode TEXT,
       result TEXT,
       error TEXT,
       failure_reason TEXT,
@@ -819,6 +938,7 @@ export function runMigrations(db: SqlDatabase): void {
       cancelled_at TEXT,
       FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id),
       FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id),
+      FOREIGN KEY(issue_session_id) REFERENCES multiremi_issue_sessions(id) ON DELETE SET NULL,
       FOREIGN KEY(chat_session_id) REFERENCES multiremi_chat_sessions(id) ON DELETE SET NULL,
       FOREIGN KEY(trigger_comment_id) REFERENCES multiremi_issue_comments(id) ON DELETE SET NULL
     );
@@ -911,6 +1031,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_at TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_type TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_id TEXT");
+  addColumnIfMissing(db, "multiremi_issue_comments", "issue_session_id TEXT");
   addColumnIfMissing(db, "multiremi_attachments", "chat_session_id TEXT");
   addColumnIfMissing(db, "multiremi_attachments", "chat_message_id TEXT");
   ensureIssueSubscriberTypedSchema(db);
@@ -931,6 +1052,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_tasks", "parent_task_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_comment_id TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "trigger_summary TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "issue_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "assignment_event_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_from_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_to_seq INTEGER");
+  addColumnIfMissing(db, "multiremi_tasks", "projection_mode TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "tool_call_id TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "status TEXT");
   addColumnIfMissing(db, "multiremi_task_messages", "meta TEXT");
@@ -959,6 +1085,8 @@ export function runMigrations(db: SqlDatabase): void {
   backfillMemberUserIds(db);
   backfillOwnerExternalId(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_issue_session ON multiremi_tasks(issue_session_id, created_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_session ON multiremi_issue_comments(issue_session_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_parent ON multiremi_issues(parent_issue_id, position, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_scheduled ON multiremi_issues(workspace_id, start_date, due_date)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_parent ON multiremi_issue_comments(parent_id, created_at)");
@@ -977,7 +1105,95 @@ export function runMigrations(db: SqlDatabase): void {
   // boot. Pre-pool tasks keep their pin (claimable by their original machine);
   // new tasks are already unbound by createTask. Only the agent binding above
   // is cleared, which is the invariant the pool model needs.
+  backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
+}
+
+function backfillDefaultIssueSessions(db: SqlDatabase): void {
+  const now = new Date().toISOString();
+  db.run(
+    `INSERT INTO multiremi_issue_sessions (
+       id, issue_id, workspace_id, title, status, is_default,
+       created_by_type, created_by_id, created_at, updated_at
+     )
+     SELECT 'ises_' || i.id, i.id, i.workspace_id, 'Main', 'active', 1,
+            'system', NULL, i.created_at, i.updated_at
+     FROM multiremi_issues i
+     WHERE NOT EXISTS (
+       SELECT 1 FROM multiremi_issue_sessions s
+       WHERE s.issue_id = i.id AND s.is_default = 1
+     )
+     ON CONFLICT DO NOTHING`,
+  );
+  db.run(
+    `UPDATE multiremi_issue_comments
+     SET issue_session_id = (
+       SELECT s.id FROM multiremi_issue_sessions s
+       WHERE s.issue_id = multiremi_issue_comments.issue_id AND s.is_default = 1
+       LIMIT 1
+     )
+     WHERE issue_session_id IS NULL`,
+  );
+  db.run(
+    `UPDATE multiremi_tasks
+     SET issue_session_id = (
+       SELECT s.id FROM multiremi_issue_sessions s
+       WHERE s.issue_id = multiremi_tasks.issue_id AND s.is_default = 1
+       LIMIT 1
+     )
+     WHERE issue_id IS NOT NULL AND issue_session_id IS NULL`,
+  );
+  db.run(
+    `INSERT INTO multiremi_session_events (
+       id, session_id, seq, author_type, author_id, kind, body,
+       source_comment_id, metadata, created_at
+     )
+     SELECT
+       'sevt_' || c.id,
+       c.issue_session_id,
+       COALESCE((
+         SELECT MAX(existing.seq)
+         FROM multiremi_session_events existing
+         WHERE existing.session_id = c.issue_session_id
+       ), 0) + (
+         SELECT COUNT(*)
+         FROM multiremi_issue_comments prior
+         WHERE prior.issue_session_id = c.issue_session_id
+           AND (prior.created_at < c.created_at OR (prior.created_at = c.created_at AND prior.id <= c.id))
+       ),
+       c.author_type,
+       c.author_id,
+       CASE WHEN c.type = 'system' THEN 'system' ELSE 'message' END,
+       c.body,
+       c.id,
+       '{}',
+       c.created_at
+     FROM multiremi_issue_comments c
+     WHERE c.issue_session_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM multiremi_session_events e WHERE e.source_comment_id = c.id
+       )
+     ON CONFLICT DO NOTHING`,
+  );
+  db.run(
+    `INSERT INTO multiremi_session_participants (
+       id, session_id, participant_type, participant_id, role, status, joined_at, updated_at
+     )
+     SELECT
+       'spart_' || e.session_id || '_' || e.author_type || '_' || e.author_id,
+       e.session_id,
+       e.author_type,
+       e.author_id,
+       'participant',
+       'active',
+       MIN(e.created_at),
+       ?
+     FROM multiremi_session_events e
+     WHERE e.author_id IS NOT NULL AND e.author_type IN ('agent', 'member')
+     GROUP BY e.session_id, e.author_type, e.author_id
+     ON CONFLICT DO NOTHING`,
+    [now],
+  );
 }
 
 function renameLegacyMulticaObjects(db: SqlDatabase): void {

@@ -56,6 +56,11 @@ import { CommentInput } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
+import {
+  IssueSessionBar,
+  IssueSessionResultCards,
+  IssueSessionTaskCards,
+} from "./issue-session-bar";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multiremi/core/github";
@@ -65,7 +70,14 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useRecentContextStore } from "@multiremi/core/chat";
-import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multiremi/core/issues/queries";
+import {
+  issueListOptions,
+  issueDetailOptions,
+  childIssuesOptions,
+  issueUsageOptions,
+  issueAttachmentsOptions,
+  issueSessionsOptions,
+} from "@multiremi/core/issues/queries";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { issueLabelsOptions } from "@multiremi/core/labels";
@@ -648,13 +660,23 @@ interface IssueDetailProps {
   layoutId?: string;
   /** When set, the issue detail will auto-scroll to this comment and briefly highlight it. */
   highlightCommentId?: string;
+  /** Selects the product Session that owns a deep-linked comment. */
+  initialIssueSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multimira_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
+export function IssueDetail({
+  issueId,
+  onDelete,
+  onDone,
+  defaultSidebarOpen = true,
+  layoutId = "multimira_issue_detail_layout",
+  highlightCommentId,
+  initialIssueSessionId,
+}: IssueDetailProps) {
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const id = issueId;
@@ -666,6 +688,21 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: issueSessions = [] } = useQuery(issueSessionsOptions(id));
+  const [selectedIssueSessionId, setSelectedIssueSessionId] = useState(initialIssueSessionId ?? "");
+  const activeIssueSessionId =
+    issueSessions.find((session) => session.id === selectedIssueSessionId)?.id
+    ?? issueSessions.find((session) => session.is_default)?.id
+    ?? issueSessions[0]?.id
+    ?? "";
+  useEffect(() => {
+    if (activeIssueSessionId && activeIssueSessionId !== selectedIssueSessionId) {
+      setSelectedIssueSessionId(activeIssueSessionId);
+    }
+  }, [activeIssueSessionId, selectedIssueSessionId]);
+  useEffect(() => {
+    setSelectedIssueSessionId(initialIssueSessionId ?? "");
+  }, [id, initialIssueSessionId]);
   // Workspace owners and admins moderate any comment authored by anyone
   // (mirrors backend `comment.go:507-512`). Computed here so per-comment
   // rendering doesn't have to re-derive it for every row.
@@ -850,7 +887,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     timeline, loading: timelineLoading,
     submitComment, submitReply,
     editComment, deleteComment, toggleResolveComment, toggleReaction: handleToggleReaction,
-  } = useIssueTimeline(id, user?.id);
+  } = useIssueTimeline(id, user?.id, activeIssueSessionId || undefined, Boolean(activeIssueSessionId));
 
   // Resolve / unresolve must always clear the per-session expand entry so
   // re-resolving an already-expanded thread folds it back to the bar (the
@@ -1952,6 +1989,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </div>
             </div>
 
+            <IssueSessionBar
+              issueId={id}
+              sessions={issueSessions}
+              selectedSessionId={activeIssueSessionId}
+              agents={agents}
+              onSelectSession={setSelectedIssueSessionId}
+            />
+
             <LocalDirectoryHint projectId={issue?.project_id} />
 
             {/* Agent live output — sticky banner in the activity section,
@@ -1960,7 +2005,24 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 The execution log itself (per-task timeline + past runs)
                 lives in the right panel via ExecutionLogSection — this
                 card is just a header-style "agent is working" anchor. */}
-            <AgentLiveCard key={id} issueId={id} />
+            {activeIssueSessionId && (
+              <>
+                <AgentLiveCard
+                  key={`${id}:${activeIssueSessionId}`}
+                  issueId={id}
+                  issueSessionId={activeIssueSessionId}
+                />
+                <IssueSessionTaskCards
+                  issueId={id}
+                  issueSessionId={activeIssueSessionId}
+                />
+                <IssueSessionResultCards
+                  issueId={id}
+                  issueSessionId={activeIssueSessionId}
+                  sessions={issueSessions}
+                />
+              </>
+            )}
 
             {/* Timeline entries — virtualized via react-virtuoso to keep
                 first-paint cost O(viewport) instead of O(N). On a 500-comment
@@ -2000,7 +2062,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 ) : (
                   <div className="mt-4">
                     <Virtuoso
-                      key={`${wsId}:${id}`}
+                      key={`${wsId}:${id}:${activeIssueSessionId}`}
                       customScrollParent={scrollContainerEl}
                       data={items}
                       increaseViewportBy={{ top: 800, bottom: 800 }}
@@ -2032,7 +2094,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   keeps the previous issue's in-memory content and the
                   next keystroke would flush it into the new issue's
                   draft key. */}
-              <CommentInput key={id} issueId={id} onSubmit={submitComment} />
+              <CommentInput
+                key={`${id}:${activeIssueSessionId}`}
+                issueId={id}
+                onSubmit={submitComment}
+              />
             </div>
           </div>
         </div>

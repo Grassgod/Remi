@@ -21,6 +21,7 @@ import {
   skillWithFilesCompatibilityResponse,
 } from "./serializers/skills.js";
 import type {
+  AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
   CreateAccessTokenInput,
@@ -38,6 +39,7 @@ import type {
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  CreateIssueSessionInput,
   CreateIssueWithTaskInput,
   CreateLabelInput,
   CreatePinnedItemInput,
@@ -45,6 +47,7 @@ import type {
   CreateProjectResourceInput,
   CreateRuntimeDirectoryScanInput,
   CreateRuntimeLocalSkillImportInput,
+  CreateSessionTaskInput,
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -54,6 +57,7 @@ import type {
   ListIssueCommentsInput,
   ListIssuesInput,
   QuickCreateIssueInput,
+  PublishSessionResultInput,
   RegisterRuntimeInput,
   ReportRuntimeDirectoryScanInput,
   ReportRuntimeLocalSkillImportInput,
@@ -83,6 +87,7 @@ import type {
   MultiremiIssueDependency,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
+  MultiremiIssueSession,
   MultiremiIssueSubscriber,
   MultiremiLabel,
   MultiremiProject,
@@ -91,6 +96,9 @@ import type {
   MultiremiPinnedItem,
   MultiremiSquad,
   MultiremiSquadMember,
+  MultiremiSessionEvent,
+  MultiremiSessionParticipant,
+  MultiremiSessionResult,
   MultiremiTask,
   MultiremiTaskMessage,
   TaskMessageInput,
@@ -124,6 +132,7 @@ import type {
   UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateIssueCommentInput,
+  UpdateIssueSessionInput,
   UpdateLabelInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
@@ -3141,6 +3150,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       q: c.req.query("q") ?? "",
       workspaceId,
       includeClosed: c.req.query("include_closed") === "true" || c.req.query("includeClosed") === "true",
+      includeCommentBodies: !currentTaskAccessToken(c),
       limit: parseOptionalInt(c.req.query("limit")),
       offset: parseOptionalInt(c.req.query("offset")),
     });
@@ -3155,6 +3165,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
         q: c.req.query("q") ?? "",
         workspaceId,
         includeClosed: c.req.query("include_closed") === "true",
+        includeCommentBodies: !currentTaskAccessToken(c),
         limit: parseOptionalInt(c.req.query("limit")),
         offset: parseOptionalInt(c.req.query("offset")),
       });
@@ -3305,13 +3316,18 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const scopedTasks = taskScopedIssueTasks(c, store, issue.id, issue.tasks);
+    const scopedComments = taskScopedIssueComments(c, store, issue.id, store.listIssueComments(issue.id));
+    const productSessionScope = taskTokenProductSessionId(c, store, issue.id);
     return c.json({
-      issue,
+      issue: { ...issue, tasks: scopedTasks },
       children: issue.children,
       childProgress: issue.childProgress,
       dependencies: issue.dependencies,
-      comments: store.listIssueComments(issue.id),
-      activity: store.listIssueActivity(issue.id),
+      comments: scopedComments,
+      // Legacy activity rows duplicate comment bodies without a Session id.
+      // Product-Session task tokens use the canonical Session timeline instead.
+      activity: productSessionScope ? [] : store.listIssueActivity(issue.id),
     });
   });
   app.get("/api/issues/:id", (c) => {
@@ -3330,6 +3346,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(
+      c,
+      store,
+      issue.id,
+      cleanString(c.req.query("issue_session_id")),
+    );
+    if (sessionDenied) return sessionDenied;
     const response = issueTimelineResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
@@ -3339,6 +3362,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(
+      c,
+      store,
+      issue.id,
+      cleanString(c.req.query("issue_session_id")),
+    );
+    if (sessionDenied) return sessionDenied;
     const response = issueTimelineCompatibilityResponse(store, issue.id, c);
     if (!response) return c.json({ error: "issue not found" }, 404);
     return c.json(response);
@@ -3348,7 +3378,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const tasks = store.listTasksForIssue(issue.id)
+    const tasks = taskScopedIssueTasks(c, store, issue.id, store.listTasksForIssue(issue.id))
       .filter((task) => isActiveTaskStatus(task.status))
       .map((task) => taskCompatibilityResponse(task));
     return c.json({ tasks });
@@ -3358,7 +3388,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    return c.json(store.listTasksForIssue(issue.id).map((task) => taskCompatibilityResponse(task)));
+    return c.json(taskScopedIssueTasks(c, store, issue.id, store.listTasksForIssue(issue.id))
+      .map((task) => taskCompatibilityResponse(task)));
   });
   app.get("/api/issues/:id/usage", (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -3372,6 +3403,9 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    if (currentTaskAccessToken(c)) {
+      return c.json({ error: "task agents must delegate through their current product Session" }, 403);
+    }
     const body = await readJson<{ agent_id?: string; agentId?: string; prompt?: string }>(c);
     const result = safeRerunIssue(store, issue.id, body);
     if ("error" in result) return c.json({ error: result.error }, result.status);
@@ -3383,6 +3417,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue || !task || task.issueId !== issue.id) return c.json({ error: "task not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.post("/api/issues/:id/squad-evaluated", async (c) => {
@@ -3553,15 +3589,224 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const body = await readJson<AssignIssueInput>(c);
     return c.json(store.assignIssue(issue.id, body));
   });
+  app.get("/api/issues/:id/sessions", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessions = store.listIssueSessions(issue.id, c.req.query("include_archived") === "true");
+    return c.json(sessions.map((session) => issueSessionCompatibilityResponse(
+      session,
+      store.listSessionParticipants(session.id),
+    )));
+  });
+  app.post("/api/issues/:id/sessions", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    if (currentTaskAccessToken(c)) {
+      return c.json({ error: "task agents cannot create product Sessions" }, 403);
+    }
+    const body = await readJson<CreateIssueSessionInput>(c);
+    const creator = issueSubscriberCaller(c);
+    try {
+      const session = store.createIssueSession(issue.id, {
+        ...body,
+        createdByType: creator.actorType,
+        createdById: creator.actorId,
+      });
+      return c.json(issueSessionCompatibilityResponse(
+        session,
+        store.listSessionParticipants(session.id),
+      ), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  app.get("/api/issues/:id/sessions/:sessionId", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    return c.json(issueSessionCompatibilityResponse(
+      session,
+      store.listSessionParticipants(session.id),
+    ));
+  });
+  app.patch("/api/issues/:id/sessions/:sessionId", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const body = await readJson<UpdateIssueSessionInput>(c);
+    try {
+      return c.json(issueSessionCompatibilityResponse(
+        store.updateIssueSession(session.id, body),
+        store.listSessionParticipants(session.id),
+      ));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  app.get("/api/issues/:id/sessions/:sessionId/participants", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    return c.json(store.listSessionParticipants(session.id).map(sessionParticipantCompatibilityResponse));
+  });
+  app.post("/api/issues/:id/sessions/:sessionId/participants", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const body = await readJson<AddSessionParticipantInput>(c);
+    const participantType = body.participantType ?? body.participant_type;
+    const participantId = body.participantId ?? body.participant_id;
+    if (participantType === "agent" && participantId) {
+      const agent = store.getAgent(participantId);
+      if (!agent || !canCurrentUserAccessAgent(c, store, agent)) {
+        return c.json({ error: "you do not have access to this agent" }, 403);
+      }
+    }
+    try {
+      return c.json(sessionParticipantCompatibilityResponse(store.addSessionParticipant(session.id, body)), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  app.delete("/api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    store.removeSessionParticipant(session.id, c.req.param("participantType"), c.req.param("participantId"));
+    return c.body(null, 204);
+  });
+  app.get("/api/issues/:id/sessions/:sessionId/events", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    // Task-scoped agents may read their current Session, but cannot use this
+    // endpoint to pull sibling transcripts. Cross-session agent access is via
+    // the explicit published-results endpoint below.
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const sinceSeq = Number(c.req.query("since_seq") ?? 0);
+    const rawToSeq = c.req.query("to_seq");
+    const toSeq = rawToSeq == null ? null : Number(rawToSeq);
+    return c.json(store.listSessionEvents(session.id, { sinceSeq, toSeq }).map(sessionEventCompatibilityResponse));
+  });
+  app.post("/api/issues/:id/sessions/:sessionId/messages", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const body = await readJson<CreateIssueCommentInput>(c);
+    try {
+      return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, {
+        ...issueCommentCreateInput(c, body, store),
+        issueSessionId: session.id,
+      })), 201);
+    } catch (error) {
+      return issueCommentMutationErrorResponse(c, error);
+    }
+  });
+  app.get("/api/issues/:id/sessions/:sessionId/tasks", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    return c.json(store.listTasksForIssue(issue.id)
+      .filter((task) => task.issueSessionId === session.id)
+      .map((task) => taskCompatibilityResponse(task)));
+  });
+  app.post("/api/issues/:id/sessions/:sessionId/tasks", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const body = await readJson<CreateSessionTaskInput>(c);
+    const agentId = cleanString(body.agentId ?? body.agent_id);
+    const agent = agentId ? store.getAgent(agentId) : null;
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    if (!canCurrentUserAccessAgent(c, store, agent)) {
+      return c.json({ error: "you do not have access to this agent" }, 403);
+    }
+    const creator = issueSubscriberCaller(c);
+    try {
+      const task = store.createSessionTask(session.id, {
+        ...body,
+        agentId,
+        createdByType: creator.actorType,
+        createdById: creator.actorId,
+      });
+      return c.json(taskCompatibilityResponse(task), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  app.get("/api/issues/:id/session-results", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    return c.json(store.listIssueSessionResults(issue.id).map(sessionResultCompatibilityResponse));
+  });
+  app.post("/api/issues/:id/sessions/:sessionId/results", async (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    const session = store.getIssueSession(c.req.param("sessionId"));
+    if (!issue || !session || session.issueId !== issue.id) return c.json({ error: "session not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const sessionDenied = denyTaskTokenSessionAccess(c, store, issue.id, session.id);
+    if (sessionDenied) return sessionDenied;
+    const body = await readJson<PublishSessionResultInput>(c);
+    const publisher = issueSubscriberCaller(c);
+    try {
+      return c.json(sessionResultCompatibilityResponse(store.publishSessionResult(session.id, {
+        ...body,
+        publishedByType: publisher.actorType,
+        publishedById: publisher.actorId,
+      })), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
   app.get("/api/multiremi/issues/:id/comments", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const input = parseIssueCommentListQuery(c);
-    if ("error" in input) return c.json({ error: input.error }, input.status);
+    const parsedInput = parseIssueCommentListQuery(c);
+    if ("error" in parsedInput) return c.json({ error: parsedInput.error }, parsedInput.status);
+    const scoped = taskScopedIssueCommentListInput(c, store, issue.id, parsedInput);
+    if ("response" in scoped) return scoped.response;
     try {
-      const result = store.listIssueCommentsForGoCli(issue.id, input);
+      const result = store.listIssueCommentsForGoCli(issue.id, scoped.input);
       setIssueCommentCursorHeaders(c, result);
       return c.json({ comments: result.comments });
     } catch (err) {
@@ -3573,10 +3818,12 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!issue) return c.json({ error: "issue not found" }, 404);
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
-    const input = parseIssueCommentListQuery(c);
-    if ("error" in input) return c.json({ error: input.error }, input.status);
+    const parsedInput = parseIssueCommentListQuery(c);
+    if ("error" in parsedInput) return c.json({ error: parsedInput.error }, parsedInput.status);
+    const scoped = taskScopedIssueCommentListInput(c, store, issue.id, parsedInput);
+    if ("response" in scoped) return scoped.response;
     try {
-      const result = store.listIssueCommentsForGoCli(issue.id, input);
+      const result = store.listIssueCommentsForGoCli(issue.id, scoped.input);
       setIssueCommentCursorHeaders(c, result);
       return c.json(result.comments.map(commentCompatibilityResponse));
     } catch (err) {
@@ -3589,7 +3836,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
     if (denied) return denied;
     const body = await readJson<CreateIssueCommentInput>(c);
-    return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body)) }, 201);
+    return c.json({ comment: store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store)) }, 201);
   });
   app.post("/api/issues/:id/comments", async (c) => {
     const issue = issueFromParam(store, c, "id", "compat");
@@ -3599,7 +3846,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const body = await readJsonStrict<CreateIssueCommentInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, issueCommentCreateInput(c, body))), 201);
+      return c.json(commentCompatibilityResponse(store.createIssueComment(issue.id, issueCommentCreateInput(c, body, store))), 201);
     } catch (error) {
       return issueCommentMutationErrorResponse(c, error);
     }
@@ -3893,18 +4140,26 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.post("/api/inbox/:id/archive", (c) => c.json(inboxCompatibilityResponse(store.archiveInboxItem(c.req.param("id")))));
 
   app.put("/api/multiremi/comments/:id", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<UpdateIssueCommentInput>(c);
     return c.json({ comment: store.updateIssueComment(c.req.param("id"), body) });
   });
   app.patch("/api/multiremi/comments/:id", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<UpdateIssueCommentInput>(c);
     return c.json({ comment: store.updateIssueComment(c.req.param("id"), body) });
   });
   app.delete("/api/multiremi/comments/:id", (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     store.deleteIssueComment(c.req.param("id"));
     return c.json({ ok: true });
   });
   app.post("/api/multiremi/comments/:id/resolve", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
     return c.json({
       comment: store.resolveIssueComment(c.req.param("id"), {
@@ -3914,9 +4169,13 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     });
   });
   app.delete("/api/multiremi/comments/:id/resolve", (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     return c.json({ comment: store.unresolveIssueComment(c.req.param("id")) });
   });
   app.put("/api/comments/:id", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJsonStrict<UpdateIssueCommentInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -3926,6 +4185,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.delete("/api/comments/:id", (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     try {
       store.deleteIssueComment(c.req.param("id"));
       return c.body(null, 204);
@@ -3934,6 +4195,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.post("/api/comments/:id/resolve", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJsonStrictAllowEmpty<{ actorType?: string; actor_type?: string; actorId?: string | null; actor_id?: string | null }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
@@ -3946,6 +4209,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.delete("/api/comments/:id/resolve", (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     try {
       return c.json(commentCompatibilityResponse(store.unresolveIssueComment(c.req.param("id"))));
     } catch (error) {
@@ -3953,6 +4218,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     }
   });
   app.post("/api/comments/:id/reactions", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3960,6 +4227,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     return c.json(commentReactionCompatibilityResponse(store.addCommentReaction(c.req.param("id"), input)), 201);
   });
   app.delete("/api/comments/:id/reactions", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJsonStrict<CreateMultiremiReactionInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const input = normalizeReactionInput(body);
@@ -3969,18 +4238,26 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   app.get("/api/multiremi/comments/:id/reactions", (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     return c.json({ reactions: store.listCommentReactions(c.req.param("id")) });
   });
   app.post("/api/multiremi/comments/:id/reactions", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     return c.json({ reaction: store.addCommentReaction(c.req.param("id"), normalizeReactionInput(body)) }, 201);
   });
   app.delete("/api/multiremi/comments/:id/reactions", async (c) => {
+    const denied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (denied) return denied;
     const body = await readJson<CreateMultiremiReactionInput>(c);
     store.removeCommentReaction(c.req.param("id"), normalizeReactionInput(body));
     return c.json({ ok: true });
   });
   app.get("/api/multiremi/comments/:id/attachments", (c) => {
+    const taskDenied = denyTaskTokenCommentAccess(c, store, c.req.param("id"));
+    if (taskDenied) return taskDenied;
     const comment = store.getIssueComment(c.req.param("id"));
     if (!comment) return c.json({ attachments: [] });
     const issue = store.getIssue(comment.issueId);
@@ -3999,6 +4276,11 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
   app.post("/api/multiremi/attachments", async (c) => {
     const body = await readJson<CreateAttachmentInput>(c);
+    const commentId = cleanString(body.commentId ?? body.comment_id);
+    if (commentId) {
+      const taskDenied = denyTaskTokenCommentAccess(c, store, commentId);
+      if (taskDenied) return taskDenied;
+    }
     const workspaceId = cleanString(body.workspaceId) ?? cleanString(body.workspace_id) ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
@@ -4016,6 +4298,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     const commentId = stringFormValue(form.get("commentId") ?? form.get("comment_id"));
     const comment = commentId ? store.getIssueComment(commentId) : null;
     if (commentId && !comment) return c.json({ error: "invalid comment_id" }, 403);
+    if (commentId) {
+      const taskDenied = denyTaskTokenCommentAccess(c, store, commentId);
+      if (taskDenied) return taskDenied;
+    }
     if (issue && comment && comment.issueId !== issue.id) return c.json({ error: "invalid comment_id" }, 403);
     const chatSessionId = stringFormValue(form.get("chatSessionId") ?? form.get("chat_session_id"));
     const chatSession = chatSessionId ? loadChatSessionForCurrentUser(c, store, chatSessionId) : null;
@@ -4267,9 +4553,17 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
 
   app.get("/api/multiremi/tasks", (c) => {
     const status = c.req.query("status") as any;
+    const taskToken = currentTaskAccessToken(c);
+    if (taskToken?.taskId) {
+      const task = store.getTask(taskToken.taskId);
+      return c.json({ tasks: task && (!status || task.status === status) ? [task] : [] });
+    }
     return c.json({ tasks: store.listTasks(status) });
   });
   app.post("/api/multiremi/tasks", async (c) => {
+    if (currentTaskAccessToken(c)) {
+      return c.json({ error: "task agents must delegate through their current product Session" }, 403);
+    }
     const body = await readJson<CreateTaskInput>(c);
     // Gate on the target agent: without this, any member could create a task
     // for another workspace's (private) agent and drive its machine +
@@ -4296,21 +4590,29 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     return c.json({ task });
   });
   app.post("/api/multiremi/tasks/:id/cancel", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     return c.json({ task: store.cancelTask(task.id) });
   });
   app.post("/api/tasks/:id/cancel", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     return c.json(taskCompatibilityResponse(store.cancelTask(task.id)));
   });
   app.get("/api/multiremi/tasks/:id/messages", (c) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
@@ -4319,11 +4621,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const listTaskHumanRequestsRoute = (c: any) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     return c.json({ requests: store.listTaskHumanRequests(task.id) });
   };
   const respondTaskHumanRequestRoute = async (c: any) => {
     const task = taskFromParam(store, c, "id");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     const requestId = c.req.param("requestId");
     const request = store.getTaskHumanRequest(requestId);
     if (!request || request.taskId !== task.id) return c.json({ error: "request not found" }, 404);
@@ -4521,6 +4827,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   app.get("/api/tasks/:taskId/messages", (c) => {
     const task = taskFromParam(store, c, "taskId");
     if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
     if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
       return c.json({ error: "forbidden" }, 403);
     }
@@ -4855,6 +5163,89 @@ function currentAccessToken(c: Context): MultiremiAccessToken | null {
 function currentTaskAccessToken(c: Context): MultiremiAccessToken | null {
   const token = currentAccessToken(c);
   return token?.type === "task" ? token : null;
+}
+
+function denyTaskTokenSessionAccess(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  requestedSessionId: string | null,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  if (!task || task.issueId !== issueId) return c.json({ error: "forbidden" }, 403);
+  // Legacy tasks predate product Sessions and retain their issue-wide access.
+  if (!task.issueSessionId) return null;
+  if (requestedSessionId !== task.issueSessionId) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+function denyTaskTokenCommentAccess(
+  c: Context,
+  store: MultiremiStore,
+  commentId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  const comment = store.getIssueComment(commentId);
+  if (
+    !task
+    || !comment
+    || task.issueId !== comment.issueId
+    || (task.issueSessionId && task.issueSessionId !== comment.issueSessionId)
+  ) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  return null;
+}
+
+function denyTaskTokenTaskAccess(
+  c: Context,
+  requestedTask: MultiremiTask,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  // Task execution messages contain raw provider/tool transcripts. They are
+  // private to the running task and are deliberately not part of the shared
+  // product Session event log.
+  if (token.taskId !== requestedTask.id) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+function taskScopedIssueTasks(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  tasks: MultiremiTask[],
+): MultiremiTask[] {
+  const issueSessionId = taskTokenProductSessionId(c, store, issueId);
+  if (!issueSessionId) return tasks;
+  return tasks.filter((task) => task.issueSessionId === issueSessionId);
+}
+
+function taskScopedIssueComments(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  comments: MultiremiIssueComment[],
+): MultiremiIssueComment[] {
+  const issueSessionId = taskTokenProductSessionId(c, store, issueId);
+  if (!issueSessionId) return comments;
+  return comments.filter((comment) => comment.issueSessionId === issueSessionId);
+}
+
+function taskTokenProductSessionId(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+): string | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const currentTask = store.getTask(token.taskId);
+  if (!currentTask || currentTask.issueId !== issueId) return null;
+  return currentTask.issueSessionId;
 }
 
 function currentJwtUserId(c: Context): string | null {
@@ -5554,10 +5945,74 @@ function commentReactionCompatibilityResponse(reaction: MultiremiCommentReaction
   };
 }
 
+function sessionParticipantCompatibilityResponse(participant: MultiremiSessionParticipant): Record<string, unknown> {
+  return {
+    id: participant.id,
+    session_id: participant.sessionId,
+    participant_type: participant.participantType,
+    participant_id: participant.participantId,
+    role: participant.role,
+    status: participant.status,
+    joined_at: participant.joinedAt,
+    updated_at: participant.updatedAt,
+  };
+}
+
+function issueSessionCompatibilityResponse(
+  session: MultiremiIssueSession,
+  participants: MultiremiSessionParticipant[],
+): Record<string, unknown> {
+  return {
+    id: session.id,
+    issue_id: session.issueId,
+    workspace_id: session.workspaceId,
+    title: session.title,
+    status: session.status,
+    is_default: session.isDefault,
+    summary: session.summary,
+    created_by_type: session.createdByType,
+    created_by_id: session.createdById,
+    created_at: session.createdAt,
+    updated_at: session.updatedAt,
+    participants: participants.map(sessionParticipantCompatibilityResponse),
+  };
+}
+
+function sessionEventCompatibilityResponse(event: MultiremiSessionEvent): Record<string, unknown> {
+  return {
+    id: event.id,
+    session_id: event.sessionId,
+    seq: event.seq,
+    author_type: event.authorType,
+    author_id: event.authorId,
+    kind: event.kind,
+    body: event.body,
+    task_id: event.taskId,
+    source_comment_id: event.sourceCommentId,
+    metadata: event.metadata,
+    created_at: event.createdAt,
+  };
+}
+
+function sessionResultCompatibilityResponse(result: MultiremiSessionResult): Record<string, unknown> {
+  return {
+    id: result.id,
+    issue_id: result.issueId,
+    source_session_id: result.sourceSessionId,
+    title: result.title,
+    body: result.body,
+    metadata: result.metadata,
+    published_by_type: result.publishedByType,
+    published_by_id: result.publishedById,
+    created_at: result.createdAt,
+  };
+}
+
 function commentCompatibilityResponse(comment: MultiremiIssueComment): Record<string, unknown> {
   const response: Record<string, unknown> = {
     id: comment.id,
     issue_id: comment.issueId,
+    issue_session_id: comment.issueSessionId,
     author_type: comment.authorType,
     author_id: comment.authorId,
     content: comment.body,
@@ -5634,16 +6089,52 @@ function issueSubscriberCaller(c: Context): { actorType: "member" | "agent"; act
   return { actorType: "member", actorId: currentRequestUserId(c) };
 }
 
-function issueCommentCreateInput(c: Context, input: CreateIssueCommentInput): CreateIssueCommentInput {
+function issueCommentCreateInput(
+  c: Context,
+  input: CreateIssueCommentInput,
+  store?: MultiremiStore,
+): CreateIssueCommentInput {
   const taskToken = currentTaskAccessToken(c);
   if (taskToken?.agentId) {
-    return { ...input, authorType: "agent", authorId: taskToken.agentId };
+    const task = taskToken.taskId && store ? store.getTask(taskToken.taskId) : null;
+    return {
+      ...input,
+      authorType: "agent",
+      authorId: taskToken.agentId,
+      issueSessionId: task?.issueSessionId ?? input.issueSessionId ?? input.issue_session_id ?? null,
+    };
   }
   if (cleanString(input.authorType) || cleanString(input.authorId)) return input;
   const agentId = cleanString(c.req.header("X-Agent-ID"));
   if (agentId) return { ...input, authorType: "agent", authorId: agentId };
   if (!currentAccessToken(c) && !currentJwtUserId(c)) return input;
   return { ...input, authorType: "member", authorId: currentRequestUserId(c) };
+}
+
+function taskScopedIssueCommentListInput(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  input: ListIssueCommentsInput,
+): { input: ListIssueCommentsInput } | { response: Response } {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return { input };
+  const task = store.getTask(token.taskId);
+  if (!task || task.issueId !== issueId) {
+    return { response: c.json({ error: "forbidden" }, 403) };
+  }
+  if (!task.issueSessionId) return { input };
+  const requested = cleanString(input.issueSessionId ?? input.issue_session_id);
+  if (requested && requested !== task.issueSessionId) {
+    return { response: c.json({ error: "forbidden" }, 403) };
+  }
+  return {
+    input: {
+      ...input,
+      issueSessionId: task.issueSessionId,
+      issue_session_id: task.issueSessionId,
+    },
+  };
 }
 
 function issueSubscriberTarget(
@@ -7123,6 +7614,10 @@ function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: Mul
     const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
     return loaded instanceof Response ? loaded : null;
   }
+  if (attachment.commentId) {
+    const denied = denyTaskTokenCommentAccess(c, store, attachment.commentId);
+    if (denied) return denied;
+  }
   return denyCurrentUserWorkspaceAccess(c, store, attachment.workspaceId);
 }
 
@@ -7702,6 +8197,7 @@ function taskMessageRealtimePayload(message: MultiremiTaskMessage, task: Multire
     created_at: message.createdAt,
   };
   if (task.chatSessionId) payload.chat_session_id = task.chatSessionId;
+  if (task.issueSessionId) payload.issue_session_id = task.issueSessionId;
   if (message.tool) payload.tool = message.tool;
   if (message.content) payload.content = message.content;
   if (message.input) payload.input = message.input;
@@ -8355,6 +8851,8 @@ function parseIssueCommentListQuery(c: { req: { query: (name: string) => string 
   const tail = parseIntegerQuery(c.req.query("tail"), "tail");
   if (tail && typeof tail === "object") return tail;
   return {
+    issueSessionId: c.req.query("issue_session_id") ?? c.req.query("issue-session-id") ?? null,
+    issue_session_id: c.req.query("issue_session_id") ?? c.req.query("issue-session-id") ?? null,
     since: c.req.query("since") ?? null,
     thread: c.req.query("thread") ?? null,
     recent,
@@ -8480,9 +8978,14 @@ function issueTimelineResponse(
   target_index?: number;
 } | null {
   if (!store.getIssue(issueId)) return null;
+  const issueSessionId = cleanString(c.req.query("issue_session_id")) || null;
+  if (issueSessionId) {
+    const session = store.getIssueSession(issueSessionId);
+    if (!session || session.issueId !== issueId) return null;
+  }
   const wrapped = ["limit", "before", "after", "around"].some((name) => c.req.query(name) != null);
-  if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true });
-  const entries = store.listIssueTimeline(issueId, { ascending: false });
+  if (!wrapped) return store.listIssueTimeline(issueId, { ascending: true, issueSessionId });
+  const entries = store.listIssueTimeline(issueId, { ascending: false, issueSessionId });
   const response: {
     entries: MultiremiTimelineEntry[];
     next_cursor: null;
@@ -8509,6 +9012,7 @@ function timelineEntryCompatibilityResponse(entry: MultiremiTimelineEntry): Reco
   const response: Record<string, unknown> = {
     type: entry.type,
     id: entry.id,
+    issue_session_id: entry.issue_session_id ?? entry.issueSessionId ?? null,
     actor_type: entry.actor_type ?? entry.actorType,
     actor_id: entry.actor_id ?? entry.actorId,
     created_at: entry.created_at ?? entry.createdAt,
@@ -9409,6 +9913,7 @@ function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: Multire
   agent_id: string;
   runtime_id: string | null;
   issue_id: string | null;
+  issue_session_id: string | null;
   chat_session_id: string | null;
   autopilot_run_id: string | null;
   trigger_comment_id: string | null;
@@ -9443,6 +9948,7 @@ function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: Multire
     agent_id: string;
     runtime_id: string | null;
     issue_id: string | null;
+    issue_session_id: string | null;
     chat_session_id: string | null;
     autopilot_run_id: string | null;
     trigger_comment_id: string | null;
@@ -9480,6 +9986,7 @@ function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: Multire
     agent_id: task.agentId,
     runtime_id: task.runtimeId,
     issue_id: task.issueId,
+    issue_session_id: task.issueSessionId,
     chat_session_id: task.chatSessionId,
     autopilot_run_id: task.autopilotRunId,
     trigger_comment_id: task.triggerCommentId,
@@ -9540,6 +10047,7 @@ function daemonTaskWireResponse(task: MultiremiTask, triggerMetadata: MultiremiT
   if (task.progressStep != null) response.progress_step = task.progressStep;
   if (task.progressTotal != null) response.progress_total = task.progressTotal;
   if (task.chatSessionId) response.chat_session_id = task.chatSessionId;
+  if (task.issueSessionId) response.issue_session_id = task.issueSessionId;
   if (task.autopilotRunId) response.autopilot_run_id = task.autopilotRunId;
   if (task.triggerCommentId) response.trigger_comment_id = task.triggerCommentId;
   if (task.triggerSummary) response.trigger_summary = task.triggerSummary;
@@ -9574,6 +10082,35 @@ function daemonTaskClaimResponse(
   if (task.workDir) response.prior_work_dir = task.workDir;
   if (task.agent) response.agent = daemonClaimAgentResponse(task.agent);
   if (task.issue) response.issue = issueCompatibilityResponse(task.issue, { includeLabels: true });
+  if (task.issueSessionId) {
+    const issueSession = store.getIssueSession(task.issueSessionId);
+    if (issueSession) {
+      response.issue_session = issueSession;
+      const projection = store.buildTaskSessionProjection(task.id);
+      if (projection) {
+        response.session_projection = {
+          session_id: projection.sessionId,
+          target_agent_id: projection.targetAgentId,
+          mode: projection.mode,
+          from_seq: projection.fromSeq,
+          to_seq: projection.toSeq,
+          jsonl: projection.jsonl,
+        };
+      }
+    }
+    if (task.issueId) {
+      response.issue_session_results = store.listIssueSessionResults(task.issueId)
+        .filter((result) => result.sourceSessionId !== task.issueSessionId)
+        .map((result) => ({
+          id: result.id,
+          source_session_id: result.sourceSessionId,
+          title: result.title,
+          body: result.body,
+          metadata: result.metadata,
+          created_at: result.createdAt,
+        }));
+    }
+  }
   if (task.project) {
     response.project_id = task.project.id;
     response.project_title = task.project.title;

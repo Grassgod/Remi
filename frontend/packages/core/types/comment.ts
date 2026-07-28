@@ -17,6 +17,7 @@ export interface Reaction {
 export interface Comment {
   id: string;
   issue_id: string;
+  issue_session_id?: string | null;
   author_type: CommentAuthorType;
   author_id: string;
   content: string;

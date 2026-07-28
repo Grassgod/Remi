@@ -746,6 +746,100 @@ describe("Multiremi CLI config", () => {
     }
   });
 
+  test("issue Session CLI lists Sessions and publishes explicit reusable results", async () => {
+    const requests: Array<{
+      method: string;
+      path: string;
+      body: Record<string, unknown>;
+    }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        const body = request.method === "POST"
+          ? await request.json() as Record<string, unknown>
+          : {};
+        requests.push({
+          method: request.method,
+          path: `${url.pathname}${url.search}`,
+          body,
+        });
+        if (url.pathname === "/api/issues/iss_1/sessions") {
+          return Response.json([{
+            id: "sess_main",
+            title: "Main",
+            status: "active",
+            is_default: true,
+            participants: [],
+          }]);
+        }
+        if (url.pathname === "/api/issues/iss_1/session-results") {
+          return Response.json([{
+            id: "sres_1",
+            source_session_id: "sess_main",
+            title: "Decision",
+            body: "Use canonical events.",
+            created_at: "2026-07-27T00:00:00.000Z",
+          }]);
+        }
+        if (url.pathname === "/api/issues/iss_1/sessions/sess_main/results" && request.method === "POST") {
+          return Response.json({
+            id: "sres_2",
+            source_session_id: "sess_main",
+            ...body,
+          }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const logs: string[] = [];
+    const originalLog = console.log;
+    try {
+      console.log = (value?: unknown) => { logs.push(String(value)); };
+      const connection = ["--server", `http://127.0.0.1:${server.port}`, "--token", "tok_cli", "--output", "json"];
+      await runMultiremi(["issue", "session", "list", "iss_1", ...connection], { programName: "multiremi" });
+      await runMultiremi(["issue", "session", "result", "list", "iss_1", "--session", "sess_main", ...connection], { programName: "multiremi" });
+      await runMultiremi([
+        "issue",
+        "session",
+        "result",
+        "publish",
+        "iss_1",
+        "--session",
+        "sess_main",
+        "--title",
+        "API contract",
+        "--content",
+        "Share results, not raw transcripts.",
+        ...connection,
+      ], { programName: "multiremi" });
+
+      expect(JSON.parse(logs[0])[0]).toMatchObject({ id: "sess_main", title: "Main" });
+      expect(JSON.parse(logs[1])[0]).toMatchObject({ id: "sres_1", source_session_id: "sess_main" });
+      expect(JSON.parse(logs[2])).toMatchObject({
+        id: "sres_2",
+        title: "API contract",
+        body: "Share results, not raw transcripts.",
+      });
+      expect(requests).toEqual([
+        { method: "GET", path: "/api/issues/iss_1/sessions", body: {} },
+        { method: "GET", path: "/api/issues/iss_1/session-results", body: {} },
+        {
+          method: "POST",
+          path: "/api/issues/iss_1/sessions/sess_main/results",
+          body: {
+            title: "API contract",
+            body: "Share results, not raw transcripts.",
+          },
+        },
+      ]);
+    } finally {
+      console.log = originalLog;
+      server.stop(true);
+    }
+  });
+
   test("issue comment list reads legacy cursor headers from older servers", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",

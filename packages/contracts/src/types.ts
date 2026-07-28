@@ -737,10 +737,128 @@ export interface MultiremiIssueDependency {
   createdAt: string;
 }
 
+export type MultiremiIssueSessionStatus = "active" | "archived";
+export type MultiremiSessionParticipantType = "agent" | "member";
+export type MultiremiSessionProjectionMode = "bootstrap" | "delta";
+
+export interface MultiremiIssueSession {
+  id: string;
+  issueId: string;
+  issue_id?: string;
+  workspaceId: string;
+  workspace_id?: string;
+  title: string;
+  status: MultiremiIssueSessionStatus;
+  isDefault: boolean;
+  is_default?: boolean;
+  summary: string | null;
+  createdByType: string;
+  created_by_type?: string;
+  createdById: string | null;
+  created_by_id?: string | null;
+  createdAt: string;
+  created_at?: string;
+  updatedAt: string;
+  updated_at?: string;
+}
+
+export interface MultiremiSessionParticipant {
+  id: string;
+  sessionId: string;
+  session_id?: string;
+  participantType: MultiremiSessionParticipantType;
+  participant_type?: MultiremiSessionParticipantType;
+  participantId: string;
+  participant_id?: string;
+  role: string;
+  status: string;
+  joinedAt: string;
+  joined_at?: string;
+  updatedAt: string;
+  updated_at?: string;
+}
+
+export interface MultiremiSessionEvent {
+  id: string;
+  sessionId: string;
+  session_id?: string;
+  seq: number;
+  authorType: string;
+  author_type?: string;
+  authorId: string | null;
+  author_id?: string | null;
+  kind: string;
+  body: string;
+  taskId: string | null;
+  task_id?: string | null;
+  sourceCommentId: string | null;
+  source_comment_id?: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  created_at?: string;
+}
+
+export interface MultiremiSessionAgentLane {
+  sessionId: string;
+  session_id?: string;
+  agentId: string;
+  agent_id?: string;
+  providerSessionId: string | null;
+  provider_session_id?: string | null;
+  runtimeId: string | null;
+  runtime_id?: string | null;
+  provider: string | null;
+  workDir: string | null;
+  work_dir?: string | null;
+  cursorSeq: number;
+  cursor_seq?: number;
+  generation: number;
+  status: string;
+  lastTaskId: string | null;
+  last_task_id?: string | null;
+  createdAt: string;
+  created_at?: string;
+  updatedAt: string;
+  updated_at?: string;
+}
+
+export interface MultiremiSessionResult {
+  id: string;
+  issueId: string;
+  issue_id?: string;
+  sourceSessionId: string;
+  source_session_id?: string;
+  title: string;
+  body: string;
+  metadata: Record<string, unknown>;
+  publishedByType: string;
+  published_by_type?: string;
+  publishedById: string | null;
+  published_by_id?: string | null;
+  createdAt: string;
+  created_at?: string;
+}
+
+export interface MultiremiSessionProjection {
+  sessionId: string;
+  session_id?: string;
+  targetAgentId: string;
+  target_agent_id?: string;
+  mode: MultiremiSessionProjectionMode;
+  fromSeq: number;
+  from_seq?: number;
+  toSeq: number;
+  to_seq?: number;
+  /** Deterministic newline-delimited JSON projection for the ACP user turn. */
+  jsonl: string;
+}
+
 export interface MultiremiIssueComment {
   id: string;
   issueId: string;
   issue_id?: string;
+  issueSessionId: string | null;
+  issue_session_id?: string | null;
   authorType: string;
   author_type?: string;
   authorId: string | null;
@@ -771,6 +889,8 @@ export interface MultiremiIssueComment {
 }
 
 export interface ListIssueCommentsInput {
+  issueSessionId?: string | null;
+  issue_session_id?: string | null;
   since?: string | null;
   thread?: string | null;
   tail?: number | null;
@@ -805,6 +925,8 @@ export interface MultiremiIssueActivity {
 export interface MultiremiTimelineEntry {
   type: "activity" | "comment";
   id: string;
+  issueSessionId?: string | null;
+  issue_session_id?: string | null;
   actorType: string;
   actor_type?: string;
   actorId: string | null;
@@ -1134,6 +1256,8 @@ export interface MultiremiTask {
    *  receive, so a claim-response task may omit it. */
   provider?: string | null;
   issueId: string | null;
+  issueSessionId: string | null;
+  issue_session_id?: string | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   triggerCommentId: string | null;
@@ -1188,6 +1312,14 @@ export interface MultiremiTask {
   attempt: number;
   maxAttempts: number;
   parentTaskId: string | null;
+  assignmentEventId: string | null;
+  assignment_event_id?: string | null;
+  projectionFromSeq: number | null;
+  projection_from_seq?: number | null;
+  projectionToSeq: number | null;
+  projection_to_seq?: number | null;
+  projectionMode: MultiremiSessionProjectionMode | null;
+  projection_mode?: MultiremiSessionProjectionMode | null;
   result: string | null;
   error: string | null;
   failureReason: string | null;
@@ -1701,6 +1833,8 @@ export interface CreateIssueDependencyInput {
 }
 
 export interface CreateIssueCommentInput {
+  issueSessionId?: string | null;
+  issue_session_id?: string | null;
   authorType?: string;
   authorId?: string | null;
   parentId?: string | null;
@@ -1932,6 +2066,8 @@ export interface CreateTaskInput {
   runtimeId?: string | null;
   runtime_id?: string | null;
   issueId?: string | null;
+  issueSessionId?: string | null;
+  issue_session_id?: string | null;
   chatSessionId?: string | null;
   triggerCommentId?: string | null;
   trigger_comment_id?: string | null;
@@ -1946,6 +2082,14 @@ export interface CreateTaskInput {
   maxAttempts?: number | null;
   parentTaskId?: string | null;
   parent_task_id?: string | null;
+  assignmentEventId?: string | null;
+  assignment_event_id?: string | null;
+  assignmentAuthorType?: string;
+  assignment_author_type?: string;
+  assignmentAuthorId?: string | null;
+  assignment_author_id?: string | null;
+  assignmentSourceEventId?: string | null;
+  assignment_source_event_id?: string | null;
   /**
    * Resume-unsafe retry: abandon the chat session's promoted provider session.
    * Skips session/work_dir inheritance and chat-session runtime affinity so the
@@ -1953,6 +2097,56 @@ export interface CreateTaskInput {
    * the original machine. local_directory affinity still applies.
    */
   resetProviderSession?: boolean;
+}
+
+export interface CreateIssueSessionInput {
+  id?: string;
+  issueId?: string;
+  issue_id?: string;
+  title?: string;
+  createdByType?: string;
+  created_by_type?: string;
+  createdById?: string | null;
+  created_by_id?: string | null;
+  participantAgentIds?: string[];
+  participant_agent_ids?: string[];
+}
+
+export interface UpdateIssueSessionInput {
+  title?: string;
+  status?: MultiremiIssueSessionStatus;
+  summary?: string | null;
+}
+
+export interface AddSessionParticipantInput {
+  participantType?: MultiremiSessionParticipantType;
+  participant_type?: MultiremiSessionParticipantType;
+  participantId?: string;
+  participant_id?: string;
+  role?: string;
+}
+
+export interface CreateSessionTaskInput {
+  agentId?: string;
+  agent_id?: string;
+  prompt: string;
+  createdByType?: string;
+  created_by_type?: string;
+  createdById?: string | null;
+  created_by_id?: string | null;
+  sourceEventId?: string | null;
+  source_event_id?: string | null;
+  priority?: number;
+}
+
+export interface PublishSessionResultInput {
+  title?: string;
+  body: string;
+  metadata?: Record<string, unknown>;
+  publishedByType?: string;
+  published_by_type?: string;
+  publishedById?: string | null;
+  published_by_id?: string | null;
 }
 
 export interface TaskMessageInput {

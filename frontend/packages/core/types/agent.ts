@@ -42,6 +42,7 @@ export type TaskFailureReason =
   | "codex_semantic_inactivity"
   | "runtime_offline"
   | "runtime_recovery"
+  | "agent_error.stale_session"
   | "manual";
 
 // One daily bucket for the Agents-list ACTIVITY sparkline. The back-end
@@ -64,12 +65,16 @@ export interface AgentRunCount {
 
 export interface AgentTask {
   id: string;
+  /** Delegated instruction. Older backends may omit it from list responses. */
+  prompt?: string;
   agent_id: string;
   runtime_id: string;
   // Empty string ("") when the task has no linked issue — either chat- or
   // autopilot-spawned. Check chat_session_id / autopilot_run_id to tell
   // which source produced it.
   issue_id: string;
+  /** Product Session under the Issue. Empty/missing for legacy tasks. */
+  issue_session_id?: string;
   // `waiting_local_directory` is the daemon-emitted hold state for the
   // local_directory flow: a task that has been dispatched but is parked
   // because another task currently owns the same on-disk path lock.

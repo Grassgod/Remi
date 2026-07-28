@@ -16,10 +16,15 @@ import type {
   CreateBillingPortalSessionResponse,
   FleetModelsResponse,
   GroupedIssuesResponse,
+  IssueSession,
+  IssueSessionTask,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   RuntimeDirectoryScanRequest,
   Squad,
+  SessionEvent,
+  SessionParticipant,
+  SessionResult,
   TimelineEntry,
   User,
   WebhookDelivery,
@@ -183,6 +188,7 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
 export const CommentSchema = z.object({
   id: z.string(),
   issue_id: z.string(),
+  issue_session_id: z.string().nullable().optional(),
   author_type: z.string(),
   author_id: z.string(),
   content: z.string(),
@@ -195,6 +201,130 @@ export const CommentSchema = z.object({
 }).loose();
 
 export const CommentsListSchema = z.array(CommentSchema);
+
+export const SessionParticipantSchema = z.object({
+  id: z.string(),
+  session_id: z.string(),
+  participant_type: z.string(),
+  participant_id: z.string(),
+  role: z.string().default("participant"),
+  status: z.string().default("active"),
+  joined_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const SessionParticipantListSchema = z.array(SessionParticipantSchema);
+export const EMPTY_SESSION_PARTICIPANTS: SessionParticipant[] = [];
+
+export const IssueSessionSchema = z.object({
+  id: z.string(),
+  issue_id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  status: z.string(),
+  is_default: z.boolean().default(false),
+  summary: z.string().nullable().default(null),
+  created_by_type: z.string().default("system"),
+  created_by_id: z.string().nullable().default(null),
+  created_at: z.string(),
+  updated_at: z.string(),
+  participants: z.array(SessionParticipantSchema).default([]),
+}).loose();
+
+export const IssueSessionListSchema = z.array(IssueSessionSchema);
+export const EMPTY_ISSUE_SESSIONS: IssueSession[] = [];
+export const EMPTY_ISSUE_SESSION: IssueSession = {
+  id: "",
+  issue_id: "",
+  workspace_id: "",
+  title: "",
+  status: "active",
+  is_default: false,
+  summary: null,
+  created_by_type: "system",
+  created_by_id: null,
+  created_at: "",
+  updated_at: "",
+  participants: [],
+};
+
+const SessionEventSchema = z.object({
+  id: z.string(),
+  session_id: z.string(),
+  seq: z.number(),
+  author_type: z.string(),
+  author_id: z.string().nullable().default(null),
+  kind: z.string(),
+  body: z.string(),
+  task_id: z.string().nullable().default(null),
+  source_comment_id: z.string().nullable().default(null),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  created_at: z.string(),
+}).loose();
+
+export const SessionEventListSchema = z.array(SessionEventSchema);
+export const EMPTY_SESSION_EVENTS: SessionEvent[] = [];
+
+export const SessionResultSchema = z.object({
+  id: z.string(),
+  issue_id: z.string(),
+  source_session_id: z.string(),
+  title: z.string().default(""),
+  body: z.string(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  published_by_type: z.string(),
+  published_by_id: z.string().nullable().default(null),
+  created_at: z.string(),
+}).loose();
+
+export const SessionResultListSchema = z.array(SessionResultSchema);
+export const EMPTY_SESSION_RESULTS: SessionResult[] = [];
+export const EMPTY_SESSION_RESULT: SessionResult = {
+  id: "",
+  issue_id: "",
+  source_session_id: "",
+  title: "",
+  body: "",
+  metadata: {},
+  published_by_type: "member",
+  published_by_id: null,
+  created_at: "",
+};
+
+export const IssueSessionTaskSchema = z.object({
+  id: z.string(),
+  agent_id: z.string(),
+  runtime_id: z.preprocess((value) => value ?? "", z.string()),
+  issue_id: z.string(),
+  issue_session_id: z.string(),
+  prompt: z.string().optional(),
+  status: z.string(),
+  priority: z.number().default(0),
+  dispatched_at: z.string().nullable().default(null),
+  started_at: z.string().nullable().default(null),
+  completed_at: z.string().nullable().default(null),
+  result: z.unknown().nullable().default(null),
+  error: z.string().nullable().default(null),
+  created_at: z.string(),
+}).loose();
+
+export const IssueSessionTaskListSchema = z.array(IssueSessionTaskSchema);
+export const EMPTY_ISSUE_SESSION_TASKS: IssueSessionTask[] = [];
+export const EMPTY_ISSUE_SESSION_TASK: IssueSessionTask = {
+  id: "",
+  agent_id: "",
+  runtime_id: "",
+  issue_id: "",
+  issue_session_id: "",
+  status: "queued",
+  priority: 0,
+  dispatched_at: null,
+  started_at: null,
+  completed_at: null,
+  result: null,
+  error: null,
+  created_at: "",
+};
 
 // Metadata is primitive-only by API/DB contract. Stay lenient on shape:
 // unknown keys land as `unknown` to a caller, but the field itself defaults

@@ -5,9 +5,11 @@ import { cleanOptionalString, nullableString, parseJson, toJson } from "@multire
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
+import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { createLogger } from "@shared/logger.js";
 import type {
+  AddSessionParticipantInput,
   AddSquadMemberInput,
   AssignIssueInput,
   AssignIssueResult,
@@ -22,6 +24,7 @@ import type {
   CreateIssueDependencyInput,
   CreateIssueCommentInput,
   CreateIssueInput,
+  CreateIssueSessionInput,
   BatchDeleteIssuesInput,
   BatchUpdateIssuesInput,
   CreateLabelInput,
@@ -30,6 +33,7 @@ import type {
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
   CreateRuntimeLocalSkillImportInput,
+  CreateSessionTaskInput,
   CreateSkillInput,
   CreateSquadInput,
   CreateTaskHumanRequestInput,
@@ -70,6 +74,7 @@ import type {
   MultiremiIssueDependency,
   MultiremiIssueDependencyType,
   MultiremiIssue,
+  MultiremiIssueSession,
   MultiremiIssueAssigneeGroup,
   MultiremiIssuePriority,
   MultiremiIssueSearchResult,
@@ -105,6 +110,7 @@ import type {
   MultiremiRuntimeModelListRequestStatus,
   MultiremiRuntimeUpdateRequest,
   MultiremiRuntimeUpdateRequestStatus,
+  PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
   ReportRuntimeModelListInput,
@@ -119,6 +125,11 @@ import type {
   MultiremiRuntimeUsage,
   MultiremiSkill,
   MultiremiSkillFile,
+  MultiremiSessionAgentLane,
+  MultiremiSessionEvent,
+  MultiremiSessionParticipant,
+  MultiremiSessionProjection,
+  MultiremiSessionResult,
   MultiremiSquad,
   MultiremiSquadMember,
   MultiremiTask,
@@ -154,6 +165,7 @@ import type {
   UpdateChatSessionInput,
   UpdateIssueInput,
   UpdateIssueCommentInput,
+  UpdateIssueSessionInput,
   UpdateLabelInput,
   UpdateMultiremiUserInput,
   UpdateProjectInput,
@@ -171,12 +183,19 @@ const ACTIVE_TASK_STATUSES: MultiremiTaskStatus[] = ["queued", "dispatched", "ru
 const IN_FLIGHT_TASK_STATUSES: MultiremiTaskStatus[] = ["dispatched", "running", "waiting_local_directory", "awaiting_human"];
 const ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"] as const;
 const CLOSED_ISSUE_STATUSES = new Set(["done", "completed", "closed", "cancelled", "failed"]);
-const AUTO_RETRY_FAILURE_REASONS = new Set(["runtime_offline", "runtime_recovery", "timeout", "codex_semantic_inactivity"]);
+const AUTO_RETRY_FAILURE_REASONS = new Set([
+  "runtime_offline",
+  "runtime_recovery",
+  "timeout",
+  "codex_semantic_inactivity",
+  "agent_error.stale_session",
+]);
 const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "iteration_limit",
   "agent_fallback_message",
   "api_invalid_request",
   "codex_semantic_inactivity",
+  "agent_error.stale_session",
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const SYSTEM_AUTHOR_ID = "00000000-0000-0000-0000-000000000000";
@@ -259,6 +278,7 @@ const KNOWN_FAILURE_REASONS = new Set([
   "agent_error.provider_server_error",
   "agent_error.runtime_missing_executable",
   "agent_error.runtime_version_unsupported",
+  "agent_error.stale_session",
   "agent_error.unknown",
   "agent_fallback_message",
   "context_limit",
@@ -2288,6 +2308,7 @@ runMigrations(this.db);
     const placeholders = ids.map(() => "?").join(",");
     this.db.run(`DELETE FROM multiremi_agent_skills WHERE agent_id IN (${placeholders})`, ids);
     this.db.run(`DELETE FROM multiremi_squad_members WHERE member_type = 'agent' AND member_id IN (${placeholders})`, ids);
+    this.db.run(`DELETE FROM multiremi_session_agent_lanes WHERE agent_id IN (${placeholders})`, ids);
     this.db.run(
       `UPDATE multiremi_squads
        SET leader_id = NULL, updated_at = ?
@@ -3188,12 +3209,355 @@ runMigrations(this.db);
       const creator = this.findWorkspaceMemberForUser(createdBy, workspaceId);
       if (creator) this.addIssueSubscriber(id, creator.id, "created");
     }
+    this.getOrCreateDefaultIssueSession(id, createdBy);
     return this.getIssue(id)!;
   }
 
   getIssue(id: string): MultiremiIssue | null {
     const row = this.db.query("SELECT * FROM multiremi_issues WHERE id = ?").get(id) as Row | null;
     return row ? this.hydrateIssue(toIssue(row)) : null;
+  }
+
+  getOrCreateDefaultIssueSession(issueId: string, createdById: string | null = null): MultiremiIssueSession {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const existing = this.db.query(
+      "SELECT * FROM multiremi_issue_sessions WHERE issue_id = ? AND is_default = 1 LIMIT 1",
+    ).get(issueId) as Row | null;
+    if (existing) return toIssueSession(existing);
+
+    const id = createId("ises");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_issue_sessions (
+         id, issue_id, workspace_id, title, status, is_default,
+         created_by_type, created_by_id, created_at, updated_at
+       ) VALUES (?, ?, ?, 'Main', 'active', 1, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+      [id, issueId, issue.workspaceId, createdById ? "member" : "system", createdById, now, now],
+    );
+    const row = this.db.query(
+      "SELECT * FROM multiremi_issue_sessions WHERE issue_id = ? AND is_default = 1 LIMIT 1",
+    ).get(issueId) as Row | null;
+    if (!row) throw new Error(`Failed to create default session for issue: ${issueId}`);
+    return toIssueSession(row);
+  }
+
+  createIssueSession(issueId: string, input: CreateIssueSessionInput = {}): MultiremiIssueSession {
+    const issue = this.getIssue(issueId);
+    if (!issue) throw new Error(`Issue not found: ${issueId}`);
+    const title = input.title?.trim() || `Session ${this.listIssueSessions(issueId, true).length + 1}`;
+    const id = input.id ?? createId("ises");
+    const now = nowIso();
+    const createdByType = input.createdByType ?? input.created_by_type ?? "member";
+    const createdById = input.createdById ?? input.created_by_id ?? null;
+    this.db.run(
+      `INSERT INTO multiremi_issue_sessions (
+         id, issue_id, workspace_id, title, status, is_default,
+         created_by_type, created_by_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, 'active', 0, ?, ?, ?, ?)`,
+      [id, issueId, issue.workspaceId, title, createdByType, createdById, now, now],
+    );
+    if (createdById && (createdByType === "member" || createdByType === "agent")) {
+      this.addSessionParticipant(id, {
+        participantType: createdByType,
+        participantId: createdById,
+        role: "owner",
+      });
+    }
+    const participantAgentIds = input.participantAgentIds ?? input.participant_agent_ids ?? [];
+    for (const agentId of participantAgentIds) {
+      this.addSessionParticipant(id, { participantType: "agent", participantId: agentId });
+    }
+    this.appendSessionEvent(id, {
+      authorType: "system",
+      authorId: null,
+      kind: "session_created",
+      body: title,
+      metadata: { created_by_type: createdByType, created_by_id: createdById },
+    });
+    return this.getIssueSession(id)!;
+  }
+
+  getIssueSession(id: string): MultiremiIssueSession | null {
+    const row = this.db.query("SELECT * FROM multiremi_issue_sessions WHERE id = ?").get(id) as Row | null;
+    return row ? toIssueSession(row) : null;
+  }
+
+  listIssueSessions(issueId: string, includeArchived = false): MultiremiIssueSession[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = includeArchived
+      ? this.db.query(
+        "SELECT * FROM multiremi_issue_sessions WHERE issue_id = ? ORDER BY is_default DESC, updated_at DESC",
+      ).all(issueId) as Row[]
+      : this.db.query(
+        "SELECT * FROM multiremi_issue_sessions WHERE issue_id = ? AND status = 'active' ORDER BY is_default DESC, updated_at DESC",
+      ).all(issueId) as Row[];
+    return rows.map(toIssueSession);
+  }
+
+  updateIssueSession(id: string, input: UpdateIssueSessionInput): MultiremiIssueSession {
+    const session = this.getIssueSession(id);
+    if (!session) throw new Error(`Issue session not found: ${id}`);
+    const title = input.title === undefined ? session.title : input.title.trim();
+    if (!title) throw new Error("Session title is required");
+    const status = input.status ?? session.status;
+    if (status !== "active" && status !== "archived") throw new Error(`Invalid session status: ${status}`);
+    const summary = input.summary === undefined ? session.summary : cleanOptionalString(input.summary);
+    const now = nowIso();
+    this.db.run(
+      "UPDATE multiremi_issue_sessions SET title = ?, status = ?, summary = ?, updated_at = ? WHERE id = ?",
+      [title, status, summary, now, id],
+    );
+    return this.getIssueSession(id)!;
+  }
+
+  addSessionParticipant(sessionId: string, input: AddSessionParticipantInput): MultiremiSessionParticipant {
+    const session = this.getIssueSession(sessionId);
+    if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    const participantType = input.participantType ?? input.participant_type;
+    const participantId = input.participantId ?? input.participant_id;
+    if (participantType !== "agent" && participantType !== "member") {
+      throw new Error("participant_type must be agent or member");
+    }
+    if (!participantId) throw new Error("participant_id is required");
+    let normalizedParticipantId = participantId;
+    if (participantType === "agent") {
+      const agent = this.getAgent(participantId);
+      if (!agent || agent.archivedAt) throw new Error(`Agent not found: ${participantId}`);
+      if (agent.workspaceId !== session.workspaceId) throw new Error("Participant belongs to another workspace");
+    } else {
+      const member = this.getWorkspaceMember(participantId) ?? this.findWorkspaceMemberForUser(participantId, session.workspaceId);
+      if (!member || member.workspaceId !== session.workspaceId) throw new Error(`Member not found: ${participantId}`);
+      // New API actors use stable user ids, while local/legacy member fixtures
+      // may not have a user link yet. Preserve their member id rather than
+      // inserting NULL into the participant key.
+      normalizedParticipantId = member.userId ?? member.id;
+    }
+    const now = nowIso();
+    const id = createId("spart");
+    this.db.run(
+      `INSERT INTO multiremi_session_participants (
+         id, session_id, participant_type, participant_id, role, status, joined_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+       ON CONFLICT(session_id, participant_type, participant_id)
+       DO UPDATE SET role = excluded.role, status = 'active', updated_at = excluded.updated_at`,
+      [id, sessionId, participantType, normalizedParticipantId, input.role?.trim() || "participant", now, now],
+    );
+    if (participantType === "agent") this.getOrCreateSessionAgentLane(sessionId, normalizedParticipantId);
+    const row = this.db.query(
+      `SELECT * FROM multiremi_session_participants
+       WHERE session_id = ? AND participant_type = ? AND participant_id = ?`,
+    ).get(sessionId, participantType, normalizedParticipantId) as Row | null;
+    return toSessionParticipant(row!);
+  }
+
+  removeSessionParticipant(sessionId: string, participantType: string, participantId: string): void {
+    if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
+    this.db.run(
+      `UPDATE multiremi_session_participants
+       SET status = 'left', updated_at = ?
+       WHERE session_id = ? AND participant_type = ? AND participant_id = ?`,
+      [nowIso(), sessionId, participantType, participantId],
+    );
+  }
+
+  listSessionParticipants(sessionId: string, includeLeft = false): MultiremiSessionParticipant[] {
+    if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
+    const rows = includeLeft
+      ? this.db.query(
+        "SELECT * FROM multiremi_session_participants WHERE session_id = ? ORDER BY joined_at ASC",
+      ).all(sessionId) as Row[]
+      : this.db.query(
+        "SELECT * FROM multiremi_session_participants WHERE session_id = ? AND status = 'active' ORDER BY joined_at ASC",
+      ).all(sessionId) as Row[];
+    return rows.map(toSessionParticipant);
+  }
+
+  appendSessionEvent(sessionId: string, input: {
+    authorType: string;
+    authorId?: string | null;
+    kind?: string;
+    body?: string;
+    taskId?: string | null;
+    sourceCommentId?: string | null;
+    metadata?: Record<string, unknown>;
+    createdAt?: string;
+  }): MultiremiSessionEvent {
+    const tx = this.db.transaction(() => {
+      const session = this.getIssueSession(sessionId);
+      if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+      // Row self-write serializes sequence allocation across server processes.
+      this.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
+      const max = this.db.query(
+        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+      ).get(sessionId) as { seq: number } | null;
+      const seq = Number(max?.seq ?? 0) + 1;
+      const id = createId("sevt");
+      const now = input.createdAt ?? nowIso();
+      this.db.run(
+        `INSERT INTO multiremi_session_events (
+           id, session_id, seq, author_type, author_id, kind, body,
+           task_id, source_comment_id, metadata, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          sessionId,
+          seq,
+          input.authorType,
+          input.authorId ?? null,
+          input.kind ?? "message",
+          input.body ?? "",
+          input.taskId ?? null,
+          input.sourceCommentId ?? null,
+          toJson(input.metadata ?? {}),
+          now,
+        ],
+      );
+      this.db.run("UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?", [now, sessionId]);
+      return toSessionEvent(this.db.query("SELECT * FROM multiremi_session_events WHERE id = ?").get(id) as Row);
+    });
+    return tx();
+  }
+
+  listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {
+    if (!this.getIssueSession(sessionId)) throw new Error(`Issue session not found: ${sessionId}`);
+    const sinceSeq = Math.max(0, Math.floor(Number(input.sinceSeq ?? 0)));
+    const toSeq = input.toSeq == null ? null : Math.max(0, Math.floor(Number(input.toSeq)));
+    const rows = toSeq == null
+      ? this.db.query(
+        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
+      ).all(sessionId, sinceSeq) as Row[]
+      : this.db.query(
+        "SELECT * FROM multiremi_session_events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq ASC",
+      ).all(sessionId, sinceSeq, toSeq) as Row[];
+    return rows.map(toSessionEvent);
+  }
+
+  getOrCreateSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane {
+    const session = this.getIssueSession(sessionId);
+    if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    const agent = this.getAgent(agentId);
+    if (!agent || agent.archivedAt) throw new Error(`Agent not found: ${agentId}`);
+    if (agent.workspaceId !== session.workspaceId) throw new Error("Agent belongs to another workspace");
+    const now = nowIso();
+    this.db.run(
+      `INSERT INTO multiremi_session_agent_lanes (
+         session_id, agent_id, cursor_seq, generation, status, created_at, updated_at
+       ) VALUES (?, ?, 0, 1, 'active', ?, ?)
+       ON CONFLICT(session_id, agent_id) DO NOTHING`,
+      [sessionId, agentId, now, now],
+    );
+    const row = this.db.query(
+      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
+    ).get(sessionId, agentId) as Row | null;
+    return toSessionAgentLane(row!);
+  }
+
+  getSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
+    const row = this.db.query(
+      "SELECT * FROM multiremi_session_agent_lanes WHERE session_id = ? AND agent_id = ?",
+    ).get(sessionId, agentId) as Row | null;
+    return row ? toSessionAgentLane(row) : null;
+  }
+
+  buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
+    const task = this.getTask(taskId);
+    if (!task?.issueSessionId) return null;
+    const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+    const events = this.listSessionEvents(task.issueSessionId);
+    const projection = buildSessionProjection({
+      sessionId: task.issueSessionId,
+      targetAgentId: task.agentId,
+      events,
+      cursorSeq: lane.cursorSeq,
+      providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
+      resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
+    });
+    this.db.run(
+      `UPDATE multiremi_tasks
+       SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?, updated_at = ?
+       WHERE id = ?`,
+      [projection.fromSeq, projection.toSeq, projection.mode, nowIso(), taskId],
+    );
+    return projection;
+  }
+
+  createSessionTask(sessionId: string, input: CreateSessionTaskInput): MultiremiTask {
+    const session = this.getIssueSession(sessionId);
+    if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    const agentId = input.agentId ?? input.agent_id;
+    if (!agentId) throw new Error("agent_id is required");
+    this.addSessionParticipant(sessionId, { participantType: "agent", participantId: agentId });
+    return this.createTask({
+      agentId,
+      issueId: session.issueId,
+      issueSessionId: sessionId,
+      workspaceId: session.workspaceId,
+      priority: input.priority,
+      prompt: input.prompt,
+      assignmentAuthorType: input.createdByType ?? input.created_by_type ?? "system",
+      assignmentAuthorId: input.createdById ?? input.created_by_id ?? null,
+      assignmentSourceEventId: input.sourceEventId ?? input.source_event_id ?? null,
+    });
+  }
+
+  publishSessionResult(sessionId: string, input: PublishSessionResultInput): MultiremiSessionResult {
+    const session = this.getIssueSession(sessionId);
+    if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    const body = input.body.trim();
+    if (!body) throw new Error("Result body is required");
+    const id = createId("sres");
+    const now = nowIso();
+    const publishedByType = input.publishedByType ?? input.published_by_type ?? "agent";
+    const publishedById = input.publishedById ?? input.published_by_id ?? null;
+    this.db.run(
+      `INSERT INTO multiremi_session_results (
+         id, issue_id, source_session_id, title, body, metadata,
+         published_by_type, published_by_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        session.issueId,
+        sessionId,
+        input.title?.trim() ?? "",
+        body,
+        toJson(input.metadata ?? {}),
+        publishedByType,
+        publishedById,
+        now,
+      ],
+    );
+    this.appendSessionEvent(sessionId, {
+      authorType: "system",
+      authorId: null,
+      kind: "result_published",
+      body,
+      metadata: { result_id: id, title: input.title?.trim() ?? "" },
+    });
+    return this.getSessionResult(id)!;
+  }
+
+  getSessionResult(id: string): MultiremiSessionResult | null {
+    const row = this.db.query("SELECT * FROM multiremi_session_results WHERE id = ?").get(id) as Row | null;
+    return row ? toSessionResult(row) : null;
+  }
+
+  listIssueSessionResults(issueId: string): MultiremiSessionResult[] {
+    if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const rows = this.db.query(
+      "SELECT * FROM multiremi_session_results WHERE issue_id = ? ORDER BY created_at ASC",
+    ).all(issueId) as Row[];
+    return rows.map(toSessionResult);
+  }
+
+  private sessionAuthorName(authorType: string, authorId: string | null): string | null {
+    if (!authorId) return null;
+    if (authorType === "agent") return this.getAgent(authorId)?.name ?? null;
+    if (authorType === "member") {
+      return this.getWorkspaceMember(authorId)?.name ?? this.getUser(authorId)?.name ?? null;
+    }
+    return null;
   }
 
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null {
@@ -3407,16 +3771,26 @@ runMigrations(this.db);
     return { deleted };
   }
 
-  searchIssues(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { issues: MultiremiIssueSearchResult[]; total: number } {
+  searchIssues(input: {
+    q: string;
+    workspaceId?: string | null;
+    includeClosed?: boolean;
+    includeCommentBodies?: boolean;
+    limit?: number;
+    offset?: number;
+  }): { issues: MultiremiIssueSearchResult[]; total: number } {
     const query = normalizeSearchQuery(input.q);
     if (!query) throw new Error("q parameter is required");
     const workspaceId = input.workspaceId ?? "local";
     const includeClosed = Boolean(input.includeClosed);
+    const includeCommentBodies = input.includeCommentBodies !== false;
     const limit = clampSearchLimit(input.limit);
     const offset = Math.max(0, Number(input.offset ?? 0));
     const rows = this.listIssues().map((issue) => ({
       issue,
-      matchedCommentSnippet: this.searchIssueCommentSnippet(issue.id, query),
+      matchedCommentSnippet: includeCommentBodies
+        ? this.searchIssueCommentSnippet(issue.id, query)
+        : null,
     })).filter(({ issue, matchedCommentSnippet }) => {
       if (issue.workspaceId !== workspaceId) return false;
       if (!includeClosed && CLOSED_ISSUE_STATUSES.has(issue.status)) return false;
@@ -3692,11 +4066,22 @@ runMigrations(this.db);
   private createSystemIssueComment(issueId: string, body: string, data: Record<string, unknown>): MultiremiIssueComment {
     const id = createId("cmt");
     const now = nowIso();
+    const issueSession = this.getOrCreateDefaultIssueSession(issueId);
     this.db.run(
-      `INSERT INTO multiremi_issue_comments (id, issue_id, author_type, author_id, parent_id, body, type, created_at, updated_at)
-       VALUES (?, ?, 'system', ?, NULL, ?, 'system', ?, ?)`,
-      [id, issueId, SYSTEM_AUTHOR_ID, body, now, now],
+      `INSERT INTO multiremi_issue_comments (
+         id, issue_id, issue_session_id, author_type, author_id, parent_id, body, type, created_at, updated_at
+       ) VALUES (?, ?, ?, 'system', ?, NULL, ?, 'system', ?, ?)`,
+      [id, issueId, issueSession.id, SYSTEM_AUTHOR_ID, body, now, now],
     );
+    this.appendSessionEvent(issueSession.id, {
+      authorType: "system",
+      authorId: SYSTEM_AUTHOR_ID,
+      kind: "system",
+      body,
+      sourceCommentId: id,
+      metadata: data,
+      createdAt: now,
+    });
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     this.appendIssueActivity(issueId, {
       actorType: "system",
@@ -3940,23 +4325,57 @@ runMigrations(this.db);
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
     const parentId = input.parentId ?? input.parent_id ?? null;
+    const parent = parentId ? this.getIssueComment(parentId) : null;
     if (parentId) {
-      const parent = this.getIssueComment(parentId);
       if (!parent || parent.issueId !== issueId) throw new Error(`Parent comment not found: ${parentId}`);
+    }
+    const issueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id)
+      ?? parent?.issueSessionId
+      ?? this.getOrCreateDefaultIssueSession(issueId, input.authorId ?? null).id;
+    const issueSession = this.getIssueSession(issueSessionId);
+    if (!issueSession || issueSession.issueId !== issueId) {
+      throw new Error(`Issue session not found for issue: ${issueSessionId}`);
+    }
+    if (parent && parent.issueSessionId && parent.issueSessionId !== issueSessionId) {
+      throw new Error("Reply must belong to the parent comment's session");
     }
     const id = createId("cmt");
     const now = nowIso();
     const body = rawBody.trim();
     this.db.run(
-      `INSERT INTO multiremi_issue_comments (id, issue_id, author_type, author_id, parent_id, body, type, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, issueId, input.authorType ?? "member", input.authorId ?? null, parentId, body, "comment", now, now],
+      `INSERT INTO multiremi_issue_comments (
+         id, issue_id, issue_session_id, author_type, author_id, parent_id, body, type, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, issueId, issueSessionId, input.authorType ?? "member", input.authorId ?? null, parentId, body, "comment", now, now],
     );
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, issueId]);
     if (parentId) this.unresolveThreadRoot(parentId);
     const authorType = input.authorType ?? "member";
+    if (authorType === "agent" && input.authorId) {
+      this.addSessionParticipant(issueSessionId, {
+        participantType: "agent",
+        participantId: input.authorId,
+      });
+    } else if (authorType === "member" && input.authorId) {
+      const member = this.getWorkspaceMember(input.authorId) ?? this.findWorkspaceMemberForUser(input.authorId, issue.workspaceId);
+      if (member) {
+        this.addSessionParticipant(issueSessionId, {
+          participantType: "member",
+          participantId: member.id,
+        });
+      }
+    }
+    this.appendSessionEvent(issueSessionId, {
+      authorType,
+      authorId: input.authorId ?? null,
+      kind: "message",
+      body,
+      sourceCommentId: id,
+      metadata: { parent_comment_id: parentId },
+      createdAt: now,
+    });
     if (authorType === "member" && input.authorId) {
       // authorId is a request user id, not a member row id — translate before
       // subscribing, and skip (rather than fail the comment) when the author
@@ -3983,7 +4402,16 @@ runMigrations(this.db);
       payload: { comment },
     });
     const mentionedMemberIds = this.triggerMemberMentions(issue, comment);
-    this.notifySubscribedMembers(issue, "comment_created", "New comment", body, authorType, input.authorId ?? null, mentionedMemberIds);
+    this.notifySubscribedMembers(
+      issue,
+      "comment_created",
+      "New comment",
+      body,
+      authorType,
+      input.authorId ?? null,
+      mentionedMemberIds,
+      { comment_id: id, issue_session_id: issueSessionId },
+    );
     this.triggerCommentMentions(issue, comment);
     return comment;
   }
@@ -4002,6 +4430,16 @@ runMigrations(this.db);
     if (attachmentIds.length) this.linkAttachmentsToComment(id, current.issueId, attachmentIds);
     if (current.body !== body) this.cancelTasksByTriggerComments([id]);
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    if (current.issueSessionId && current.body !== body) {
+      this.appendSessionEvent(current.issueSessionId, {
+        authorType: "system",
+        authorId: null,
+        kind: "message_edited",
+        body,
+        metadata: { comment_id: id, previous_body: current.body },
+        createdAt: now,
+      });
+    }
     this.appendIssueActivity(current.issueId, {
       actorType: "system",
       actorId: null,
@@ -4016,6 +4454,9 @@ runMigrations(this.db);
     const current = this.getRawIssueComment(id);
     if (!current) throw new Error(`Comment not found: ${id}`);
     const ids = this.collectCommentTreeIds(id);
+    const deletedComments = ids
+      .map((commentId) => this.getRawIssueComment(commentId))
+      .filter((comment): comment is MultiremiIssueComment => comment !== null);
     const now = nowIso();
     this.cancelTasksByTriggerComments(ids);
     for (const commentId of ids) {
@@ -4024,6 +4465,17 @@ runMigrations(this.db);
     }
     for (const commentId of ids.slice().reverse()) {
       this.db.run("DELETE FROM multiremi_issue_comments WHERE id = ?", [commentId]);
+    }
+    for (const comment of deletedComments) {
+      if (!comment.issueSessionId) continue;
+      this.appendSessionEvent(comment.issueSessionId, {
+        authorType: "system",
+        authorId: null,
+        kind: "message_deleted",
+        body: "",
+        metadata: { comment_id: comment.id, deleted_body: comment.body },
+        createdAt: now,
+      });
     }
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
     this.appendIssueActivity(current.issueId, {
@@ -4048,6 +4500,16 @@ runMigrations(this.db);
       [now, input.actorType ?? "member", input.actorId ?? "local", now, id],
     );
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    if (current.issueSessionId) {
+      this.appendSessionEvent(current.issueSessionId, {
+        authorType: input.actorType ?? "member",
+        authorId: input.actorId ?? "local",
+        kind: "thread_resolved",
+        body: current.body,
+        metadata: { comment_id: id },
+        createdAt: now,
+      });
+    }
     this.appendIssueActivity(current.issueId, {
       actorType: input.actorType ?? "member",
       actorId: input.actorId ?? "local",
@@ -4069,6 +4531,16 @@ runMigrations(this.db);
       [now, id],
     );
     this.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, current.issueId]);
+    if (current.issueSessionId) {
+      this.appendSessionEvent(current.issueSessionId, {
+        authorType: "system",
+        authorId: null,
+        kind: "thread_unresolved",
+        body: current.body,
+        metadata: { comment_id: id },
+        createdAt: now,
+      });
+    }
     this.appendIssueActivity(current.issueId, {
       actorType: "system",
       actorId: null,
@@ -4092,7 +4564,14 @@ runMigrations(this.db);
   }
 
   listIssueCommentsForGoCli(issueId: string, input: ListIssueCommentsInput = {}): ListIssueCommentsResult {
-    const comments = this.listIssueComments(issueId).slice(0, COMMENT_HARD_CAP);
+    const issueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id);
+    if (issueSessionId) {
+      const session = this.getIssueSession(issueSessionId);
+      if (!session || session.issueId !== issueId) throw new Error("issue session not found in this issue");
+    }
+    const comments = this.listIssueComments(issueId)
+      .filter((comment) => !issueSessionId || comment.issueSessionId === issueSessionId)
+      .slice(0, COMMENT_HARD_CAP);
     const since = parseCommentCursorTime(input.since);
     const rootsOnly = Boolean(input.rootsOnly ?? input.roots_only);
     const thread = normalizeCommentString(input.thread);
@@ -4227,11 +4706,21 @@ runMigrations(this.db);
     return this.listIssueActivity(issue.id).find((activity) => activity.id === id)!;
   }
 
-  listIssueTimeline(issueId: string, options: { ascending?: boolean } = {}): MultiremiTimelineEntry[] {
+  listIssueTimeline(issueId: string, options: { ascending?: boolean; issueSessionId?: string | null } = {}): MultiremiTimelineEntry[] {
     if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
+    const sessionId = cleanOptionalString(options.issueSessionId);
+    if (sessionId) {
+      const session = this.getIssueSession(sessionId);
+      if (!session || session.issueId !== issueId) throw new Error(`Issue session not found for issue: ${sessionId}`);
+    }
     const entries: MultiremiTimelineEntry[] = [
-      ...this.listIssueComments(issueId).map(commentToTimelineEntry),
-      ...this.listIssueActivity(issueId).map(activityToTimelineEntry),
+      ...this.listIssueComments(issueId)
+        .filter((comment) => !sessionId || comment.issueSessionId === sessionId)
+        .map(commentToTimelineEntry),
+      // Issue property changes belong to the Issue, not one product Session.
+      // Keep them in the legacy aggregate timeline, while Session timelines
+      // remain isolated conversation histories.
+      ...(sessionId ? [] : this.listIssueActivity(issueId).map(activityToTimelineEntry)),
     ];
     const ascending = options.ascending !== false;
     return entries.sort((left, right) => {
@@ -6455,6 +6944,13 @@ runMigrations(this.db);
     // reference that would drive B's agent + machine + credentials from A).
     if (issue && issue.workspaceId !== agent.workspaceId) throw new Error("Issue workspace does not match agent workspace");
     if (chatSession && chatSession.workspaceId !== agent.workspaceId) throw new Error("Chat session workspace does not match agent workspace");
+    const requestedIssueSessionId = cleanOptionalString(input.issueSessionId ?? input.issue_session_id)
+      ?? triggerComment?.issueSessionId
+      ?? (issue && !chatSession ? this.getOrCreateDefaultIssueSession(issue.id).id : null);
+    const issueSession = requestedIssueSessionId ? this.getIssueSession(requestedIssueSessionId) : null;
+    if (requestedIssueSessionId && !issueSession) throw new Error(`Issue session not found: ${requestedIssueSessionId}`);
+    if (issueSession && issueSession.issueId !== issueId) throw new Error("Issue session does not belong to task issue");
+    if (issueSession && issueSession.workspaceId !== agent.workspaceId) throw new Error("Issue session workspace does not match agent workspace");
     let runtimeId = resolveOptionalStringField(input, "runtimeId", "runtime_id", agent.runtimeId);
     if (runtimeId && !this.getRuntime(runtimeId)) throw new Error(`Runtime not found: ${runtimeId}`);
     // Pool scheduling: tasks stay unbound so any provider-matching runtime can
@@ -6479,6 +6975,32 @@ runMigrations(this.db);
     if (affinity.runtimeId) runtimeId = affinity.runtimeId;
     if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
 
+    // Product-session affinity is per (session, agent), not per Issue and not
+    // shared with other agents. A valid lane pins this task to the runtime that
+    // owns the ACP lineage. If a local-directory constraint points elsewhere,
+    // or the provider/runtime drifted, abandon the cache atomically and cold
+    // bootstrap from the canonical event log.
+    let issueLane: MultiremiSessionAgentLane | null = null;
+    let inheritIssueLane = false;
+    if (issueSession) {
+      issueLane = this.getOrCreateSessionAgentLane(issueSession.id, agent.id);
+      const laneRuntime = issueLane.runtimeId ? this.getRuntime(issueLane.runtimeId) : null;
+      const laneResumable =
+        !input.resetProviderSession
+        && !!issueLane.providerSessionId
+        && issueLane.provider === agent.provider
+        && laneRuntime != null
+        && this.runtimeCanRunAgent(laneRuntime, agent);
+      const runtimeConflict = Boolean(affinity.runtimeId && issueLane.runtimeId && affinity.runtimeId !== issueLane.runtimeId);
+      if (laneResumable && !runtimeConflict) {
+        runtimeId = issueLane.runtimeId;
+        inheritIssueLane = true;
+      } else if (issueLane.providerSessionId || issueLane.cursorSeq > 0) {
+        this.resetSessionAgentLane(issueSession.id, agent.id);
+        issueLane = this.getOrCreateSessionAgentLane(issueSession.id, agent.id);
+      }
+    }
+
     const id = input.id ?? createId("tsk");
     const now = nowIso();
     const attempt = normalizePositiveInt(input.attempt, 1);
@@ -6486,14 +7008,17 @@ runMigrations(this.db);
     const triggerSummary = normalizeTriggerSummary(input.triggerSummary ?? input.trigger_summary ?? triggerComment?.body ?? null);
     this.db.run(
       `INSERT INTO multiremi_tasks (
-        id, agent_id, runtime_id, issue_id, chat_session_id, trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
-        attempt, max_attempts, parent_task_id, session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
+        trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
+        attempt, max_attempts, parent_task_id, assignment_event_id,
+        session_id, work_dir, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.agentId,
         runtimeId,
         issueId,
+        issueSession?.id ?? null,
         input.chatSessionId ?? null,
         triggerCommentId,
         triggerSummary,
@@ -6509,13 +7034,22 @@ runMigrations(this.db);
         attempt,
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+        cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
         // The inheritChatSession gate applies only to a task that HAS a chat
         // session: when false the promoted session belongs to a machine we
         // can't return to (engine switched / runtime gone) — dropped, even if a
         // chat send re-sends the old fields. A task WITHOUT a chat session
         // (e.g. an issue-only resume-safe retry) carries its session explicitly,
         // already gated by maybeRetryFailedTask, so honour it directly.
-        chatSession
+        issueSession
+          ? (
+            inheritIssueLane
+              ? issueLane?.providerSessionId ?? null
+              : input.resetProviderSession
+                ? null
+                : input.sessionId ?? null
+          )
+          : chatSession
           ? (inheritChatSession ? (input.sessionId ?? chatSession.sessionId ?? null) : null)
           : (input.sessionId ?? null),
         // Only a machine-affine work_dir is stamped here: a session/directory
@@ -6525,16 +7059,71 @@ runMigrations(this.db);
         // The daemon owns the agent.cwd fallback and guards it against the
         // local filesystem (resolveWorkDir), then reports the resolved dir back
         // via pinTaskSession, so session promotion still records the real path.
-        chatSession
+        issueSession
+          ? (
+            inheritIssueLane
+              ? issueLane?.workDir ?? null
+              : input.resetProviderSession
+                ? null
+                : input.workDir ?? null
+          )
+          : chatSession
           ? (inheritChatSession ? (input.workDir ?? chatSession.workDir ?? null) : null)
           : (input.workDir ?? null),
         now,
         now,
       ],
     );
+    if (issueSession) {
+      this.addSessionParticipant(issueSession.id, {
+        participantType: "agent",
+        participantId: agent.id,
+      });
+      if (!cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id)) {
+        const assignment = this.appendSessionEvent(issueSession.id, {
+          authorType: input.assignmentAuthorType ?? input.assignment_author_type ?? "system",
+          authorId: input.assignmentAuthorId ?? input.assignment_author_id ?? null,
+          kind: "task_assigned",
+          body: input.prompt,
+          taskId: id,
+          metadata: {
+            assignee_agent_id: agent.id,
+            source_event_id: input.assignmentSourceEventId ?? input.assignment_source_event_id ?? null,
+            attempt,
+            parent_task_id: cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
+          },
+        });
+        this.db.run(
+          "UPDATE multiremi_tasks SET assignment_event_id = ?, updated_at = ? WHERE id = ?",
+          [assignment.id, nowIso(), id],
+        );
+      }
+    }
     const task = this.getTask(id)!;
     this.notifyTaskEnqueued(task);
     return task;
+  }
+
+  resetSessionAgentLane(sessionId: string, agentId: string): MultiremiSessionAgentLane | null {
+    const lane = this.getSessionAgentLane(sessionId, agentId);
+    // A legacy task can predate lane creation, and an agent may already have
+    // been archived as part of runtime teardown. In both cases there is no
+    // resumable cache to clear, so terminal handling must remain a no-op.
+    if (!lane) return null;
+    this.db.run(
+      `UPDATE multiremi_session_agent_lanes
+       SET provider_session_id = NULL,
+           runtime_id = NULL,
+           provider = NULL,
+           work_dir = NULL,
+           cursor_seq = 0,
+           generation = generation + 1,
+           last_task_id = NULL,
+           updated_at = ?
+       WHERE session_id = ? AND agent_id = ?`,
+      [nowIso(), sessionId, agentId],
+    );
+    return this.getSessionAgentLane(sessionId, agentId) ?? lane;
   }
 
   /**
@@ -7364,12 +7953,14 @@ runMigrations(this.db);
       && parent.provider === agent.provider
       && this.runtimeCanRunAgent(parentRuntime, agent);
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
+    if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
     const retry = this.createTask({
       agentId: parent.agentId,
       // Resume-safe failures must go back to the machine holding the session;
       // once the session is abandoned, any pool machine may pick up the retry.
       runtimeId: resumeSafe ? parent.runtimeId : null,
       issueId: parent.issueId,
+      issueSessionId: parent.issueSessionId,
       chatSessionId: parent.chatSessionId,
       triggerCommentId: parent.triggerCommentId,
       triggerSummary: parent.triggerSummary,
@@ -7754,6 +8345,7 @@ runMigrations(this.db);
     actorType: string,
     actorId: string | null,
     excludedMemberIds: string[] = [],
+    details: unknown | null = null,
   ): void {
     const subscribers = this.listIssueSubscribers(issue.id);
     const excluded = new Set(excludedMemberIds);
@@ -7769,6 +8361,7 @@ runMigrations(this.db);
         body,
         actorType,
         actorId,
+        details,
       });
     }
   }
@@ -7805,6 +8398,10 @@ runMigrations(this.db);
         body: comment.body,
         actorType: comment.authorType,
         actorId: comment.authorId,
+        details: {
+          comment_id: comment.id,
+          issue_session_id: comment.issueSessionId,
+        },
       });
       notified.push(memberId);
     }
@@ -8009,6 +8606,23 @@ runMigrations(this.db);
         data: { taskId: task.id, runtimeId: task.runtimeId },
       });
       if (status === "completed") this.postAgentReplyComment(task, body);
+      if (task.issueSessionId) {
+        this.appendSessionEvent(task.issueSessionId, {
+          authorType: status === "completed" ? "agent" : "system",
+          authorId: status === "completed" ? task.agentId : null,
+          kind: `task_${status}`,
+          body: status === "completed" ? "" : body ?? "",
+          taskId: task.id,
+          metadata: {
+            status,
+            assignee_agent_id: task.agentId,
+            result_available: status === "completed" && Boolean(body?.trim()),
+            failure_reason: task.failureReason,
+          },
+        });
+        if (status === "completed") this.promoteSessionAgentLane(task);
+        else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
+      }
       if (issue?.projectId) this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, issue.projectId]);
     }
 
@@ -8040,6 +8654,48 @@ runMigrations(this.db);
     return retry;
   }
 
+  private promoteSessionAgentLane(task: MultiremiTask): void {
+    if (!task.issueSessionId || !task.sessionId || !task.runtimeId || !task.provider) return;
+    const cursorSeq = Math.max(0, task.projectionToSeq ?? 0);
+    const now = nowIso();
+    const lane = this.getOrCreateSessionAgentLane(task.issueSessionId, task.agentId);
+    // The provider lineage and its cursor are one checkpoint. For a warm turn,
+    // only the lineage used by the task may advance; for a cold turn the lane
+    // must still be empty. This prevents a late completion from overwriting a
+    // manually reset or replaced lane.
+    const expectedProviderSessionId = task.projectionMode === "delta" ? task.sessionId : null;
+    const update = `UPDATE multiremi_session_agent_lanes
+      SET provider_session_id = ?,
+          runtime_id = ?,
+          provider = ?,
+          work_dir = ?,
+          cursor_seq = ?,
+          last_task_id = ?,
+          updated_at = ?
+      WHERE session_id = ? AND agent_id = ?`;
+    const params = [
+      task.sessionId,
+      task.runtimeId,
+      task.provider,
+      task.workDir,
+      cursorSeq,
+      task.id,
+      now,
+      task.issueSessionId,
+      task.agentId,
+    ];
+    // Keep the NULL comparison out of a placeholder expression: SQLite accepts
+    // `? IS NULL`, while Postgres cannot infer that placeholder's data type.
+    if (expectedProviderSessionId == null) {
+      this.db.run(`${update} AND provider_session_id IS NULL`, params);
+    } else {
+      this.db.run(`${update} AND provider_session_id = ?`, [...params, expectedProviderSessionId]);
+    }
+    // Keep the lane row created above even when the guarded update intentionally
+    // loses a race; callers can inspect it to diagnose lineage replacement.
+    void lane;
+  }
+
   // Post the agent's final reply as an issue comment so the outcome is visible
   // in the issue thread, not only inside the run transcript. Threads under the
   // triggering comment when the task came from an @mention. Legacy daemons
@@ -8059,6 +8715,7 @@ runMigrations(this.db);
       }
       const parent = task.triggerCommentId ? this.getIssueComment(task.triggerCommentId) : null;
       this.createIssueComment(task.issueId, {
+        issueSessionId: task.issueSessionId,
         authorType: "agent",
         authorId: task.agentId,
         parentId: parent && parent.issueId === task.issueId ? parent.id : null,
@@ -10244,6 +10901,146 @@ function toIssue(row: Row): MultiremiIssue {
   };
 }
 
+function toIssueSession(row: Row): MultiremiIssueSession {
+  const issueId = String(row.issue_id);
+  const workspaceId = String(row.workspace_id ?? "local");
+  const isDefault = Boolean(Number(row.is_default ?? 0));
+  const createdByType = String(row.created_by_type ?? "member");
+  const createdById = nullableString(row.created_by_id);
+  const createdAt = String(row.created_at);
+  const updatedAt = String(row.updated_at);
+  return {
+    id: String(row.id),
+    issueId,
+    issue_id: issueId,
+    workspaceId,
+    workspace_id: workspaceId,
+    title: String(row.title ?? "Main"),
+    status: String(row.status ?? "active") as MultiremiIssueSession["status"],
+    isDefault,
+    is_default: isDefault,
+    summary: nullableString(row.summary),
+    createdByType,
+    created_by_type: createdByType,
+    createdById,
+    created_by_id: createdById,
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+function toSessionParticipant(row: Row): MultiremiSessionParticipant {
+  const sessionId = String(row.session_id);
+  const participantType = String(row.participant_type) as MultiremiSessionParticipant["participantType"];
+  const participantId = String(row.participant_id);
+  const joinedAt = String(row.joined_at);
+  const updatedAt = String(row.updated_at);
+  return {
+    id: String(row.id),
+    sessionId,
+    session_id: sessionId,
+    participantType,
+    participant_type: participantType,
+    participantId,
+    participant_id: participantId,
+    role: String(row.role ?? "participant"),
+    status: String(row.status ?? "active"),
+    joinedAt,
+    joined_at: joinedAt,
+    updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+function toSessionEvent(row: Row): MultiremiSessionEvent {
+  const sessionId = String(row.session_id);
+  const authorType = String(row.author_type ?? "system");
+  const authorId = nullableString(row.author_id);
+  const taskId = nullableString(row.task_id);
+  const sourceCommentId = nullableString(row.source_comment_id);
+  const createdAt = String(row.created_at);
+  return {
+    id: String(row.id),
+    sessionId,
+    session_id: sessionId,
+    seq: Number(row.seq ?? 0),
+    authorType,
+    author_type: authorType,
+    authorId,
+    author_id: authorId,
+    kind: String(row.kind ?? "message"),
+    body: String(row.body ?? ""),
+    taskId,
+    task_id: taskId,
+    sourceCommentId,
+    source_comment_id: sourceCommentId,
+    metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
+    createdAt,
+    created_at: createdAt,
+  };
+}
+
+function toSessionAgentLane(row: Row): MultiremiSessionAgentLane {
+  const sessionId = String(row.session_id);
+  const agentId = String(row.agent_id);
+  const providerSessionId = nullableString(row.provider_session_id);
+  const runtimeId = nullableString(row.runtime_id);
+  const workDir = nullableString(row.work_dir);
+  const lastTaskId = nullableString(row.last_task_id);
+  const createdAt = String(row.created_at);
+  const updatedAt = String(row.updated_at);
+  const cursorSeq = Number(row.cursor_seq ?? 0);
+  return {
+    sessionId,
+    session_id: sessionId,
+    agentId,
+    agent_id: agentId,
+    providerSessionId,
+    provider_session_id: providerSessionId,
+    runtimeId,
+    runtime_id: runtimeId,
+    provider: nullableString(row.provider),
+    workDir,
+    work_dir: workDir,
+    cursorSeq,
+    cursor_seq: cursorSeq,
+    generation: Number(row.generation ?? 1),
+    status: String(row.status ?? "active"),
+    lastTaskId,
+    last_task_id: lastTaskId,
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
+  };
+}
+
+function toSessionResult(row: Row): MultiremiSessionResult {
+  const issueId = String(row.issue_id);
+  const sourceSessionId = String(row.source_session_id);
+  const publishedByType = String(row.published_by_type ?? "agent");
+  const publishedById = nullableString(row.published_by_id);
+  const createdAt = String(row.created_at);
+  return {
+    id: String(row.id),
+    issueId,
+    issue_id: issueId,
+    sourceSessionId,
+    source_session_id: sourceSessionId,
+    title: String(row.title ?? ""),
+    body: String(row.body ?? ""),
+    metadata: parseJson<Record<string, unknown>>(row.metadata, {}),
+    publishedByType,
+    published_by_type: publishedByType,
+    publishedById,
+    published_by_id: publishedById,
+    createdAt,
+    created_at: createdAt,
+  };
+}
+
 function toChildIssueProgress(row: Row): MultiremiIssueChildProgress {
   return {
     parentIssueId: String(row.parent_issue_id),
@@ -10278,6 +11075,7 @@ function parseIssueMetadata(value: unknown): Record<string, string | number | bo
 
 function toIssueComment(row: Row): MultiremiIssueComment {
   const issueId = String(row.issue_id);
+  const issueSessionId = nullableString(row.issue_session_id);
   const authorType = String(row.author_type ?? "member");
   const authorId = nullableString(row.author_id);
   const parentId = nullableString(row.parent_id);
@@ -10292,6 +11090,8 @@ function toIssueComment(row: Row): MultiremiIssueComment {
     id: String(row.id),
     issueId,
     issue_id: issueId,
+    issueSessionId,
+    issue_session_id: issueSessionId,
     authorType,
     author_type: authorType,
     authorId,
@@ -10333,6 +11133,8 @@ function commentToTimelineEntry(comment: MultiremiIssueComment): MultiremiTimeli
   return {
     type: "comment",
     id: comment.id,
+    issueSessionId: comment.issueSessionId,
+    issue_session_id: comment.issueSessionId,
     actorType: comment.authorType,
     actor_type: comment.authorType,
     actorId: comment.authorId,
@@ -10695,6 +11497,8 @@ function toTask(row: Row): MultiremiTask {
     runtimeId: nullableString(row.runtime_id),
     provider: nullableString(row.provider),
     issueId: nullableString(row.issue_id),
+    issueSessionId: nullableString(row.issue_session_id),
+    issue_session_id: nullableString(row.issue_session_id),
     chatSessionId: nullableString(row.chat_session_id),
     autopilotRunId: nullableString(row.autopilot_run_id),
     triggerCommentId: nullableString(row.trigger_comment_id),
@@ -10706,6 +11510,14 @@ function toTask(row: Row): MultiremiTask {
     attempt: Number(row.attempt ?? 1),
     maxAttempts: Number(row.max_attempts ?? 3),
     parentTaskId: nullableString(row.parent_task_id),
+    assignmentEventId: nullableString(row.assignment_event_id),
+    assignment_event_id: nullableString(row.assignment_event_id),
+    projectionFromSeq: row.projection_from_seq == null ? null : Number(row.projection_from_seq),
+    projection_from_seq: row.projection_from_seq == null ? null : Number(row.projection_from_seq),
+    projectionToSeq: row.projection_to_seq == null ? null : Number(row.projection_to_seq),
+    projection_to_seq: row.projection_to_seq == null ? null : Number(row.projection_to_seq),
+    projectionMode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
+    projection_mode: nullableString(row.projection_mode) as MultiremiTask["projectionMode"],
     result: taskResult.output,
     error: nullableString(row.error),
     failureReason: nullableString(row.failure_reason),

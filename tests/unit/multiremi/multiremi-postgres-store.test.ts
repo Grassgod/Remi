@@ -170,6 +170,11 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       "multiremi_agents",
       "multiremi_runtimes",
       "multiremi_tasks",
+      "multiremi_issue_sessions",
+      "multiremi_session_participants",
+      "multiremi_session_events",
+      "multiremi_session_agent_lanes",
+      "multiremi_session_results",
       "multiremi_workspace_members",
       "multiremi_access_tokens",
       "multiremi_users",
@@ -213,6 +218,64 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(i1.number).toBe(1);
     expect(i2.number).toBe(2);
     expect(store.getIssue(i1.id)?.title).toBe("One");
+  });
+
+  it("persists Issue Sessions, agent lanes, projections, and explicit results", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({
+      name: "rt-session-pg",
+      provider: "claude",
+      workspaceId: ws,
+    });
+    const agent = store.createAgent({
+      name: "Session PG",
+      provider: "claude",
+      workspaceId: ws,
+      runtimeId: runtime.id,
+    });
+    const issue = store.createIssue({ title: "Session PG issue", workspaceId: ws });
+    const main = store.getOrCreateDefaultIssueSession(issue.id);
+    const sibling = store.createIssueSession(issue.id, { title: "Sibling" });
+
+    store.createIssueComment(issue.id, {
+      issueSessionId: main.id,
+      body: "Canonical main context",
+    });
+    store.createIssueComment(issue.id, {
+      issueSessionId: sibling.id,
+      body: "Private sibling transcript",
+    });
+
+    const task = store.createSessionTask(main.id, {
+      agentId: agent.id,
+      prompt: "Use the main context",
+    });
+    expect(store.buildTaskSessionProjection(task.id)).toMatchObject({
+      mode: "bootstrap",
+      sessionId: main.id,
+      targetAgentId: agent.id,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, {
+      output: "Main answer",
+      sessionId: "pg_acp_session",
+      workDir: "/tmp/pg-issue-session",
+    });
+
+    expect(store.getSessionAgentLane(main.id, agent.id)).toMatchObject({
+      providerSessionId: "pg_acp_session",
+      runtimeId: runtime.id,
+      provider: "claude",
+      lastTaskId: task.id,
+    });
+    expect(store.listSessionEvents(main.id).some((event) => event.body === "Private sibling transcript")).toBe(false);
+
+    const result = store.publishSessionResult(main.id, {
+      title: "Reusable decision",
+      body: "Only this bounded result crosses Sessions.",
+    });
+    expect(store.listIssueSessionResults(issue.id)).toEqual([result]);
   });
 
   it("listIssues pushes status/priority/project/assignee filters + pagination into SQL", () => {

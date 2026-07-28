@@ -298,6 +298,7 @@ export function InboxPage() {
         defaultSidebarOpen={false}
         layoutId="multimira_inbox_issue_detail_layout"
         highlightCommentId={selected.details?.comment_id ?? undefined}
+        initialIssueSessionId={selected.details?.issue_session_id ?? undefined}
         onDelete={() => {
           // Issue deletion CASCADE-deletes the inbox item server-side, and the
           // issue:deleted WS event prunes it from the inbox cache. Just clear

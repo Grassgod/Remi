@@ -34,7 +34,14 @@ import type {
   UpdateIssueRequest,
   ListIssuesCache,
 } from "../types";
-import type { TimelineEntry, IssueSubscriber, Reaction } from "../types";
+import type {
+  TimelineEntry,
+  IssueSubscriber,
+  Reaction,
+  IssueSession,
+  IssueSessionTask,
+  SessionResult,
+} from "../types";
 import { sortTimelineEntriesAsc } from "./timeline-sort";
 
 // ---------------------------------------------------------------------------
@@ -590,7 +597,79 @@ export function useBatchDeleteIssues() {
 
 type TimelineCache = TimelineEntry[];
 
-export function useCreateComment(issueId: string) {
+export function useCreateIssueSession(issueId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ title }: { title: string }) => api.createIssueSession(issueId, title),
+    onSuccess: (session) => {
+      if (!session.id) return;
+      qc.setQueryData<IssueSession[]>(issueKeys.sessions(issueId), (old = []) => {
+        if (old.some((item) => item.id === session.id)) return old;
+        return [...old, session];
+      });
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueKeys.sessions(issueId) });
+    },
+  });
+}
+
+export function useAddSessionParticipant(issueId: string, issueSessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      participantType,
+      participantId,
+    }: {
+      participantType: "agent" | "member";
+      participantId: string;
+    }) => api.addSessionParticipant(issueId, issueSessionId, participantType, participantId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueKeys.sessions(issueId) });
+    },
+  });
+}
+
+export function useCreateSessionTask(issueId: string, issueSessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agentId, prompt }: { agentId: string; prompt: string }) =>
+      api.createSessionTask(issueId, issueSessionId, agentId, prompt),
+    onSuccess: (task) => {
+      if (!task.id) return;
+      qc.setQueryData<IssueSessionTask[]>(
+        issueKeys.sessionTasks(issueId, issueSessionId),
+        (old = []) => old.some((item) => item.id === task.id) ? old : [...old, task],
+      );
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueKeys.sessionTasks(issueId, issueSessionId) });
+      qc.invalidateQueries({ queryKey: issueKeys.sessions(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+    },
+  });
+}
+
+export function usePublishSessionResult(issueId: string, issueSessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ title, body }: { title: string; body: string }) =>
+      api.publishSessionResult(issueId, issueSessionId, title, body),
+    onSuccess: (result) => {
+      if (!result.id) return;
+      qc.setQueryData<SessionResult[]>(issueKeys.sessionResults(issueId), (old = []) => {
+        if (old.some((item) => item.id === result.id)) return old;
+        return [...old, result];
+      });
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: issueKeys.sessionResults(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+    },
+  });
+}
+
+export function useCreateComment(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
@@ -603,7 +682,7 @@ export function useCreateComment(issueId: string) {
       type?: string;
       parentId?: string;
       attachmentIds?: string[];
-    }) => api.createComment(issueId, content, type, parentId, attachmentIds),
+    }) => api.createComment(issueId, content, type, parentId, attachmentIds, issueSessionId),
     onSuccess: (comment) => {
       const entry: TimelineEntry = {
         type: "comment",
@@ -621,7 +700,7 @@ export function useCreateComment(issueId: string) {
       // Dedupe by id: the `comment:created` WS event may have already added
       // this entry from the broadcast path before this onSuccess fires. Skip
       // the append if the entry is already in the cache.
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId), (old) => {
+      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
         if (!old) return [entry];
         if (old.some((e) => e.id === entry.id)) return old;
         return sortTimelineEntriesAsc([...old, entry]);
@@ -637,16 +716,16 @@ export function useCreateComment(issueId: string) {
   });
 }
 
-export function useUpdateComment(issueId: string) {
+export function useUpdateComment(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ commentId, content, attachmentIds }: { commentId: string; content: string; attachmentIds: string[] }) =>
       api.updateComment(commentId, content, attachmentIds),
     onMutate: async ({ commentId, content, attachmentIds }) => {
-      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId));
+      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
       const kept = new Set(attachmentIds);
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId), (old) =>
+      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
         old?.map((e) =>
           e.id === commentId
             ? { ...e, content, attachments: e.attachments?.filter((a) => kept.has(a.id)) }
@@ -657,22 +736,22 @@ export function useUpdateComment(issueId: string) {
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev !== undefined) {
-        qc.setQueryData(issueKeys.timeline(issueId), ctx.prev);
+        qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
 
-export function useDeleteComment(issueId: string) {
+export function useDeleteComment(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (commentId: string) => api.deleteComment(commentId),
     onMutate: async (commentId) => {
-      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId));
+      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
 
       // Cascade: collect all descendants of the deleted comment.
       const toRemove = new Set<string>([commentId]);
@@ -693,31 +772,31 @@ export function useDeleteComment(issueId: string) {
         }
       }
 
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId), (old) =>
+      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
         old?.filter((e) => !toRemove.has(e.id)),
       );
       return { prev };
     },
     onError: (_err, _id, ctx) => {
       if (ctx?.prev !== undefined) {
-        qc.setQueryData(issueKeys.timeline(issueId), ctx.prev);
+        qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
 
-export function useResolveComment(issueId: string) {
+export function useResolveComment(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ commentId, resolved }: { commentId: string; resolved: boolean }) =>
       resolved ? api.resolveComment(commentId) : api.unresolveComment(commentId),
     onMutate: async ({ commentId, resolved }) => {
-      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId) });
-      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId));
-      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId), (old) =>
+      await qc.cancelQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+      const prev = qc.getQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId));
+      qc.setQueryData<TimelineCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
         old?.map((e) =>
           e.id === commentId
             ? {
@@ -733,19 +812,19 @@ export function useResolveComment(issueId: string) {
     },
     onError: (_err, _vars, ctx) => {
       if (ctx?.prev !== undefined) {
-        qc.setQueryData(issueKeys.timeline(issueId), ctx.prev);
+        qc.setQueryData(issueKeys.timeline(issueId, issueSessionId), ctx.prev);
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }
 
-export function useToggleCommentReaction(issueId: string) {
+export function useToggleCommentReaction(issueId: string, issueSessionId?: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationKey: ["toggleCommentReaction", issueId] as const,
+    mutationKey: ["toggleCommentReaction", issueId, issueSessionId ?? "all"] as const,
     mutationFn: async ({
       commentId,
       emoji,
@@ -758,7 +837,7 @@ export function useToggleCommentReaction(issueId: string) {
       return api.addReaction(commentId, emoji);
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
     },
   });
 }

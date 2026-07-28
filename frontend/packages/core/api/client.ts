@@ -44,6 +44,11 @@ import type {
   CreatePersonalAccessTokenResponse,
   RuntimeUsage,
   IssueUsageSummary,
+  IssueSession,
+  IssueSessionTask,
+  SessionEvent,
+  SessionParticipant,
+  SessionResult,
   RuntimeHourlyActivity,
   RuntimeUsageByAgent,
   RuntimeUsageByHour,
@@ -162,6 +167,14 @@ import {
   EMPTY_SQUAD_LIST,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_ISSUE_SESSIONS,
+  EMPTY_ISSUE_SESSION,
+  EMPTY_ISSUE_SESSION_TASKS,
+  EMPTY_ISSUE_SESSION_TASK,
+  EMPTY_SESSION_EVENTS,
+  EMPTY_SESSION_PARTICIPANTS,
+  EMPTY_SESSION_RESULT,
+  EMPTY_SESSION_RESULTS,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
@@ -182,6 +195,15 @@ import {
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
+  IssueSessionListSchema,
+  IssueSessionSchema,
+  IssueSessionTaskListSchema,
+  IssueSessionTaskSchema,
+  SessionEventListSchema,
+  SessionParticipantListSchema,
+  SessionParticipantSchema,
+  SessionResultSchema,
+  SessionResultListSchema,
   UserSchema,
   WebhookDeliveryResponseSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -632,8 +654,17 @@ export class ApiClient {
     });
   }
 
-  async createComment(issueId: string, content: string, type?: string, parentId?: string, attachmentIds?: string[]): Promise<Comment> {
-    return this.fetch(`/api/issues/${issueId}/comments`, {
+  async createComment(
+    issueId: string,
+    content: string,
+    type?: string,
+    parentId?: string,
+    attachmentIds?: string[],
+    issueSessionId?: string,
+  ): Promise<Comment> {
+    return this.fetch(issueSessionId
+      ? `/api/issues/${issueId}/sessions/${issueSessionId}/messages`
+      : `/api/issues/${issueId}/comments`, {
       method: "POST",
       body: JSON.stringify({
         content,
@@ -644,12 +675,134 @@ export class ApiClient {
     });
   }
 
-  async listTimeline(issueId: string): Promise<TimelineEntry[]> {
+  async listTimeline(issueId: string, issueSessionId?: string): Promise<TimelineEntry[]> {
+    const query = issueSessionId
+      ? `?issue_session_id=${encodeURIComponent(issueSessionId)}`
+      : "";
     const raw = await this.fetch<unknown>(
-      `/api/issues/${issueId}/timeline`,
+      `/api/issues/${issueId}/timeline${query}`,
     );
     return parseWithFallback(raw, TimelineEntriesSchema, EMPTY_TIMELINE_ENTRIES, {
       endpoint: "GET /api/issues/:id/timeline",
+    });
+  }
+
+  async listIssueSessions(issueId: string): Promise<IssueSession[]> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions`);
+    return parseWithFallback(raw, IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, {
+      endpoint: "GET /api/issues/:id/sessions",
+    });
+  }
+
+  async createIssueSession(issueId: string, title: string): Promise<IssueSession> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+    return parseWithFallback(raw, IssueSessionSchema, EMPTY_ISSUE_SESSION, {
+      endpoint: "POST /api/issues/:id/sessions",
+    });
+  }
+
+  async listSessionParticipants(issueId: string, sessionId: string): Promise<SessionParticipant[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/sessions/${sessionId}/participants`,
+    );
+    return parseWithFallback(raw, SessionParticipantListSchema, EMPTY_SESSION_PARTICIPANTS, {
+      endpoint: "GET /api/issues/:id/sessions/:sessionId/participants",
+    });
+  }
+
+  async addSessionParticipant(
+    issueId: string,
+    sessionId: string,
+    participantType: "agent" | "member",
+    participantId: string,
+  ): Promise<SessionParticipant> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/sessions/${sessionId}/participants`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          participant_type: participantType,
+          participant_id: participantId,
+        }),
+      },
+    );
+    return parseWithFallback(raw, SessionParticipantSchema, {
+      id: "",
+      session_id: sessionId,
+      participant_type: participantType,
+      participant_id: participantId,
+      role: "participant",
+      status: "active",
+      joined_at: "",
+      updated_at: "",
+    }, {
+      endpoint: "POST /api/issues/:id/sessions/:sessionId/participants",
+    });
+  }
+
+  async removeSessionParticipant(
+    issueId: string,
+    sessionId: string,
+    participantType: "agent" | "member",
+    participantId: string,
+  ): Promise<void> {
+    await this.fetch(
+      `/api/issues/${issueId}/sessions/${sessionId}/participants/${participantType}/${participantId}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async listSessionEvents(issueId: string, sessionId: string): Promise<SessionEvent[]> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/events`);
+    return parseWithFallback(raw, SessionEventListSchema, EMPTY_SESSION_EVENTS, {
+      endpoint: "GET /api/issues/:id/sessions/:sessionId/events",
+    });
+  }
+
+  async listSessionTasks(issueId: string, sessionId: string): Promise<IssueSessionTask[]> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/tasks`);
+    return parseWithFallback(raw, IssueSessionTaskListSchema, EMPTY_ISSUE_SESSION_TASKS, {
+      endpoint: "GET /api/issues/:id/sessions/:sessionId/tasks",
+    });
+  }
+
+  async createSessionTask(
+    issueId: string,
+    sessionId: string,
+    agentId: string,
+    prompt: string,
+  ): Promise<IssueSessionTask> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/tasks`, {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, prompt }),
+    });
+    return parseWithFallback(raw, IssueSessionTaskSchema, EMPTY_ISSUE_SESSION_TASK, {
+      endpoint: "POST /api/issues/:id/sessions/:sessionId/tasks",
+    });
+  }
+
+  async listIssueSessionResults(issueId: string): Promise<SessionResult[]> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/session-results`);
+    return parseWithFallback(raw, SessionResultListSchema, EMPTY_SESSION_RESULTS, {
+      endpoint: "GET /api/issues/:id/session-results",
+    });
+  }
+
+  async publishSessionResult(
+    issueId: string,
+    sessionId: string,
+    title: string,
+    body: string,
+  ): Promise<SessionResult> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/sessions/${sessionId}/results`, {
+      method: "POST",
+      body: JSON.stringify({ title, body }),
+    });
+    return parseWithFallback(raw, SessionResultSchema, EMPTY_SESSION_RESULT, {
+      endpoint: "POST /api/issues/:id/sessions/:sessionId/results",
     });
   }
 

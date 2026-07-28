@@ -9,6 +9,7 @@ import type { TaskFailureReason } from "@multiremi/core/types";
 // is purely a detail-page concern now.
 export const failureReasonLabel: Record<TaskFailureReason, string> = {
   agent_error: "Agent execution error",
+  "agent_error.stale_session": "Provider session expired",
   timeout: "Task timed out",
   codex_semantic_inactivity: "Codex semantic inactivity timeout",
   runtime_offline: "Daemon offline",
