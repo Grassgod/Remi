@@ -104,6 +104,22 @@
     "local_validate_unsupported": "Local directories can only be picked on the desktop app.",
     "project_ref_deleted": "Deleted project"
   },
+  "wiki": {
+    "tab_issues": "Issues",
+    "tab_wiki": "Wiki",
+    "memory_node": "Agent Memory",
+    "memory_description": "Durable facts agents learned while working on this project.",
+    "memory_empty": "No memory entries yet.",
+    "pinned_badge": "Pinned",
+    "source_issue": "Source issue",
+    "links_label": "Links to",
+    "link_missing": "No page with this slug yet",
+    "updated_by": "Last updated by",
+    "unknown_author": "Unknown",
+    "version": "v{{version}}",
+    "empty_title": "No knowledge entries yet",
+    "empty_hint": "Hand the project to an agent, or write the first entry with the CLI."
+  },
   "repo_source": {
     "tab_git": "Git",
     "tab_runtime": "From fleet",

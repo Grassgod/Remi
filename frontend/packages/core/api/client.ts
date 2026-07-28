@@ -81,6 +81,9 @@ import type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  ProjectDoc,
+  ListProjectDocsResponse,
+  ListProjectDocRevisionsResponse,
   Label,
   CreateLabelRequest,
   UpdateLabelRequest,
@@ -224,6 +227,12 @@ import {
   EMPTY_CREATE_BILLING_CHECKOUT_SESSION_RESPONSE,
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
+  ListProjectDocsResponseSchema,
+  ListProjectDocRevisionsResponseSchema,
+  ProjectDocResponseSchema,
+  EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+  EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+  EMPTY_PROJECT_DOC,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2036,6 +2045,53 @@ export class ApiClient {
     await this.fetch(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
     });
+  }
+
+  // Project docs (wiki pages + agent memory)
+  async listProjectDocs(
+    projectId: string,
+    params?: { kind?: string; q?: string },
+  ): Promise<ListProjectDocsResponse> {
+    const search = new URLSearchParams();
+    if (params?.kind) search.set("kind", params.kind);
+    if (params?.q) search.set("q", params.q);
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/docs?${search}`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      { endpoint: "GET /api/projects/:id/docs" },
+    );
+  }
+
+  /** `ref` is the doc id or its slug — the server resolves both. */
+  async getProjectDoc(projectId: string, ref: string): Promise<ProjectDoc> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/docs/${encodeURIComponent(ref)}`,
+    );
+    return parseWithFallback(
+      raw,
+      ProjectDocResponseSchema,
+      { doc: EMPTY_PROJECT_DOC },
+      { endpoint: "GET /api/projects/:id/docs/:ref" },
+    ).doc;
+  }
+
+  async listProjectDocRevisions(
+    projectId: string,
+    ref: string,
+  ): Promise<ListProjectDocRevisionsResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/docs/${encodeURIComponent(ref)}/revisions`,
+    );
+    return parseWithFallback(
+      raw,
+      ListProjectDocRevisionsResponseSchema,
+      EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+      { endpoint: "GET /api/projects/:id/docs/:ref/revisions" },
+    );
   }
 
   // Labels

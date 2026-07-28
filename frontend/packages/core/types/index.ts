@@ -101,6 +101,15 @@ export type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
+export type {
+  ProjectDoc,
+  ProjectDocKind,
+  ProjectDocAuthorType,
+  ProjectDocRef,
+  ProjectDocRevision,
+  ListProjectDocsResponse,
+  ListProjectDocRevisionsResponse,
+} from "./project-doc";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,

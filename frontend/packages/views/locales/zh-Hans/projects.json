@@ -104,6 +104,22 @@
     "local_validate_unsupported": "本地目录仅能在桌面端选择。",
     "project_ref_deleted": "项目已删除"
   },
+  "wiki": {
+    "tab_issues": "Issues",
+    "tab_wiki": "Wiki",
+    "memory_node": "智能体记忆",
+    "memory_description": "智能体在这个项目上干活时沉淀下来的长期事实。",
+    "memory_empty": "还没有记忆条目。",
+    "pinned_badge": "已置顶",
+    "source_issue": "来源 issue",
+    "links_label": "链接到",
+    "link_missing": "还没有这个 slug 对应的页面",
+    "updated_by": "最后更新",
+    "unknown_author": "未知",
+    "version": "v{{version}}",
+    "empty_title": "还没有知识条目",
+    "empty_hint": "把项目交给智能体干活，或用 CLI 写入第一条。"
+  },
   "repo_source": {
     "tab_git": "Git 仓库",
     "tab_runtime": "从机队导入",

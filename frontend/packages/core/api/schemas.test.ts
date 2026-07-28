@@ -14,9 +14,15 @@ import {
   EMPTY_SESSION_RESULTS,
   FleetModelsResponseSchema,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+  EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+  EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+  EMPTY_PROJECT_DOC,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  ListProjectDocsResponseSchema,
+  ListProjectDocRevisionsResponseSchema,
+  ProjectDocResponseSchema,
   IssueSessionListSchema,
   IssueSessionTaskListSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -606,5 +612,210 @@ describe("FleetModelsResponseSchema", () => {
       opts,
     );
     expect(parsed).toBe(EMPTY_FLEET_MODELS);
+  });
+});
+
+describe("ListProjectDocsResponseSchema", () => {
+  const opts = { endpoint: "GET /api/projects/:id/docs (test)" };
+  const validDoc = {
+    id: "pdoc_1",
+    project_id: "proj-1",
+    workspace_id: "ws-1",
+    kind: "wiki",
+    slug: "build-notes",
+    title: "Build notes",
+    summary: "How to build",
+    body: "# Build\n\nRun `make`.",
+    tags: ["build"],
+    pinned: false,
+    refs: [{ type: "issue", value: "MUL-12" }],
+    source_task_id: null,
+    source_issue_id: null,
+    author_type: "agent",
+    author_id: "agent-1",
+    updated_by_type: "agent",
+    updated_by_id: "agent-1",
+    version: 2,
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-02T00:00:00Z",
+  };
+
+  it("parses a well-formed list", () => {
+    const parsed = parseWithFallback(
+      { docs: [validDoc] },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs).toHaveLength(1);
+    expect(parsed.docs[0]?.tags).toEqual(["build"]);
+    expect(parsed.docs[0]?.version).toBe(2);
+    expect(parsed.docs[0]?.refs).toEqual([{ type: "issue", value: "MUL-12" }]);
+  });
+
+  it("defaults a missing docs array instead of blanking the Wiki tab", () => {
+    const parsed = parseWithFallback(
+      {},
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs).toEqual([]);
+  });
+
+  it("defaults body / tags / pinned on a skeleton page written by the CLI", () => {
+    const { body: _b, tags: _t, pinned: _p, summary: _s, ...skeleton } = validDoc;
+    const parsed = parseWithFallback(
+      { docs: [skeleton] },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs[0]?.body).toBe("");
+    expect(parsed.docs[0]?.tags).toEqual([]);
+    expect(parsed.docs[0]?.pinned).toBe(false);
+    expect(parsed.docs[0]?.summary).toBeNull();
+  });
+
+  it("drops refs to [] when the server omits them, nulls them, or sends a non-array", () => {
+    const { refs: _r, ...withoutRefs } = validDoc;
+    for (const doc of [
+      withoutRefs,
+      { ...validDoc, refs: null },
+      { ...validDoc, refs: "issue:MUL-12" },
+      { ...validDoc, refs: 3 },
+    ]) {
+      const parsed = parseWithFallback(
+        { docs: [doc] },
+        ListProjectDocsResponseSchema,
+        EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+        opts,
+      );
+      expect(parsed.docs[0]?.refs).toEqual([]);
+    }
+  });
+
+  it("keeps an unknown ref type and drops a non-object ref instead of failing the page", () => {
+    const parsed = parseWithFallback(
+      {
+        docs: [{
+          ...validDoc,
+          refs: [{ type: "dashboard", value: "grafana-7" }, "issue:MUL-9", null],
+        }],
+      },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs[0]?.refs).toEqual([
+      { type: "dashboard", value: "grafana-7" },
+    ]);
+  });
+
+  it("keeps an unknown kind so a future doc type degrades instead of crashing", () => {
+    const parsed = parseWithFallback(
+      { docs: [{ ...validDoc, kind: "runbook" }] },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs[0]?.kind).toBe("runbook");
+  });
+
+  it("falls back when tags arrives as null", () => {
+    const parsed = parseWithFallback(
+      { docs: [{ ...validDoc, tags: null }] },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_LIST_PROJECT_DOCS_RESPONSE);
+  });
+
+  it("falls back when docs is not an array or a doc loses its title", () => {
+    for (const bad of [
+      { docs: null },
+      { docs: [{ ...validDoc, title: undefined }] },
+      { docs: [{ ...validDoc, pinned: "yes" }] },
+    ]) {
+      const parsed = parseWithFallback(
+        bad,
+        ListProjectDocsResponseSchema,
+        EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+        opts,
+      );
+      expect(parsed).toBe(EMPTY_LIST_PROJECT_DOCS_RESPONSE);
+    }
+  });
+
+  it("passes unknown server-side fields through untouched", () => {
+    const parsed = parseWithFallback(
+      { docs: [{ ...validDoc, reviewed_by: "user-9" }], total: 1 },
+      ListProjectDocsResponseSchema,
+      EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+      opts,
+    );
+    expect(
+      (parsed.docs[0] as unknown as { reviewed_by?: string }).reviewed_by,
+    ).toBe("user-9");
+  });
+});
+
+describe("ListProjectDocRevisionsResponseSchema", () => {
+  const opts = { endpoint: "GET /api/projects/:id/docs/:ref/revisions (test)" };
+  const validRevision = {
+    id: "pdrev_1",
+    doc_id: "pdoc_1",
+    version: 1,
+    title: "Build notes",
+    summary: null,
+    body: "old body",
+    author_type: "member",
+    author_id: "user-1",
+    created_at: "2026-07-01T00:00:00Z",
+  };
+
+  it("parses a well-formed revision list", () => {
+    const parsed = parseWithFallback(
+      { revisions: [validRevision] },
+      ListProjectDocRevisionsResponseSchema,
+      EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed.revisions[0]?.version).toBe(1);
+  });
+
+  it("defaults a missing revisions array", () => {
+    const parsed = parseWithFallback(
+      {},
+      ListProjectDocRevisionsResponseSchema,
+      EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed.revisions).toEqual([]);
+  });
+
+  it("falls back when a revision loses its version number", () => {
+    const parsed = parseWithFallback(
+      { revisions: [{ ...validRevision, version: "1" }] },
+      ListProjectDocRevisionsResponseSchema,
+      EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE);
+  });
+});
+
+describe("ProjectDocResponseSchema", () => {
+  const opts = { endpoint: "GET /api/projects/:id/docs/:ref (test)" };
+
+  it("falls back to the empty doc when the envelope is missing its doc", () => {
+    const parsed = parseWithFallback(
+      { document: { id: "pdoc_1" } },
+      ProjectDocResponseSchema,
+      { doc: EMPTY_PROJECT_DOC },
+      opts,
+    );
+    expect(parsed.doc).toBe(EMPTY_PROJECT_DOC);
   });
 });
