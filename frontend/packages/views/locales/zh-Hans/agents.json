@@ -77,6 +77,7 @@
   },
   "row_actions": {
     "cancel_all_tasks": "取消全部 task",
+    "edit": "编辑",
     "duplicate": "复制",
     "restore": "恢复",
     "archive": "归档",
@@ -115,6 +116,7 @@
     "archive_dialog_description": "\"{{name}}\"将被归档，无法被分配或提及，但所有历史会被保留。可以稍后恢复。",
     "archive_dialog_cancel": "取消",
     "archive_dialog_confirm": "归档",
+    "more_edit": "编辑智能体",
     "more_archive": "归档智能体",
     "agent_updated_toast": "已更新智能体",
     "update_failed_toast": "更新智能体失败",
@@ -191,6 +193,14 @@
     "discard_dialog_description": "当前 tab 有未保存的修改，离开会丢弃这些修改。",
     "discard_keep": "继续编辑",
     "discard_confirm": "放弃修改"
+  },
+  "edit_dialog": {
+    "title": "编辑智能体",
+    "description": "修改智能体的基本信息、引擎、模型、可见范围、并发数和指令。",
+    "instructions_placeholder": "点击查看或编辑指令",
+    "save": "保存修改",
+    "saving": "保存中...",
+    "cancel": "取消"
   },
   "create_dialog": {
     "title_create": "创建智能体",

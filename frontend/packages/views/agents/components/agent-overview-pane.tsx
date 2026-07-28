@@ -93,11 +93,10 @@ interface AgentOverviewPaneProps {
  *   - Tasks — assigned/created issues using the shared issue board/list.
  *   - Instructions / Skills / Env / Custom Args — four editing surfaces.
  *
- * The previous Settings tab was deleted because every field on it is now
- * inline-editable in the inspector (left column) — runtime / model /
- * visibility / concurrency via PropRow + Picker, and avatar / name /
- * description via popover. Two entry points for the same writes was just
- * extra concept count without extra capability.
+ * The previous Settings tab was deleted because the same fields stay
+ * inline-editable in the inspector for quick changes. A consolidated
+ * "Edit Agent" dialog is available from the page/list actions when users
+ * want to review the basic metadata as one form.
  *
  * Activity is the landing tab because most visits to this page are diagnostic
  * ("what is this agent doing / why did it fail?"), not configuration tweaks.

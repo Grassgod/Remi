@@ -72,11 +72,9 @@ interface InspectorProps {
  * (avatar / name / description / status), inline-editable properties, and
  * skills.
  *
- * **All editing happens here** — there is no separate Settings tab. The
- * trade-off is that the inspector carries some weight (4 inline pickers plus
- * 3 popovers for name/description/avatar), but it eliminates the "see vs
- * edit" mode split that the previous Settings tab created. Users no longer
- * have to switch tabs and hunt for the field they were already looking at.
+ * Quick single-field edits happen here — there is no separate Settings tab.
+ * The explicit "Edit Agent" action opens the consolidated metadata dialog for
+ * users who want to review several fields before saving them together.
  */
 export function AgentDetailInspector({
   agent,

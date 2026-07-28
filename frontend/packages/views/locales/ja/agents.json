@@ -77,6 +77,7 @@
   },
   "row_actions": {
     "cancel_all_tasks": "すべてのタスクをキャンセル",
+    "edit": "編集",
     "duplicate": "複製",
     "restore": "復元",
     "archive": "アーカイブ",
@@ -115,6 +116,7 @@
     "archive_dialog_description": "\"{{name}}\" がアーカイブされます。割り当てやメンションはできなくなりますが、履歴はすべて保持されます。後で復元できます。",
     "archive_dialog_cancel": "キャンセル",
     "archive_dialog_confirm": "アーカイブ",
+    "more_edit": "エージェントを編集",
     "more_archive": "エージェントをアーカイブ",
     "agent_updated_toast": "エージェントを更新しました",
     "update_failed_toast": "エージェントを更新できませんでした",
@@ -191,6 +193,14 @@
     "discard_dialog_description": "このタブに保存していない変更があります。今移動すると変更は破棄されます。",
     "discard_keep": "編集を続ける",
     "discard_confirm": "変更を破棄"
+  },
+  "edit_dialog": {
+    "title": "エージェントを編集",
+    "description": "エージェントの基本情報、エンジン、モデル、公開範囲、同時実行数、指示を更新します。",
+    "instructions_placeholder": "クリックして指示を表示・編集",
+    "save": "変更を保存",
+    "saving": "保存中...",
+    "cancel": "キャンセル"
   },
   "create_dialog": {
     "title_create": "エージェントを作成",

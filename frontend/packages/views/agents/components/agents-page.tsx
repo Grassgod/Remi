@@ -9,9 +9,15 @@ import {
   Plus,
   Search,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
-import type { Agent, AgentRuntime, CreateAgentRequest } from "@multiremi/core/types";
+import type {
+  Agent,
+  AgentRuntime,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+} from "@multiremi/core/types";
 import {
   type AgentAvailability,
   agentRunCounts30dOptions,
@@ -45,6 +51,7 @@ import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig, availabilityOrder } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
+import { EditAgentDialog } from "./edit-agent-dialog";
 import { type AgentRow, createAgentColumns } from "./agent-columns";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -122,6 +129,7 @@ export function AgentsPage() {
   const [duplicateTemplate, setDuplicateTemplate] = useState<Agent | null>(
     null,
   );
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
 
   const runtimesById = useMemo(() => {
     const m = new Map<string, AgentRuntime>();
@@ -354,6 +362,31 @@ export function AgentsPage() {
     setShowCreate(true);
   }, []);
 
+  const handleEdit = useCallback((agent: Agent) => {
+    setEditingAgent(agent);
+  }, []);
+
+  const handleEditSave = async (data: UpdateAgentRequest) => {
+    if (!editingAgent) return;
+    try {
+      const updated = await api.updateAgent(editingAgent.id, data);
+      qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) =>
+        current.map((agent) =>
+          agent.id === updated.id ? updated : agent,
+        ),
+      );
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      toast.success(t(($) => $.detail.agent_updated_toast));
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.detail.update_failed_toast),
+      );
+      throw error;
+    }
+  };
+
   // Assemble per-row data once per render — agent + runtime + presence +
   // activity + role flags. The columns reach into `row.original` and never
   // pull their own queries, which keeps each cell a pure function.
@@ -391,8 +424,13 @@ export function AgentsPage() {
   ]);
 
   const columns = useMemo(
-    () => createAgentColumns({ onDuplicate: handleDuplicate, t }),
-    [handleDuplicate, t],
+    () =>
+      createAgentColumns({
+        onDuplicate: handleDuplicate,
+        onEdit: handleEdit,
+        t,
+      }),
+    [handleDuplicate, handleEdit, t],
   );
 
   const table = useReactTable({
@@ -514,6 +552,14 @@ export function AgentsPage() {
             setDuplicateTemplate(null);
           }}
           onCreate={handleCreate}
+        />
+      )}
+
+      {editingAgent && (
+        <EditAgentDialog
+          agent={editingAgent}
+          onClose={() => setEditingAgent(null)}
+          onSave={handleEditSave}
         />
       )}
     </div>

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Lock,
   MoreHorizontal,
+  Pencil,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,6 +40,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
@@ -48,6 +50,7 @@ import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig } from "../presence";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentOverviewPane, type DetailTab } from "./agent-overview-pane";
+import { EditAgentDialog } from "./edit-agent-dialog";
 import { useT } from "../../i18n";
 
 interface AgentDetailPageProps {
@@ -98,6 +101,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
   const { canEdit } = useAgentPermissions(agent, wsId);
 
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
 
   // One-shot channel: the inspector's compact Lark status row asks the
   // overview pane to focus a tab. The pane clears it after consuming.
@@ -245,7 +249,8 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
         agent={agent}
         presence={presence}
         backHref={paths.agents()}
-        canArchive={canEdit.allowed}
+        canEdit={canEdit.allowed}
+        onEdit={() => setShowEdit(true)}
         onArchive={() => setConfirmArchive(true)}
       />
 
@@ -339,6 +344,19 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           </DialogContent>
         </Dialog>
       )}
+
+      {showEdit && (
+        <EditAgentDialog
+          agent={agent}
+          onClose={() => setShowEdit(false)}
+          onSave={(data) =>
+            handleUpdate(
+              agent.id,
+              data as unknown as Record<string, unknown>,
+            )
+          }
+        />
+      )}
     </div>
   );
 }
@@ -347,13 +365,15 @@ function DetailHeader({
   agent,
   presence,
   backHref,
-  canArchive,
+  canEdit,
+  onEdit,
   onArchive,
 }: {
   agent: Agent;
   presence: AgentPresenceDetail | null;
   backHref: string;
-  canArchive: boolean;
+  canEdit: boolean;
+  onEdit: () => void;
   onArchive: () => void;
 }) {
   const { t } = useT("agents");
@@ -383,7 +403,7 @@ function DetailHeader({
         </>
       }
       actions={
-        !isArchived && canArchive ? (
+        !isArchived && canEdit ? (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="ghost" size="icon-sm" />}
@@ -391,6 +411,11 @@ function DetailHeader({
               <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-auto">
+              <DropdownMenuItem onClick={onEdit}>
+                <Pencil className="h-3.5 w-3.5" />
+                {t(($) => $.detail.more_edit)}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive"
                 onClick={onArchive}

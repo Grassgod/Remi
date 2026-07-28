@@ -77,9 +77,11 @@ function makeHeaderRenderer(t: ColumnHeaderT, key: "agent" | "status" | "workloa
 
 export function createAgentColumns({
   onDuplicate,
+  onEdit,
   t,
 }: {
   onDuplicate: (agent: Agent) => void;
+  onEdit: (agent: Agent) => void;
   t: ColumnHeaderT;
 }): ColumnDef<AgentRow>[] {
   return [
@@ -154,6 +156,7 @@ export function createAgentColumns({
             presence={row.original.presence}
             canManage={row.original.canManage}
             onDuplicate={onDuplicate}
+            onEdit={onEdit}
           />
         </div>
       ),

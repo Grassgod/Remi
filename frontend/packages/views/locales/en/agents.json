@@ -79,6 +79,7 @@
   },
   "row_actions": {
     "cancel_all_tasks": "Cancel all tasks",
+    "edit": "Edit",
     "duplicate": "Duplicate",
     "restore": "Restore",
     "archive": "Archive",
@@ -119,6 +120,7 @@
     "archive_dialog_description": "\"{{name}}\" will be archived. It won't be assignable or mentionable, but all history is preserved. You can restore it later.",
     "archive_dialog_cancel": "Cancel",
     "archive_dialog_confirm": "Archive",
+    "more_edit": "Edit Agent",
     "more_archive": "Archive Agent",
     "agent_updated_toast": "Agent updated",
     "update_failed_toast": "Failed to update agent",
@@ -195,6 +197,14 @@
     "discard_dialog_description": "You have unsaved changes in this tab. Leaving now will discard them.",
     "discard_keep": "Keep editing",
     "discard_confirm": "Discard changes"
+  },
+  "edit_dialog": {
+    "title": "Edit Agent",
+    "description": "Update the agent's identity, engine, model, visibility, capacity, and instructions.",
+    "instructions_placeholder": "Click to view or edit instructions",
+    "save": "Save changes",
+    "saving": "Saving...",
+    "cancel": "Cancel"
   },
   "create_dialog": {
     "title_create": "Create Agent",

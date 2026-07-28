@@ -5,6 +5,7 @@ import {
   AlertCircle,
   Copy,
   MoreHorizontal,
+  Pencil,
   RotateCcw,
   Square,
   Trash2,
@@ -47,6 +48,9 @@ interface AgentRowActionsProps {
   // Called when the user picks "Duplicate" — the page opens a Create
   // dialog pre-populated with this agent's config as a template.
   onDuplicate: (agent: Agent) => void;
+  // Opens the platform-side metadata editor. No daemon update is involved:
+  // the dialog writes the agent resource through the existing platform API.
+  onEdit: (agent: Agent) => void;
 }
 
 /**
@@ -64,6 +68,7 @@ export function AgentRowActions({
   presence,
   canManage,
   onDuplicate,
+  onEdit,
 }: AgentRowActionsProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
@@ -81,11 +86,13 @@ export function AgentRowActions({
   // below a flat list of conditionals rather than a tangle of role/state
   // branches.
   const showStop = canManage && !isArchived && hasActiveWork;
+  const showEdit = canManage && !isArchived;
   const showDuplicate = !isArchived; // any workspace member can duplicate
   const showArchive = canManage && !isArchived;
   const showRestore = canManage && isArchived;
 
-  const hasAnyAction = showStop || showDuplicate || showArchive || showRestore;
+  const hasAnyAction =
+    showStop || showEdit || showDuplicate || showArchive || showRestore;
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
@@ -158,6 +165,12 @@ export function AgentRowActions({
             >
               <Square className="h-3.5 w-3.5" />
               {t(($) => $.row_actions.cancel_all_tasks)}
+            </DropdownMenuItem>
+          )}
+          {showEdit && (
+            <DropdownMenuItem onClick={() => onEdit(agent)}>
+              <Pencil className="h-3.5 w-3.5" />
+              {t(($) => $.row_actions.edit)}
             </DropdownMenuItem>
           )}
           {showDuplicate && (
