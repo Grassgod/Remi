@@ -12,6 +12,7 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { runtimeModelsKeys } from "@multiremi/core/runtimes";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
 import type { RelayConfigResponse, RelayEngineConfig } from "@multiremi/core/api";
@@ -115,6 +116,9 @@ function EngineSection({ engine, config, wsId }: { engine: Engine; config: Relay
       const tokenOp = tokenDirty ? (token ? "set" : "clear") : "keep";
       await api.updateRelayConfig(wsId, engine, { fragment, token_op: tokenOp, auth_token: token });
       await qc.invalidateQueries({ queryKey: relayKeys.config(wsId) });
+      // The save awaited gateway discovery, so the fleet catalog is fresh — refetch the
+      // model dropdown so it reflects the new gateway without a manual page refresh.
+      await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
       setTokenDirty(false);
       setToken("");
       setRevealed(false);
