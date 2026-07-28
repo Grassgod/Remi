@@ -29,6 +29,7 @@ import type {
   BatchUpdateIssuesInput,
   CreateLabelInput,
   CreatePinnedItemInput,
+  CreateProjectDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeUpdateInput,
@@ -95,6 +96,12 @@ import type {
   ListIssuesInput,
   MultiremiMetricCounter,
   MultiremiProject,
+  MultiremiProjectDoc,
+  MultiremiProjectDocIndexEntry,
+  MultiremiProjectDocKind,
+  MultiremiProjectDocRef,
+  MultiremiProjectDocRevision,
+  MultiremiProjectDocsIndex,
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiRepoData,
@@ -168,6 +175,7 @@ import type {
   UpdateIssueSessionInput,
   UpdateLabelInput,
   UpdateMultiremiUserInput,
+  UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
   UpdateRuntimeInput,
@@ -217,6 +225,29 @@ const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const COMMENT_HARD_CAP = 2000;
 const COMMENT_SUMMARY_RUNES = 200;
+const PROJECT_DOC_MEMORY_INDEX_LIMIT = 50;
+const PROJECT_DOC_WIKI_INDEX_LIMIT = 100;
+const PROJECT_DOC_INDEX_BODY_MAX = 500;
+const PROJECT_DOC_INDEX_SUMMARY_MAX = 160;
+const PROJECT_DOC_INDEX_SCHEMA_MAX = 1500;
+const PROJECT_DOC_REFS_MAX = 20;
+/** Reserved slug: the per-project doc that tells agents how to maintain the wiki. */
+const PROJECT_DOC_SCHEMA_SLUG = "_schema";
+const PROJECT_DOC_SCHEMA_TITLE = "Wiki Schema";
+const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库维护规则）
+
+本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。
+
+## 分层
+- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。
+- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。
+
+## 维护纪律
+- 写入前先 \`doc search\` / \`doc get\` 查已有条目；能 update 就不要 create。
+- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。
+- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。
+- 一次性细节、只对当前 issue 有效的信息不要入库。
+`;
 const EVENT_RUNTIME_REGISTERED = "runtime_registered";
 const EVENT_RUNTIME_READY = "runtime_ready";
 const EVENT_RUNTIME_FAILED = "runtime_failed";
@@ -5573,6 +5604,243 @@ runMigrations(this.db);
     this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
   }
 
+  listProjectDocs(projectId: string, input: { kind?: string | null } = {}): MultiremiProjectDoc[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const kind = cleanOptionalString(input.kind);
+    const rows = kind
+      ? this.db.query(
+        "SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = ? ORDER BY pinned DESC, updated_at DESC",
+      ).all(projectId, normalizeProjectDocKind(kind)) as Row[]
+      : this.db.query(
+        "SELECT * FROM multiremi_project_docs WHERE project_id = ? ORDER BY pinned DESC, updated_at DESC",
+      ).all(projectId) as Row[];
+    return rows.map(toProjectDoc);
+  }
+
+  getProjectDoc(id: string): MultiremiProjectDoc | null {
+    const row = this.db.query("SELECT * FROM multiremi_project_docs WHERE id = ?").get(id) as Row | null;
+    return row ? toProjectDoc(row) : null;
+  }
+
+  /** Resolves a doc within a project by id first, then by slug (both are user-facing refs). */
+  getProjectDocByRef(projectId: string, ref: string): MultiremiProjectDoc | null {
+    const value = ref.trim();
+    if (!value) return null;
+    const byId = this.getProjectDoc(value);
+    if (byId && byId.projectId === projectId) return byId;
+    const row = this.db.query(
+      "SELECT * FROM multiremi_project_docs WHERE project_id = ? AND slug = ?",
+    ).get(projectId, value) as Row | null;
+    return row ? toProjectDoc(row) : null;
+  }
+
+  createProjectDoc(projectId: string, input: CreateProjectDocInput): MultiremiProjectDoc {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const kind = normalizeProjectDocKind(input.kind ?? "wiki");
+    const title = String(input.title ?? "").trim();
+    if (!title) throw new Error("title is required");
+    const id = input.id ?? createId("pdoc");
+    const slug = projectDocSlug(input.slug, title, id);
+    const summary = cleanOptionalString(input.summary);
+    const body = String(input.body ?? "");
+    const pinned = input.pinned === undefined || input.pinned === null ? kind === "memory" : Boolean(input.pinned);
+    const authorType = cleanOptionalString(input.authorType ?? input.author_type);
+    const authorId = cleanOptionalString(input.authorId ?? input.author_id);
+    // The maintenance rules land before the project's first real doc does, so an
+    // agent writing its first entry already has something to follow. Seeding a
+    // `_schema` doc itself must not recurse — hence the slug guard.
+    if (slug !== PROJECT_DOC_SCHEMA_SLUG) this.ensureProjectDocSchema(projectId);
+    const now = nowIso();
+    const tx = this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO multiremi_project_docs (
+          id, project_id, workspace_id, kind, slug, title, summary, body, tags, pinned, refs,
+          source_task_id, source_issue_id, author_type, author_id,
+          updated_by_type, updated_by_id, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          projectId,
+          project.workspaceId,
+          kind,
+          slug,
+          title,
+          summary,
+          body,
+          toJson(normalizeProjectDocTags(input.tags)),
+          pinned ? 1 : 0,
+          toJson(normalizeProjectDocRefs(input.refs)),
+          cleanOptionalString(input.sourceTaskId ?? input.source_task_id),
+          cleanOptionalString(input.sourceIssueId ?? input.source_issue_id),
+          authorType,
+          authorId,
+          authorType,
+          authorId,
+          1,
+          now,
+          now,
+        ],
+      );
+      this.insertProjectDocRevision(id, 1, title, summary, body, authorType, authorId, now);
+      this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.getProjectDoc(id)!;
+    });
+    return tx();
+  }
+
+  updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): MultiremiProjectDoc {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectDocByRef(projectId, ref);
+    if (!existing) throw new Error(`Project doc not found: ${ref}`);
+    const expectedVersion = input.expectedVersion ?? input.expected_version;
+    if (expectedVersion !== undefined && expectedVersion !== null && Number(expectedVersion) !== existing.version) {
+      throw new Error("project doc version conflict");
+    }
+    const title = hasAnyField(input, "title") ? String(input.title ?? "").trim() : existing.title;
+    if (!title) throw new Error("title is required");
+    const slug = hasAnyField(input, "slug") ? projectDocSlug(input.slug, title, existing.id) : existing.slug;
+    const summary = hasAnyField(input, "summary") ? cleanOptionalString(input.summary) : existing.summary;
+    const body = hasAnyField(input, "body") ? String(input.body ?? "") : existing.body;
+    const tags = hasAnyField(input, "tags") ? normalizeProjectDocTags(input.tags) : existing.tags;
+    const pinned = hasAnyField(input, "pinned") ? Boolean(input.pinned) : existing.pinned;
+    // refs are replaced wholesale (the CLI/API always send the full list), never merged.
+    const refs = hasAnyField(input, "refs") ? normalizeProjectDocRefs(input.refs) : existing.refs;
+    const updatedByType = cleanOptionalString(input.updatedByType ?? input.updated_by_type);
+    const updatedById = cleanOptionalString(input.updatedById ?? input.updated_by_id);
+    const version = existing.version + 1;
+    const now = nowIso();
+    const tx = this.db.transaction(() => {
+      this.db.run(
+        `UPDATE multiremi_project_docs
+         SET slug = ?, title = ?, summary = ?, body = ?, tags = ?, pinned = ?, refs = ?,
+             updated_by_type = ?, updated_by_id = ?, version = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          slug,
+          title,
+          summary,
+          body,
+          toJson(tags),
+          pinned ? 1 : 0,
+          toJson(refs),
+          updatedByType,
+          updatedById,
+          version,
+          now,
+          existing.id,
+        ],
+      );
+      this.insertProjectDocRevision(existing.id, version, title, summary, body, updatedByType, updatedById, now);
+      this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.getProjectDoc(existing.id)!;
+    });
+    return tx();
+  }
+
+  deleteProjectDoc(projectId: string, ref: string): void {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectDocByRef(projectId, ref);
+    if (!existing) throw new Error(`Project doc not found: ${ref}`);
+    const now = nowIso();
+    this.db.transaction(() => {
+      // Foreign keys are decorative here (sqlite runs with them off, the Postgres
+      // bridge strips them), so the revisions go with the doc explicitly.
+      this.db.run("DELETE FROM multiremi_project_doc_revisions WHERE doc_id = ?", [existing.id]);
+      this.db.run("DELETE FROM multiremi_project_docs WHERE id = ?", [existing.id]);
+      this.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+    })();
+  }
+
+  listProjectDocRevisions(docId: string): MultiremiProjectDocRevision[] {
+    const rows = this.db.query(
+      "SELECT * FROM multiremi_project_doc_revisions WHERE doc_id = ? ORDER BY version DESC",
+    ).all(docId) as Row[];
+    return rows.map(toProjectDocRevision);
+  }
+
+  searchProjectDocs(projectId: string, query: string, input: { kind?: string | null; limit?: number } = {}): MultiremiProjectDoc[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const term = query.trim();
+    if (!term) return [];
+    const kind = cleanOptionalString(input.kind);
+    // The term is a literal substring, not a pattern: `%` and `_` in a user's
+    // query must match themselves. Escaping them (and the escape char itself)
+    // requires naming the escape char explicitly — sqlite's LIKE has none by
+    // default while Postgres already treats backslash as one, so without the
+    // clause the two dialects disagree on a term containing a backslash.
+    const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    // LOWER() on both sides keeps the match case-insensitive in sqlite and Postgres
+    // alike; the columns stay separate (no concatenation) so a NULL summary cannot
+    // swallow the whole predicate.
+    const where = "project_id = ? AND (LOWER(title) LIKE LOWER(?) ESCAPE '\\' OR LOWER(summary) LIKE LOWER(?) ESCAPE '\\' OR LOWER(body) LIKE LOWER(?) ESCAPE '\\' OR LOWER(tags) LIKE LOWER(?) ESCAPE '\\')";
+    const limit = clampSearchLimit(input.limit);
+    const rows = kind
+      ? this.db.query(
+        `SELECT * FROM multiremi_project_docs WHERE ${where} AND kind = ? ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+      ).all(projectId, pattern, pattern, pattern, pattern, normalizeProjectDocKind(kind), limit) as Row[]
+      : this.db.query(
+        `SELECT * FROM multiremi_project_docs WHERE ${where} ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+      ).all(projectId, pattern, pattern, pattern, pattern, limit) as Row[];
+    return rows.map(toProjectDoc);
+  }
+
+  /**
+   * Seeds the project's `_schema` doc (the wiki maintenance rules) when it is
+   * missing. Otherwise `_schema` is an ordinary doc: readable, editable,
+   * revisioned — only the slug is reserved.
+   */
+  ensureProjectDocSchema(projectId: string): MultiremiProjectDoc {
+    const existing = this.getProjectDocByRef(projectId, PROJECT_DOC_SCHEMA_SLUG);
+    if (existing) return existing;
+    return this.createProjectDoc(projectId, {
+      kind: "wiki",
+      slug: PROJECT_DOC_SCHEMA_SLUG,
+      title: PROJECT_DOC_SCHEMA_TITLE,
+      body: PROJECT_DOC_SCHEMA_TEMPLATE,
+      pinned: false,
+    });
+  }
+
+  /** Compact knowledge index injected into a task's prompt (see getTaskWithAgent). */
+  getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex {
+    const memory = this.db.query(
+      `SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = 'memory'
+       ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+    ).all(projectId, PROJECT_DOC_MEMORY_INDEX_LIMIT) as Row[];
+    // `_schema` rides its own field, so it never eats a slot in the wiki listing.
+    const wiki = this.db.query(
+      `SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = 'wiki' AND slug <> ?
+       ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+    ).all(projectId, PROJECT_DOC_SCHEMA_SLUG, PROJECT_DOC_WIKI_INDEX_LIMIT) as Row[];
+    const schema = this.db.query(
+      "SELECT body FROM multiremi_project_docs WHERE project_id = ? AND slug = ?",
+    ).get(projectId, PROJECT_DOC_SCHEMA_SLUG) as Row | null;
+    return {
+      memory: memory.map((row) => toProjectDocIndexEntry(toProjectDoc(row))),
+      wiki: wiki.map((row) => toProjectDocIndexEntry(toProjectDoc(row))),
+      schema: schema ? trimProjectDocText(String(schema.body ?? ""), PROJECT_DOC_INDEX_SCHEMA_MAX) : null,
+    };
+  }
+
+  private insertProjectDocRevision(
+    docId: string,
+    version: number,
+    title: string,
+    summary: string | null,
+    body: string,
+    authorType: string | null,
+    authorId: string | null,
+    createdAt: string,
+  ): void {
+    this.db.run(
+      `INSERT INTO multiremi_project_doc_revisions (
+        id, doc_id, version, title, summary, body, author_type, author_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [createId("pdrev"), docId, version, title, summary, body, authorType, authorId, createdAt],
+    );
+  }
+
   createSquad(input: CreateSquadInput): MultiremiSquad {
     if (!input.name?.trim()) throw new Error("Squad name is required");
     const workspaceId = input.workspaceId ?? "local";
@@ -7249,6 +7517,7 @@ runMigrations(this.db);
       issue,
       project,
       projectResources,
+      projectDocs: project ? this.getProjectDocsIndex(project.id) : null,
       repos: this.resolveTaskRepos(task.workspaceId, projectResources),
     };
   }
@@ -10871,6 +11140,102 @@ function toProjectResource(row: Row): MultiremiProjectResource {
     createdAt: String(row.created_at),
     createdBy: nullableString(row.created_by),
   };
+}
+
+function toProjectDoc(row: Row): MultiremiProjectDoc {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    kind: row.kind === "memory" ? "memory" : "wiki",
+    slug: String(row.slug),
+    title: String(row.title),
+    summary: nullableString(row.summary),
+    body: String(row.body ?? ""),
+    tags: normalizeProjectDocTags(parseJson(row.tags, [])),
+    // The Postgres bridge may hand back a boolean where sqlite stores 0/1.
+    pinned: row.pinned === true || Number(row.pinned) === 1,
+    refs: normalizeProjectDocRefs(parseJson(row.refs, [])),
+    sourceTaskId: nullableString(row.source_task_id),
+    sourceIssueId: nullableString(row.source_issue_id),
+    authorType: nullableString(row.author_type) as MultiremiProjectDoc["authorType"],
+    authorId: nullableString(row.author_id),
+    updatedByType: nullableString(row.updated_by_type) as MultiremiProjectDoc["updatedByType"],
+    updatedById: nullableString(row.updated_by_id),
+    version: Number(row.version ?? 1),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toProjectDocRevision(row: Row): MultiremiProjectDocRevision {
+  return {
+    id: String(row.id),
+    docId: String(row.doc_id),
+    version: Number(row.version ?? 1),
+    title: String(row.title),
+    summary: nullableString(row.summary),
+    body: String(row.body ?? ""),
+    authorType: nullableString(row.author_type) as MultiremiProjectDocRevision["authorType"],
+    authorId: nullableString(row.author_id),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toProjectDocIndexEntry(doc: MultiremiProjectDoc): MultiremiProjectDocIndexEntry {
+  return {
+    id: doc.id,
+    slug: doc.slug,
+    title: doc.title,
+    summary: doc.summary === null ? null : trimProjectDocText(doc.summary, PROJECT_DOC_INDEX_SUMMARY_MAX),
+    body: doc.kind === "memory" ? trimProjectDocText(doc.body, PROJECT_DOC_INDEX_BODY_MAX) : null,
+    kind: doc.kind,
+    pinned: doc.pinned,
+    sourceIssueId: doc.sourceIssueId,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+function trimProjectDocText(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function normalizeProjectDocKind(value: unknown): MultiremiProjectDocKind {
+  const kind = String(value ?? "").trim().toLowerCase();
+  if (kind !== "wiki" && kind !== "memory") throw new Error(`unknown kind: ${value}`);
+  return kind;
+}
+
+function normalizeProjectDocTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((tag) => String(tag).trim()).filter((tag) => tag.length > 0);
+}
+
+/**
+ * Lenient by design: an unknown ref type is kept as written (the taxonomy is a
+ * convention, not a constraint) — only a ref without a value is worthless.
+ */
+function normalizeProjectDocRefs(value: unknown): MultiremiProjectDocRef[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((ref): ref is Record<string, unknown> => typeof ref === "object" && ref !== null)
+    .map((ref) => ({ type: String(ref.type ?? "").trim(), value: String(ref.value ?? "").trim() }))
+    .filter((ref) => ref.value.length > 0)
+    .slice(0, PROJECT_DOC_REFS_MAX);
+}
+
+/**
+ * Explicit slug wins; otherwise slugify the title. A title with no ASCII
+ * alphanumerics (a pure CJK one, say) slugifies to nothing — fall back to the
+ * doc id so the URL-ish ref always exists and stays unique.
+ */
+function projectDocSlug(explicit: string | null | undefined, title: string, docId: string): string {
+  const source = String(explicit ?? "").trim() || title;
+  // The reserved slug is the one ref that survives slugification verbatim —
+  // otherwise its leading underscore would be shaved off into "schema".
+  if (source === PROJECT_DOC_SCHEMA_SLUG) return PROJECT_DOC_SCHEMA_SLUG;
+  const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || docId;
 }
 
 function toIssue(row: Row): MultiremiIssue {

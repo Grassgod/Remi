@@ -665,6 +665,70 @@ export interface MultiremiProjectResource {
   createdBy: string | null;
 }
 
+export type MultiremiProjectDocKind = "wiki" | "memory";
+
+export interface MultiremiProjectDoc {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  kind: MultiremiProjectDocKind;
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  pinned: boolean;
+  /** Cited sources. type: issue|task|comment|url|file (lenient — unknown types are kept). */
+  refs: MultiremiProjectDocRef[];
+  sourceTaskId: string | null;
+  sourceIssueId: string | null;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  updatedByType: "member" | "agent" | null;
+  updatedById: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiProjectDocRevision {
+  id: string;
+  docId: string;
+  version: number;
+  title: string;
+  summary: string | null;
+  body: string;
+  authorType: "member" | "agent" | null;
+  authorId: string | null;
+  createdAt: string;
+}
+
+/** Injection index attached to task dispatch. Bodies only for memory entries, trimmed. */
+export interface MultiremiProjectDocIndexEntry {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string | null;
+  /** memory entries carry a body (trimmed to 500 chars); wiki entries are null. */
+  body: string | null;
+  kind: MultiremiProjectDocKind;
+  pinned: boolean;
+  sourceIssueId: string | null;
+  updatedAt: string;
+}
+
+export interface MultiremiProjectDocRef {
+  type: string;
+  value: string;
+}
+
+export interface MultiremiProjectDocsIndex {
+  memory: MultiremiProjectDocIndexEntry[];
+  wiki: MultiremiProjectDocIndexEntry[];
+  /** Body of the `_schema` doc (trimmed to 1500 chars), null when absent. `_schema` is not in wiki[]. */
+  schema: string | null;
+}
+
 export interface MultiremiRepoData {
   url: string;
   description?: string;
@@ -1356,6 +1420,7 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   issue: MultiremiIssue | null;
   project: MultiremiProject | null;
   projectResources: MultiremiProjectResource[];
+  projectDocs: MultiremiProjectDocsIndex | null;
   repos: MultiremiRepoData[];
 }
 
@@ -1958,6 +2023,42 @@ export interface UpdateProjectResourceInput {
   resource_ref?: Record<string, unknown>;
   label?: string | null;
   position?: number | null;
+}
+
+export interface CreateProjectDocInput {
+  id?: string;
+  kind?: string | null;
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  pinned?: boolean | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  sourceTaskId?: string | null;
+  source_task_id?: string | null;
+  sourceIssueId?: string | null;
+  source_issue_id?: string | null;
+  authorType?: "member" | "agent" | null;
+  author_type?: "member" | "agent" | null;
+  authorId?: string | null;
+  author_id?: string | null;
+}
+
+export interface UpdateProjectDocInput {
+  slug?: string | null;
+  title?: string;
+  summary?: string | null;
+  body?: string | null;
+  tags?: string[] | null;
+  pinned?: boolean | null;
+  refs?: MultiremiProjectDocRef[] | null;
+  expectedVersion?: number | null;
+  expected_version?: number | null;
+  updatedByType?: "member" | "agent" | null;
+  updated_by_type?: "member" | "agent" | null;
+  updatedById?: string | null;
+  updated_by_id?: string | null;
 }
 
 export interface CreateSquadInput {

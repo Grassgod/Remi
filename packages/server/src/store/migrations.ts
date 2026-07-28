@@ -715,6 +715,50 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_project_resources_project ON multiremi_project_resources(project_id, position);
 
+    CREATE TABLE IF NOT EXISTS multiremi_project_docs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      kind TEXT NOT NULL DEFAULT 'wiki',
+      slug TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      refs TEXT NOT NULL DEFAULT '[]',
+      source_task_id TEXT,
+      source_issue_id TEXT,
+      author_type TEXT,
+      author_id TEXT,
+      updated_by_type TEXT,
+      updated_by_id TEXT,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project_id, slug),
+      FOREIGN KEY(project_id) REFERENCES multiremi_projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_project ON multiremi_project_docs(project_id, kind, pinned, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_workspace ON multiremi_project_docs(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS multiremi_project_doc_revisions (
+      id TEXT PRIMARY KEY,
+      doc_id TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      author_type TEXT,
+      author_id TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(doc_id, version),
+      FOREIGN KEY(doc_id) REFERENCES multiremi_project_docs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_project_doc_revisions_doc ON multiremi_project_doc_revisions(doc_id, version);
+
     CREATE TABLE IF NOT EXISTS multiremi_pinned_items (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1075,6 +1119,10 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "provider TEXT");
   addColumnIfMissing(db, "multiremi_autopilot_triggers", "signing_secret_hint TEXT");
   addColumnIfMissing(db, "multiremi_runtime_update_requests", "scope TEXT NOT NULL DEFAULT 'cli'");
+  // Source references on wiki/memory docs. The table itself is new enough that
+  // only dev databases predate the column, but CREATE TABLE IF NOT EXISTS never
+  // revisits an existing table — so it gets patched in like every other column.
+  addColumnIfMissing(db, "multiremi_project_docs", "refs TEXT NOT NULL DEFAULT '[]'");
   // Multi-user auth: stable external identity (Feishu open_id) on users, and an
   // explicit user↔member link so membership no longer relies solely on the
   // legacy `mem_<ws>_<userId>` id convention.

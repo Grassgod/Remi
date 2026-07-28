@@ -192,6 +192,27 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getProject(a.id)?.title).toBe("Alpha");
   });
 
+  it("escapes LIKE metacharacters in project doc search the same way sqlite does", () => {
+    // searchProjectDocs pins `ESCAPE '\'` into the SQL text. Postgres already
+    // treats backslash as the default LIKE escape while sqlite has none, so the
+    // clause is what makes the two dialects agree — and it has to survive
+    // translateSqliteToPg's string-aware placeholder numbering to get here.
+    const ws = freshWorkspace();
+    const project = store.createProject({ title: "PG escaping", workspaceId: ws });
+    const percent = store.createProjectDoc(project.id, { kind: "memory", title: "Cache hit 90% on warm runs" });
+    const underscore = store.createProjectDoc(project.id, { kind: "memory", title: "Set MAX_WORKERS before the run" });
+    const backslash = store.createProjectDoc(project.id, { kind: "memory", title: "Windows path C:\\Users\\ci" });
+    store.createProjectDoc(project.id, { kind: "wiki", title: "Unrelated page" });
+
+    expect(store.searchProjectDocs(project.id, "90%").map((doc) => doc.id)).toEqual([percent.id]);
+    expect(store.searchProjectDocs(project.id, "MAX_WORKERS").map((doc) => doc.id)).toEqual([underscore.id]);
+    expect(store.searchProjectDocs(project.id, "MAXaWORKERS")).toHaveLength(0);
+    expect(store.searchProjectDocs(project.id, "C:\\Users").map((doc) => doc.id)).toEqual([backslash.id]);
+    expect(store.searchProjectDocs(project.id, "%").map((doc) => doc.id)).toEqual([percent.id]);
+    expect(store.searchProjectDocs(project.id, "_").map((doc) => doc.id)).toEqual([underscore.id]);
+    expect(store.searchProjectDocs(project.id, "%unrelated%")).toEqual([]);
+  });
+
   it("registers runtimes and upserts them via ON CONFLICT (id) DO UPDATE", () => {
     const ws = freshWorkspace();
     const first = store.registerRuntime({ name: "rt-a", provider: "claude", workspaceId: ws, maxConcurrency: 3 });
