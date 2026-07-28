@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import type { ChatPendingTask, PendingChatTasksResponse } from "../types";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -24,9 +25,28 @@ export const chatKeys = {
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PREFIXED_TASK_ID_PATTERN = /^tsk_[a-z0-9_]+$/i;
+export const CHAT_PENDING_REFETCH_INTERVAL_MS = 3000;
 
 export function isTaskMessageTaskId(taskId: string | null | undefined): taskId is string {
-  return typeof taskId === "string" && UUID_PATTERN.test(taskId);
+  return typeof taskId === "string"
+    && (UUID_PATTERN.test(taskId) || PREFIXED_TASK_ID_PATTERN.test(taskId));
+}
+
+export function pendingChatTaskRefetchInterval(query: {
+  state: { data?: ChatPendingTask };
+}): number | false {
+  return query.state.data?.task_id
+    ? CHAT_PENDING_REFETCH_INTERVAL_MS
+    : false;
+}
+
+export function pendingChatTasksRefetchInterval(query: {
+  state: { data?: PendingChatTasksResponse };
+}): number | false {
+  return (query.state.data?.tasks?.length ?? 0) > 0
+    ? CHAT_PENDING_REFETCH_INTERVAL_MS
+    : false;
 }
 
 export function chatSessionsOptions(wsId: string) {
@@ -71,13 +91,17 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
 /**
  * Pending task for a chat session — the "is something still running?" signal.
  * Refetched via WS invalidation in useRealtimeSync when chat:message / chat:done
- * / task:completed / task:failed arrive.
+ * / task:completed / task:failed arrive. While a task is pending, a low-rate
+ * poll reconciles missed WS events so the UI cannot stay queued forever after
+ * the server has already completed the task.
  */
 export function pendingChatTaskOptions(sessionId: string) {
   return queryOptions({
     queryKey: chatKeys.pendingTask(sessionId),
     queryFn: () => api.getPendingChatTask(sessionId),
     enabled: !!sessionId,
+    refetchInterval: pendingChatTaskRefetchInterval,
+    refetchIntervalInBackground: true,
     staleTime: Infinity,
   });
 }
@@ -105,6 +129,8 @@ export function pendingChatTasksOptions(wsId: string) {
   return queryOptions({
     queryKey: chatKeys.pendingTasks(wsId),
     queryFn: () => api.listPendingChatTasks(),
+    refetchInterval: pendingChatTasksRefetchInterval,
+    refetchIntervalInBackground: true,
     staleTime: Infinity,
   });
 }

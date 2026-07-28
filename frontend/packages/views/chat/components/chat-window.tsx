@@ -43,7 +43,12 @@ import {
   useMarkChatSessionRead,
   useUpdateChatSession,
 } from "@multiremi/core/chat/mutations";
-import { useChatStore } from "@multiremi/core/chat";
+import {
+  reconcileSettledPendingChatTask,
+  useChatStore,
+  type PendingChatTaskRef,
+} from "@multiremi/core/chat";
+import { useChatScopeSubscription } from "@multiremi/core/realtime";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -124,6 +129,7 @@ export function ChatWindow() {
     pendingChatTaskOptions(activeSessionId ?? ""),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
+  useChatScopeSubscription(activeSessionId, !!activeSessionId);
 
   // Legacy archived sessions (the old soft-archive feature was removed but
   // pre-existing rows with status='archived' may still exist) are excluded
@@ -135,6 +141,24 @@ export function ChatWindow() {
   const isSessionArchived = currentSession?.status === "archived";
 
   const qc = useQueryClient();
+  const previousPendingTaskRef = useRef<PendingChatTaskRef>({
+    sessionId: activeSessionId,
+    taskId: pendingTaskId,
+  });
+  useEffect(() => {
+    const current = {
+      sessionId: activeSessionId,
+      taskId: pendingTaskId,
+    };
+    reconcileSettledPendingChatTask(
+      qc,
+      wsId,
+      previousPendingTaskRef.current,
+      current,
+    );
+    previousPendingTaskRef.current = current;
+  }, [activeSessionId, pendingTaskId, qc, wsId]);
+
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();
 
