@@ -81,3 +81,8 @@ soul.md
 
 # Vite frontend build output (not tracked)
 web/frontend/dist/
+
+# Local operational artifacts
+.turbo/
+web/
+.run-multiremi-server.sh
