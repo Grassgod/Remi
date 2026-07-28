@@ -103,6 +103,30 @@ export interface AgentTaskProjectResource {
   label: string | null;
 }
 
+/** Project knowledge entry (wiki page / memory fact) injected into the prompt. */
+export interface AgentTaskProjectDocEntry {
+  id: string;
+  slug: string;
+  title: string;
+  summary?: string | null;
+  /** memory entries carry a trimmed body; wiki entries are null. */
+  body?: string | null;
+  kind: string;
+  pinned?: boolean;
+  sourceIssueId?: string | null;
+  source_issue_id?: string | null;
+  updatedAt?: string;
+  updated_at?: string;
+}
+
+/** Project knowledge index attached to task dispatch. */
+export interface AgentTaskProjectDocsIndex {
+  memory: AgentTaskProjectDocEntry[];
+  wiki: AgentTaskProjectDocEntry[];
+  /** Trimmed body of the project's `_schema` wiki page; null when the project has none. */
+  schema?: string | null;
+}
+
 /** Repo available to a task. */
 export interface AgentTaskRepo {
   url: string;
@@ -142,6 +166,8 @@ export interface AgentTask {
   issue_session_results?: AgentTaskIssueSessionResult[];
   project: AgentTaskProject | null;
   projectResources: AgentTaskProjectResource[];
+  projectDocs?: AgentTaskProjectDocsIndex | null;
+  project_docs?: AgentTaskProjectDocsIndex | null;
   repos: AgentTaskRepo[];
 
   // Workspace + spawn-context fields (workspace/persistent.ts, env/injector.ts).

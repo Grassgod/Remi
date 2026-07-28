@@ -1,4 +1,4 @@
-import type { AgentTask } from "@daemon/contracts/types.js";
+import type { AgentTask, AgentTaskProjectDocEntry } from "@daemon/contracts/types.js";
 
 export function buildTaskPrompt(task: AgentTask): string {
   const sections: string[] = [];
@@ -40,6 +40,7 @@ export function buildTaskPrompt(task: AgentTask): string {
         sections.push(formatProjectResource(resource));
       }
     }
+    appendProjectKnowledgeSections(sections, task, task.project.id);
   }
 
   if (task.repos.length) {
@@ -335,4 +336,107 @@ function formatProjectResource(resource: AgentTask["projectResources"][number]):
     return label ? `- Local directory: ${path} (${label})` : `- Local directory: ${path}`;
   }
   return `- ${resource.resourceType}: ${JSON.stringify(resource.resourceRef)}`;
+}
+
+const PROJECT_MEMORY_BUDGET = 4000;
+const PROJECT_MEMORY_BODY_LIMIT = 200;
+const PROJECT_WIKI_BUDGET = 2000;
+const PROJECT_WIKI_SUMMARY_LIMIT = 120;
+const PROJECT_ENTRY_TITLE_LIMIT = 200;
+
+function appendProjectKnowledgeSections(sections: string[], task: AgentTask, projectId: string): void {
+  const docs = task.projectDocs ?? task.project_docs ?? null;
+
+  const memoryLines = budgetedEntryLines((docs?.memory ?? []).map(formatProjectMemoryEntry), PROJECT_MEMORY_BUDGET);
+  if (memoryLines.length) {
+    sections.push("");
+    sections.push("## Project Memory");
+    sections.push("Durable facts recorded by earlier work on this project:");
+    for (const line of memoryLines) sections.push(line);
+  }
+
+  const wikiLines = budgetedEntryLines((docs?.wiki ?? []).map(formatProjectWikiEntry), PROJECT_WIKI_BUDGET);
+  if (wikiLines.length) {
+    sections.push("");
+    sections.push("## Project Wiki");
+    sections.push("Wiki pages for this project (titles only — read a page before relying on it):");
+    for (const line of wikiLines) sections.push(line);
+  }
+
+  sections.push("");
+  sections.push("## Project Knowledge Commands");
+  sections.push(`Read a page: \`remi project doc get ${projectId} <slug-or-id>\``);
+  sections.push(`Search project knowledge: \`remi project doc search ${projectId} "<query>"\``);
+  sections.push("");
+  sections.push("When you finish, write back what you learned that other issues in this project will reuse — build/test commands, architecture decisions, pitfalls. Integrate it into what is already here instead of piling up new entries:");
+  sections.push(`1. Search first: \`remi project doc search ${projectId} "<query>"\`, then \`remi project doc get ${projectId} <slug-or-id>\` on anything related.`);
+  sections.push(`2. Update, do not create: when a related entry exists, revise it with \`remi project doc update ${projectId} <slug-or-id> --content-stdin\`. If your finding contradicts it, say in the body what changed and on what evidence — never leave both versions standing.`);
+  sections.push(`3. Only genuinely new facts get a new entry: \`remi project memory add ${projectId} --title 'One-sentence fact'\` (template below).`);
+  sections.push(`4. Durable syntheses — architecture notes, runbooks — belong in a wiki page: \`remi project doc create ${projectId} --kind wiki --title "<title>" --content-stdin\`.`);
+  sections.push("5. Cite sources on every write with `--ref issue:<id>` / `--ref task:<id>` / `--ref url:<url>`, and cross-link related pages with `[[slug]]` links in the body.");
+  sections.push("6. Do not record one-off details that only matter for this issue.");
+  sections.push("");
+  sections.push([
+    "Use --content-stdin with a quoted HEREDOC for the body, and single-quote the title, so the shell cannot rewrite backticks, $(), variables, quotes, or formatting:",
+    "",
+    `    cat <<'MEMORY' | remi project memory add ${projectId} --title 'One-sentence fact' --content-stdin`,
+    "    Supporting detail worth keeping.",
+    "    MEMORY",
+  ].join("\n"));
+
+  const schema = typeof docs?.schema === "string" ? docs.schema.trim() : "";
+  if (schema) {
+    sections.push("");
+    sections.push("Maintenance rules for this project's wiki (from _schema):");
+    sections.push(schema);
+    sections.push(`Revise these rules with \`remi project doc update ${projectId} _schema --content-stdin\` when the project's conventions change.`);
+  }
+}
+
+function budgetedEntryLines(lines: string[], budget: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    if (kept.length && used + line.length > budget) {
+      kept.push("(more entries exist — use search)");
+      break;
+    }
+    kept.push(line);
+    used += line.length;
+  }
+  return kept;
+}
+
+/**
+ * Titles are agent-written free text landing verbatim in the prompt. Flattening
+ * whitespace stops an embedded newline from forging a `##` section of its own,
+ * and the cap stops one title from eating a whole section: budgetedEntryLines
+ * always keeps the first line, so an unbounded title bypasses the budget.
+ */
+function entryTitle(entry: AgentTaskProjectDocEntry): string {
+  const flattened = entry.title.replace(/\s+/g, " ").trim();
+  return truncateText(flattened || entry.slug, PROJECT_ENTRY_TITLE_LIMIT);
+}
+
+function formatProjectMemoryEntry(entry: AgentTaskProjectDocEntry): string {
+  const title = entryTitle(entry);
+  // `memory add --summary` is stored and shipped but has no other rendering, so
+  // it stands in for a missing body rather than being dropped on the floor.
+  const detail = firstLine(entry.body) || firstLine(entry.summary);
+  return detail ? `- ${title}: ${truncateText(detail, PROJECT_MEMORY_BODY_LIMIT)}` : `- ${title}`;
+}
+
+function formatProjectWikiEntry(entry: AgentTaskProjectDocEntry): string {
+  const head = `- ${entryTitle(entry)} (slug: ${entry.slug})`;
+  const summary = firstLine(entry.summary);
+  return summary ? `${head} - ${truncateText(summary, PROJECT_WIKI_SUMMARY_LIMIT)}` : head;
+}
+
+function firstLine(text: string | null | undefined): string {
+  if (typeof text !== "string") return "";
+  return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+function truncateText(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
