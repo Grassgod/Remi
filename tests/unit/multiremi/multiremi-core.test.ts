@@ -5061,8 +5061,8 @@ describe("Bun Multiremi API", () => {
     const previewBody = await preview.json();
     expect(preview.status).toBe(200);
     expect(previewBody.product).toBe("multiremi");
-    expect(previewBody.installScriptUrl).toBe("https://github.com/Grassgod/remi/releases/download/v1.2.3/install-multiremi.sh");
-    expect(previewBody.installCommand).toBe("curl -fsSL https://github.com/Grassgod/remi/releases/download/v1.2.3/install-multiremi.sh | bash");
+    expect(previewBody.installScriptUrl).toBe("https://github.com/Grassgod/remi/releases/download/v1.2.3/install-remi.sh");
+    expect(previewBody.installCommand).toBe("curl -fsSL https://github.com/Grassgod/remi/releases/download/v1.2.3/install-remi.sh | bash");
     expect(previewBody.setupCommand).toBe("multiremi setup --server https://remi.example --workspace ws_1 --token tok_123 --provider codex");
     expect(previewBody.daemonCommand).toBe("multiremi daemon");
     expect(previewBody.installCommand).not.toContain("multimira");
@@ -8542,8 +8542,14 @@ describe("Bun Multiremi API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ daemon_id: "daemon-missing", runtimes: [{ type: "codex" }] }),
     });
-    expect(missing.status).toBe(400);
-    expect(await missing.json()).toEqual({ error: "workspace_id is required" });
+    expect(missing.status).toBe(200);
+    expect(await missing.json()).toMatchObject({
+      runtimes: [{
+        workspace_id: "local",
+        daemon_id: "daemon-missing",
+        provider: "codex",
+      }],
+    });
 
     const camelRegister = await app.request("/api/daemon/register", {
       method: "POST",
@@ -8831,6 +8837,11 @@ describe("Bun Multiremi API", () => {
       repos: expectedRepos,
       repos_version: expectedReposVersion,
       settings: { coauthor_enabled: true },
+      relay: {
+        claude: null,
+        codex: null,
+        model_discovery: false,
+      },
     });
 
     store.updateWorkspace("local", {
