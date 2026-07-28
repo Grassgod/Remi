@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>模型网关 — 设置 mockup（文件融合·片段编辑器）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --background:#ffffff; --foreground:#09090b;
+  --card:#ffffff; --card-ring:rgba(9,9,11,.10);
+  --muted:#f4f4f5; --muted-foreground:#71717a;
+  --border:#e4e4e7; --input:#e4e4e7; --ring:#a1a1aa;
+  --primary:#18181b; --primary-foreground:#fafafa;
+  --brand:#3b5bd9; --success:#15803d; --warning:#b45309;
+  --claude:#d97757; --openai:#0f0f0f;
+  --radius-lg:10px; --radius-xl:14px;
+  --font-sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:208px 1fr;min-height:100vh;max-width:1160px;margin:0 auto;box-shadow:0 0 0 1px var(--border)}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* rail */
+.rail{border-right:1px solid var(--border);padding:16px}
+.rail h1{font-size:14px;font-weight:600;margin:4px 8px 16px}
+.rail .grp{font-size:12px;font-weight:500;color:var(--muted-foreground);padding:8px 8px 4px}
+.rail .grp.ws{padding-top:16px}
+.rail a{display:flex;gap:9px;align-items:center;padding:6px 9px 6px 7px;border-radius:6px;font-size:14px;color:rgba(9,9,11,.6);text-decoration:none;cursor:default;border-left:2px solid transparent;margin-bottom:1px}
+.rail a.on{color:var(--foreground);font-weight:500;border-left-color:var(--foreground)}
+
+/* content */
+.main{overflow-y:auto}
+.wrap{max-width:788px;margin:0 auto;padding:24px}
+.sections{display:flex;flex-direction:column;gap:28px}
+.head h2{font-size:14px;font-weight:600;margin:0 0 6px}
+.head p{margin:0;color:var(--muted-foreground);font-size:14px;line-height:1.55}
+.head p .mono{font-family:var(--font-mono)}
+
+/* global discovery toggle (FeatureRow) */
+.frow{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--card);border-radius:var(--radius-xl);box-shadow:0 0 0 1px var(--card-ring);padding:14px 16px}
+.frow .left{display:flex;align-items:flex-start;gap:12px}
+.frow .fchip{border:1px solid var(--border);background:rgba(244,244,245,.6);border-radius:6px;padding:8px;color:var(--muted-foreground);display:grid;place-items:center}
+.frow .flabel{font-size:14px;font-weight:500;margin-bottom:3px}
+.frow .fdesc{font-size:13px;color:var(--muted-foreground);line-height:1.45}
+.switch{width:32px;height:18.4px;border-radius:999px;background:var(--input);position:relative;flex:none;cursor:pointer;transition:.15s}
+.switch::after{content:"";position:absolute;left:2px;top:2px;width:14.4px;height:14.4px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.switch.on{background:var(--primary)}
+.switch.on::after{left:15.6px}
+
+/* engine section */
+.section{display:flex;flex-direction:column;gap:12px}
+.sec-head{display:flex;align-items:center;gap:9px}
+.sec-head .chip{border:1px solid var(--border);background:rgba(244,244,245,.6);border-radius:7px;width:30px;height:30px;display:grid;place-items:center}
+.sec-head .chip svg{width:17px;height:17px}
+.sec-head h3{font-size:14px;font-weight:600;margin:0}
+.sec-head .badge{margin-left:auto;display:inline-flex;height:20px;align-items:center;gap:6px;border-radius:26px;border:1px solid var(--border);color:var(--foreground);padding:0 9px;font-size:12px;font-weight:500;background:#fff}
+.sec-head .badge.ok b{color:var(--success)} .sec-head .badge.warn b{color:var(--warning)}
+
+.card{background:var(--card);border-radius:var(--radius-xl);box-shadow:0 0 0 1px var(--card-ring);padding:16px;display:flex;flex-direction:column;gap:14px}
+.field label{display:block;font-size:12px;color:var(--muted-foreground);margin-bottom:6px}
+.field .hint{font-size:12px;color:var(--muted-foreground);margin-top:6px;line-height:1.5}
+.field .hint code,.mono{font-family:var(--font-mono)}
+.row{display:flex;gap:8px}
+.inp{height:32px;width:100%;border:1px solid var(--input);border-radius:var(--radius-lg);background:transparent;padding:4px 10px;font-size:14px;font-family:var(--font-mono);color:var(--foreground)}
+.inp:focus{outline:none;border-color:var(--ring);box-shadow:0 0 0 3px rgba(161,161,170,.5)}
+.secret{position:relative;flex:1}
+.secret .inp{padding-right:34px}
+.secret .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;padding:0;color:var(--muted-foreground);cursor:pointer;display:grid;place-items:center}
+.secret .eye:hover{color:var(--foreground)}
+.secret .eye .ic{width:14px;height:14px}
+
+/* fragment editor */
+.editor{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fcfcfd}
+.editor .bar{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--border);background:rgba(244,244,245,.5);font-size:11.5px;color:var(--muted-foreground)}
+.editor .bar .tag{font-family:var(--font-mono);color:var(--foreground)}
+.editor .bar .merge{margin-left:auto;display:inline-flex;align-items:center;gap:5px}
+.editor .bar .merge .ic{width:12px;height:12px}
+.editor pre{margin:0;font-family:var(--font-mono);font-size:12.5px;line-height:1.7;padding:12px 14px 12px 0;color:#27272a;overflow-x:auto;counter-reset:ln}
+.editor pre .ln{display:block;white-space:pre;padding-left:48px;position:relative}
+.editor pre .ln::before{counter-increment:ln;content:counter(ln);position:absolute;left:0;width:34px;text-align:right;color:#c4c4c8;user-select:none}
+.tok-k{color:#0369a1} .tok-s{color:#15803d} .tok-p{color:#9333ea}
+
+/* actions */
+.actions{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}
+.btn{height:28px;display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius-lg);border:1px solid var(--border);background:var(--background);padding:0 10px;font-size:14px;font-weight:500;cursor:pointer;color:var(--foreground)}
+.btn:hover{background:var(--muted)}
+.btn .ic{width:12px;height:12px}
+.btn.primary{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+.btn.primary:hover{background:#000}
+
+/* apply status */
+.applied{border:1px solid var(--border);background:rgba(244,244,245,.5);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--muted-foreground)}
+.applied .t{color:var(--foreground);font-weight:600;font-size:13px;margin-bottom:8px}
+.applied .r{display:flex;gap:8px;align-items:center;padding:3px 0;line-height:1.5}
+.applied .ok{color:var(--success)} .applied .pend{color:var(--warning)}
+.applied code{font-family:var(--font-mono);font-size:11.5px;background:var(--muted);padding:1px 6px;border-radius:5px;color:var(--foreground)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ============ LEFT RAIL ============ -->
+  <nav class="rail">
+    <h1>设置</h1>
+    <div class="grp">我的账号</div>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>个人资料</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></svg>偏好设置</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>通知</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>API Token</a>
+    <div class="grp ws">Remi</div>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>通用</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M18 19a5 5 0 0 1-5-5v8"/><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="12" r="2"/><circle cx="20" cy="19" r="2"/></svg>代码仓库</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>GitHub</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M15 8V2"/><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"/><path d="M9 8V2"/></svg>集成</a>
+    <a class="on"><svg class="ic" viewBox="0 0 24 24"><path d="m10.586 5.414-5.172 5.172"/><path d="m18.586 13.414-5.172 5.172"/><path d="M6 12h12"/><circle cx="12" cy="20" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="20" cy="12" r="2"/><circle cx="4" cy="12" r="2"/></svg>模型网关</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/><path d="M6.453 15h11.094"/><path d="M8.5 2h7"/></svg>实验室</a>
+    <a><svg class="ic" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></svg>成员</a>
+  </nav>
+
+  <!-- ============ CONTENT ============ -->
+  <main class="main">
+    <div class="wrap">
+      <div class="sections">
+
+        <div class="head">
+          <h2>模型网关</h2>
+          <p>下面每个引擎是一份<b>配置片段</b>。保存后 daemon 会把它 <b>deep-merge（文件融合）</b>进各机对应文件——<b>只覆盖片段里出现的 key</b>，本机的 model/theme/hooks/项目信任等原样保留。密钥单独存：claude 写 settings.json、<b>codex 写 <span class="mono">auth.json</span> 的 OPENAI_API_KEY</b>（relay 官方推荐）。</p>
+        </div>
+
+        <!-- 全局模型发现 -->
+        <div class="frow">
+          <div class="left">
+            <span class="fchip"><svg class="ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></span>
+            <div>
+              <div class="flabel">自动发现模型</div>
+              <div class="fdesc">server 用网关凭据拉取 <span class="mono">/v1/models</span> 与 <span class="mono">/models</span>，创建 agent 时下拉框显示真实模型（如 gpt-5.6-sol）。<b>claude/codex 统一开关。</b></div>
+            </div>
+          </div>
+          <div class="switch on" onclick="this.classList.toggle('on')"></div>
+        </div>
+
+        <!-- ============ CLAUDE ============ -->
+        <div class="section">
+          <div class="sec-head">
+            <span class="chip"><svg viewBox="0 0 24 24" fill="var(--claude)"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg></span>
+            <h3>Claude</h3>
+            <span class="badge warn">3 台在线 · <b>1 台漂移</b></span>
+          </div>
+          <div class="card">
+            <div class="field">
+              <label>配置片段（JSON）</label>
+              <div class="editor">
+                <div class="bar"><span class="tag">~/.claude/settings.json</span><span class="merge"><svg class="ic" viewBox="0 0 24 24"><path d="m10.586 5.414-5.172 5.172"/><path d="m18.586 13.414-5.172 5.172"/><path d="M6 12h12"/><circle cx="12" cy="20" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="20" cy="12" r="2"/><circle cx="4" cy="12" r="2"/></svg>deep-merge</span></div>
+                <pre><span class="ln"><span class="tok-p">{</span></span><span class="ln">  <span class="tok-k">"env"</span>: {</span><span class="ln">    <span class="tok-k">"ANTHROPIC_BASE_URL"</span>: <span class="tok-s">"https://ai.openremi.fun"</span></span><span class="ln">  }</span><span class="ln"><span class="tok-p">}</span></span></pre>
+              </div>
+              <div class="hint">只覆盖片段里的 key（此处 <code>env.ANTHROPIC_BASE_URL</code>），本机 model/theme/hooks 原样保留。</div>
+            </div>
+            <div class="field">
+              <label>鉴权 Token · ANTHROPIC_AUTH_TOKEN</label>
+              <div class="row"><div class="secret">
+                <input id="cla" class="inp" type="password" value="sk-ant-xxxxxxxxxxxxxxxxxxxx">
+                <button class="eye" onclick="tg('cla')" aria-label="显示"><svg class="ic" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+              </div></div>
+              <div class="hint">token 单独存（片段里不含），合并进 <code>settings.json</code> 的 env。用 AUTH_TOKEN 不用 API_KEY。留 <code>••••</code> 不改。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============ CODEX ============ -->
+        <div class="section">
+          <div class="sec-head">
+            <span class="chip"><svg viewBox="0 0 24 24" fill="var(--openai)"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997z"/></svg></span>
+            <h3>Codex</h3>
+            <span class="badge ok">3 台在线 · <b>全车队一致</b></span>
+          </div>
+          <div class="card">
+            <div class="field">
+              <label>配置片段（TOML）</label>
+              <div class="editor">
+                <div class="bar"><span class="tag">~/.codex/config.toml</span><span class="merge"><svg class="ic" viewBox="0 0 24 24"><path d="m10.586 5.414-5.172 5.172"/><path d="m18.586 13.414-5.172 5.172"/><path d="M6 12h12"/><circle cx="12" cy="20" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="20" cy="12" r="2"/><circle cx="4" cy="12" r="2"/></svg>deep-merge</span></div>
+                <pre><span class="ln"><span class="tok-k">model_provider</span> = <span class="tok-s">"OpenAI"</span></span><span class="ln"></span><span class="ln"><span class="tok-p">[model_providers.OpenAI]</span></span><span class="ln"><span class="tok-k">base_url</span> = <span class="tok-s">"https://vip.openremi.fun/v1"</span></span><span class="ln"><span class="tok-k">wire_api</span> = <span class="tok-s">"responses"</span></span><span class="ln"><span class="tok-k">supports_websockets</span> = <span class="tok-p">true</span></span><span class="ln"><span class="tok-k">requires_openai_auth</span> = <span class="tok-p">true</span></span></pre>
+              </div>
+              <div class="hint">只覆盖 provider 块，本机 <code>[projects."…"]</code>/<code>[hooks.state]</code> 保留。密钥不在片段里（见下方 token）。</div>
+            </div>
+            <div class="field">
+              <label>鉴权 Token · auth.json 的 OPENAI_API_KEY</label>
+              <div class="row"><div class="secret">
+                <input id="cod" class="inp" type="password" value="sk-xxxxxxxxxxxxxxxxxxxxxxxx">
+                <button class="eye" onclick="tg('cod')" aria-label="显示"><svg class="ic" viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></button>
+              </div></div>
+              <div class="hint">daemon 写入本机 <code>~/.codex/auth.json</code> 的 <code>OPENAI_API_KEY</code>（relay 官方推荐、静态 key），迁移掉 chatgpt OAuth → 免 <code>codex login</code>。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- actions -->
+        <div class="actions">
+          <button class="btn">取消</button>
+          <button class="btn primary"><svg class="ic" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>保存</button>
+        </div>
+
+        <!-- apply status -->
+        <div class="applied">
+          <div class="t">同步状态（各机器当前生效的 relay 配置）</div>
+          <div class="r"><span class="ok">✓</span> <code>n37-066-008</code> 已应用 · claude <code>ai.openremi.fun</code> / codex <code>vip.openremi.fun/v1</code></div>
+          <div class="r"><span class="ok">✓</span> <code>D0091YK33F</code>（Mac）已应用</div>
+          <div class="r"><span class="pend">⟳</span> <code>n37-206-133</code> claude 仍指 <code>ai.openremi.fun</code>（漂移），待下次心跳融合（≤2 分钟）</div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+<script>function tg(id){const e=document.getElementById(id);e.type=e.type==='password'?'text':'password';}</script>
+</body>
+</html>

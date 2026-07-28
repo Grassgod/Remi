@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multiremi 整体方案 · 统一机器 × 项目绑机 × Agent 去物理化</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --ink:#e8eaed; --muted:#9aa4b2;
+    --line:#2a2f3a; --accent:#5b9dff; --accent2:#7ee0b8; --warn:#ffcf70; --bad:#ff8a8a; --purple:#c1a4ff;
+    --code:#c8d3ff; --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px}
+  header.hero{padding:56px 24px 40px;background:radial-gradient(120% 140% at 50% 0%,#1b2740 0%,#0f1115 60%);
+    border-bottom:1px solid var(--line);text-align:center}
+  .hero .kicker{color:var(--accent);font-weight:600;letter-spacing:.14em;font-size:12px;text-transform:uppercase}
+  .hero h1{font-size:30px;margin:12px 0 8px;letter-spacing:-.5px}
+  .hero .lead{color:var(--muted);max-width:720px;margin:0 auto;font-size:15.5px}
+  .hero .oneliner{margin:24px auto 0;max-width:820px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:18px 22px;font-size:15.5px;text-align:left}
+  .hero .oneliner b{color:var(--accent2)}
+  section{margin-top:56px}
+  h2{font-size:22px;margin:0 0 6px;display:flex;align-items:center;gap:12px}
+  h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:9px;
+    background:var(--accent);color:#08101f;font-size:14px;font-weight:700;flex:none;padding:0 8px}
+  h2 .n.g{background:var(--accent2)} h2 .n.p{background:var(--purple)} h2 .n.y{background:var(--warn)}
+  .sub{color:var(--muted);margin:2px 0 20px;font-size:14.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:1fr 1fr 1fr}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:1fr}}
+  code,.mono{font-family:var(--mono);font-size:12.5px;color:var(--code);
+    background:#0c0e13;border:1px solid var(--line);border-radius:6px;padding:1.5px 6px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.04em;padding:2px 9px;border-radius:999px;vertical-align:middle}
+  .t-blue{background:rgba(91,157,255,.16);color:#a9c8ff;border:1px solid rgba(91,157,255,.3)}
+  .t-green{background:rgba(126,224,184,.14);color:#a7ecca;border:1px solid rgba(126,224,184,.28)}
+  .t-warn{background:rgba(255,207,112,.14);color:#ffdd94;border:1px solid rgba(255,207,112,.3)}
+  .t-bad{background:rgba(255,138,138,.14);color:#ffb3b3;border:1px solid rgba(255,138,138,.3)}
+  .t-purple{background:rgba(193,164,255,.14);color:#d7c6ff;border:1px solid rgba(193,164,255,.3)}
+  .t-gray{background:#20242e;color:var(--muted);border:1px solid var(--line)}
+
+  .diagram{display:flex;flex-direction:column;gap:14px}
+  .row{display:flex;align-items:stretch;gap:12px;flex-wrap:wrap}
+  .node{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:140px;flex:1}
+  .node .h{font-weight:700;font-size:14px;display:flex;align-items:center;gap:8px}
+  .node .d{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .node.accent{border-color:rgba(91,157,255,.5);background:linear-gradient(180deg,rgba(91,157,255,.08),transparent)}
+  .node.good{border-color:rgba(126,224,184,.5);background:linear-gradient(180deg,rgba(126,224,184,.07),transparent)}
+  .node.bad{border-color:rgba(255,138,138,.45)}
+  .node.dim{opacity:.55}
+  .arrow{align-self:center;color:var(--muted);font-size:13px;white-space:nowrap;padding:0 2px}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+  .dot.b{background:var(--accent)} .dot.g{background:var(--accent2)} .dot.r{background:var(--bad)} .dot.y{background:var(--warn)} .dot.p{background:var(--purple)}
+
+  ul.clean{margin:10px 0 0;padding-left:0;list-style:none}
+  ul.clean li{position:relative;padding-left:20px;margin:7px 0;font-size:14px}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:9px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  ul.clean li.g::before{background:var(--accent2)}
+  ul.clean li.w::before{background:var(--warn)}
+  ul.clean li.r::before{background:var(--bad)}
+  ul.clean li.p::before{background:var(--purple)}
+  .muted{color:var(--muted)}
+  .kv{color:var(--muted);font-size:12.5px}
+
+  table.plain{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:12px}
+  table.plain th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;letter-spacing:.05em;
+    padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.plain td{padding:9px 10px;border-bottom:1px solid #20242c;vertical-align:top}
+  table.plain tr:last-child td{border-bottom:none}
+
+  .module{position:relative;overflow:hidden}
+  .module .mid{position:absolute;right:-4px;top:-16px;font-size:80px;font-weight:800;color:#ffffff07;pointer-events:none}
+  .module h3{margin:8px 0 4px;font-size:17px}
+  .module .files{margin-top:12px;font-size:11.5px;color:var(--muted)}
+  .module .files code{font-size:11px}
+
+  .envstack{font-family:var(--mono);font-size:12.5px;background:#0c0e13;border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px;margin-top:10px;line-height:1.9}
+  .envstack .new{color:var(--accent2)} .envstack .old{color:var(--muted)} .envstack .top{color:var(--code)}
+
+  .phase{display:grid;grid-template-columns:150px 1fr;border-left:2px solid var(--line);margin-left:8px}
+  .phase>.when{padding:0 14px 28px 20px;position:relative}
+  .phase>.when::before{content:"";position:absolute;left:-9px;top:2px;width:16px;height:16px;border-radius:50%;
+    background:var(--accent);border:3px solid var(--bg)}
+  .phase.c2>.when::before{background:var(--accent2)} .phase.c3>.when::before{background:var(--purple)}
+  .phase.c4>.when::before{background:var(--warn)} .phase.c5>.when::before{background:var(--bad)}
+  .phase .plabel{font-weight:700;font-size:14px} .phase .psub{font-size:11.5px;color:var(--muted)}
+  .phase>.body{padding:0 0 28px 8px}
+  .phase .goal{font-size:13px;color:var(--accent2);margin-top:8px}
+  .phase .goal::before{content:"✓ ";font-weight:700}
+
+  .decision{border-left:3px solid var(--warn);padding:12px 16px;background:rgba(255,207,112,.05);
+    border-radius:0 10px 10px 0;margin-top:12px;font-size:14px}
+  .decision b{color:var(--warn)}
+  .decision .a{color:var(--accent2);font-size:13.5px;margin-top:4px}
+
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;text-align:center}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="kicker">Multiremi · 整体方案 · 2026-07</div>
+  <h1>统一机器 × 项目绑机 × Agent 去物理化</h1>
+  <p class="lead">机器在安装时就配齐 Claude + Codex + Key,彼此完全等价;"在哪跑"由项目决定;Agent 退化成纯人格;Runtime 从产品概念中消失。</p>
+  <div class="oneliner">
+    <span class="tag t-blue">一句话</span>&nbsp;
+    <b>注册机器 → 项目绑机器 → 开干。</b>&nbsp;路径、CLI、Key 全自动;派活 = 项目 + 人格,机器由项目推导。
+  </div>
+  <div class="legend">
+    <span><i class="dot g"></i>新增</span>
+    <span><i class="dot b"></i>改造现有</span>
+    <span><i class="dot r"></i>删除/淡出</span>
+    <span><i class="dot y"></i>决策点</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 0 目标模型 -->
+  <section>
+    <h2><span class="n">0</span>目标模型</h2>
+    <p class="sub">四个实体,一条链。对比现状:agent 不再绑 runtime,provider 筛选整个不存在(机器全能)。</p>
+    <div class="card">
+      <div class="diagram">
+        <div class="row">
+          <div class="node good">
+            <div class="h"><i class="dot g"></i>机器 Machine</div>
+            <div class="d">装 daemon 即注册。<b>统一化</b>:claude + codex + key 自动配齐,彼此等价<br><span class="kv">= 现在的 daemon;runtime 降为其内部细节</span></div>
+          </div>
+          <div class="arrow">← 绑定(物化)—</div>
+          <div class="node good">
+            <div class="h"><i class="dot g"></i>项目 Project</div>
+            <div class="d">逻辑容器 + <b>一条机器绑定</b>:「我在机器 M 的目录 D」<br><span class="kv">目录可以是已有文件夹,或自动 clone</span></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="node accent">
+            <div class="h"><i class="dot b"></i>Agent(纯人格)</div>
+            <div class="d">provider + instructions + skills + model<br><span class="kv"><s>runtimeId</s> <s>cwd</s> 全部拿掉</span></div>
+          </div>
+          <div class="arrow">+ 项目 →</div>
+          <div class="node accent">
+            <div class="h"><i class="dot b"></i>Task</div>
+            <div class="d"><code>project + agent + prompt</code><br><span class="kv">机器 ← 项目绑定推导;目录 ← 物化记录;CLI ← agent.provider</span></div>
+          </div>
+          <div class="arrow">→ 执行</div>
+          <div class="node dim">
+            <div class="h"><i class="dot r"></i>Runtime</div>
+            <div class="d">不再出现在产品里<br><span class="kv">daemon 按 provider 拉起对应 CLI 的内部实现</span></div>
+          </div>
+        </div>
+      </div>
+      <ul class="clean">
+        <li class="g">机器统一 ⇒ 「这台机器有啥 CLI」问题消失 ⇒ 任何 agent 可跑在任何机器</li>
+        <li class="g">项目绑机器 ⇒ 「代码在哪」只有一个权威来源,agent 与 repo 资源不再重复编码机器</li>
+        <li class="r">删除:agent 创建时选 runtime、agent.cwd、provider 可用性筛选</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- A 凭证中心 -->
+  <section>
+    <h2><span class="n g">A</span>模块 A · Provider 凭证中心 <span class="tag t-green">全新 · 全方案地基</span></h2>
+    <p class="sub">现状盘点结论:multiremi <b>没有任何模型/凭证配置模块</b>。现在的"凭证"= 每台机器人工 <code>claude login</code> 一次。本模块让 key 集中在服务端、按需下发。</p>
+    <div class="grid g3">
+      <div class="card module"><div class="mid">存</div>
+        <span class="tag t-green">服务端</span>
+        <h3>凭证表 + 管理 API</h3>
+        <ul class="clean">
+          <li class="g">表 <code>provider_credentials</code>:provider(claude/codex) → env 键值对(如 <code>ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY</code>、<code>OPENAI_BASE_URL / OPENAI_API_KEY</code>)</li>
+          <li class="g"><code>GET/PUT /api/admin/provider-credentials</code>,仅 admin/master</li>
+          <li>设置页一个简单表单(每个 provider 一组 env)</li>
+        </ul>
+        <div class="files">新表 + api.ts 两个路由 + 设置页</div>
+      </div>
+      <div class="card module"><div class="mid">发</div>
+        <span class="tag t-blue">下发通道</span>
+        <h3>心跳携带 · 内存持有</h3>
+        <ul class="clean">
+          <li class="g">daemon 注册/心跳响应里带 <code>provider_env</code></li>
+          <li class="g"><b>只存在 daemon 内存,不落盘</b>——fleet 机器上没有 key 文件</li>
+          <li class="g">轮换 = 改服务端 → 所有机器下个心跳自动生效,零登机操作</li>
+        </ul>
+        <div class="files">daemon register/heartbeat 响应 + <code>worker/daemon.ts</code> 持有</div>
+      </div>
+      <div class="card module"><div class="mid">注</div>
+        <span class="tag t-blue">注入点</span>
+        <h3>buildTaskEnv 加一层</h3>
+        <div class="envstack">
+          <span class="new">{ ...服务端 provider 凭证,   ← 新增打底</span><br>
+          <span class="old">&nbsp;&nbsp;...agent.customEnv,        ← 人格级仍可覆盖</span><br>
+          <span class="top">&nbsp;&nbsp;...MULTIREMI_* }           ← 坐标永远最优先</span>
+        </div>
+        <div class="files">单点:<code>src/daemon/agent-runtime/env/injector.ts</code> buildTaskEnv()</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B 机器统一化 -->
+  <section>
+    <h2><span class="n g">B</span>模块 B · 机器统一化安装 <span class="tag t-green">改造 install/setup</span></h2>
+    <p class="sub">装 daemon = 机器就绪。不需要任何 CLI 登录、不需要手工配 key。</p>
+    <div class="card">
+      <table class="plain">
+        <tr><th style="width:130px">环节</th><th>现在</th><th>改成</th></tr>
+        <tr>
+          <td><code>install-remi.sh</code></td>
+          <td class="muted">只装 remi 二进制</td>
+          <td>同时检测并安装 <b>claude + codex</b> 两个 CLI(走公司 npm 镜像;GitHub 不可达场景沿用本服务器镜像分发)。版本固定,升级复用现有 runtime-update 机制(<span class="mono">daemon.ts:472</span> 已有 <code>provider update</code>)</td>
+        </tr>
+        <tr>
+          <td><code>remi setup</code></td>
+          <td class="muted">要求各 CLI 已人工登录</td>
+          <td>不再需要登录。健康检查 = 「CLI 存在 + 服务端凭证可用」。setup 完机器即达"全能"状态</td>
+        </tr>
+        <tr>
+          <td>注册</td>
+          <td class="muted">daemon 按装了的 CLI 上报 runtime</td>
+          <td>不变(每台恒上报 claude + codex 两个 runtime),但 runtime 仅内部使用,UI 只展示机器</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- C 项目绑机器 -->
+  <section>
+    <h2><span class="n">C</span>模块 C · 项目绑机器(物化) <span class="tag t-blue">复用 local_directory</span></h2>
+    <p class="sub">「代码在哪台机器的哪个目录」的唯一权威。不新建表——<code>local_directory</code> 资源(<code>{daemon_id, local_path}</code>)就是它,配套约束已存在(<span class="mono">store.ts:7266</span> 一机一目录)。</p>
+    <div class="grid g2">
+      <div class="card module"><div class="mid">绑</div>
+        <h3>两种绑定方式</h3>
+        <ul class="clean">
+          <li><b>导入已有目录</b>:代码已在机器上 → 选机器 → 目录扫描选路径(复用已做的 directory-scan)→ 写 local_directory</li>
+          <li class="g"><b>自动 clone</b> <span class="tag t-green">新</span>:项目挂 git URL → 选机器 → daemon 收到 provision 请求,clone 到标准路径 <code>~/.remi/projects/&lt;slug&gt;</code> → 完成后自动写 local_directory</li>
+        </ul>
+        <p class="kv" style="margin-top:10px">provision 请求复用现有"runtime 请求队列"机制(directory-scan / model-list / update 同款),不发明新通道。</p>
+      </div>
+      <div class="card module"><div class="mid">1:1</div>
+        <h3>基数:V1 锁一项目一机器</h3>
+        <ul class="clean">
+          <li>UI 上项目只绑<b>一台</b>机器 → 派活无需"选哪台",交互最简</li>
+          <li class="g">数据模型天然支持多条物化(多机器),将来要并行/多机时直接放开,不用改表</li>
+          <li>换机器 = 重新绑定(旧记录移除或保留为历史)</li>
+        </ul>
+        <div class="files">项目页新增「绑定机器」入口(复用已做的三来源 repo 选择器交互)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- D 派发改造 -->
+  <section>
+    <h2><span class="n">D</span>模块 D · 派发改造 <span class="tag t-blue">核心逻辑变更</span></h2>
+    <p class="sub">派活判据从「agent 绑的 runtime」换成「项目绑的机器」。</p>
+    <div class="card">
+      <table class="plain">
+        <tr><th style="width:100px"></th><th>现在</th><th>改成</th></tr>
+        <tr>
+          <td><b>判据</b><br><span class="mono" style="font-size:10.5px">api.ts:9453</span></td>
+          <td class="muted">queued 任务能被某 runtime 领取 ⇔ <code>agent.runtimeId == 它</code> 且 provider 匹配</td>
+          <td>任务带 <code>project_id</code> → 项目物化指向机器 M → 领取者 = <b>M 上 provider == agent.provider 的 runtime</b></td>
+        </tr>
+        <tr>
+          <td><b>工作目录</b></td>
+          <td class="muted">agent.cwd(钉死在 agent 上)</td>
+          <td>物化记录的 <code>local_path</code>(daemon 已支持:<span class="mono">daemon.ts:686</span> resolvedWorkDir.localDirectory)</td>
+        </tr>
+        <tr>
+          <td><b>建任务</b></td>
+          <td class="muted">选 agent(机器随 agent 隐式确定)</td>
+          <td>选项目 + 选 agent。issue 任务的项目随 issue 自带;chat 任务显式选</td>
+        </tr>
+        <tr>
+          <td><b>兼容</b></td>
+          <td colspan="2"><code>agent.runtimeId</code> 仍有值的老 agent → 继续按老判据,现网不断;新 agent 一律走新链路</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- E agent 去物理化 + 前端 -->
+  <section>
+    <h2><span class="n">E</span>模块 E · Agent 去物理化 + 前端收口</h2>
+    <div class="grid g2">
+      <div class="card module"><div class="mid">-</div>
+        <span class="tag t-bad">删除</span>
+        <h3>Agent 身上拿掉的</h3>
+        <ul class="clean">
+          <li class="r">创建时选 runtime(<span class="mono">api.ts:6460</span> 必填放开;字段类型本就可空)</li>
+          <li class="r"><code>cwd</code>(由物化提供)</li>
+          <li class="r">「移动 agent 到另一个 runtime」操作(不再有意义)</li>
+        </ul>
+        <p class="kv" style="margin-top:8px">保留:provider(决定拉起哪个 CLI)、model、instructions、skills、customEnv、maxConcurrentTasks。</p>
+      </div>
+      <div class="card module"><div class="mid">UI</div>
+        <span class="tag t-blue">前端</span>
+        <h3>界面变化</h3>
+        <ul class="clean">
+          <li>「运行时」页 → <b>「机器」页</b>(现有 runtimes-page 本就按机器聚合,只需去掉 provider 维度的展示)</li>
+          <li>agent 创建:去掉选运行时步骤,只剩人格配置</li>
+          <li>项目页:+「绑定机器」(导入目录 / 自动 clone)</li>
+          <li>派活:选项目 → 机器自动跟随,无感</li>
+          <li class="g">回填:给现有 agent 的 cwd 生成对应项目物化,然后清 <code>runtimeId</code></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 分期 -->
+  <section>
+    <h2><span class="n p">§</span>分期落地 · 每期独立上线</h2>
+    <p class="sub">顺序有讲究:凭证先行(其它模块的地基),前端收口最后。</p>
+    <div class="card">
+      <div class="phase c1">
+        <div class="when"><div class="plabel">P1 凭证中心</div><div class="psub">模块 A · 最小 ~3 天</div></div>
+        <div class="body">
+          <ul class="clean" style="margin:0">
+            <li>凭证表 + admin API + 设置页;心跳下发;injector 加一层</li>
+          </ul>
+          <div class="goal">独立价值:key 集中管理、随时轮换;机器从此不需要人工登录 —— 不做后面几期也值得上</div>
+        </div>
+      </div>
+      <div class="phase c2">
+        <div class="when"><div class="plabel">P2 安装统一化</div><div class="psub">模块 B</div></div>
+        <div class="body">
+          <ul class="clean" style="margin:0">
+            <li>install-remi.sh 装双 CLI;setup 免登录;存量 3 台机器重装一遍验证</li>
+          </ul>
+          <div class="goal">新机器接入 = 跑一条安装命令,零配置</div>
+        </div>
+      </div>
+      <div class="phase c3">
+        <div class="when"><div class="plabel">P3 项目绑机器</div><div class="psub">模块 C</div></div>
+        <div class="body">
+          <ul class="clean" style="margin:0">
+            <li>项目页绑定入口(导入目录先行);provision 自动 clone 随后</li>
+          </ul>
+          <div class="goal">「代码在哪」有了唯一权威来源</div>
+        </div>
+      </div>
+      <div class="phase c4">
+        <div class="when"><div class="plabel">P4 派发改造</div><div class="psub">模块 D + E 后端</div></div>
+        <div class="body">
+          <ul class="clean" style="margin:0">
+            <li>isPendingForRuntime 换判据(带 runtimeId 的老 agent 兼容);放开创建必填;派发单测</li>
+          </ul>
+          <div class="goal">可以创建"不绑机器"的 agent 并跑通全链路;老 agent 照常</div>
+        </div>
+      </div>
+      <div class="phase c5">
+        <div class="when"><div class="plabel">P5 前端收口</div><div class="psub">模块 E 前端 + 回填</div></div>
+        <div class="body">
+          <ul class="clean" style="margin:0">
+            <li>机器页 / agent 创建简化 / 派活流;回填存量 agent 后清掉 runtimeId 兼容路径</li>
+          </ul>
+          <div class="goal">Runtime 从产品里彻底消失,目标模型达成</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 决策点 -->
+  <section>
+    <h2><span class="n y">?</span>决策点与风险</h2>
+    <div class="card">
+      <div class="decision">
+        <b>D1 · key 在服务端怎么存?</b> 内网单组织,DB 明文可接受吗,还是 server 环境变量注入/简单加密?
+        <div class="a">建议:先 DB 直存(和 master token 同级的信任域),重点保证 fleet 机器不落盘;后续要加密再说。</div>
+      </div>
+      <div class="decision">
+        <b>D2 · CLI 安装源</b>:内网装 claude/codex 走公司 npm registry 是否通畅?(GitHub 需 proxy 是已知约束)
+        <div class="a">建议:P2 动手前先在一台机器手工验证两条安装命令;不通就走本服务器镜像分发(install-remi.sh 已有同款机制)。</div>
+      </div>
+      <div class="decision">
+        <b>D3 · 多用户还做不做?</b> 与本方案正交:机器可见性(public/private)、成员权限那套<b>冻结不动</b>即可,两边不互相阻塞。
+        <div class="a">本方案在单人和多人模式下都成立;若日后继续多用户,只需给「项目绑机器」补权限校验。</div>
+      </div>
+      <div class="decision">
+        <b>D4 · 具体 env 键名</b>:claude(<code>ANTHROPIC_BASE_URL/ANTHROPIC_API_KEY</code> 或 AUTH_TOKEN)与 codex(<code>OPENAI_BASE_URL/OPENAI_API_KEY</code> 或 config.toml)按当时 CLI 版本核对,凭证表用自由键值对,不写死。
+      </div>
+      <ul class="clean" style="margin-top:16px">
+        <li class="w">风险:自动 clone 的仓库鉴权(私有 repo 需要 git 凭证)——V1 可先只支持已配好 git 凭证的机器,或先只做"导入已有目录"</li>
+        <li class="w">风险:双 CLI 版本漂移——install 固定版本 + 复用 runtime-update 机制统一升级</li>
+        <li class="g">回滚容易:P4 之前所有改动都是加法;P4 有老判据兜底,关掉新判据即回到现状</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 变更清单 -->
+  <section>
+    <h2><span class="n">✎</span>变更清单速查</h2>
+    <div class="card">
+      <table class="plain">
+        <tr><th style="width:90px">层</th><th>新增</th><th>修改</th><th>删除/淡出</th></tr>
+        <tr>
+          <td><b>数据</b></td>
+          <td>表 <code>provider_credentials</code></td>
+          <td><code>local_directory</code> 语义升格为项目物化;task 显式 <code>project_id</code></td>
+          <td><code>agent.runtimeId</code>、<code>agent.cwd</code>(回填后弃用)</td>
+        </tr>
+        <tr>
+          <td><b>API</b></td>
+          <td><code>/api/admin/provider-credentials</code>;provision(clone)请求队列</td>
+          <td>daemon register/heartbeat 响应带 <code>provider_env</code>;创建 agent 放开 runtime 必填;派发判据(<span class="mono">api.ts:9453</span>)</td>
+          <td>agent move-runtime 操作</td>
+        </tr>
+        <tr>
+          <td><b>Daemon</b></td>
+          <td>凭证内存持有;clone provisioner</td>
+          <td><code>injector.ts buildTaskEnv</code> 加凭证层;install-remi.sh 装双 CLI;setup 免登录</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td><b>前端</b></td>
+          <td>凭证设置页;项目「绑定机器」</td>
+          <td>运行时页 → 机器页;派活选项目</td>
+          <td>agent 创建的选运行时步骤</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <div>前置事实:key 可下发(已确认)· <code>local_directory</code> 及请求队列机制已存在 · runtimes 页已按机器聚合 —— 三个最贵的零件都是现成的。</div>
+    <div style="margin-top:8px">代码锚点 · <code>injector.ts</code> buildTaskEnv · <code>api.ts:9453</code> isPendingForRuntime · <code>api.ts:6460</code> runtime 必填 · <code>store.ts:7266</code> 一机一目录 · <code>daemon.ts:686</code> workDir 解析 · <code>daemon.ts:472</code> provider update</div>
+  </footer>
+
+</div>
+</body>
+</html>
