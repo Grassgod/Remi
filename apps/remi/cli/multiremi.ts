@@ -99,9 +99,6 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
     case "repo":
       await repo(parsed.positional, parsed.options);
       return;
-    case "agent":
-      await agent(parsed.positional, parsed.options);
-      return;
     case "issue":
       await issue(parsed.positional, parsed.options);
       return;
@@ -583,91 +580,6 @@ async function attachment(positional: string[], options: CliOptions): Promise<vo
     path: absolutePath,
     size: attachmentStringField(attachmentRow, "size_bytes", "sizeBytes") ?? String(data.byteLength),
   });
-}
-
-async function agent(positional: string[], options: CliOptions): Promise<void> {
-  const action = positional[0] ?? "";
-  if (action === "list") {
-    const workspaceId = multiremiApiConnection(options).workspaceId;
-    const query = workspaceId
-      ? `?${new URLSearchParams({ workspace_id: workspaceId }).toString()}`
-      : "";
-    const response = await multiremiApiRequest("GET", `/api/agents${query}`, undefined, options);
-    printAgentCollection(response, options);
-    return;
-  }
-  if (action === "get") {
-    const agentId = positional[1]?.trim();
-    if (!agentId) throw new Error("usage: multiremi agent get <agent-id> [--output json]");
-    printJson(await multiremiApiRequest("GET", `/api/agents/${encodeURIComponent(agentId)}`, undefined, options));
-    return;
-  }
-  if (action === "edit" || action === "update") {
-    const agentId = positional[1]?.trim();
-    if (!agentId) {
-      throw new Error(
-        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex] [--model <model>] [--thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
-      );
-    }
-    await agentEdit(agentId, options);
-    return;
-  }
-  throw new Error("usage: multiremi agent list|get|edit|update ...");
-}
-
-async function agentEdit(agentId: string, options: CliOptions): Promise<void> {
-  const body: Record<string, unknown> = {};
-
-  addStringBodyField(body, options, "name", "name");
-
-  const description = await readOptionalTextBody(options, "description");
-  if (description.set) body.description = description.value;
-
-  const instructions = await readOptionalTextBody(options, "instructions");
-  if (instructions.set) body.instructions = instructions.value;
-
-  addStringBodyField(body, options, "avatar_url", "avatar-url");
-  addStringBodyField(body, options, "model", "model");
-  addStringBodyField(body, options, "thinking_level", "thinking-level");
-
-  if (hasOption(options, "provider")) {
-    const provider = rawStringOption(options, "provider");
-    if (!provider || !isSupportedDaemonProvider(provider)) {
-      throw new Error(`--provider must be one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
-    }
-    body.provider = provider;
-  }
-
-  if (hasOption(options, "visibility")) {
-    const visibility = rawStringOption(options, "visibility");
-    if (visibility !== "private" && visibility !== "workspace") {
-      throw new Error("--visibility must be private or workspace");
-    }
-    body.visibility = visibility;
-  }
-
-  const maxConcurrentTasks = integerOption(options, "max-concurrent-tasks");
-  if (maxConcurrentTasks !== null) {
-    if (maxConcurrentTasks < 1 || maxConcurrentTasks > 50) {
-      throw new Error("--max-concurrent-tasks must be an integer between 1 and 50");
-    }
-    body.max_concurrent_tasks = maxConcurrentTasks;
-  }
-
-  if (Object.keys(body).length === 0) {
-    throw new Error(
-      "no fields to edit; pass --name, --description, --instructions, --avatar-url, --provider, --model, --thinking-level, --visibility, or --max-concurrent-tasks",
-    );
-  }
-
-  printJson(
-    await multiremiApiRequest(
-      "PUT",
-      `/api/agents/${encodeURIComponent(agentId)}`,
-      body,
-      options,
-    ),
-  );
 }
 
 async function issue(positional: string[], options: CliOptions): Promise<void> {
@@ -1399,22 +1311,6 @@ function printIssueCollection(value: unknown, options: CliOptions): void {
   printIssueTable(extractList(value, "issues"), { match: false, fullId: Boolean(options["full-id"] ?? options.fullId) });
 }
 
-function printAgentCollection(value: unknown, options: CliOptions): void {
-  if (outputMode(options, "table") !== "table") {
-    printJson(value);
-    return;
-  }
-  printTable(extractList(value, "agents"), [
-    { header: "ID", value: (row) => field(row, "id"), maxWidth: Boolean(options["full-id"] ?? options.fullId) ? 0 : 18 },
-    { header: "NAME", value: (row) => field(row, "name"), maxWidth: 32 },
-    { header: "ENGINE", value: (row) => field(row, "provider") },
-    { header: "MODEL", value: (row) => field(row, "model"), maxWidth: 28 },
-    { header: "VISIBILITY", value: (row) => field(row, "visibility") },
-    { header: "CONCURRENCY", value: (row) => field(row, "max_concurrent_tasks", "maxConcurrentTasks") },
-    { header: "UPDATED", value: (row) => shortDate(field(row, "updated_at", "updatedAt")) },
-  ], "No agents found.");
-}
-
 function printIssueSearch(value: unknown, options: CliOptions): void {
   if (outputMode(options, "table") !== "table") {
     printJson(value);
@@ -1627,10 +1523,6 @@ Commands:
   daemon service         Install, uninstall, or print a user-level service
   repo checkout <url>    Check out an allowed workspace repository
   attachment download <id> Download an attachment to a local file
-  agent list             List agents
-  agent get <id>         Print an agent as JSON
-  agent edit <id>        Edit agent identity and runtime metadata
-  agent update <id>      Alias for agent edit
   issue get <id>         Print an issue as JSON
   issue list             List issues
   issue create           Create an issue
@@ -1683,19 +1575,6 @@ Options:
   --service-dir <dir>    Directory for daemon service files
   --enable               Enable service after daemon service install
   --disable              Disable service before daemon service uninstall
-
-Agent edit options:
-  --name <name>          Change the display name
-  --description <text>   Change or clear the description
-  --instructions <text>  Change or clear instructions
-  --avatar-url <url>     Change or clear the avatar URL
-  --provider <name>      Change engine: claude or codex
-  --model <model>        Change or clear the model override
-  --thinking-level <v>   Change or clear the reasoning override
-  --visibility <value>   Set private or workspace visibility
-  --max-concurrent-tasks <n> Set concurrency from 1 to 50
-  --description-file <p> Read description from a file
-  --instructions-file <p> Read instructions from a file
 `);
 }
 

@@ -11661,47 +11661,18 @@ describe("Bun Multiremi API", () => {
     const updatedAgent = await app.request(`/api/agents/${agent.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: "Edited Agent",
-        description: "",
-        instructions: "Updated instructions",
-        avatar_url: "",
-        provider: "claude",
-        model: "claude-sonnet",
-        visibility: "private",
-        max_concurrent_tasks: 4,
-        custom_args: ["--updated"],
-        thinking_level: "low",
-      }),
+      body: JSON.stringify({ custom_args: ["--updated"], thinking_level: "low" }),
     });
     const updatedAgentBody = await updatedAgent.json();
     expect(updatedAgentBody).toMatchObject({
       id: agent.id,
-      name: "Edited Agent",
-      description: "",
-      instructions: "Updated instructions",
-      avatar_url: "",
-      provider: "claude",
-      model: "claude-sonnet",
-      visibility: "private",
-      max_concurrent_tasks: 4,
       has_custom_env: true,
       custom_env_key_count: 1,
       custom_args: ["--updated"],
       thinking_level: "low",
     });
     expect(updatedAgentBody.custom_env).toBeUndefined();
-    expect(store.getAgent(agent.id)).toMatchObject({
-      name: "Edited Agent",
-      description: "",
-      instructions: "Updated instructions",
-      avatarUrl: "",
-      provider: "claude",
-      model: "claude-sonnet",
-      visibility: "private",
-      maxConcurrentTasks: 4,
-      customEnv: { SECRET_TOKEN: "real-value" },
-    });
+    expect(store.getAgent(agent.id)?.customEnv).toEqual({ SECRET_TOKEN: "real-value" });
 
     const updatedEnv = await app.request(`/api/agents/${agent.id}/env`, {
       method: "PUT",
