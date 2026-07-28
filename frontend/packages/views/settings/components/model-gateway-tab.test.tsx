@@ -79,8 +79,9 @@ describe("ModelGatewayTab", () => {
 
   it("saves the claude fragment with token_op keep when the token was untouched", async () => {
     render(<ModelGatewayTab />, { wrapper: Wrapper });
-    const saveButtons = screen.getAllByRole("button", { name: /Save/ });
-    await userEvent.click(saveButtons[0]); // claude section
+    const [claudeSaveButton] = screen.getAllByRole("button", { name: /Save/ });
+    if (!claudeSaveButton) throw new Error("Claude save button not found");
+    await userEvent.click(claudeSaveButton);
     await waitFor(() => expect(mockUpdateRelay).toHaveBeenCalled());
     expect(mockUpdateRelay).toHaveBeenCalledWith(
       "workspace-1",
