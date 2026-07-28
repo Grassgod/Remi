@@ -7,16 +7,26 @@ import {
   DuplicateIssueErrorBodySchema,
   EMPTY_CLI_LATEST_VERSION,
   EMPTY_FLEET_MODELS,
+  EMPTY_ISSUE_SESSION_TASKS,
+  EMPTY_ISSUE_SESSIONS,
+  EMPTY_SESSION_EVENTS,
+  EMPTY_SESSION_PARTICIPANTS,
+  EMPTY_SESSION_RESULTS,
   FleetModelsResponseSchema,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  IssueSessionListSchema,
+  IssueSessionTaskListSchema,
   RuntimeDirectoryScanRequestSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
+  SessionEventListSchema,
+  SessionParticipantListSchema,
+  SessionResultListSchema,
   SquadListSchema,
   SquadSchema,
   TimelineEntriesSchema,
@@ -327,6 +337,68 @@ describe("TimelineEntriesSchema null actor_id", () => {
     expect(parsed).toHaveLength(3);
     expect(parsed[1]).toMatchObject({ action: "issue_assigned", actor_id: "" });
     expect(parsed[2]).toMatchObject({ type: "comment", content: "Remi 是一个 AI 消息路由器。" });
+  });
+});
+
+describe("IssueSessionListSchema", () => {
+  const opts = { endpoint: "GET /api/issues/:id/sessions" };
+
+  it("defaults optional participant and summary fields for older responses", () => {
+    const parsed = parseWithFallback([
+      {
+        id: "sess_1",
+        issue_id: "issue_1",
+        workspace_id: "ws_1",
+        title: "Main",
+        status: "active",
+        created_at: "2026-07-27T00:00:00Z",
+        updated_at: "2026-07-27T00:00:00Z",
+      },
+    ], IssueSessionListSchema, EMPTY_ISSUE_SESSIONS, opts);
+    expect(parsed[0]).toMatchObject({
+      id: "sess_1",
+      is_default: false,
+      summary: null,
+      participants: [],
+    });
+  });
+
+  it("falls back instead of exposing a malformed list to the UI", () => {
+    expect(parseWithFallback(
+      { sessions: null },
+      IssueSessionListSchema,
+      EMPTY_ISSUE_SESSIONS,
+      opts,
+    )).toEqual([]);
+  });
+});
+
+describe("Issue Session boundary list schemas", () => {
+  it("falls back for malformed participant, event, task, and result arrays", () => {
+    expect(parseWithFallback(
+      { participants: null },
+      SessionParticipantListSchema,
+      EMPTY_SESSION_PARTICIPANTS,
+      { endpoint: "GET Session participants" },
+    )).toEqual([]);
+    expect(parseWithFallback(
+      [{ id: "event_without_sequence" }],
+      SessionEventListSchema,
+      EMPTY_SESSION_EVENTS,
+      { endpoint: "GET Session events" },
+    )).toEqual([]);
+    expect(parseWithFallback(
+      null,
+      IssueSessionTaskListSchema,
+      EMPTY_ISSUE_SESSION_TASKS,
+      { endpoint: "GET Session tasks" },
+    )).toEqual([]);
+    expect(parseWithFallback(
+      [{ id: "result_without_body" }],
+      SessionResultListSchema,
+      EMPTY_SESSION_RESULTS,
+      { endpoint: "GET Session results" },
+    )).toEqual([]);
   });
 });
 

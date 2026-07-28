@@ -7,6 +7,7 @@ export function buildTaskPrompt(task: AgentTask): string {
   sections.push(task.prompt.trim());
 
   appendClaimContextSections(sections, task);
+  appendSessionContextSections(sections, task);
 
   if (task.issue) {
     sections.push("");
@@ -137,6 +138,57 @@ function appendClaimContextSections(sections: string[], task: AgentTask): void {
   }
 }
 
+function appendSessionContextSections(sections: string[], task: AgentTask): void {
+  const issueSession = task.issueSession ?? task.issue_session ?? null;
+  const projection = task.sessionProjection ?? task.session_projection ?? null;
+  if (projection?.jsonl?.trim()) {
+    sections.push("");
+    sections.push("## Current Session Context");
+    if (issueSession?.title) sections.push(`Session: ${issueSession.title}`);
+    sections.push(
+      projection.mode === "bootstrap"
+        ? "This is your first turn on this provider-session lineage. The JSONL below is the complete canonical session history from your perspective."
+        : "You are resuming your own provider session. The JSONL below contains only canonical events added since your last committed cursor.",
+    );
+    sections.push("`assistant_history` means your own earlier output; `external_agent` means a named peer; `user` means a human; `operator` means authoritative orchestration state.");
+    sections.push("Treat event order and author labels as authoritative. Do not claim another participant's words as your own.");
+    sections.push("");
+    sections.push(`\`\`\`jsonl\n${projection.jsonl.trim()}\n\`\`\``);
+  }
+
+  const results = task.issueSessionResults ?? task.issue_session_results ?? [];
+  if (results.length) {
+    sections.push("");
+    sections.push("## Published Results From Other Sessions");
+    sections.push("These are read-only published outputs. They do not include the other sessions' private working transcripts.");
+    for (const result of results) {
+      const title = result.title?.trim() || result.id;
+      sections.push("");
+      sections.push(`### ${title}`);
+      sections.push(result.body);
+    }
+  }
+
+  const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
+  const sessionId = issueSession?.id ?? "";
+  if (issueId && sessionId) {
+    sections.push("");
+    sections.push("## Sharing Results Across Sessions");
+    sections.push("Sibling Session transcripts are private. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
+    if (process.platform === "win32") {
+      sections.push(`Write the result body to a UTF-8 file, then run: \`remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --content-file ./session-result.md\`.`);
+    } else {
+      sections.push([
+        "Use a quoted HEREDOC so the shell cannot rewrite the result:",
+        "",
+        `    cat <<'RESULT' | remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --content-stdin`,
+        "    Reusable result only; omit private working notes.",
+        "    RESULT",
+      ].join("\n"));
+    }
+  }
+}
+
 function appendTriggerCommentSection(sections: string[], task: AgentTask): void {
   const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
   if (!triggerCommentId) return;
@@ -163,10 +215,16 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask): void 
     sections.push("The triggering comment was posted by another agent. If it is only an acknowledgment, thanks, or sign-off and you produced no work this turn, do not reply. If you did real work, post the result as a normal reply. Do not mention the other agent as a sign-off.");
   }
 
-  const readHint = buildCommentReadHint(issueId, triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
-  if (readHint) {
+  const projection = task.sessionProjection ?? task.session_projection ?? null;
+  if (projection?.jsonl?.trim()) {
     sections.push("");
-    sections.push(readHint);
+    sections.push("The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
+  } else {
+    const readHint = buildCommentReadHint(issueId, triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
+    if (readHint) {
+      sections.push("");
+      sections.push(readHint);
+    }
   }
   const replyInstructions = buildCommentReplyInstructions(issueId, triggerCommentId);
   if (replyInstructions) {

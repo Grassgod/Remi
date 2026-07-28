@@ -10,6 +10,7 @@ export interface AssigneeFrequencyEntry {
 export interface TimelineEntry {
   type: "activity" | "comment";
   id: string;
+  issue_session_id?: string | null;
   actor_type: string;
   actor_id: string;
   created_at: string;
@@ -29,4 +30,3 @@ export interface TimelineEntry {
   /** Set by frontend coalescing when consecutive identical activities are merged. */
   coalesced_count?: number;
 }
-

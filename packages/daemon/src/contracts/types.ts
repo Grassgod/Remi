@@ -56,6 +56,38 @@ export interface AgentTaskIssue {
   metadata: Record<string, string | number | boolean>;
 }
 
+export interface AgentTaskIssueSession {
+  id: string;
+  issueId?: string;
+  issue_id?: string;
+  title: string;
+  summary?: string | null;
+}
+
+export interface AgentTaskSessionProjection {
+  sessionId?: string;
+  session_id?: string;
+  targetAgentId?: string;
+  target_agent_id?: string;
+  mode: "bootstrap" | "delta";
+  fromSeq?: number;
+  from_seq?: number;
+  toSeq?: number;
+  to_seq?: number;
+  jsonl: string;
+}
+
+export interface AgentTaskIssueSessionResult {
+  id: string;
+  sourceSessionId?: string;
+  source_session_id?: string;
+  title?: string;
+  body: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  created_at?: string;
+}
+
 /** Project attached to a task. */
 export interface AgentTaskProject {
   id: string;
@@ -93,6 +125,8 @@ export interface AgentTask {
 
   issueId: string | null;
   issue_id?: string | null;
+  issueSessionId?: string | null;
+  issue_session_id?: string | null;
   chatSessionId: string | null;
   autopilotRunId: string | null;
   completedAt: string | null;
@@ -100,6 +134,12 @@ export interface AgentTask {
 
   agent: AgentTaskAgent | null;
   issue: AgentTaskIssue | null;
+  issueSession?: AgentTaskIssueSession | null;
+  issue_session?: AgentTaskIssueSession | null;
+  sessionProjection?: AgentTaskSessionProjection | null;
+  session_projection?: AgentTaskSessionProjection | null;
+  issueSessionResults?: AgentTaskIssueSessionResult[];
+  issue_session_results?: AgentTaskIssueSessionResult[];
   project: AgentTaskProject | null;
   projectResources: AgentTaskProjectResource[];
   repos: AgentTaskRepo[];

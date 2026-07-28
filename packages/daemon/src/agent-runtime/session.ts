@@ -80,6 +80,15 @@ export class AgentSession {
       }
     }
 
+    // Ephemeral task execution deliberately has no in-process recovery: the
+    // server owns retry policy and, for product Sessions, must atomically reset
+    // the AgentLane before rebuilding a bootstrap projection. Returning an
+    // empty success here would preserve a dead provider session and lose the
+    // task. Surface a stable error marker so the daemon/server can classify it.
+    if (staleSession && recovered === null) {
+      throw new Error("Stale provider session: no conversation found");
+    }
+
     return {
       response: resultResponse,
       sessionId: resultResponse?.sessionId ?? null,

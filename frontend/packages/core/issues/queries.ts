@@ -65,8 +65,13 @@ export const issueKeys = {
   childProgress: (wsId: string) =>
     [...issueKeys.all(wsId), "child-progress"] as const,
   /** Full-issue timeline (single TanStack Query, no cursor). */
-  timeline: (issueId: string) =>
-    ["issues", "timeline", issueId] as const,
+  timeline: (issueId: string, issueSessionId?: string) =>
+    ["issues", "timeline", issueId, issueSessionId ?? "all"] as const,
+  sessions: (issueId: string) => ["issues", "sessions", issueId] as const,
+  sessionTasks: (issueId: string, issueSessionId: string) =>
+    ["issues", "sessions", issueId, issueSessionId, "tasks"] as const,
+  sessionResults: (issueId: string) =>
+    ["issues", "sessions", issueId, "results"] as const,
   reactions: (issueId: string) => ["issues", "reactions", issueId] as const,
   subscribers: (issueId: string) =>
     ["issues", "subscribers", issueId] as const,
@@ -465,10 +470,32 @@ export function childrenByParentsOptions(
  * entries per issue) it added complexity without a UX win and broke reply
  * threads at page boundaries.
  */
-export function issueTimelineOptions(issueId: string) {
+export function issueTimelineOptions(issueId: string, issueSessionId?: string) {
   return queryOptions({
-    queryKey: issueKeys.timeline(issueId),
-    queryFn: () => api.listTimeline(issueId),
+    queryKey: issueKeys.timeline(issueId, issueSessionId),
+    queryFn: () => api.listTimeline(issueId, issueSessionId),
+  });
+}
+
+export function issueSessionsOptions(issueId: string) {
+  return queryOptions({
+    queryKey: issueKeys.sessions(issueId),
+    queryFn: () => api.listIssueSessions(issueId),
+  });
+}
+
+export function issueSessionTasksOptions(issueId: string, issueSessionId: string) {
+  return queryOptions({
+    queryKey: issueKeys.sessionTasks(issueId, issueSessionId),
+    queryFn: () => api.listSessionTasks(issueId, issueSessionId),
+    enabled: Boolean(issueId && issueSessionId),
+  });
+}
+
+export function issueSessionResultsOptions(issueId: string) {
+  return queryOptions({
+    queryKey: issueKeys.sessionResults(issueId),
+    queryFn: () => api.listIssueSessionResults(issueId),
   });
 }
 

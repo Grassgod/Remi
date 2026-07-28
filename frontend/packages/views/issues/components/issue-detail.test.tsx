@@ -195,6 +195,26 @@ vi.mock("../../projects/components/project-picker", () => ({
 // Mock api
 const mockApiObj = vi.hoisted(() => ({
   getIssue: vi.fn(),
+  listIssueSessions: vi.fn().mockResolvedValue([{
+    id: "session-main",
+    issue_id: "issue-1",
+    workspace_id: "ws-1",
+    title: "Main",
+    status: "active",
+    is_default: true,
+    summary: null,
+    created_by_type: "system",
+    created_by_id: null,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-01T00:00:00Z",
+    participants: [],
+  }]),
+  listSessionTasks: vi.fn().mockResolvedValue([]),
+  listIssueSessionResults: vi.fn().mockResolvedValue([]),
+  createIssueSession: vi.fn(),
+  addSessionParticipant: vi.fn(),
+  createSessionTask: vi.fn(),
+  publishSessionResult: vi.fn(),
   listTimeline: vi.fn().mockResolvedValue([]),
   listComments: vi.fn().mockResolvedValue([]),
   createComment: vi.fn(),
@@ -449,12 +469,12 @@ function createTestQueryClient() {
   });
 }
 
-function renderIssueDetail(issueId = "issue-1") {
+function renderIssueDetail(issueId = "issue-1", initialIssueSessionId?: string) {
   const queryClient = createTestQueryClient();
   return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={queryClient}>
-        <IssueDetail issueId={issueId} />
+        <IssueDetail issueId={issueId} initialIssueSessionId={initialIssueSessionId} />
       </QueryClientProvider>
     </I18nProvider>,
   );
@@ -472,7 +492,7 @@ function renderIssueDetailWithHighlight(
     // the issue itself has finished loading, so the effect that scrolls to
     // the comment fires once with `loading=true` (skeleton still rendered,
     // no comment DOM) and must re-fire when `loading` flips to false.
-    queryClient.setQueryData(["issues", "timeline", issueId], mockTimeline);
+    queryClient.setQueryData(["issues", "timeline", issueId, "session-main"], mockTimeline);
   }
   const result = render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
@@ -494,6 +514,22 @@ describe("IssueDetail (shared)", () => {
     mockViewport.isMobile = false;
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
+    mockApiObj.listIssueSessions.mockResolvedValue([{
+      id: "session-main",
+      issue_id: mockIssue.id,
+      workspace_id: "ws-1",
+      title: "Main",
+      status: "active",
+      is_default: true,
+      summary: null,
+      created_by_type: "system",
+      created_by_id: null,
+      created_at: "2025-01-01T00:00:00Z",
+      updated_at: "2025-01-01T00:00:00Z",
+      participants: [],
+    }]);
+    mockApiObj.listSessionTasks.mockResolvedValue([]);
+    mockApiObj.listIssueSessionResults.mockResolvedValue([]);
     // /timeline returns the entries flat in chronological order (oldest first).
     mockApiObj.listTimeline.mockResolvedValue(mockTimeline);
     mockApiObj.listIssueReactions.mockResolvedValue([]);
@@ -529,6 +565,129 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("switches the visible conversation by product Session", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+    renderIssueDetail();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+    await waitFor(() => {
+      expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
+    });
+  });
+
+  it("opens the Session that owns an inbox deep-linked comment", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+
+    renderIssueDetail("issue-1", "session-review");
+
+    await waitFor(() => {
+      expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
+    });
+  });
+
+  it("shows and explicitly publishes reusable Session results", async () => {
+    mockApiObj.listIssueSessionResults.mockResolvedValue([{
+      id: "result-1",
+      issue_id: mockIssue.id,
+      source_session_id: "session-main",
+      title: "Architecture decision",
+      body: "Use an append-only canonical event log.",
+      metadata: {},
+      published_by_type: "member",
+      published_by_id: "user-1",
+      created_at: "2025-01-03T00:00:00Z",
+    }]);
+    mockApiObj.publishSessionResult.mockResolvedValue({
+      id: "result-2",
+      issue_id: mockIssue.id,
+      source_session_id: "session-main",
+      title: "API contract",
+      body: "Sibling sessions consume explicit results only.",
+      metadata: {},
+      published_by_type: "member",
+      published_by_id: "user-1",
+      created_at: "2025-01-04T00:00:00Z",
+    });
+    renderIssueDetail();
+
+    expect(await screen.findByText("Use an append-only canonical event log.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Publish result" }));
+    fireEvent.change(screen.getByLabelText("Title (optional)"), {
+      target: { value: "API contract" },
+    });
+    fireEvent.change(screen.getByLabelText("Result"), {
+      target: { value: "Sibling sessions consume explicit results only." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+    await waitFor(() => {
+      expect(mockApiObj.publishSessionResult).toHaveBeenCalledWith(
+        "issue-1",
+        "session-main",
+        "API contract",
+        "Sibling sessions consume explicit results only.",
+      );
+    });
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {

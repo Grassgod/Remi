@@ -635,6 +635,10 @@ async function issue(positional: string[], options: CliOptions): Promise<void> {
     await issueComment(positional.slice(1), options);
     return;
   }
+  if (action === "session") {
+    await issueSession(positional.slice(1), options);
+    return;
+  }
   if (action === "metadata") {
     await issueMetadata(positional.slice(1), options);
     return;
@@ -684,7 +688,70 @@ async function issue(positional: string[], options: CliOptions): Promise<void> {
     printIssueSearch(await multiremiApiRequest("GET", `/api/issues/search?${params.toString()}`, undefined, options), options);
     return;
   }
-  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|cancel-task|comment|subscriber|metadata ...");
+  throw new Error("usage: multiremi issue list|get|create|update|assign|status|delete|search|runs|run-messages|rerun|cancel-task|comment|session|subscriber|metadata ...");
+}
+
+async function issueSession(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  if (action === "list") {
+    const issueId = positional[1]?.trim();
+    if (!issueId) throw new Error("usage: multiremi issue session list <issue-id> [--output json]");
+    const response = await multiremiApiRequest(
+      "GET",
+      `/api/issues/${encodeURIComponent(issueId)}/sessions`,
+      undefined,
+      options,
+    );
+    printIssueSessionCollection(response, options);
+    return;
+  }
+  if (action === "result") {
+    await issueSessionResult(positional.slice(1), options);
+    return;
+  }
+  throw new Error("usage: multiremi issue session list|result ...");
+}
+
+async function issueSessionResult(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  const issueId = positional[1]?.trim();
+  if (action === "list") {
+    if (!issueId) {
+      throw new Error("usage: multiremi issue session result list <issue-id> [--session <session-id>] [--output json]");
+    }
+    const response = await multiremiApiRequest(
+      "GET",
+      `/api/issues/${encodeURIComponent(issueId)}/session-results`,
+      undefined,
+      options,
+    );
+    const sessionId = rawStringOption(options, "session", "session-id");
+    const filtered = sessionId
+      ? extractList(response).filter((row) => field(row, "source_session_id", "sourceSessionId") === sessionId)
+      : response;
+    printIssueSessionResultCollection(filtered, options);
+    return;
+  }
+  if (action === "publish") {
+    if (!issueId) {
+      throw new Error("usage: multiremi issue session result publish <issue-id> --session <session-id> [--title <title>] (--content <text>|--content-file <path>|--content-stdin)");
+    }
+    const sessionId = rawStringOption(options, "session", "session-id");
+    if (!sessionId) throw new Error("--session is required");
+    const body = await readContentBody(options, "result body");
+    if (!body.trim()) throw new Error("result body is required");
+    printJson(await multiremiApiRequest(
+      "POST",
+      `/api/issues/${encodeURIComponent(issueId)}/sessions/${encodeURIComponent(sessionId)}/results`,
+      {
+        title: rawStringOption(options, "title") ?? "",
+        body,
+      },
+      options,
+    ));
+    return;
+  }
+  throw new Error("usage: multiremi issue session result list|publish ...");
 }
 
 async function issueComment(positional: string[], options: CliOptions): Promise<void> {
@@ -1104,12 +1171,16 @@ function camelizeOptionKey(key: string): string {
 }
 
 async function readCommentBody(options: CliOptions): Promise<string> {
+  return readContentBody(options, "comment body");
+}
+
+async function readContentBody(options: CliOptions, label: string): Promise<string> {
   const content = stringOpt(options.content, undefined);
   if (content != null) return content;
   const contentFile = stringOpt(options.contentFile ?? options["content-file"], undefined);
   if (contentFile) return readFileSync(contentFile, "utf8");
   if (Boolean(options.contentStdin ?? options["content-stdin"])) return await readStdin();
-  throw new Error("comment body is required: pass --content, --content-file, or --content-stdin");
+  throw new Error(`${label} is required: pass --content, --content-file, or --content-stdin`);
 }
 
 async function readStdin(): Promise<string> {
@@ -1309,6 +1380,35 @@ function printIssueCollection(value: unknown, options: CliOptions): void {
     return;
   }
   printIssueTable(extractList(value, "issues"), { match: false, fullId: Boolean(options["full-id"] ?? options.fullId) });
+}
+
+function printIssueSessionCollection(value: unknown, options: CliOptions): void {
+  if (outputMode(options, "table") !== "table") {
+    printJson(value);
+    return;
+  }
+  printTable(extractList(value, "sessions"), [
+    { header: "ID", value: (row) => field(row, "id"), maxWidth: Boolean(options["full-id"] ?? options.fullId) ? 0 : 18 },
+    { header: "TITLE", value: (row) => field(row, "title"), maxWidth: 36 },
+    { header: "STATUS", value: (row) => field(row, "status") },
+    { header: "DEFAULT", value: (row) => field(row, "is_default", "isDefault") ? "yes" : "" },
+    { header: "PARTICIPANTS", value: (row) => Array.isArray(row.participants) ? row.participants.length : 0 },
+    { header: "UPDATED", value: (row) => shortDate(field(row, "updated_at", "updatedAt")) },
+  ], "No sessions found.");
+}
+
+function printIssueSessionResultCollection(value: unknown, options: CliOptions): void {
+  if (outputMode(options, "table") !== "table") {
+    printJson(value);
+    return;
+  }
+  printTable(extractList(value, "results"), [
+    { header: "ID", value: (row) => field(row, "id"), maxWidth: Boolean(options["full-id"] ?? options.fullId) ? 0 : 18 },
+    { header: "SOURCE SESSION", value: (row) => field(row, "source_session_id", "sourceSessionId"), maxWidth: 18 },
+    { header: "TITLE", value: (row) => field(row, "title"), maxWidth: 36 },
+    { header: "RESULT", value: (row) => field(row, "body"), maxWidth: 80 },
+    { header: "PUBLISHED", value: (row) => shortDate(field(row, "created_at", "createdAt")) },
+  ], "No published session results found.");
 }
 
 function printIssueSearch(value: unknown, options: CliOptions): void {
@@ -1536,6 +1636,9 @@ Commands:
   issue comment update <comment-id>
   issue comment delete <comment-id>
   issue comment resolve <comment-id>
+  issue session list <id> List product Sessions for an issue
+  issue session result list <id> List explicitly published cross-Session results
+  issue session result publish <id> Publish a reusable result from one Session
   issue subscriber list <id>
   issue subscriber add <id> [--user-id <member-id>]
   issue subscriber remove <id> [--user-id <member-id>]
@@ -1558,6 +1661,10 @@ Options:
   --output json|table    Output format for supported read commands
   --full-id              Show full IDs in supported table output
   --attachment <path>    Attach a local file to issue create/comment add (repeatable)
+  --session <id>         Select a product Session for Session result commands
+  --content <text>       Inline comment or published-result body
+  --content-file <path>  Read a comment or published-result body from a file
+  --content-stdin        Read a comment or published-result body from stdin
   --output-dir <dir>     Directory for attachment download
   --provider <name>      Limit daemon to one provider: claude or codex (default: auto-detect)
   --workspace <id>       Workspace id (default: local)

@@ -49,9 +49,10 @@ interface TaskState {
 
 interface AgentLiveCardProps {
   issueId: string;
+  issueSessionId?: string;
 }
 
-export function AgentLiveCard({ issueId }: AgentLiveCardProps) {
+export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
   const { t } = useT("issues");
   const { getActorName } = useActorName();
   const [taskStates, setTaskStates] = useState<Map<string, TaskState>>(new Map());
@@ -93,8 +94,11 @@ export function AgentLiveCard({ issueId }: AgentLiveCardProps) {
   // before the WS subscription saw them.
   const reconcile = useCallback(() => {
     const mySeq = ++reconcileSeq.current;
-    api.getActiveTasksForIssue(issueId).then(({ tasks }) => {
+    api.getActiveTasksForIssue(issueId).then(({ tasks: issueTasks }) => {
       if (!mountedRef.current) return;
+      const tasks = issueSessionId
+        ? issueTasks.filter((task) => task.issue_session_id === issueSessionId)
+        : issueTasks;
       // A newer reconcile was issued after this one — drop this response
       // unconditionally and let the latest request win, regardless of
       // resolution order. Without this guard, a slow A then a fast B can
@@ -148,7 +152,7 @@ export function AgentLiveCard({ issueId }: AgentLiveCardProps) {
         });
       }
     }).catch(console.error);
-  }, [issueId]);
+  }, [issueId, issueSessionId]);
 
   // Initial fetch on mount / issueId change.
   useEffect(() => {

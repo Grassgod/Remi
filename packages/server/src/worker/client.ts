@@ -18,6 +18,7 @@ export interface MultiremiWorkspaceReposResponse {
   repos: MultiremiRepoData[];
   repos_version: string;
   settings?: Record<string, unknown>;
+  relay?: MultiremiRelayWire;
 }
 
 export interface MultiremiDaemonRegisterRuntimeInput {
@@ -37,11 +38,23 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   };
 }
 
+export interface MultiremiRelayEngineWire {
+  fragment: string;
+  auth_token: string;
+  revision: number;
+}
+export interface MultiremiRelayWire {
+  claude: MultiremiRelayEngineWire | null;
+  codex: MultiremiRelayEngineWire | null;
+  model_discovery?: boolean;
+}
+
 export interface MultiremiDaemonRegisterResponse {
   workspace_id?: string;
   repos: MultiremiRepoData[];
   repos_version: string;
   settings?: Record<string, unknown>;
+  relay?: MultiremiRelayWire;
   runtimes: Array<{ id: string; provider?: string; type?: string }>;
 }
 
@@ -297,6 +310,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     agentId: stringOrNull(raw.agent_id ?? raw.agentId) ?? "",
     runtimeId: stringOrNull(raw.runtime_id ?? raw.runtimeId),
     issueId: stringOrNull(raw.issue_id ?? raw.issueId),
+    issueSessionId: stringOrNull(raw.issue_session_id ?? raw.issueSessionId),
     chatSessionId: stringOrNull(raw.chat_session_id ?? raw.chatSessionId),
     autopilotRunId: stringOrNull(raw.autopilot_run_id ?? raw.autopilotRunId),
     triggerCommentId: stringOrNull(raw.trigger_comment_id ?? raw.triggerCommentId),
@@ -345,6 +359,13 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     cancelledAt: stringOrNull(raw.cancelled_at ?? raw.cancelledAt),
     agent: normalizeDaemonClaimAgent(raw.agent),
     issue: normalizeDaemonClaimIssue(raw.issue),
+    issueSession: raw.issue_session ?? raw.issueSession ?? null,
+    sessionProjection: raw.session_projection ?? raw.sessionProjection ?? null,
+    issueSessionResults: Array.isArray(raw.issue_session_results)
+      ? raw.issue_session_results
+      : Array.isArray(raw.issueSessionResults)
+        ? raw.issueSessionResults
+        : [],
     project: normalizeDaemonClaimProject(raw.project),
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
     repos: Array.isArray(raw.repos) ? raw.repos : [],

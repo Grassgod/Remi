@@ -34,6 +34,7 @@
       "repositories": "저장소",
       "github": "GitHub",
       "integrations": "연동",
+      "model_gateway": "모델 게이트웨이",
       "labs": "실험실",
       "members": "멤버"
     }
@@ -368,5 +369,22 @@
     "install_error_session_lost": "설치 세션이 만료되었거나 유실되었어요. 다시 스캔해 처음부터 진행하세요.",
     "install_error_forbidden": "이 워크스페이스에 Lark 봇을 설치할 권한이 더 이상 없어요. 워크스페이스 관리자에게 문의하세요.",
     "install_error_generic": "설치에 실패했어요. 다시 시도하세요."
+  },
+  "modelGateway": {
+    "description": "모든 에이전트가 공유하는 게이트웨이 자격 증명. 저장하면 각 에이전트의 데몬이 다음 하트비트에서 로컬 CLI 설정에 딥 병합합니다.",
+    "discovery_title": "모델 자동 검색",
+    "discovery_desc": "게이트웨이의 /v1/models 및 /models를 조회하여 에이전트 생성 드롭다운에 실제 모델을 표시합니다. 두 엔진 모두 적용.",
+    "fragment_label": "구성 조각 (딥 병합, 비밀 아님)",
+    "token_label": "인증 토큰",
+    "claude_hint": "settings.json의 env(ANTHROPIC_AUTH_TOKEN)에 병합됩니다. API_KEY가 아닌 AUTH_TOKEN을 사용하세요.",
+    "codex_hint": "auth.json의 OPENAI_API_KEY에 기록됩니다(릴레이 권장). config.toml provider 블록은 조각에서 가져옵니다.",
+    "save": "저장",
+    "saving": "저장 중…",
+    "reveal": "표시",
+    "hide": "숨기기",
+    "saved": "저장됨",
+    "save_failed": "저장 실패",
+    "applied_note": "릴레이 관련 키만 덮어쓰며 각 머신의 다른 설정은 유지됩니다. 에이전트는 다음 하트비트에 적용합니다.",
+    "insufficient": "워크스페이스 소유자와 관리자만 모델 게이트웨이를 관리할 수 있습니다."
   }
 }

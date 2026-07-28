@@ -23,6 +23,7 @@ export const TaskFailureReason = {
   AgentEmptyOrUnparseableOutput: "agent_error.empty_or_unparseable_output",
   AgentTimeout: "agent_error.agent_timeout",
   AgentContextOverflow: "agent_error.context_overflow",
+  AgentStaleSession: "agent_error.stale_session",
   AgentMissingConfig: "agent_error.missing_config",
   AgentModelNotFoundOrUnavailable: "agent_error.model_not_found_or_unavailable",
   AgentRuntimeVersionUnsupported: "agent_error.runtime_version_unsupported",
@@ -36,6 +37,10 @@ export function classifyTaskFailure(rawError: string): TaskFailureReasonValue {
   const trimmed = String(rawError ?? "").trim();
   if (!trimmed) return TaskFailureReason.AgentUnknown;
   const lower = trimmed.toLowerCase();
+
+  if (containsAny(lower, "stale provider session", "no conversation found")) {
+    return TaskFailureReason.AgentStaleSession;
+  }
 
   if (
     containsAny(lower, "context length", "context_length_exceeded", "maximum context", "prompt is too long", "context size has been exceeded") ||

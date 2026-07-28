@@ -34,6 +34,7 @@
       "repositories": "Repositories",
       "github": "GitHub",
       "integrations": "Integrations",
+      "model_gateway": "Model Gateway",
       "labs": "Labs",
       "members": "Members"
     }
@@ -368,5 +369,22 @@
         "description": "Create and work on issues"
       }
     }
+  },
+  "modelGateway": {
+    "description": "Fleet-wide gateway credentials shared by every agent. On save, each agent's daemon deep-merges these into its local CLI config on the next heartbeat.",
+    "discovery_title": "Auto-discover models",
+    "discovery_desc": "Query the gateway's /v1/models and /models so the agent-creation dropdown shows the gateway's real models. Applies to both engines.",
+    "fragment_label": "Config fragment (deep-merged, non-secret)",
+    "token_label": "Auth token",
+    "claude_hint": "Merged into settings.json's env (ANTHROPIC_AUTH_TOKEN). Use AUTH_TOKEN, not API_KEY.",
+    "codex_hint": "Written to auth.json's OPENAI_API_KEY (relay recommended). config.toml provider block from the fragment.",
+    "save": "Save",
+    "saving": "Saving…",
+    "reveal": "Reveal",
+    "hide": "Hide",
+    "saved": "Saved",
+    "save_failed": "Save failed",
+    "applied_note": "Only relay keys are overwritten; each machine's other settings are preserved. Agents apply on their next heartbeat.",
+    "insufficient": "Only workspace owners and admins can manage the model gateway."
   }
 }

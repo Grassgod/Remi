@@ -29,6 +29,7 @@ describe("Multiremi task failure classification", () => {
     expect(classifyTaskFailure("claude timed out after 2h0m0s")).toBe(TaskFailureReason.AgentTimeout);
     expect(classifyTaskFailure("executable not found in $PATH")).toBe(TaskFailureReason.AgentRuntimeMissingExecutable);
     expect(classifyTaskFailure("agent exit status 137")).toBe(TaskFailureReason.AgentProcessFailure);
+    expect(classifyTaskFailure("Stale provider session: no conversation found")).toBe(TaskFailureReason.AgentStaleSession);
     expect(classifyTaskFailure("the agent gave up for reasons unknown")).toBe(TaskFailureReason.AgentUnknown);
   });
 

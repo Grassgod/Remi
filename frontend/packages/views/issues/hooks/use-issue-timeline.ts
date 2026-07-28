@@ -44,6 +44,7 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
   return {
     type: "comment",
     id: c.id,
+    issue_session_id: c.issue_session_id ?? null,
     actor_type: c.author_type,
     actor_id: c.author_id,
     content: c.content,
@@ -59,11 +60,19 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
   };
 }
 
-export function useIssueTimeline(issueId: string, userId?: string) {
+export function useIssueTimeline(
+  issueId: string,
+  userId?: string,
+  issueSessionId?: string,
+  enabled = true,
+) {
   const { t } = useT("issues");
   const qc = useQueryClient();
 
-  const query = useQuery(issueTimelineOptions(issueId));
+  const query = useQuery({
+    ...issueTimelineOptions(issueId, issueSessionId),
+    enabled,
+  });
   const { data, isLoading: loading } = query;
 
   const timeline = useMemo<TimelineEntry[]>(() => data ?? [], [data]);
@@ -73,18 +82,18 @@ export function useIssueTimeline(issueId: string, userId?: string) {
   // stable. Pull just those so the useCallback identities downstream don't
   // flip on every parent re-render — listing the whole mutation object would
   // defeat React.memo on CommentCard.
-  const { mutateAsync: createComment } = useCreateComment(issueId);
-  const { mutateAsync: updateComment } = useUpdateComment(issueId);
-  const { mutateAsync: deleteCommentAsync } = useDeleteComment(issueId);
-  const { mutateAsync: resolveCommentAsync } = useResolveComment(issueId);
-  const { mutate: toggleCommentReaction } = useToggleCommentReaction(issueId);
+  const { mutateAsync: createComment } = useCreateComment(issueId, issueSessionId);
+  const { mutateAsync: updateComment } = useUpdateComment(issueId, issueSessionId);
+  const { mutateAsync: deleteCommentAsync } = useDeleteComment(issueId, issueSessionId);
+  const { mutateAsync: resolveCommentAsync } = useResolveComment(issueId, issueSessionId);
+  const { mutate: toggleCommentReaction } = useToggleCommentReaction(issueId, issueSessionId);
 
   // Reconnect recovery: invalidate so the next render refetches the full
   // timeline. Cheaper than diffing across a possibly-long disconnect.
   useWSReconnect(
     useCallback(() => {
-      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
-    }, [qc, issueId]),
+      qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId, issueSessionId) });
+    }, [qc, issueId, issueSessionId]),
   );
 
   // --- WS event handlers ---
@@ -95,14 +104,15 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { comment } = payload as CommentCreatedPayload;
         if (comment.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) => {
+        if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
           const entry = commentToTimelineEntry(comment);
           if (!old) return [entry];
           if (old.some((e) => e.id === comment.id)) return old;
           return sortTimelineEntriesAsc([...old, entry]);
         });
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -112,13 +122,14 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { comment } = payload as CommentUpdatedPayload;
         if (comment.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) =>
+        if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
           old?.map((e) =>
             e.id === comment.id ? commentToTimelineEntry(comment) : e,
           ),
         );
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -134,13 +145,14 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { comment } = payload as CommentResolvedPayload;
         if (comment.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) =>
+        if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
           old?.map((e) =>
             e.id === comment.id ? commentToTimelineEntry(comment) : e,
           ),
         );
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -150,13 +162,14 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { comment } = payload as CommentUnresolvedPayload;
         if (comment.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) =>
+        if (issueSessionId && comment.issue_session_id !== issueSessionId) return;
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
           old?.map((e) =>
             e.id === comment.id ? commentToTimelineEntry(comment) : e,
           ),
         );
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -166,7 +179,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { comment_id, issue_id } = payload as CommentDeletedPayload;
         if (issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) => {
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
           if (!old) return old;
           // Cascade through replies (full timeline now lives in this single
           // cache, so a flat sweep is sufficient).
@@ -188,7 +201,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           return old.filter((e) => !idsToRemove.has(e.id));
         });
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -198,15 +211,16 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const p = payload as ActivityCreatedPayload;
         if (p.issue_id !== issueId) return;
+        if (issueSessionId) return;
         const entry = p.entry;
         if (!entry || !entry.id) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) => {
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) => {
           if (!old) return [entry];
           if (old.some((e) => e.id === entry.id)) return old;
           return sortTimelineEntriesAsc([...old, entry]);
         });
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -216,7 +230,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const { reaction, issue_id } = payload as ReactionAddedPayload;
         if (issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) =>
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
           old?.map((e) => {
             if (e.id !== reaction.comment_id) return e;
             const existing = e.reactions ?? [];
@@ -225,7 +239,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           }),
         );
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -235,7 +249,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
       (payload: unknown) => {
         const p = payload as ReactionRemovedPayload;
         if (p.issue_id !== issueId) return;
-        qc.setQueryData<TLCache>(issueKeys.timeline(issueId), (old) =>
+        qc.setQueryData<TLCache>(issueKeys.timeline(issueId, issueSessionId), (old) =>
           old?.map((e) => {
             if (e.id !== p.comment_id) return e;
             return {
@@ -252,7 +266,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
           }),
         );
       },
-      [qc, issueId],
+      [qc, issueId, issueSessionId],
     ),
   );
 
@@ -348,7 +362,7 @@ export function useIssueTimeline(issueId: string, userId?: string) {
 
   const pendingReactionVars = useMutationState({
     filters: {
-      mutationKey: ["toggleCommentReaction", issueId],
+      mutationKey: ["toggleCommentReaction", issueId, issueSessionId ?? "all"],
       status: "pending",
     },
     select: (m) =>

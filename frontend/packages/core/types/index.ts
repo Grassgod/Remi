@@ -62,6 +62,17 @@ export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
+export type {
+  IssueSession,
+  IssueSessionStatus,
+  SessionParticipant,
+  SessionParticipantType,
+  SessionEvent,
+  SessionResult,
+  CreateIssueSessionRequest,
+  CreateSessionTaskRequest,
+  IssueSessionTask,
+} from "./issue-session";
 export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
 export type {
   TimelineEntry,
