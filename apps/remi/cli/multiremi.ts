@@ -99,11 +99,17 @@ export async function runMultiremi(args: string[], runOptions: RunMultiremiOptio
     case "repo":
       await repo(parsed.positional, parsed.options);
       return;
+    case "agent":
+      await agent(parsed.positional, parsed.options);
+      return;
     case "issue":
       await issue(parsed.positional, parsed.options);
       return;
     case "attachment":
       await attachment(parsed.positional, parsed.options);
+      return;
+    case "project":
+      await project(parsed.positional, parsed.options);
       return;
     case "seed":
       seed(parsed.options);
@@ -582,6 +588,91 @@ async function attachment(positional: string[], options: CliOptions): Promise<vo
   });
 }
 
+async function agent(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  if (action === "list") {
+    const workspaceId = multiremiApiConnection(options).workspaceId;
+    const query = workspaceId
+      ? `?${new URLSearchParams({ workspace_id: workspaceId }).toString()}`
+      : "";
+    const response = await multiremiApiRequest("GET", `/api/agents${query}`, undefined, options);
+    printAgentCollection(response, options);
+    return;
+  }
+  if (action === "get") {
+    const agentId = positional[1]?.trim();
+    if (!agentId) throw new Error("usage: multiremi agent get <agent-id> [--output json]");
+    printJson(await multiremiApiRequest("GET", `/api/agents/${encodeURIComponent(agentId)}`, undefined, options));
+    return;
+  }
+  if (action === "edit" || action === "update") {
+    const agentId = positional[1]?.trim();
+    if (!agentId) {
+      throw new Error(
+        "usage: multiremi agent edit <agent-id> [--name <name>] [--description <text>] [--instructions <text>] [--avatar-url <url>] [--provider claude|codex] [--model <model>] [--thinking-level <level>] [--visibility private|workspace] [--max-concurrent-tasks <n>]",
+      );
+    }
+    await agentEdit(agentId, options);
+    return;
+  }
+  throw new Error("usage: multiremi agent list|get|edit|update ...");
+}
+
+async function agentEdit(agentId: string, options: CliOptions): Promise<void> {
+  const body: Record<string, unknown> = {};
+
+  addStringBodyField(body, options, "name", "name");
+
+  const description = await readOptionalTextBody(options, "description");
+  if (description.set) body.description = description.value;
+
+  const instructions = await readOptionalTextBody(options, "instructions");
+  if (instructions.set) body.instructions = instructions.value;
+
+  addStringBodyField(body, options, "avatar_url", "avatar-url");
+  addStringBodyField(body, options, "model", "model");
+  addStringBodyField(body, options, "thinking_level", "thinking-level");
+
+  if (hasOption(options, "provider")) {
+    const provider = rawStringOption(options, "provider");
+    if (!provider || !isSupportedDaemonProvider(provider)) {
+      throw new Error(`--provider must be one of: ${SUPPORTED_DAEMON_PROVIDERS.join(", ")}`);
+    }
+    body.provider = provider;
+  }
+
+  if (hasOption(options, "visibility")) {
+    const visibility = rawStringOption(options, "visibility");
+    if (visibility !== "private" && visibility !== "workspace") {
+      throw new Error("--visibility must be private or workspace");
+    }
+    body.visibility = visibility;
+  }
+
+  const maxConcurrentTasks = integerOption(options, "max-concurrent-tasks");
+  if (maxConcurrentTasks !== null) {
+    if (maxConcurrentTasks < 1 || maxConcurrentTasks > 50) {
+      throw new Error("--max-concurrent-tasks must be an integer between 1 and 50");
+    }
+    body.max_concurrent_tasks = maxConcurrentTasks;
+  }
+
+  if (Object.keys(body).length === 0) {
+    throw new Error(
+      "no fields to edit; pass --name, --description, --instructions, --avatar-url, --provider, --model, --thinking-level, --visibility, or --max-concurrent-tasks",
+    );
+  }
+
+  printJson(
+    await multiremiApiRequest(
+      "PUT",
+      `/api/agents/${encodeURIComponent(agentId)}`,
+      body,
+      options,
+    ),
+  );
+}
+
 async function issue(positional: string[], options: CliOptions): Promise<void> {
   const action = positional[0] ?? "";
   if (action === "list") {
@@ -947,6 +1038,189 @@ async function issueSubscriber(positional: string[], options: CliOptions): Promi
     return;
   }
   throw new Error("usage: multiremi issue subscriber list|add|remove <issue-id> [--user-id <member-id>]");
+}
+
+async function project(positional: string[], options: CliOptions): Promise<void> {
+  const area = positional[0] ?? "";
+  if (area === "doc") {
+    await projectDoc(positional.slice(1), options);
+    return;
+  }
+  if (area === "memory") {
+    await projectMemory(positional.slice(1), options);
+    return;
+  }
+  throw new Error("usage: multiremi project doc|memory ...");
+}
+
+async function projectDoc(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  const projectId = positional[1]?.trim();
+  const ref = positional[2]?.trim();
+  if (action === "list") {
+    if (!projectId) throw new Error("usage: multiremi project doc list <project-id> [--kind wiki|memory] [--output json]");
+    const params = new URLSearchParams();
+    addQueryParam(params, "kind", rawStringOption(options, "kind"));
+    const query = params.toString();
+    printProjectDocCollection(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/docs${query ? `?${query}` : ""}`,
+      undefined,
+      options,
+    ), options);
+    return;
+  }
+  if (action === "get") {
+    if (!projectId || !ref) throw new Error("usage: multiremi project doc get <project-id> <slug-or-id> [--output json]");
+    printJson(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}`,
+      undefined,
+      options,
+    ));
+    return;
+  }
+  if (action === "create") {
+    if (!projectId) {
+      throw new Error("usage: multiremi project doc create <project-id> --kind wiki|memory --title <title> [--slug <slug>] [--summary <text>] [--tags a,b] [--pinned] [--ref <type>:<value>] [--content <text>|--content-file <path>|--content-stdin]");
+    }
+    await projectDocCreate(projectId, options);
+    return;
+  }
+  if (action === "update") {
+    if (!projectId || !ref) {
+      throw new Error("usage: multiremi project doc update <project-id> <slug-or-id> [--title <title>] [--summary <text>] [--tags a,b] [--pinned true|false] [--ref <type>:<value>] [--expected-version <n>] [--content <text>|--content-file <path>|--content-stdin]");
+    }
+    await projectDocUpdate(projectId, ref, options);
+    return;
+  }
+  if (action === "delete") {
+    if (!projectId || !ref) throw new Error("usage: multiremi project doc delete <project-id> <slug-or-id>");
+    const response = await multiremiApiRequest(
+      "DELETE",
+      `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}`,
+      undefined,
+      options,
+    );
+    printJson(response ?? { deleted: true });
+    return;
+  }
+  if (action === "search") {
+    if (!projectId || !ref) throw new Error("usage: multiremi project doc search <project-id> <query> [--kind wiki|memory] [--limit <n>]");
+    const params = new URLSearchParams({ q: ref });
+    addQueryParam(params, "kind", rawStringOption(options, "kind"));
+    const limit = integerOption(options, "limit");
+    if (limit !== null) params.set("limit", String(limit));
+    printProjectDocCollection(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/docs?${params.toString()}`,
+      undefined,
+      options,
+    ), options);
+    return;
+  }
+  throw new Error("usage: multiremi project doc list|get|create|update|delete|search <project-id> ...");
+}
+
+async function projectDocCreate(projectId: string, options: CliOptions): Promise<void> {
+  const title = rawStringOption(options, "title");
+  if (!title?.trim()) throw new Error("--title is required");
+  const body: Record<string, unknown> = { kind: rawStringOption(options, "kind") ?? "wiki", title };
+  addStringBodyField(body, options, "slug", "slug");
+  addStringBodyField(body, options, "summary", "summary", false, true);
+  await addProjectDocSharedBodyFields(body, options);
+  printJson(await multiremiApiRequest("POST", `/api/projects/${encodeURIComponent(projectId)}/docs`, body, options));
+}
+
+async function projectDocUpdate(projectId: string, ref: string, options: CliOptions): Promise<void> {
+  const body: Record<string, unknown> = {};
+  addStringBodyField(body, options, "title", "title");
+  addStringBodyField(body, options, "summary", "summary", false, true);
+  await addProjectDocSharedBodyFields(body, options);
+  if (Object.keys(body).length === 0) {
+    throw new Error("no fields to update; pass --title, --summary, --tags, --pinned, --ref, or --content");
+  }
+  const expectedVersion = integerOption(options, "expected-version");
+  if (expectedVersion !== null) body.expected_version = expectedVersion;
+  printJson(await multiremiApiRequest(
+    "PUT",
+    `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}`,
+    body,
+    options,
+  ));
+}
+
+async function projectMemory(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "";
+  const projectId = positional[1]?.trim();
+  if (action === "add") {
+    if (!projectId) {
+      throw new Error("usage: multiremi project memory add <project-id> --title <one-sentence fact> [--summary <text>] [--ref <type>:<value>] [--content <text>|--content-file <path>|--content-stdin]");
+    }
+    const title = rawStringOption(options, "title");
+    if (!title?.trim()) throw new Error("--title is required");
+    const body: Record<string, unknown> = { kind: "memory", title, pinned: true };
+    addStringBodyField(body, options, "summary", "summary", false, true);
+    await addProjectDocSharedBodyFields(body, options);
+    // In-task provenance: the daemon injects MULTIREMI_TASK_ID into the agent
+    // process, and the server backfills the issue behind that task.
+    const taskId = process.env.MULTIREMI_TASK_ID?.trim();
+    if (taskId) body.source_task_id = taskId;
+    printJson(await multiremiApiRequest("POST", `/api/projects/${encodeURIComponent(projectId)}/docs`, body, options));
+    return;
+  }
+  throw new Error("usage: multiremi project memory add <project-id> --title <one-sentence fact> ...");
+}
+
+/** --tags / --pinned / --ref / --content: shared by doc create, doc update, and memory add. */
+async function addProjectDocSharedBodyFields(body: Record<string, unknown>, options: CliOptions): Promise<void> {
+  if (hasOption(options, "tags")) body.tags = parseProjectDocTags(rawStringOption(options, "tags") ?? "");
+  const pinned = projectDocPinnedOption(options);
+  if (pinned !== null) body.pinned = pinned;
+  const refs = projectDocRefsOption(options);
+  if (refs) body.refs = refs;
+  const content = await readOptionalTextBody(options, "content");
+  if (content.set) body.body = content.value;
+}
+
+function parseProjectDocTags(raw: string): string[] {
+  return raw.split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function projectDocPinnedOption(options: CliOptions): boolean | null {
+  if (!hasOption(options, "pinned")) return null;
+  const value = rawStringOption(options, "pinned");
+  // Bare `--pinned` parses as a boolean flag and means pinned=true.
+  if (value == null) return true;
+  if (value !== "true" && value !== "false") throw new Error("--pinned must be true or false");
+  return value === "true";
+}
+
+/**
+ * `--ref issue:MUL-12` / `--ref task:tsk_1` / `--ref url:https://…`, repeatable.
+ * A bare http(s) URL is accepted as a url ref so the caller does not have to
+ * prefix it; anything else without a type prefix is a usage error. On update the
+ * parsed list replaces the doc's refs wholesale.
+ */
+function projectDocRefsOption(options: CliOptions): Array<{ type: string; value: string }> | null {
+  if (!hasOption(options, "ref")) return null;
+  const refs: Array<{ type: string; value: string }> = [];
+  for (const raw of stringListOption(options, "ref")) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    if (isHttpUrl(entry)) {
+      refs.push({ type: "url", value: entry });
+      continue;
+    }
+    const separator = entry.indexOf(":");
+    const type = separator > 0 ? entry.slice(0, separator).trim() : "";
+    const value = separator > 0 ? entry.slice(separator + 1).trim() : "";
+    if (!type || !value) {
+      throw new Error(`--ref ${JSON.stringify(raw)} must be <type>:<value> (issue:<id>, task:<id>, url:<url>) or an http(s) URL`);
+    }
+    refs.push({ type, value });
+  }
+  return refs;
 }
 
 interface CliIssueComment {
@@ -1382,6 +1656,37 @@ function printIssueCollection(value: unknown, options: CliOptions): void {
   printIssueTable(extractList(value, "issues"), { match: false, fullId: Boolean(options["full-id"] ?? options.fullId) });
 }
 
+function printAgentCollection(value: unknown, options: CliOptions): void {
+  if (outputMode(options, "table") !== "table") {
+    printJson(value);
+    return;
+  }
+  printTable(extractList(value, "agents"), [
+    { header: "ID", value: (row) => field(row, "id"), maxWidth: Boolean(options["full-id"] ?? options.fullId) ? 0 : 18 },
+    { header: "NAME", value: (row) => field(row, "name"), maxWidth: 32 },
+    { header: "ENGINE", value: (row) => field(row, "provider") },
+    { header: "MODEL", value: (row) => field(row, "model"), maxWidth: 28 },
+    { header: "VISIBILITY", value: (row) => field(row, "visibility") },
+    { header: "CONCURRENCY", value: (row) => field(row, "max_concurrent_tasks", "maxConcurrentTasks") },
+    { header: "UPDATED", value: (row) => shortDate(field(row, "updated_at", "updatedAt")) },
+  ], "No agents found.");
+}
+
+function printProjectDocCollection(value: unknown, options: CliOptions): void {
+  if (outputMode(options, "table") !== "table") {
+    printJson(value);
+    return;
+  }
+  printTable(extractList(value, "docs"), [
+    { header: "SLUG", value: (row) => field(row, "slug"), maxWidth: 28 },
+    { header: "KIND", value: (row) => field(row, "kind") },
+    { header: "TITLE", value: (row) => field(row, "title"), maxWidth: 48 },
+    { header: "PINNED", value: (row) => field(row, "pinned") ? "yes" : "" },
+    { header: "VERSION", value: (row) => field(row, "version") },
+    { header: "UPDATED", value: (row) => shortDate(field(row, "updated_at", "updatedAt")) },
+  ], "No project docs found.");
+}
+
 function printIssueSessionCollection(value: unknown, options: CliOptions): void {
   if (outputMode(options, "table") !== "table") {
     printJson(value);
@@ -1623,6 +1928,10 @@ Commands:
   daemon service         Install, uninstall, or print a user-level service
   repo checkout <url>    Check out an allowed workspace repository
   attachment download <id> Download an attachment to a local file
+  agent list             List agents
+  agent get <id>         Print an agent as JSON
+  agent edit <id>        Edit agent identity and runtime metadata
+  agent update <id>      Alias for agent edit
   issue get <id>         Print an issue as JSON
   issue list             List issues
   issue create           Create an issue
@@ -1650,6 +1959,13 @@ Commands:
   issue metadata get <id> --key <k>
   issue metadata set <id> --key <k> --value <v> [--type string|number|bool]
   issue metadata delete <id> --key <k>
+  project doc list <project-id> List project wiki pages and memory entries
+  project doc get <project-id> <slug-or-id>
+  project doc create <project-id> --kind wiki|memory --title <t>
+  project doc update <project-id> <slug-or-id>
+  project doc delete <project-id> <slug-or-id>
+  project doc search <project-id> <query>
+  project memory add <project-id> --title <one-sentence fact>
   seed                   Create a default local agent
   version                Print Multiremi version
 
@@ -1682,6 +1998,30 @@ Options:
   --service-dir <dir>    Directory for daemon service files
   --enable               Enable service after daemon service install
   --disable              Disable service before daemon service uninstall
+
+Agent edit options:
+  --name <name>          Change the display name
+  --description <text>   Change or clear the description
+  --instructions <text>  Change or clear instructions
+  --avatar-url <url>     Change or clear the avatar URL
+  --provider <name>      Change engine: claude or codex
+  --model <model>        Change or clear the model override
+  --thinking-level <v>   Change or clear the reasoning override
+  --visibility <value>   Set private or workspace visibility
+  --max-concurrent-tasks <n> Set concurrency from 1 to 50
+  --description-file <p> Read description from a file
+  --instructions-file <p> Read instructions from a file
+
+Project knowledge options:
+  --kind wiki|memory     Doc kind for project doc create/list/search
+  --title <text>         Doc title (a one-sentence fact for memory add)
+  --slug <slug>          Explicit slug for project doc create instead of one derived from the title
+  --summary <text>       Short summary shown in listings and prompt injection
+  --tags a,b             Comma-separated tags
+  --pinned [true|false]  Pin the doc into the prompt injection index
+  --ref <type>:<value>   Cite a source: issue:<id>, task:<id>, url:<url> (repeatable)
+  --expected-version <n> Fail the update when the doc moved on (409)
+  --limit <n>            Result cap for project doc search
 `);
 }
 

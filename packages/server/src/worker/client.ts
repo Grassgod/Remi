@@ -1,5 +1,6 @@
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiProjectDocIndexEntry,
   MultiremiRepoData,
   MultiremiRuntimeDirectoryCandidate,
   MultiremiRuntimeModel,
@@ -368,6 +369,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
         : [],
     project: normalizeDaemonClaimProject(raw.project),
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
+    projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
     repos: Array.isArray(raw.repos) ? raw.repos : [],
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
@@ -444,6 +446,28 @@ function normalizeDaemonClaimProjectResources(raw: any): MultiremiTaskWithAgent[
     resourceRef: objectOrDefault(resource.resource_ref ?? resource.resourceRef),
     createdAt: stringOrNull(resource.created_at ?? resource.createdAt) ?? "",
     createdBy: stringOrNull(resource.created_by ?? resource.createdBy),
+  }));
+}
+
+function normalizeDaemonClaimProjectDocs(raw: any): MultiremiTaskWithAgent["projectDocs"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return {
+    memory: normalizeDaemonClaimProjectDocEntries(raw.memory),
+    wiki: normalizeDaemonClaimProjectDocEntries(raw.wiki),
+    schema: stringOrNull(raw.schema),
+  };
+}
+
+function normalizeDaemonClaimProjectDocEntries(raw: any): MultiremiProjectDocIndexEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => ({
+    ...entry,
+    summary: stringOrNull(entry.summary),
+    body: stringOrNull(entry.body),
+    kind: entry.kind === "memory" ? "memory" : "wiki",
+    pinned: entry.pinned === true || Number(entry.pinned) === 1,
+    sourceIssueId: stringOrNull(entry.source_issue_id ?? entry.sourceIssueId),
+    updatedAt: stringOrNull(entry.updated_at ?? entry.updatedAt) ?? "",
   }));
 }
 

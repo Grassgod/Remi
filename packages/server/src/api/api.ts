@@ -12,7 +12,7 @@ import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { buildImportedSkillInput, SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store/store.js";
 import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
-import { refreshStaleGatewayModels, triggerGatewayDiscovery } from "@multiremi/relay/discovery.js";
+import { discoverGatewayModels, refreshStaleGatewayModels, triggerGatewayDiscovery } from "@multiremi/relay/discovery.js";
 import {
   agentSkillCompatibilitySummary,
   skillCompatibilityResponse,
@@ -43,6 +43,7 @@ import type {
   CreateIssueWithTaskInput,
   CreateLabelInput,
   CreatePinnedItemInput,
+  CreateProjectDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
   CreateRuntimeDirectoryScanInput,
@@ -91,6 +92,9 @@ import type {
   MultiremiIssueSubscriber,
   MultiremiLabel,
   MultiremiProject,
+  MultiremiProjectDoc,
+  MultiremiProjectDocIndexEntry,
+  MultiremiProjectDocRevision,
   MultiremiProjectResource,
   MultiremiProjectSearchResult,
   MultiremiPinnedItem,
@@ -134,6 +138,7 @@ import type {
   UpdateIssueCommentInput,
   UpdateIssueSessionInput,
   UpdateLabelInput,
+  UpdateProjectDocInput,
   UpdateProjectInput,
   UpdateProjectResourceInput,
   UpdateRuntimeInput,
@@ -939,7 +944,14 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       authToken: body.auth_token,
       actor: currentRequestUserId(c),
     });
-    triggerGatewayDiscovery(store, workspaceId, engine);
+    // Await discovery (bounded) so the returned catalog reflects the new gateway:
+    // the client invalidates its fleet-model cache on success, and that refetch then
+    // sees the fresh snapshot instead of the pre-save one. A slow/hung gateway can't
+    // stall the save — the race resolves at 8s and discovery finishes in the background.
+    await Promise.race([
+      discoverGatewayModels(store, workspaceId, engine).catch(() => {}),
+      new Promise<void>((resolve) => { setTimeout(resolve, 8_000); }),
+    ]);
     return c.json(store.getRelayConfigForBrowser(workspaceId));
   });
   app.post("/api/workspaces/:id/relay-config/:engine/reveal", (c) => {
@@ -2449,6 +2461,78 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store.deleteProjectResource(c.req.param("id"), c.req.param("resourceId"));
     publishProjectResourceDeleted(c, store, resource);
     return c.body(null, 204);
+  });
+  app.get("/api/projects/:id/docs", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const query = cleanString(c.req.query("q"));
+    const kind = cleanString(c.req.query("kind"));
+    try {
+      const docs = query
+        ? store.searchProjectDocs(project.id, query, { kind, limit: parseOptionalInt(c.req.query("limit")) })
+        : store.listProjectDocs(project.id, { kind });
+      return c.json({ docs: docs.map(projectDocCompatibilityResponse) });
+    } catch (err) {
+      const response = projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.post("/api/projects/:id/docs", async (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<CreateProjectDocInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const doc = store.createProjectDoc(project.id, projectDocCreateInput(c, store, body));
+      const response = projectDocCompatibilityResponse(doc);
+      publishProjectDocCreated(c, store, doc, response);
+      return c.json({ doc: response }, 201);
+    } catch (err) {
+      const response = projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.get("/api/projects/:id/docs/:ref", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
+    if (!doc) return c.json({ error: "project doc not found" }, 404);
+    return c.json({ doc: projectDocCompatibilityResponse(doc) });
+  });
+  app.put("/api/projects/:id/docs/:ref", async (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const body = await readJsonStrict<UpdateProjectDocInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const doc = store.updateProjectDoc(project.id, c.req.param("ref"), projectDocUpdateInput(c, body));
+      const response = projectDocCompatibilityResponse(doc);
+      publishProjectDocUpdated(c, store, doc, response);
+      return c.json({ doc: response });
+    } catch (err) {
+      const response = projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
+  app.delete("/api/projects/:id/docs/:ref", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    // Read the doc before deleting it: the WS payload needs its id and workspace.
+    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
+    if (!doc) return c.json({ error: "project doc not found" }, 404);
+    store.deleteProjectDoc(project.id, c.req.param("ref"));
+    publishProjectDocDeleted(c, store, doc);
+    return c.json({ deleted: true });
+  });
+  app.get("/api/projects/:id/docs/:ref/revisions", (c) => {
+    const project = loadProjectForDocs(c, store, c.req.param("id"));
+    if (project instanceof Response) return project;
+    const doc = store.getProjectDocByRef(project.id, c.req.param("ref"));
+    if (!doc) return c.json({ error: "project doc not found" }, 404);
+    return c.json({ revisions: store.listProjectDocRevisions(doc.id).map(projectDocRevisionCompatibilityResponse) });
   });
 
   app.get("/api/multiremi/squads", (c) => {
@@ -5181,6 +5265,25 @@ function denyTaskTokenSessionAccess(
   return null;
 }
 
+/**
+ * A task token is scoped to the one project its issue belongs to. Project
+ * knowledge (wiki + memory) of any other project — including one in a workspace
+ * the token's agent can otherwise reach — is not its to read or write. A task
+ * with no issue, or an issue with no project, has no project scope at all.
+ */
+function denyTaskTokenProjectAccess(
+  c: Context,
+  store: MultiremiStore,
+  projectId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  const issue = task?.issueId ? store.getIssue(task.issueId) : null;
+  if (!issue?.projectId || issue.projectId !== projectId) return c.json({ error: "project not found" }, 404);
+  return null;
+}
+
 function denyTaskTokenCommentAccess(
   c: Context,
   store: MultiremiStore,
@@ -6493,6 +6596,156 @@ function projectResourceErrorResponse(c: Context, err: unknown): Response | null
     || message === "position must be an integer"
   ) {
     return c.json({ error: message }, 400);
+  }
+  return null;
+}
+
+function projectDocCompatibilityResponse(doc: MultiremiProjectDoc): Record<string, unknown> {
+  return {
+    id: doc.id,
+    project_id: doc.projectId,
+    workspace_id: doc.workspaceId,
+    kind: doc.kind,
+    slug: doc.slug,
+    title: doc.title,
+    summary: doc.summary,
+    body: doc.body,
+    tags: doc.tags,
+    pinned: doc.pinned,
+    refs: doc.refs.map((ref) => ({ type: ref.type, value: ref.value })),
+    source_task_id: doc.sourceTaskId,
+    source_issue_id: doc.sourceIssueId,
+    author_type: doc.authorType,
+    author_id: doc.authorId,
+    updated_by_type: doc.updatedByType,
+    updated_by_id: doc.updatedById,
+    version: doc.version,
+    created_at: doc.createdAt,
+    updated_at: doc.updatedAt,
+  };
+}
+
+function projectDocIndexEntryCompatibilityResponse(entry: MultiremiProjectDocIndexEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    slug: entry.slug,
+    title: entry.title,
+    summary: entry.summary,
+    body: entry.body,
+    kind: entry.kind,
+    pinned: entry.pinned,
+    source_issue_id: entry.sourceIssueId,
+    updated_at: entry.updatedAt,
+  };
+}
+
+function projectDocRevisionCompatibilityResponse(revision: MultiremiProjectDocRevision): Record<string, unknown> {
+  return {
+    id: revision.id,
+    doc_id: revision.docId,
+    version: revision.version,
+    title: revision.title,
+    summary: revision.summary,
+    body: revision.body,
+    author_type: revision.authorType,
+    author_id: revision.authorId,
+    created_at: revision.createdAt,
+  };
+}
+
+function loadProjectForDocs(c: Context, store: MultiremiStore, projectId: string): MultiremiProject | Response {
+  const project = store.getProject(projectId);
+  if (!project) return c.json({ error: "project not found" }, 404);
+  const denied = denyCurrentUserWorkspaceAccess(c, store, project.workspaceId);
+  if (denied) return denied;
+  const taskDenied = denyTaskTokenProjectAccess(c, store, project.id);
+  if (taskDenied) return taskDenied;
+  return project;
+}
+
+/**
+ * Stamps a doc write with who made it: a task token writes as its agent,
+ * everyone else as the requesting member. Provenance is never taken from the
+ * body — the task id comes from the caller's own task token and the issue
+ * behind it is resolved server-side, so a caller can neither claim someone
+ * else's task nor smuggle a foreign issue id onto the doc. A member has no
+ * task, so member writes carry no provenance at all. `id` is dropped for the
+ * same reason: the primary key is the server's to mint. Both spellings are
+ * written because the store falls back camel → snake.
+ */
+function projectDocCreateInput(c: Context, store: MultiremiStore, input: CreateProjectDocInput): CreateProjectDocInput {
+  const caller = issueSubscriberCaller(c);
+  const sourceTaskId = currentTaskAccessToken(c)?.taskId ?? null;
+  const task = sourceTaskId ? store.getTask(sourceTaskId) : null;
+  const sourceIssueId = task?.issueId ?? null;
+  return {
+    ...input,
+    id: undefined,
+    authorType: caller.actorType,
+    author_type: caller.actorType,
+    authorId: caller.actorId,
+    author_id: caller.actorId,
+    sourceTaskId,
+    source_task_id: sourceTaskId,
+    sourceIssueId,
+    source_issue_id: sourceIssueId,
+  };
+}
+
+function projectDocUpdateInput(c: Context, input: UpdateProjectDocInput): UpdateProjectDocInput {
+  const caller = issueSubscriberCaller(c);
+  return {
+    ...input,
+    updatedByType: caller.actorType,
+    updated_by_type: caller.actorType,
+    updatedById: caller.actorId,
+    updated_by_id: caller.actorId,
+  };
+}
+
+function publishProjectDocCreated(
+  c: Context,
+  store: MultiremiStore,
+  doc: MultiremiProjectDoc,
+  response: Record<string, unknown> = projectDocCompatibilityResponse(doc),
+): void {
+  publishWorkspaceEvent(c, store, "project_doc:created", doc.workspaceId, {
+    doc: response,
+    project_id: doc.projectId,
+  });
+}
+
+function publishProjectDocUpdated(
+  c: Context,
+  store: MultiremiStore,
+  doc: MultiremiProjectDoc,
+  response: Record<string, unknown> = projectDocCompatibilityResponse(doc),
+): void {
+  publishWorkspaceEvent(c, store, "project_doc:updated", doc.workspaceId, {
+    doc: response,
+    project_id: doc.projectId,
+  });
+}
+
+function publishProjectDocDeleted(c: Context, store: MultiremiStore, doc: MultiremiProjectDoc): void {
+  publishWorkspaceEvent(c, store, "project_doc:deleted", doc.workspaceId, {
+    project_id: doc.projectId,
+    doc_id: doc.id,
+  });
+}
+
+function projectDocErrorResponse(c: Context, err: unknown): Response | null {
+  if (!(err instanceof Error)) return null;
+  const message = err.message;
+  if (message.startsWith("Project not found")) return c.json({ error: "project not found" }, 404);
+  if (message.startsWith("Project doc not found")) return c.json({ error: "project doc not found" }, 404);
+  if (message === "title is required" || message.startsWith("unknown kind")) {
+    return c.json({ error: message }, 400);
+  }
+  if (message === "project doc version conflict") return c.json({ error: message }, 409);
+  // Both dialects report the (project_id, slug) UNIQUE violation differently.
+  if (message.includes("UNIQUE constraint failed") || message.includes("duplicate key value violates unique constraint")) {
+    return c.json({ error: "a doc with this slug already exists" }, 409);
   }
   return null;
 }
@@ -10118,6 +10371,13 @@ function daemonTaskClaimResponse(
   }
   if (task.projectResources.length) {
     response.project_resources = task.projectResources.map(projectResourceCompatibilityResponse);
+  }
+  if (task.projectDocs) {
+    response.project_docs = {
+      memory: task.projectDocs.memory.map(projectDocIndexEntryCompatibilityResponse),
+      wiki: task.projectDocs.wiki.map(projectDocIndexEntryCompatibilityResponse),
+      schema: task.projectDocs.schema,
+    };
   }
   if (task.repos.length) {
     response.repos = task.repos.map((repo) => ({
