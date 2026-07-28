@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+> **Agent 权威指令：** 请先阅读 [`AGENTS.md`](./AGENTS.md)。
+> 新增或更新 Agent 规则时只维护 `AGENTS.md`，不要在本文件中重复。
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
