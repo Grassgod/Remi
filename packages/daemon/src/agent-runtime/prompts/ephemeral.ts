@@ -177,16 +177,17 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
     sections.push("## Sharing Results Across Sessions");
     sections.push("Sibling Session transcripts are private. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
     if (process.platform === "win32") {
-      sections.push(`Write the result body to a UTF-8 file, then run: \`remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --content-file ./session-result.md\`.`);
+      sections.push(`Write the result body to a UTF-8 file, then run: \`remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-file ./session-result.md\`.`);
     } else {
       sections.push([
         "Use a quoted HEREDOC so the shell cannot rewrite the result:",
         "",
-        `    cat <<'RESULT' | remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --content-stdin`,
+        `    cat <<'RESULT' | remi issue session result publish ${issueId} --session ${sessionId} --title "Short title" --type decision --content-stdin`,
         "    Reusable result only; omit private working notes.",
         "    RESULT",
       ].join("\n"));
     }
+    sections.push("Tag the result with `--type mr|report|deploy|decision|doc|other` so it is filed under the right icon, and link what it points at with repeatable `--ref issue:<id>` / `--ref task:<id>` / `--ref url:https://…` (a merge request, a document, a task).");
   }
 }
 

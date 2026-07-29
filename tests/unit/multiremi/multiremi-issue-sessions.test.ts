@@ -127,6 +127,9 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(firstPrompt).toContain(
       `remi issue session result publish ${issue.id} --session ${session.id}`,
     );
+    // The result taxonomy is only useful if the agent is told it exists.
+    expect(firstPrompt).toContain("--type mr|report|deploy|decision|doc|other");
+    expect(firstPrompt).toContain("--ref issue:<id>");
 
     expect(store.claimTask(runtime.id)?.id).toBe(firstTask.id);
     store.startTask(firstTask.id);
@@ -332,6 +335,57 @@ describe("Issue sessions and per-agent projection lanes", () => {
       expect.objectContaining({
         source_session_id: review.id,
         body: "Ship the deterministic projection.",
+      }),
+    ]);
+  });
+
+  it("roundtrips result kind and refs metadata through publish and list", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const issue = store.createIssue({ title: "Typed results", workspaceId: "local" });
+    const main = store.getOrCreateDefaultIssueSession(issue.id);
+
+    const published = await app.request(
+      `/api/issues/${issue.id}/sessions/${main.id}/results`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "Merged the projection fix",
+          body: "See the MR for the deterministic ordering change.",
+          metadata: {
+            kind: "mr",
+            refs: [
+              { type: "url", value: "https://example.test/mr/12" },
+              { type: "issue", value: issue.id },
+            ],
+          },
+        }),
+      },
+    );
+    expect(published.status).toBe(201);
+    expect(await published.json()).toMatchObject({
+      metadata: {
+        kind: "mr",
+        refs: [
+          { type: "url", value: "https://example.test/mr/12" },
+          { type: "issue", value: issue.id },
+        ],
+      },
+    });
+
+    const listed = await app.request(`/api/issues/${issue.id}/session-results`);
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual([
+      expect.objectContaining({
+        title: "Merged the projection fix",
+        metadata: {
+          kind: "mr",
+          refs: [
+            { type: "url", value: "https://example.test/mr/12" },
+            { type: "issue", value: issue.id },
+          ],
+        },
       }),
     ]);
   });

@@ -825,24 +825,49 @@ async function issueSessionResult(positional: string[], options: CliOptions): Pr
   }
   if (action === "publish") {
     if (!issueId) {
-      throw new Error("usage: multiremi issue session result publish <issue-id> --session <session-id> [--title <title>] (--content <text>|--content-file <path>|--content-stdin)");
+      throw new Error(`usage: multiremi issue session result publish <issue-id> --session <session-id> [--title <title>] [--type ${SESSION_RESULT_KINDS.join("|")}] [--ref <type>:<value>] (--content <text>|--content-file <path>|--content-stdin)`);
     }
     const sessionId = rawStringOption(options, "session", "session-id");
     if (!sessionId) throw new Error("--session is required");
     const body = await readContentBody(options, "result body");
     if (!body.trim()) throw new Error("result body is required");
+    const metadata = sessionResultMetadata(options);
     printJson(await multiremiApiRequest(
       "POST",
       `/api/issues/${encodeURIComponent(issueId)}/sessions/${encodeURIComponent(sessionId)}/results`,
       {
         title: rawStringOption(options, "title") ?? "",
         body,
+        ...(metadata ? { metadata } : {}),
       },
       options,
     ));
     return;
   }
   throw new Error("usage: multiremi issue session result list|publish ...");
+}
+
+const SESSION_RESULT_KINDS = ["mr", "report", "deploy", "decision", "doc", "other"] as const;
+
+/**
+ * `--type` / `--ref` land in the published result's open metadata bag: `kind`
+ * picks the icon on the issue's key-results panel, `refs` become source badges.
+ * Both stay optional — a result published without them still shows up, just
+ * generically. An unknown `--type` is a usage error rather than a silent pass:
+ * the taxonomy is small and the agent should be told when it drifts.
+ */
+function sessionResultMetadata(options: CliOptions): Record<string, unknown> | null {
+  const metadata: Record<string, unknown> = {};
+  if (hasOption(options, "type")) {
+    const kind = rawStringOption(options, "type")?.trim() ?? "";
+    if (!(SESSION_RESULT_KINDS as readonly string[]).includes(kind)) {
+      throw new Error(`--type ${JSON.stringify(kind)} must be one of ${SESSION_RESULT_KINDS.join(", ")}`);
+    }
+    metadata.kind = kind;
+  }
+  const refs = citationRefsOption(options);
+  if (refs) metadata.refs = refs;
+  return Object.keys(metadata).length > 0 ? metadata : null;
 }
 
 async function issueComment(positional: string[], options: CliOptions): Promise<void> {
@@ -1177,7 +1202,7 @@ async function addProjectDocSharedBodyFields(body: Record<string, unknown>, opti
   if (hasOption(options, "tags")) body.tags = parseProjectDocTags(rawStringOption(options, "tags") ?? "");
   const pinned = projectDocPinnedOption(options);
   if (pinned !== null) body.pinned = pinned;
-  const refs = projectDocRefsOption(options);
+  const refs = citationRefsOption(options);
   if (refs) body.refs = refs;
   const content = await readOptionalTextBody(options, "content");
   if (content.set) body.body = content.value;
@@ -1200,9 +1225,12 @@ function projectDocPinnedOption(options: CliOptions): boolean | null {
  * `--ref issue:MUL-12` / `--ref task:tsk_1` / `--ref url:https://…`, repeatable.
  * A bare http(s) URL is accepted as a url ref so the caller does not have to
  * prefix it; anything else without a type prefix is a usage error. On update the
- * parsed list replaces the doc's refs wholesale.
+ * parsed list replaces the target's refs wholesale.
+ *
+ * Shared by project docs and published Session results — both carry the same
+ * `{type, value}` citation shape.
  */
-function projectDocRefsOption(options: CliOptions): Array<{ type: string; value: string }> | null {
+function citationRefsOption(options: CliOptions): Array<{ type: string; value: string }> | null {
   if (!hasOption(options, "ref")) return null;
   const refs: Array<{ type: string; value: string }> = [];
   for (const raw of stringListOption(options, "ref")) {
@@ -1948,6 +1976,7 @@ Commands:
   issue session list <id> List product Sessions for an issue
   issue session result list <id> List explicitly published cross-Session results
   issue session result publish <id> Publish a reusable result from one Session
+                         [--type mr|report|deploy|decision|doc|other] [--ref <type>:<value>]
   issue subscriber list <id>
   issue subscriber add <id> [--user-id <member-id>]
   issue subscriber remove <id> [--user-id <member-id>]
@@ -1981,6 +2010,7 @@ Options:
   --content <text>       Inline comment or published-result body
   --content-file <path>  Read a comment or published-result body from a file
   --content-stdin        Read a comment or published-result body from stdin
+  --type <kind>          Published-result kind: mr|report|deploy|decision|doc|other
   --output-dir <dir>     Directory for attachment download
   --provider <name>      Limit daemon to one provider: claude or codex (default: auto-detect)
   --workspace <id>       Workspace id (default: local)
@@ -2019,7 +2049,8 @@ Project knowledge options:
   --summary <text>       Short summary shown in listings and prompt injection
   --tags a,b             Comma-separated tags
   --pinned [true|false]  Pin the doc into the prompt injection index
-  --ref <type>:<value>   Cite a source: issue:<id>, task:<id>, url:<url> (repeatable)
+  --ref <type>:<value>   Cite a source: issue:<id>, task:<id>, url:<url> (repeatable;
+                         also links a published Session result)
   --expected-version <n> Fail the update when the doc moved on (409)
   --limit <n>            Result cap for project doc search
 `);

@@ -840,6 +840,83 @@ describe("Multiremi CLI config", () => {
     }
   });
 
+  test("issue Session result publish maps --type and --ref into result metadata", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/issues/iss_1/sessions/sess_main/results" && request.method === "POST") {
+          const body = await request.json() as Record<string, unknown>;
+          bodies.push(body);
+          return Response.json({ id: "sres_3", ...body }, { status: 201 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    const originalLog = console.log;
+    try {
+      console.log = () => {};
+      const connection = ["--server", `http://127.0.0.1:${server.port}`, "--token", "tok_cli", "--output", "json"];
+      const publish = ["issue", "session", "result", "publish", "iss_1", "--session", "sess_main"];
+
+      await runMultiremi([
+        ...publish,
+        "--title", "Merged the projection fix",
+        "--type", "mr",
+        "--ref", "issue:MUL-12",
+        "--ref", "https://example.test/mr/12",
+        "--content", "Landed on main.",
+        ...connection,
+      ], { programName: "multiremi" });
+
+      // Neither flag given: the body stays exactly as before this feature —
+      // no empty metadata bag pushed at the server.
+      await runMultiremi([
+        ...publish,
+        "--content", "Plain result.",
+        ...connection,
+      ], { programName: "multiremi" });
+
+      expect(bodies).toEqual([
+        {
+          title: "Merged the projection fix",
+          body: "Landed on main.",
+          metadata: {
+            kind: "mr",
+            refs: [
+              { type: "issue", value: "MUL-12" },
+              { type: "url", value: "https://example.test/mr/12" },
+            ],
+          },
+        },
+        { title: "", body: "Plain result." },
+      ]);
+
+      // An unknown kind is rejected client-side, listing the valid kinds.
+      await expect(runMultiremi([
+        ...publish,
+        "--type", "merge-request",
+        "--content", "Rejected before it reaches the server.",
+        ...connection,
+      ], { programName: "multiremi" })).rejects.toThrow(
+        '--type "merge-request" must be one of mr, report, deploy, decision, doc, other',
+      );
+      // A malformed --ref keeps the shared project-doc parser's message.
+      await expect(runMultiremi([
+        ...publish,
+        "--ref", "MUL-12",
+        "--content", "Rejected before it reaches the server.",
+        ...connection,
+      ], { programName: "multiremi" })).rejects.toThrow('--ref "MUL-12" must be <type>:<value>');
+      expect(bodies).toHaveLength(2);
+    } finally {
+      console.log = originalLog;
+      server.stop(true);
+    }
+  });
+
   test("agent CLI lists, reads, and edits post-create metadata", async () => {
     const requests: Array<{
       method: string;
