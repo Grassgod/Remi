@@ -724,6 +724,64 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getAllByRole("button", { name: "Session actions" })).toHaveLength(2);
   });
 
+  it("mounts the session column at the panel's far left, outside the scrolling content", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+    renderIssueDetail();
+
+    const sessionsLabel = await screen.findByText("Sessions");
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
+    expect(scrollRoot).not.toBeNull();
+    // Rendering the column inside the scroll container (its previous home,
+    // mid-page in the activity section) both squeezed the centered reading
+    // column and left the panel's left gutter empty. It must be a sibling…
+    expect(scrollRoot!.contains(sessionsLabel)).toBe(false);
+    // …placed immediately before the content, i.e. on the panel's far left.
+    expect(scrollRoot!.previousElementSibling).toContainElement(sessionsLabel);
+    // The timeline itself stays inside the scroll container.
+    expect(scrollRoot!.contains(screen.getAllByText("Activity")[0]!)).toBe(true);
+  });
+
+  it("keeps the content full width with no session column on a single-session issue", async () => {
+    // Default fixture: one default "Main" session.
+    renderIssueDetail();
+
+    await screen.findByDisplayValue("Implement authentication");
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
+    expect(scrollRoot).not.toBeNull();
+    // Nothing renders to the left of the content — the centered container
+    // keeps the whole panel to itself, exactly as before the rail existed.
+    expect(scrollRoot!.previousElementSibling).toBeNull();
+  });
+
   it("opens participant management from a session row's actions menu", async () => {
     mockApiObj.listIssueSessions.mockResolvedValue([
       {

@@ -31,14 +31,15 @@ interface IssueSessionListProps {
   onSelectSession: (sessionId: string) => void;
 }
 
-// Narrow session switcher that sits to the left of the activity timeline.
+// Narrow session switcher rail on the far left of the issue detail panel.
 // Only mounted on issues that have more than one session — an issue with
 // just the default Main session has nothing to switch to, and its session
 // actions live in the right properties panel instead.
 //
-// The column is sticky inside the issue's scroll container and scrolls on
-// its own once the list outgrows the viewport, so a long timeline never
-// pushes the switcher out of reach.
+// It is a sibling of the issue's scroll container, not a child: the rail
+// keeps the full panel height, scrolls on its own once the list outgrows
+// it, and stays put while the timeline scrolls. Width shrinks below the
+// `lg` breakpoint so narrow windows keep a usable reading column.
 export function IssueSessionList({
   issueId,
   sessions,
@@ -49,7 +50,7 @@ export function IssueSessionList({
   const { t } = useT("issues");
 
   return (
-    <div className="sticky top-0 max-h-[70vh] w-56 shrink-0 self-start overflow-y-auto">
+    <div className="w-44 shrink-0 overflow-y-auto border-r px-2 py-8 lg:w-56">
       <div className="flex items-center gap-1 pl-2">
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
           {t(($) => $.detail.sessions_label)}
