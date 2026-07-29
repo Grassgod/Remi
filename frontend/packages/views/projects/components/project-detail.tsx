@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Plus, Trash2, UserMinus } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Link2, ListTodo, MoreHorizontal, PanelRight, Pin, PinOff, Plus, Trash2, UserMinus } from "lucide-react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
@@ -41,6 +41,12 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useNavigation } from "../../navigation";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
+import {
+  PickerEmpty,
+  PickerItem,
+  PickerSection,
+  PropertyPicker,
+} from "../../issues/components/pickers/property-picker";
 import { ProjectResourcesSection } from "./project-resources-section";
 import { ProjectContentTabs } from "./wiki/project-content-tabs";
 import { IssuesHeader } from "../../issues/components/issues-header";
@@ -124,6 +130,10 @@ function ProjectIssuesContent({
   filter,
   sort,
   ganttIssues,
+  isPending,
+  isError,
+  error,
+  onRetry,
 }: {
   projectId: string;
   projectIssues: Issue[];
@@ -134,6 +144,13 @@ function ProjectIssuesContent({
   filter: MyIssuesFilter;
   sort?: IssueSortParam;
   ganttIssues: Issue[];
+  /** State of the one query that feeds the current view — see
+   *  ProjectIssuesSurface. An empty `projectIssues` means "empty project"
+   *  only once that query has actually settled. */
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
 }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
@@ -210,6 +227,39 @@ function ProjectIssuesContent({
     },
     [updateIssueMutation, t],
   );
+
+  // The first paint of every project lands here. Without these two branches
+  // an unresolved (or failed) fetch is indistinguishable from an empty
+  // project, and a project with hundreds of issues opens on a confident
+  // "No issues linked — create one" CTA.
+  if (isPending) {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col gap-2 p-4">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <Skeleton key={index} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
+        <AlertCircle className="h-8 w-8 text-destructive" />
+        <div>
+          <p className="text-sm font-medium">{t(($) => $.detail.issues_error_title)}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {error instanceof Error
+              ? error.message
+              : t(($) => $.detail.issues_error_hint)}
+          </p>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          {t(($) => $.detail.issues_error_retry)}
+        </Button>
+      </div>
+    );
+  }
 
   // Gantt and Swimlane have their own data sources and empty states —
   // we never short-circuit them here, otherwise an unscheduled/unparented
@@ -366,6 +416,14 @@ function ProjectIssuesSurface({
   // would otherwise be blamed for an empty Board cache, even though it has
   // its own (potentially non-empty) scheduled cache.
   const projectIssues = usesGantt ? ganttIssues : bucketedIssues;
+  // Exactly one of the three queries is enabled per view (see above), so the
+  // loading / error state of the view is the state of that one query. Reading
+  // all three would report the disabled ones as permanently pending.
+  const activeQuery = usesAssigneeBoard
+    ? assigneeGroupsQuery
+    : usesGantt
+      ? ganttIssuesQuery
+      : statusIssuesQuery;
 
   return (
     <>
@@ -380,6 +438,10 @@ function ProjectIssuesSurface({
         filter={filter}
         sort={sort}
         ganttIssues={ganttIssues}
+        isPending={activeQuery.isLoading}
+        isError={activeQuery.isError}
+        error={activeQuery.error}
+        onRetry={() => void activeQuery.refetch()}
       />
       <BatchActionToolbar />
     </>
@@ -590,78 +652,72 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </DropdownMenu>
           </PropRow>
           <PropRow label={t(($) => $.table.lead)}>
-            <Popover open={leadOpen} onOpenChange={(v) => { setLeadOpen(v); if (!v) setLeadFilter(""); }}>
-              <PopoverTrigger
-                render={
-                  <button type="button" className="inline-flex items-center gap-1.5 text-xs hover:text-foreground transition-colors">
-                    {project.lead_type && project.lead_id ? (
-                      <>
-                        <ActorAvatar actorType={project.lead_type} actorId={project.lead_id} size={16} enableHoverCard showStatusDot />
-                        <span className="cursor-pointer">{getActorName(project.lead_type, project.lead_id)}</span>
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground">{t(($) => $.lead.no_lead)}</span>
-                    )}
-                  </button>
-                }
-              />
-              <PopoverContent align="start" className="w-52 p-0">
-                <div className="px-2 py-1.5 border-b">
-                  <input
-                    type="text"
-                    value={leadFilter}
-                    onChange={(e) => setLeadFilter(e.target.value)}
-                    placeholder={t(($) => $.lead.assign_placeholder)}
-                    className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
-                  />
-                </div>
-                <div className="p-1 max-h-60 overflow-y-auto">
-                  <button
-                    type="button"
-                    onClick={() => { handleUpdateField({ lead_type: null, lead_id: null }); setLeadOpen(false); }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                  >
-                    <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-muted-foreground">{t(($) => $.lead.no_lead)}</span>
-                  </button>
-                  {filteredMembers.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">{t(($) => $.lead.members_group)}</div>
-                      {filteredMembers.map((m) => (
-                        <button
-                          type="button"
-                          key={m.user_id}
-                          onClick={() => { handleUpdateField({ lead_type: "member", lead_id: m.user_id }); setLeadOpen(false); }}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                        >
-                          <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
-                          <span>{m.name}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {filteredAgents.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">{t(($) => $.lead.agents_group)}</div>
-                      {filteredAgents.map((a) => (
-                        <button
-                          type="button"
-                          key={a.id}
-                          onClick={() => { handleUpdateField({ lead_type: "agent", lead_id: a.id }); setLeadOpen(false); }}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                        >
-                          <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
-                          <span>{a.name}</span>
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {filteredMembers.length === 0 && filteredAgents.length === 0 && leadFilter && (
-                    <div className="px-2 py-3 text-center text-sm text-muted-foreground">{t(($) => $.lead.no_results)}</div>
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
+            {/* Same picker shell every other member+agent list uses, so this
+                one gets arrow-key navigation, listbox semantics and the IME
+                guard for free — the last one matters because the filter below
+                runs `matchesPinyin`, which would otherwise re-filter the list
+                mid-composition. */}
+            <PropertyPicker
+              open={leadOpen}
+              onOpenChange={setLeadOpen}
+              width="w-52"
+              align="start"
+              searchable
+              searchPlaceholder={t(($) => $.lead.assign_placeholder)}
+              onSearchChange={setLeadFilter}
+              triggerRender={
+                <button type="button" className="inline-flex items-center gap-1.5 text-xs hover:text-foreground transition-colors" />
+              }
+              trigger={
+                project.lead_type && project.lead_id ? (
+                  <>
+                    <ActorAvatar actorType={project.lead_type} actorId={project.lead_id} size={16} enableHoverCard showStatusDot />
+                    <span className="cursor-pointer">{getActorName(project.lead_type, project.lead_id)}</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">{t(($) => $.lead.no_lead)}</span>
+                )
+              }
+            >
+              <PickerItem
+                selected={!project.lead_type || !project.lead_id}
+                onClick={() => { handleUpdateField({ lead_type: null, lead_id: null }); setLeadOpen(false); }}
+              >
+                <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">{t(($) => $.lead.no_lead)}</span>
+              </PickerItem>
+              {filteredMembers.length > 0 && (
+                <PickerSection label={t(($) => $.lead.members_group)}>
+                  {filteredMembers.map((m) => (
+                    <PickerItem
+                      key={m.user_id}
+                      selected={project.lead_type === "member" && project.lead_id === m.user_id}
+                      onClick={() => { handleUpdateField({ lead_type: "member", lead_id: m.user_id }); setLeadOpen(false); }}
+                    >
+                      <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
+                      <span className="truncate">{m.name}</span>
+                    </PickerItem>
+                  ))}
+                </PickerSection>
+              )}
+              {filteredAgents.length > 0 && (
+                <PickerSection label={t(($) => $.lead.agents_group)}>
+                  {filteredAgents.map((a) => (
+                    <PickerItem
+                      key={a.id}
+                      selected={project.lead_type === "agent" && project.lead_id === a.id}
+                      onClick={() => { handleUpdateField({ lead_type: "agent", lead_id: a.id }); setLeadOpen(false); }}
+                    >
+                      <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
+                      <span className="truncate">{a.name}</span>
+                    </PickerItem>
+                  ))}
+                </PickerSection>
+              )}
+              {filteredMembers.length === 0 && filteredAgents.length === 0 && leadFilter && (
+                <PickerEmpty />
+              )}
+            </PropertyPicker>
           </PropRow>
         </div>}
       </div>
@@ -682,7 +738,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             {progressOpen && <div className="pl-2 flex items-center gap-3">
               <div className="relative h-2 flex-1 rounded-full bg-muted overflow-hidden">
                 <div
-                  className="absolute inset-y-0 left-0 rounded-full bg-emerald-500 transition-all"
+                  className="absolute inset-y-0 left-0 rounded-full bg-success transition-all"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -854,7 +910,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-white hover:bg-destructive/90">
+            <AlertDialogAction variant="destructive" onClick={handleDelete}>
               {t(($) => $.delete_dialog.confirm)}
             </AlertDialogAction>
           </AlertDialogFooter>

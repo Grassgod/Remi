@@ -2,16 +2,12 @@
 
 import { useState } from "react";
 import { Globe, Lock } from "lucide-react";
-import {
-  VISIBILITY_DESCRIPTION,
-  VISIBILITY_LABEL,
-  VISIBILITY_TOOLTIP,
-} from "@multiremi/core/agents";
 import type { AgentVisibility } from "@multiremi/core/types";
 import {
   PickerItem,
   PropertyPicker,
 } from "../../../issues/components/pickers";
+import { useT } from "../../../i18n";
 import { VisibilityBadge } from "../visibility-badge";
 import { CHIP_CLASS } from "./chip";
 
@@ -25,6 +21,7 @@ export function VisibilityPicker({
   canEdit?: boolean;
   onChange: (next: AgentVisibility) => Promise<void> | void;
 }) {
+  const { t } = useT("agents");
   const [open, setOpen] = useState(false);
 
   if (!canEdit) {
@@ -32,8 +29,10 @@ export function VisibilityPicker({
   }
 
   const Icon = value === "private" ? Lock : Globe;
-  const label = VISIBILITY_LABEL[value];
-  const tooltip = `Visibility · ${VISIBILITY_TOOLTIP[value]}`;
+  const label = t(($) => $.visibility[value].label);
+  const tooltip = t(($) => $.pickers.visibility_tooltip, {
+    value: t(($) => $.visibility[value].tooltip),
+  });
 
   const select = async (next: AgentVisibility) => {
     setOpen(false);
@@ -63,9 +62,11 @@ export function VisibilityPicker({
       >
         <Globe className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <div className="text-left">
-          <div className="font-medium">{VISIBILITY_LABEL.workspace}</div>
+          <div className="font-medium">
+            {t(($) => $.visibility.workspace.label)}
+          </div>
           <div className="text-xs text-muted-foreground">
-            {VISIBILITY_DESCRIPTION.workspace}
+            {t(($) => $.visibility.workspace.description)}
           </div>
         </div>
       </PickerItem>
@@ -75,9 +76,11 @@ export function VisibilityPicker({
       >
         <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <div className="text-left">
-          <div className="font-medium">{VISIBILITY_LABEL.private}</div>
+          <div className="font-medium">
+            {t(($) => $.visibility.private.label)}
+          </div>
           <div className="text-xs text-muted-foreground">
-            {VISIBILITY_DESCRIPTION.private}
+            {t(($) => $.visibility.private.description)}
           </div>
         </div>
       </PickerItem>

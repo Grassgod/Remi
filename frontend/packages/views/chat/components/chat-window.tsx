@@ -592,6 +592,7 @@ export function ChatWindow() {
         <EmptyState
           hasSessions={sessions.length > 0}
           agentName={activeAgent?.name}
+          noAgent={noAgent}
           onPickPrompt={(text) => handleSend(text)}
         />
       )}
@@ -780,7 +781,7 @@ function AgentPickerItem({
  * (sessions are bound 1:1 to an agent). "New chat" lives in the header's
  * ⊕ button, not inside this dropdown.
  */
-function SessionDropdown({
+export function SessionDropdown({
   sessions,
   agents,
   activeSessionId,
@@ -1112,10 +1113,16 @@ function SessionDropdown({
               </button>
             </div>
           ) : (
+            // Status readout and row actions occupy the same slot, so the swap
+            // has to be `display` — an opacity fade would reserve both widths
+            // at once. `focus-within` is what makes the actions reachable
+            // without a mouse: the row itself is focusable, so focusing it
+            // flips the actions into the layout, and only then can Tab move
+            // into them.
             <div className="flex shrink-0 items-center">
-              <div className="flex h-7 items-center justify-end gap-1.5 text-xs text-muted-foreground group-hover/history-row:hidden">
+              <div className="flex h-7 items-center justify-end gap-1.5 text-xs text-muted-foreground group-focus-within/history-row:hidden group-hover/history-row:hidden">
                 {isRunning && <Loader2 className="size-3 animate-spin" />}
-                {showCompleted && !isRunning && <Check className="size-3 text-emerald-500" />}
+                {showCompleted && !isRunning && <Check className="size-3 text-success" />}
                 {showUnread && !isRunning && !showCompleted && (
                   <span
                     aria-label={t(($) => $.window.unread)}
@@ -1125,7 +1132,7 @@ function SessionDropdown({
                 )}
                 <span className={cn("truncate", (showUnread || showCompleted || isRunning) && "font-medium text-foreground")}>{trailingStatus}</span>
               </div>
-              <div className="hidden h-7 items-center gap-0.5 group-hover/history-row:flex">
+              <div className="hidden h-7 items-center gap-0.5 group-focus-within/history-row:flex group-hover/history-row:flex">
                 {isRunning && pendingTask && (
                   <button
                     type="button"
@@ -1367,13 +1374,18 @@ const STARTER_ICONS: Record<(typeof STARTER_KEYS)[number], string> = {
   plan_next: "💡",
 };
 
-function EmptyState({
+export function EmptyState({
   hasSessions,
   agentName,
+  noAgent,
   onPickPrompt,
 }: {
   hasSessions: boolean;
   agentName?: string;
+  /** Server-confirmed "this workspace has zero agents you can chat with".
+   *  `handleSend` early-returns without one, so a live starter prompt would
+   *  be a button that does nothing — same lockout ChatInput already applies. */
+  noAgent: boolean;
   onPickPrompt: (text: string) => void;
 }) {
   const { t } = useT("chat");
@@ -1412,7 +1424,9 @@ function EmptyState({
             : t(($) => $.empty_state.returning_title_default)}
         </h3>
         <p className="text-sm text-muted-foreground">
-          {t(($) => $.empty_state.returning_subtitle)}
+          {noAgent
+            ? t(($) => $.empty_state.no_agent_hint)
+            : t(($) => $.empty_state.returning_subtitle)}
         </p>
       </div>
       <div className="w-full max-w-xs space-y-2">
@@ -1422,8 +1436,14 @@ function EmptyState({
             <button
               key={key}
               type="button"
+              disabled={noAgent}
               onClick={() => onPickPrompt(text)}
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent hover:border-brand/40"
+              className={cn(
+                "w-full rounded-lg border border-border bg-card px-3 py-2 text-left text-sm text-foreground transition-colors",
+                noAgent
+                  ? "cursor-not-allowed opacity-50"
+                  : "hover:border-brand/40 hover:bg-accent",
+              )}
             >
               <span className="mr-2">{STARTER_ICONS[key]}</span>
               {text}

@@ -29,11 +29,7 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { toast } from "sonner";
-import {
-  AGENT_DESCRIPTION_MAX_LENGTH,
-  VISIBILITY_DESCRIPTION,
-  VISIBILITY_LABEL,
-} from "@multiremi/core/agents";
+import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
 
@@ -293,9 +289,11 @@ export function CreateAgentDialog({
                 >
                   <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="text-left">
-                    <div className="font-medium">{VISIBILITY_LABEL.workspace}</div>
+                    <div className="font-medium">
+                      {t(($) => $.visibility.workspace.label)}
+                    </div>
                     <div className="text-xs text-muted-foreground">
-                      {VISIBILITY_DESCRIPTION.workspace}
+                      {t(($) => $.visibility.workspace.description)}
                     </div>
                   </div>
                 </button>
@@ -310,9 +308,11 @@ export function CreateAgentDialog({
                 >
                   <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="text-left">
-                    <div className="font-medium">{VISIBILITY_LABEL.private}</div>
+                    <div className="font-medium">
+                      {t(($) => $.visibility.private.label)}
+                    </div>
                     <div className="text-xs text-muted-foreground">
-                      {VISIBILITY_DESCRIPTION.private}
+                      {t(($) => $.visibility.private.description)}
                     </div>
                   </div>
                 </button>

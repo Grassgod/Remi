@@ -133,6 +133,7 @@
     "section_properties": "속성",
     "section_details": "세부 정보",
     "section_skills": "스킬",
+    "skills_empty": "아직 추가된 스킬이 없습니다.",
     "section_integrations": "연동",
     "prop_model": "모델",
     "prop_thinking": "추론",
@@ -149,6 +150,7 @@
     "rename_placeholder": "에이전트 이름",
     "rename_required": "이름은 필수입니다",
     "edit_description_title": "설명 수정",
+    "edit_description_description": "이 에이전트가 하는 일을 설명하세요. 멤버는 목록과 선택 화면에서 이를 봅니다.",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
     "cancel": "취소",
@@ -176,7 +178,8 @@
     "thinking_clear": "CLI 설정 따르기",
     "thinking_clear_title": "재정의를 지우고 추론 수준을 로컬 CLI 설정(claude/codex)에 맡깁니다",
     "engine_tooltip": "엔진: {{value}}",
-    "engine_hint": "작업은 이 엔진의 온라인 머신에서 실행됩니다."
+    "engine_hint": "작업은 이 엔진의 온라인 머신에서 실행됩니다.",
+    "visibility_tooltip": "공개 범위 · {{value}}"
   },
   "model_dropdown": {
     "label": "모델",
@@ -380,10 +383,12 @@
   "visibility": {
     "private": {
       "label": "개인",
+      "description": "본인과 워크스페이스 관리자만 할당할 수 있습니다",
       "tooltip": "개인 · 본인과 워크스페이스 관리자만 이 에이전트를 사용할 수 있습니다"
     },
     "workspace": {
       "label": "워크스페이스",
+      "description": "모든 멤버가 할당할 수 있습니다",
       "tooltip": "워크스페이스 · 이 워크스페이스의 모든 사람이 이 에이전트를 사용할 수 있습니다"
     }
   },

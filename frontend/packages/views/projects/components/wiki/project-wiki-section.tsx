@@ -2,9 +2,11 @@
 
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BookText, Brain, FileText, Pin } from "lucide-react";
+import { AlertCircle, BookText, Brain, FileText, Pin } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Badge } from "@multiremi/ui/components/ui/badge";
+import { Button } from "@multiremi/ui/components/ui/button";
+import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { projectDocListOptions } from "@multiremi/core/project-docs";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
@@ -56,7 +58,12 @@ function SidebarRow({
       )}
     >
       {icon}
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* The right pane only shows the title of the page you already opened,
+          so a truncated row here would be the only copy of a long agent-written
+          title — `title` keeps it recoverable on hover. */}
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {label}
+      </span>
       {count !== undefined && (
         <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
       )}
@@ -88,24 +95,29 @@ function WikiLinkChips({
       </span>
       {slugs.map((slug) => {
         const target = pages.find((page) => page.slug === slug);
+        // Page titles and slugs are agent-authored strings of unbounded
+        // length. Without a width bound a single long (or CJK) title makes the
+        // chip wider than the content column and hands the whole scrolling
+        // pane a horizontal scrollbar — same bound DocRefs uses.
         return target ? (
           <Badge
             key={slug}
             variant="secondary"
-            className="cursor-pointer hover:bg-accent"
+            className="max-w-64 cursor-pointer hover:bg-accent"
             render={<button type="button" />}
             onClick={() => onSelect(target.id)}
+            title={target.title}
           >
-            {target.title}
+            <span className="truncate">{target.title}</span>
           </Badge>
         ) : (
           <Badge
             key={slug}
             variant="outline"
-            className="text-muted-foreground"
+            className="max-w-64 text-muted-foreground"
             title={t(($) => $.wiki.link_missing)}
           >
-            {slug}
+            <span className="truncate">{slug}</span>
           </Badge>
         );
       })}
@@ -166,14 +178,41 @@ function WikiPagePane({
 // Right pane — the memory card stream
 // ---------------------------------------------------------------------------
 
-function MemoryCard({ doc }: { doc: ProjectDoc }) {
+// A memory body is agent-authored markdown of unbounded length, and the cards
+// live in a stream rather than on a page of their own — so a long one is
+// clamped with a fade and an explicit toggle. Whether a body is long is
+// decided from the source text, not a measured height: no layout read, no
+// resize observer, and the same answer on the server and in tests.
+const MEMORY_CLAMP_LINES = 6;
+const MEMORY_CLAMP_CHARS = 400;
+
+function isLongMemoryBody(body: string): boolean {
+  return (
+    body.length > MEMORY_CLAMP_CHARS ||
+    body.split("\n").length > MEMORY_CLAMP_LINES
+  );
+}
+
+function MemoryCard({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
   const formatRelativeDate = useFormatRelativeDate();
+  const [expanded, setExpanded] = useState(false);
   // `memory add --summary` writes a summary with no body. A memory card has no
   // second surface to show it on, so it stands in for the missing body rather
   // than being stored and never read.
   const detail = doc.body || doc.summary;
+  // Memory entries come out of the same agent prompt as wiki pages: markdown
+  // with `[[slug]]` cross-links. They go through the same pipeline WikiPagePane
+  // uses, otherwise headings, bullets, fences and raw link markers leak.
+  const body = detail
+    ? replaceWikiLinkMarkers(
+        detail,
+        (slug) => pages.find((page) => page.slug === slug)?.title ?? null,
+      )
+    : "";
+  const isLong = isLongMemoryBody(body);
+  const clamped = isLong && !expanded;
 
   return (
     <div className="rounded-lg border p-3">
@@ -186,10 +225,26 @@ function MemoryCard({ doc }: { doc: ProjectDoc }) {
           </Badge>
         )}
       </div>
-      {detail && (
-        <p className="mt-1.5 whitespace-pre-wrap text-sm text-muted-foreground">
-          {detail}
-        </p>
+      {body && (
+        <div className="mt-1.5">
+          <div className={cn("relative", clamped && "max-h-40 overflow-hidden")}>
+            <ReadonlyContent content={body} />
+            {clamped && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background to-transparent" />
+            )}
+          </div>
+          {isLong && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {expanded
+                ? t(($) => $.wiki.memory_collapse)
+                : t(($) => $.wiki.memory_expand)}
+            </button>
+          )}
+        </div>
       )}
       <DocRefs refs={doc.refs ?? []} className="mt-2" />
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -221,7 +276,13 @@ function MemoryCard({ doc }: { doc: ProjectDoc }) {
   );
 }
 
-function MemoryPane({ docs }: { docs: ProjectDoc[] }) {
+function MemoryPane({
+  docs,
+  pages,
+}: {
+  docs: ProjectDoc[];
+  pages: ProjectDoc[];
+}) {
   const { t } = useT("projects");
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-5">
@@ -236,7 +297,7 @@ function MemoryPane({ docs }: { docs: ProjectDoc[] }) {
       ) : (
         <div className="mt-4 space-y-2">
           {docs.map((doc) => (
-            <MemoryCard key={doc.id} doc={doc} />
+            <MemoryCard key={doc.id} doc={doc} pages={pages} />
           ))}
         </div>
       )}
@@ -263,8 +324,9 @@ function ActorName({
 export function ProjectWikiSection({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
-  const { data: docs = [] } = useQuery(projectDocListOptions(wsId, projectId));
+  const docsQuery = useQuery(projectDocListOptions(wsId, projectId));
   const [selected, setSelected] = useState<string>(MEMORY_NODE);
+  const docs = docsQuery.data ?? [];
 
   const memoryDocs = docs.filter((doc) => doc.kind === "memory");
   // Wiki pages sort newest-first; the server sorts pinned-first, which is the
@@ -272,6 +334,56 @@ export function ProjectWikiSection({ projectId }: { projectId: string }) {
   const wikiDocs = docs
     .filter((doc) => doc.kind === "wiki")
     .sort(byUpdatedAtDesc);
+
+  // Nothing prefetches this key, so the first open of every Wiki tab starts
+  // here. Falling through to the empty state instead would claim the project
+  // has no knowledge before the request has even answered — and keep claiming
+  // it forever when the request fails.
+  if (docsQuery.isPending) {
+    return (
+      <div className="flex min-h-0 flex-1" data-testid="wiki-loading">
+        <div className="w-56 shrink-0 space-y-2 border-r p-2">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} className="h-7 w-full" />
+          ))}
+        </div>
+        <div className="min-w-0 flex-1 px-6 py-5">
+          <div className="mx-auto w-full max-w-3xl space-y-3">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-full max-w-md" />
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-24 w-full" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (docsQuery.isError) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+        <AlertCircle className="h-8 w-8 text-destructive" />
+        <div>
+          <p className="text-sm font-medium">
+            {t(($) => $.wiki.load_error_title)}
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {docsQuery.error instanceof Error
+              ? docsQuery.error.message
+              : t(($) => $.wiki.load_error_hint)}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void docsQuery.refetch()}
+        >
+          {t(($) => $.wiki.load_error_retry)}
+        </Button>
+      </div>
+    );
+  }
 
   if (docs.length === 0) {
     return (
@@ -322,7 +434,7 @@ export function ProjectWikiSection({ projectId }: { projectId: string }) {
             onSelect={setSelected}
           />
         ) : (
-          <MemoryPane docs={memoryDocs} />
+          <MemoryPane docs={memoryDocs} pages={wikiDocs} />
         )}
       </div>
     </div>

@@ -12,10 +12,22 @@ const TEST_RESOURCES = {
   en: { common: enCommon, projects: enProjects },
 };
 
-const state = vi.hoisted(() => ({ docs: [] as unknown[] }));
+const state = vi.hoisted(() => ({
+  docs: [] as unknown[],
+  isPending: false,
+  isError: false,
+  error: null as unknown,
+}));
+const refetch = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => ({ data: state.docs }),
+  useQuery: () => ({
+    data: state.isPending ? undefined : state.docs,
+    isPending: state.isPending,
+    isError: state.isError,
+    error: state.error,
+    refetch,
+  }),
 }));
 
 vi.mock("@multiremi/core/project-docs", () => ({
@@ -97,6 +109,53 @@ function renderSection() {
 describe("ProjectWikiSection", () => {
   beforeEach(() => {
     state.docs = [];
+    state.isPending = false;
+    state.isError = false;
+    state.error = null;
+    refetch.mockClear();
+  });
+
+  it("shows a skeleton while the docs query is still pending, never the empty state", () => {
+    state.isPending = true;
+
+    renderSection();
+
+    expect(screen.getByTestId("wiki-loading")).toBeInTheDocument();
+    expect(
+      screen.queryByText("No knowledge entries yet"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a retryable error state when the docs query fails", () => {
+    state.isError = true;
+    state.error = new Error("network down");
+
+    renderSection();
+
+    expect(
+      screen.getByText("Couldn't load the knowledge base"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("network down")).toBeInTheDocument();
+    // The lie the empty state would have told instead.
+    expect(
+      screen.queryByText("No knowledge entries yet"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the generic hint when the error carries no message", () => {
+    state.isError = true;
+    state.error = "boom";
+
+    renderSection();
+
+    expect(
+      screen.getByText(
+        "Something went wrong fetching this project's wiki and memory.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows the empty state when the project has no knowledge yet", () => {
@@ -340,5 +399,103 @@ describe("ProjectWikiSection", () => {
     expect(
       screen.queryByRole("button", { name: "missing-page" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders memory bodies through the markdown pipeline with [[slug]] rewritten", () => {
+    state.docs = [
+      doc({ id: "d1", slug: "runbook", title: "Runbook" }),
+      doc({
+        id: "d2",
+        kind: "memory",
+        title: "Deploy note",
+        body: "- see [[runbook]]\n- and `[[ -f x ]]`",
+      }),
+    ];
+
+    renderSection();
+
+    // Same renderer + same [[slug]] rewrite the wiki page pane uses — the raw
+    // marker and the markdown list syntax never reach the reader as text.
+    expect(screen.getByTestId("wiki-body").textContent).toBe(
+      "- see `Runbook`\n- and `[[ -f x ]]`",
+    );
+  });
+
+  it("clamps a long memory body behind a toggle and expands it on demand", () => {
+    state.docs = [
+      doc({
+        id: "d1",
+        kind: "memory",
+        title: "Long note",
+        body: Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n"),
+      }),
+    ];
+
+    renderSection();
+
+    expect(screen.getByTestId("wiki-body").parentElement).toHaveClass(
+      "max-h-40",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+
+    expect(screen.getByTestId("wiki-body").parentElement).not.toHaveClass(
+      "max-h-40",
+    );
+    expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+  });
+
+  it("leaves a short memory body unclamped and toggle-free", () => {
+    state.docs = [
+      doc({ id: "d1", kind: "memory", title: "Short", body: "one line" }),
+    ];
+
+    renderSection();
+
+    expect(screen.getByTestId("wiki-body").parentElement).not.toHaveClass(
+      "max-h-40",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Show more" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("bounds a long wiki-link chip and keeps the full title on hover", () => {
+    const longTitle = "运行手册与灾难恢复流程".repeat(6);
+    state.docs = [
+      doc({
+        id: "d1",
+        slug: "index",
+        title: "Index",
+        body: "See [[runbook]].",
+        updated_at: "2026-07-09T00:00:00Z",
+      }),
+      doc({
+        id: "d2",
+        slug: "runbook",
+        title: longTitle,
+        updated_at: "2026-07-08T00:00:00Z",
+      }),
+    ];
+
+    renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Index" }));
+
+    // Sidebar row first, chip last.
+    const buttons = screen.getAllByRole("button", { name: longTitle });
+    const chip = buttons[buttons.length - 1]!;
+    expect(chip).toHaveClass("max-w-64");
+    expect(chip).toHaveAttribute("title", longTitle);
+  });
+
+  it("keeps a truncated sidebar page title recoverable on hover", () => {
+    const longTitle = "A very long agent-written wiki page title";
+    state.docs = [doc({ id: "d1", slug: "runbook", title: longTitle })];
+
+    renderSection();
+
+    const label = screen.getByTitle(longTitle);
+    expect(label.tagName).toBe("SPAN");
+    expect(label).toHaveClass("truncate");
   });
 });

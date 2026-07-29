@@ -129,6 +129,7 @@
     "section_properties": "属性",
     "section_details": "详情",
     "section_skills": "Skills",
+    "skills_empty": "尚未添加技能。",
     "section_integrations": "外部集成",
     "prop_model": "模型",
     "prop_thinking": "思考",
@@ -145,6 +146,7 @@
     "rename_placeholder": "智能体名称",
     "rename_required": "名称必填",
     "edit_description_title": "编辑描述",
+    "edit_description_description": "描述这个智能体做什么。成员会在列表和选择器中看到它。",
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
     "cancel": "取消",
@@ -172,7 +174,8 @@
     "thinking_clear": "跟随 CLI 配置",
     "thinking_clear_title": "清除覆盖，让本地 CLI（claude/codex）的配置决定推理级别",
     "engine_tooltip": "引擎：{{value}}",
-    "engine_hint": "任务将在该引擎的任意在线机器上运行。"
+    "engine_hint": "任务将在该引擎的任意在线机器上运行。",
+    "visibility_tooltip": "可见性 · {{value}}"
   },
   "model_dropdown": {
     "label": "模型",
@@ -371,10 +374,12 @@
   "visibility": {
     "private": {
       "label": "个人",
+      "description": "仅你和工作区管理员可以指派",
       "tooltip": "个人 · 仅你和工作区管理员可以使用该智能体"
     },
     "workspace": {
       "label": "工作区",
+      "description": "工作区内所有成员都可以指派",
       "tooltip": "工作区 · 工作区内所有人都可以使用该智能体"
     }
   },

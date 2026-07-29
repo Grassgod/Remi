@@ -64,7 +64,10 @@
     "no_issues_yet": "아직 이슈가 없습니다",
     "toast_link_copied": "링크를 복사했습니다",
     "toast_project_deleted": "프로젝트를 삭제했습니다",
-    "toast_move_issue_failed": "이슈를 이동하지 못했습니다"
+    "toast_move_issue_failed": "이슈를 이동하지 못했습니다",
+    "issues_error_title": "이슈를 불러오지 못했습니다",
+    "issues_error_hint": "이 프로젝트의 이슈를 가져오는 중 문제가 발생했습니다.",
+    "issues_error_retry": "다시 시도"
   },
   "resources": {
     "section_header": "리소스",
@@ -118,7 +121,12 @@
     "unknown_author": "알 수 없음",
     "version": "v{{version}}",
     "empty_title": "아직 지식 항목이 없습니다",
-    "empty_hint": "프로젝트를 에이전트에게 맡기거나 CLI로 첫 항목을 작성하세요."
+    "empty_hint": "프로젝트를 에이전트에게 맡기거나 CLI로 첫 항목을 작성하세요.",
+    "load_error_title": "지식 베이스를 불러오지 못했습니다",
+    "load_error_hint": "이 프로젝트의 wiki와 메모리를 가져오는 중 문제가 발생했습니다.",
+    "load_error_retry": "다시 시도",
+    "memory_expand": "더 보기",
+    "memory_collapse": "접기"
   },
   "repo_source": {
     "tab_git": "Git 저장소",

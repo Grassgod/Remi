@@ -385,6 +385,9 @@
     "saved": "已保存",
     "save_failed": "保存失败",
     "applied_note": "只覆盖 relay 相关 key，各机器的其它设置原样保留。agent 会在下次心跳应用。",
-    "insufficient": "仅工作区所有者和管理员可管理模型网关。"
+    "insufficient": "仅工作区所有者和管理员可管理模型网关。",
+    "load_failed": "无法加载网关配置",
+    "load_failed_default": "获取中转设置时出错。",
+    "try_again": "重试"
   }
 }

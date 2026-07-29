@@ -233,6 +233,8 @@ import {
   EMPTY_LIST_PROJECT_DOCS_RESPONSE,
   EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
   EMPTY_PROJECT_DOC,
+  ListLarkInstallationsResponseSchema,
+  EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2375,7 +2377,13 @@ export class ApiClient {
 
   // Lark integration
   async listLarkInstallations(workspaceId: string): Promise<ListLarkInstallationsResponse> {
-    return this.fetch(`/api/workspaces/${workspaceId}/lark/installations`);
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/lark/installations`);
+    return parseWithFallback(
+      raw,
+      ListLarkInstallationsResponseSchema,
+      EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
+      { endpoint: "GET /api/workspaces/:id/lark/installations" },
+    );
   }
 
   async beginLarkInstall(

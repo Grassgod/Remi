@@ -133,6 +133,7 @@
     "section_properties": "Properties",
     "section_details": "Details",
     "section_skills": "Skills",
+    "skills_empty": "No skills attached yet.",
     "section_integrations": "Integrations",
     "prop_model": "Model",
     "prop_thinking": "Thinking",
@@ -149,6 +150,7 @@
     "rename_placeholder": "Agent name",
     "rename_required": "Name is required",
     "edit_description_title": "Edit description",
+    "edit_description_description": "Describe what this agent does. Members see it in lists and pickers.",
     "description_placeholder": "What does this agent do?",
     "save": "Save",
     "cancel": "Cancel",
@@ -176,7 +178,8 @@
     "thinking_clear": "Follow CLI config",
     "thinking_clear_title": "Clear the override and let the local CLI config (claude/codex) decide the reasoning level",
     "engine_tooltip": "Engine: {{value}}",
-    "engine_hint": "Tasks run on any online machine of this engine."
+    "engine_hint": "Tasks run on any online machine of this engine.",
+    "visibility_tooltip": "Visibility · {{value}}"
   },
   "model_dropdown": {
     "label": "Model",
@@ -380,10 +383,12 @@
   "visibility": {
     "private": {
       "label": "Personal",
+      "description": "Only you and workspace admins can assign",
       "tooltip": "Personal · only you and workspace admins can use this agent"
     },
     "workspace": {
       "label": "Workspace",
+      "description": "All members can assign",
       "tooltip": "Workspace · everyone in this workspace can use this agent"
     }
   },

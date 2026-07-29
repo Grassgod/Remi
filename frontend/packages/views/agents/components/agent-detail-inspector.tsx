@@ -8,12 +8,16 @@ import {
 } from "react";
 import { Camera, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import type { Agent, MemberWithUser } from "@multiremi/core/types";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
   type AgentPresenceDetail,
 } from "@multiremi/core/agents";
 import { api } from "@multiremi/core/api";
+import { useAuthStore } from "@multiremi/core/auth";
+import { larkInstallationsOptions } from "@multiremi/core/lark";
+import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { isImeComposing } from "@multiremi/core/utils";
@@ -24,10 +28,12 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@multiremi/ui/components/ui/dialog";
+import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import {
   Popover,
   PopoverContent,
@@ -89,6 +95,7 @@ export function AgentDetailInspector({
   const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
   const provider = agent.provider || "claude";
+  const showIntegrations = useHasIntegrations(agent.id);
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
@@ -183,7 +190,15 @@ export function AgentDetailInspector({
             {agent.skills.length}
           </span>
         </div>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {/* SkillAttach self-hides for viewers and when the workspace has
+              nothing left to attach, so a skill-less agent would otherwise
+              render an empty zero-height row under the "Skills 0" header. */}
+          {agent.skills.length === 0 && (
+            <span className="text-xs italic text-muted-foreground/70">
+              {t(($) => $.inspector.skills_empty)}
+            </span>
+          )}
           {agent.skills.map((s) => (
             <span
               key={s.id}
@@ -197,14 +212,13 @@ export function AgentDetailInspector({
       </div>
 
       {/* Integrations — surfaces external-channel bind entry points
-          (Lark Bot today; Slack / Discord in the future). The bind
-          button self-hides when the server-side device-flow install
-          capability gate is closed, so this section may render empty
-          on deployments without a configured Lark app — that's
-          intentional and matches the "don't surface a flow that will
-          fail" guarantee. We only mount it for editors: viewers
-          shouldn't see a CTA they can't action. */}
-      {canEdit && (
+          (Lark Bot today; Slack / Discord in the future). We only mount it
+          for editors: viewers shouldn't see a CTA they can't action.
+          `showIntegrations` mirrors LarkAgentBindButton's own visibility
+          rules so the header never renders above a button that self-hid —
+          the button keeps its own gate, this one only decides whether the
+          section is worth a heading. */}
+      {canEdit && showIntegrations && (
         <div className="flex flex-col px-5 py-4">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -222,6 +236,46 @@ export function AgentDetailInspector({
       )}
     </aside>
   );
+}
+
+/**
+ * Whether the Integrations section has anything to show for this agent.
+ *
+ * Recomputes the visibility rules `LarkAgentBindButton` applies to itself
+ * (`settings/components/lark-tab.tsx`): workspace owner/admin only, then
+ * either an existing active installation for this agent or a deployment
+ * where fresh scan-installs can complete. Without it the section header
+ * renders above a button that returned null — an "INTEGRATIONS" heading
+ * with nothing under it, which is the common case for an agent owner who
+ * is a plain workspace member.
+ *
+ * Both queries are already in the cache on this page (the bind button and
+ * the overview pane request the same keys), so this costs no extra round
+ * trip. Every field is optional-chained: an older server that omits
+ * `install_supported` degrades to "no bind CTA", matching the button.
+ */
+function useHasIntegrations(agentId: string): boolean {
+  const wsId = useWorkspaceId();
+  const user = useAuthStore((s) => s.user);
+
+  const { data: listing } = useQuery({
+    ...larkInstallationsOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+  const { data: members = [] } = useQuery({
+    ...memberListOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+
+  const role = members.find((m) => m.user_id === user?.id)?.role;
+  if (role !== "owner" && role !== "admin") return false;
+
+  const hasActiveInstall =
+    listing?.installations?.some(
+      (inst) => inst.agent_id === agentId && inst.status === "active",
+    ) === true;
+
+  return hasActiveInstall || listing?.install_supported === true;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,14 +526,18 @@ function DescriptionEditorBody({
     <>
       <DialogHeader>
         <DialogTitle>{t(($) => $.inspector.edit_description_title)}</DialogTitle>
+        <DialogDescription>
+          {t(($) => $.inspector.edit_description_description)}
+        </DialogDescription>
       </DialogHeader>
       <div className="flex flex-col gap-2">
-        <textarea
+        <Textarea
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={t(($) => $.inspector.description_placeholder)}
           rows={6}
+          aria-invalid={overLimit}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               onClose();
@@ -491,7 +549,7 @@ function DescriptionEditorBody({
               void commit();
             }
           }}
-          className="w-full resize-none rounded-md border bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-input"
+          className="resize-none text-sm"
         />
         <CharCounter length={length} max={AGENT_DESCRIPTION_MAX_LENGTH} />
       </div>

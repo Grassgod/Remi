@@ -88,7 +88,8 @@
     "first_time_actions": "Ask for a summary, plan your day, or hand off a quick task.",
     "returning_title_named": "Hi, I'm {{name}}",
     "returning_title_default": "Welcome to Multiremi",
-    "returning_subtitle": "Try asking"
+    "returning_subtitle": "Try asking",
+    "no_agent_hint": "Add an agent to this workspace first — these prompts need one to run."
   },
   "starter_prompts": {
     "list_open": "List my open tasks by priority",

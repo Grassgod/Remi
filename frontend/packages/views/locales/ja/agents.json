@@ -129,6 +129,7 @@
     "section_properties": "プロパティ",
     "section_details": "詳細",
     "section_skills": "スキル",
+    "skills_empty": "追加されたスキルはまだありません。",
     "section_integrations": "連携",
     "prop_model": "モデル",
     "prop_thinking": "思考",
@@ -145,6 +146,7 @@
     "rename_placeholder": "エージェント名",
     "rename_required": "名前は必須です",
     "edit_description_title": "説明を編集",
+    "edit_description_description": "このエージェントの役割を書きます。メンバーは一覧や選択画面でこれを見ます。",
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
     "cancel": "キャンセル",
@@ -172,7 +174,8 @@
     "thinking_clear": "CLI 設定に従う",
     "thinking_clear_title": "上書きをクリアし、推論レベルをローカルの CLI 設定（claude/codex）に任せます",
     "engine_tooltip": "エンジン: {{value}}",
-    "engine_hint": "タスクはこのエンジンの任意のオンラインマシンで実行されます。"
+    "engine_hint": "タスクはこのエンジンの任意のオンラインマシンで実行されます。",
+    "visibility_tooltip": "公開範囲 · {{value}}"
   },
   "model_dropdown": {
     "label": "モデル",
@@ -371,10 +374,12 @@
   "visibility": {
     "private": {
       "label": "個人",
+      "description": "本人とワークスペースの admin のみ割り当てできます",
       "tooltip": "個人 · 本人とワークスペースの admin のみがこのエージェントを使用できます"
     },
     "workspace": {
       "label": "ワークスペース",
+      "description": "すべてのメンバーが割り当てできます",
       "tooltip": "ワークスペース · このワークスペースの全員がこのエージェントを使用できます"
     }
   },

@@ -9,11 +9,17 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { Agent } from "@multiremi/core/types";
+import type { SupportedLocale } from "@multiremi/core/i18n";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
+import zhCommon from "../../locales/zh-Hans/common.json";
+import zhAgents from "../../locales/zh-Hans/agents.json";
 
-const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
+const TEST_RESOURCES = {
+  en: { common: enCommon, agents: enAgents },
+  "zh-Hans": { common: zhCommon, agents: zhAgents },
+};
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -133,11 +139,14 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
-function renderDialog(agent = makeAgent()) {
+function renderDialog(
+  agent = makeAgent(),
+  locale: SupportedLocale = "en",
+) {
   const onSave = vi.fn().mockResolvedValue(undefined);
   const onClose = vi.fn();
   render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+    <I18nProvider locale={locale} resources={TEST_RESOURCES}>
       <EditAgentDialog agent={agent} onClose={onClose} onSave={onSave} />
     </I18nProvider>,
   );
@@ -165,7 +174,7 @@ describe("EditAgentDialog", () => {
     fireEvent.change(screen.getByRole("spinbutton"), {
       target: { value: "6" },
     });
-    fireEvent.change(screen.getByLabelText("Thinking"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Thinking" }), {
       target: { value: "high" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -223,5 +232,51 @@ describe("EditAgentDialog", () => {
     });
     expect((save as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Max concurrent tasks/)).not.toBeNull();
+  });
+
+  it("associates every field label with its control", () => {
+    renderDialog();
+
+    // getByLabelText resolves through htmlFor/id (text inputs) and through
+    // role=group + aria-labelledby (the button groups), so an unlabelled
+    // control fails this test instead of silently shipping.
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "Research Agent",
+    );
+    expect(
+      (screen.getByLabelText("Description") as HTMLInputElement).value,
+    ).toBe("Finds evidence");
+    expect(
+      (screen.getByLabelText("Concurrency") as HTMLInputElement).value,
+    ).toBe("3");
+    expect(screen.getByRole("group", { name: "Visibility" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Engine" })).not.toBeNull();
+    expect(screen.getByRole("group", { name: "Thinking" })).not.toBeNull();
+  });
+
+  it("renders the actions inside the shared dialog footer", () => {
+    renderDialog();
+
+    const footer = document.querySelector('[data-slot="dialog-footer"]');
+    expect(footer).not.toBeNull();
+    // Both actions live in the footer, so they pick up its responsive
+    // flex-col-reverse → sm:flex-row stacking instead of staying side by
+    // side on a narrow viewport.
+    expect(
+      footer?.contains(screen.getByRole("button", { name: "Cancel" })),
+    ).toBe(true);
+    expect(
+      footer?.contains(screen.getByRole("button", { name: "Save changes" })),
+    ).toBe(true);
+  });
+
+  it("translates the visibility options instead of hardcoding English", () => {
+    renderDialog(makeAgent(), "zh-Hans");
+
+    expect(screen.getByText("工作区")).not.toBeNull();
+    expect(screen.getByText("工作区内所有成员都可以指派")).not.toBeNull();
+    expect(screen.getByText("个人")).not.toBeNull();
+    expect(screen.getByText("仅你和工作区管理员可以指派")).not.toBeNull();
+    expect(screen.queryByText("All members can assign")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -36,6 +36,9 @@ import { useCurrentWorkspace } from "@multiremi/core/paths";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Badge } from "@multiremi/ui/components/ui/badge";
+import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
+import { Input } from "@multiremi/ui/components/ui/input";
+import { Label } from "@multiremi/ui/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -496,13 +499,12 @@ function GitRepoTab({
         <>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
+            <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               aria-label={t(($) => $.repo_source.search_placeholder)}
               placeholder={t(($) => $.repo_source.search_placeholder)}
-              className="h-8 w-full rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-8 pl-7 text-xs"
             />
           </div>
           <div className="max-h-48 space-y-1 overflow-y-auto">
@@ -529,11 +531,11 @@ function GitRepoTab({
                     checked && "bg-accent",
                   )}
                 >
-                  <input
-                    type="checkbox"
+                  {/* Indicator only — the wrapping <button> owns the click. */}
+                  <Checkbox
                     checked={checked}
-                    readOnly
-                    className="size-3.5"
+                    tabIndex={-1}
+                    className="pointer-events-none shrink-0"
                   />
                   <FolderGit className="size-3.5 shrink-0" />
                   <RepoUrlText url={repo.url} />
@@ -557,20 +559,20 @@ function GitRepoTab({
           e.preventDefault();
           addCustom();
         }}
-        className="flex items-center gap-1.5 pt-1 border-t"
+        className="flex items-center gap-1.5 border-t pt-2"
       >
-        <input
-          type="text"
+        <Input
           value={customUrl}
           onChange={(e) => setCustomUrl(e.target.value)}
           placeholder={t(($) => $.repo_source.url_placeholder)}
-          className="flex-1 bg-transparent text-xs px-2 py-1 outline-none placeholder:text-muted-foreground"
+          aria-label={t(($) => $.repo_source.url_placeholder)}
+          className="h-8 min-w-0 flex-1 text-xs"
         />
         <Button
           type="submit"
           size="sm"
           variant="ghost"
-          className="h-6 px-2 text-xs"
+          className="h-8 shrink-0 px-2 text-xs"
           disabled={!customUrl.trim()}
         >
           {t(($) => $.repo_source.url_add)}
@@ -641,6 +643,7 @@ function RuntimeImportTab({
   showSelected: boolean;
 }) {
   const { t } = useT("projects");
+  const idPrefix = `repo-source-${useId().replace(/:/g, "")}`;
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   // Scanning is machine-level, so collapse a machine's runtimes into one entry.
   const machines = useMemo(
@@ -790,10 +793,13 @@ function RuntimeImportTab({
 
   return (
     <div className="space-y-2">
-      <div className="space-y-1">
-        <label className="text-xs text-muted-foreground">
+      <div className="space-y-1.5">
+        <Label
+          htmlFor={`${idPrefix}-machine`}
+          className="text-xs text-muted-foreground"
+        >
           {t(($) => $.repo_source.runtime_label)}
-        </label>
+        </Label>
         <Select
           value={selectedKey}
           onValueChange={(v) => {
@@ -805,7 +811,7 @@ function RuntimeImportTab({
             setSelectedKey(v);
           }}
         >
-          <SelectTrigger className="h-8 w-full text-xs">
+          <SelectTrigger id={`${idPrefix}-machine`} className="h-8 w-full text-xs">
             <SelectValue placeholder={t(($) => $.repo_source.runtime_placeholder)}>
               {machine ? machine.label : null}
             </SelectValue>
@@ -820,18 +826,20 @@ function RuntimeImportTab({
         </Select>
       </div>
 
-      <div className="space-y-1">
-        <label className="text-xs text-muted-foreground">
+      <div className="space-y-1.5">
+        <Label
+          htmlFor={`${idPrefix}-root`}
+          className="text-xs text-muted-foreground"
+        >
           {t(($) => $.repo_source.root_label)}
-        </label>
+        </Label>
         <div className="flex items-center gap-1.5">
-          <input
-            type="text"
+          <Input
+            id={`${idPrefix}-root`}
             value={path}
             onChange={(e) => setPath(e.target.value)}
             placeholder={t(($) => $.repo_source.root_placeholder)}
-            aria-label={t(($) => $.repo_source.root_label)}
-            className="h-8 min-w-0 flex-1 rounded-md border bg-transparent px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            className="h-8 min-w-0 flex-1 font-mono text-xs"
           />
           <Button
             type="button"
@@ -943,16 +951,15 @@ function RuntimeImportTab({
                     checked && "bg-accent",
                   )}
                 >
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={checked}
                     disabled={importDisabled}
                     aria-label={candidate.name}
-                    onChange={() => {
+                    onCheckedChange={() => {
                       if (importDisabled) return;
                       toggle(resource);
                     }}
-                    className="size-3.5 shrink-0 disabled:opacity-50"
+                    className="shrink-0 data-disabled:opacity-50"
                   />
                   <button
                     type="button"
@@ -1007,11 +1014,11 @@ function RuntimeImportTab({
                   checked && "bg-accent",
                 )}
               >
-                <input
-                  type="checkbox"
+                {/* Indicator only — the wrapping <button> owns the click. */}
+                <Checkbox
                   checked={checked}
-                  readOnly
-                  className="size-3.5 shrink-0"
+                  tabIndex={-1}
+                  className="pointer-events-none shrink-0"
                 />
                 <CandidateBody candidate={candidate} noRemoteLabel={noRemoteLabel} />
                 {locked && (
@@ -1094,13 +1101,12 @@ function ProjectRefTab({
       </div>
       <div className="relative">
         <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <input
-          type="text"
+        <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           aria-label={t(($) => $.repo_source.project_placeholder)}
           placeholder={t(($) => $.repo_source.project_placeholder)}
-          className="h-8 w-full rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          className="h-8 pl-7 text-xs"
         />
       </div>
       <div className="max-h-48 space-y-1 overflow-y-auto">
@@ -1130,11 +1136,11 @@ function ProjectRefTab({
                   checked && "bg-accent",
                 )}
               >
-                <input
-                  type="checkbox"
+                {/* Indicator only — the wrapping <button> owns the click. */}
+                <Checkbox
                   checked={checked}
-                  readOnly
-                  className="size-3.5 shrink-0"
+                  tabIndex={-1}
+                  className="pointer-events-none shrink-0"
                 />
                 <ProjectIcon project={p} size="sm" />
                 <span className="truncate flex-1 text-left">{p.title}</span>

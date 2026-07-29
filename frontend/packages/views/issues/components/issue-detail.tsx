@@ -6,6 +6,7 @@ import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { AppLink } from "../../navigation";
 import { useNavigation } from "../../navigation";
 import {
+  AlertCircle,
   Archive,
   Calendar,
   CalendarClock,
@@ -400,6 +401,42 @@ function TimelineSkeleton() {
   );
 }
 
+// Every comment and activity hangs off a Session, so an issue whose session
+// list fails (or comes back empty) has no timeline to query at all. Without
+// this state the whole activity area would just stay blank forever, with no
+// hint that anything went wrong and no way to try again.
+function TimelineUnavailable({
+  onRetry,
+  retrying,
+}: {
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  const { t } = useT("issues");
+  return (
+    <div className="mt-4 flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-10 text-center">
+      <AlertCircle className="h-6 w-6 text-destructive" />
+      <div>
+        <p className="text-sm font-medium">
+          {t(($) => $.detail.timeline_unavailable_title)}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(($) => $.detail.timeline_unavailable_hint)}
+        </p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onRetry}
+        disabled={retrying}
+      >
+        {t(($) => $.detail.timeline_retry)}
+      </Button>
+    </div>
+  );
+}
+
 // When the trailing block is expanded, we still truncate its body to the most
 // recent N entries — a single block of 50 status flips drowns the comment area
 // as badly as N blocks of 1 would. Older entries fold behind a "Show N more
@@ -587,12 +624,11 @@ function SubIssueRow({ child }: { child: Issue }) {
             : "opacity-0 group-hover/row:opacity-100 focus-within:opacity-100",
         )}
       >
-        <input
-          type="checkbox"
+        <Checkbox
           checked={selected}
-          onChange={() => toggleSelected(child.id)}
-          aria-label={`Select ${child.identifier}`}
-          className="cursor-pointer accent-primary"
+          onCheckedChange={() => toggleSelected(child.id)}
+          aria-label={t(($) => $.detail.select_sub_issue_aria, { identifier: child.identifier })}
+          className="cursor-pointer"
         />
       </div>
       <StatusPicker
@@ -690,7 +726,10 @@ export function IssueDetail({
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: issueSessions = [] } = useQuery(issueSessionsOptions(id));
+  const sessionsQuery = useQuery(issueSessionsOptions(id));
+  // Stable reference: `?? []` inline would hand children a fresh array on
+  // every render and defeat their memoization.
+  const issueSessions = useMemo(() => sessionsQuery.data ?? [], [sessionsQuery.data]);
   const [selectedIssueSessionId, setSelectedIssueSessionId] = useState(initialIssueSessionId ?? "");
   const activeIssueSessionId =
     issueSessions.find((session) => session.id === selectedIssueSessionId)?.id
@@ -1948,7 +1987,7 @@ export function IssueDetail({
                       if (el) el.indeterminate = someChildrenSelected && !allChildrenSelected;
                     }}
                     onChange={handleToggleSelectAllChildren}
-                    aria-label="Select all sub-issues"
+                    aria-label={t(($) => $.detail.select_all_sub_issues_aria)}
                     className={cn(
                       "ml-1 cursor-pointer accent-primary transition-opacity",
                       someChildrenSelected
@@ -2073,7 +2112,19 @@ export function IssueDetail({
                 first commit. Without this null guard Virtuoso falls back to
                 its own scroller, grabs 0 height inside overflow-y-auto, and
                 miscomputes total-height on first paint. */}
-            {timelineLoading && timelineView.groups.length === 0 ? (
+            {!activeIssueSessionId ? (
+              // The timeline query is gated on a resolved session id, and a
+              // disabled query reports `isLoading === false` — so this branch
+              // has to own both the waiting state and the dead end.
+              sessionsQuery.isPending ? (
+                <TimelineSkeleton />
+              ) : (
+                <TimelineUnavailable
+                  onRetry={() => void sessionsQuery.refetch()}
+                  retrying={sessionsQuery.isFetching}
+                />
+              )
+            ) : timelineLoading && timelineView.groups.length === 0 ? (
               <TimelineSkeleton />
             ) : (
               // Two render modes:

@@ -41,4 +41,23 @@ describe("ProjectContentTabs", () => {
 
     expect(screen.getByText("issues board")).toBeInTheDocument();
   });
+
+  it("wires each tab to a real tabpanel so the switch is announced", () => {
+    renderTabs();
+
+    const issuesTab = screen.getByRole("tab", { name: "Issues" });
+    const panel = screen.getByRole("tabpanel");
+
+    expect(issuesTab).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toContainElement(screen.getByText("issues board"));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Wiki" }));
+
+    const wikiPanel = screen.getByRole("tabpanel");
+    expect(screen.getByRole("tab", { name: "Wiki" })).toHaveAttribute(
+      "aria-controls",
+      wikiPanel.id,
+    );
+    expect(wikiPanel).toContainElement(screen.getByText("wiki pane"));
+  });
 });

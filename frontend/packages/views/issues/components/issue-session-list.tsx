@@ -5,7 +5,14 @@ import { Loader2, MoreHorizontal } from "lucide-react";
 import type { Agent, IssueSession } from "@multiremi/core/types";
 import { useAddSessionParticipant } from "@multiremi/core/issues";
 import { Button } from "@multiremi/ui/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multiremi/ui/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,6 +22,7 @@ import {
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { AvatarGroup, AvatarGroupCount } from "@multiremi/ui/components/ui/avatar";
 import { cn } from "@multiremi/ui/lib/utils";
+import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
 import {
@@ -204,64 +212,100 @@ function SessionParticipantsDialog({
   const { t } = useT("issues");
   const addParticipant = useAddSessionParticipant(issueId, session.id);
 
+  const activeAgents = useMemo(
+    () => agents.filter((agent) => !agent.archived_at),
+    [agents],
+  );
   const availableAgents = useMemo(() => {
     const participantAgentIds = new Set(
       session.participants
         .filter((participant) => participant.participant_type === "agent")
         .map((participant) => participant.participant_id),
     );
-    return agents.filter(
-      (agent) => !agent.archived_at && !participantAgentIds.has(agent.id),
-    );
-  }, [agents, session.participants]);
+    return activeAgents.filter((agent) => !participantAgentIds.has(agent.id));
+  }, [activeAgents, session.participants]);
+
+  // One mutation object drives every row, so `isPending` alone would spin the
+  // whole list. Pair it with the id currently in flight.
+  const pendingAgentId = addParticipant.isPending
+    ? addParticipant.variables?.participantId
+    : undefined;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t(($) => $.detail.session_participants)}</DialogTitle>
+          <DialogDescription>
+            {t(($) => $.detail.session_participants_description)}
+          </DialogDescription>
         </DialogHeader>
-        {session.participants.length > 0 && (
-          <AvatarGroup>
-            {session.participants.slice(0, 8).map((participant) => (
-              <ActorAvatar
-                key={`${participant.participant_type}-${participant.participant_id}`}
-                actorType={participant.participant_type}
-                actorId={participant.participant_id}
-                size={22}
-              />
-            ))}
-            {session.participants.length > 8 && (
-              <AvatarGroupCount>+{session.participants.length - 8}</AvatarGroupCount>
-            )}
-          </AvatarGroup>
-        )}
-        <div className="text-xs font-medium text-muted-foreground">
-          {t(($) => $.detail.add_agent)}
-        </div>
-        {availableAgents.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {t(($) => $.detail.no_agents_available)}
-          </p>
-        ) : (
-          <div className="space-y-1">
-            {availableAgents.map((agent) => (
-              <button
-                key={agent.id}
-                type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-                onClick={() => addParticipant.mutate({
-                  participantType: "agent",
-                  participantId: agent.id,
-                })}
-              >
-                <ActorAvatar actorType="agent" actorId={agent.id} size={22} />
-                <span className="truncate">{agent.name}</span>
-                {addParticipant.isPending && <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin" />}
-              </button>
-            ))}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          {session.participants.length > 0 && (
+            <AvatarGroup>
+              {session.participants.slice(0, 8).map((participant) => (
+                <ActorAvatar
+                  key={`${participant.participant_type}-${participant.participant_id}`}
+                  actorType={participant.participant_type}
+                  actorId={participant.participant_id}
+                  size={22}
+                />
+              ))}
+              {session.participants.length > 8 && (
+                <AvatarGroupCount>+{session.participants.length - 8}</AvatarGroupCount>
+              )}
+            </AvatarGroup>
+          )}
+          <div className="text-xs font-medium text-muted-foreground">
+            {t(($) => $.detail.add_agent)}
           </div>
-        )}
+          {availableAgents.length === 0 ? (
+            // "Nothing to add" has two very different causes, and the fix the
+            // user needs differs: create an agent vs. nothing left to do.
+            <p className="text-xs text-muted-foreground">
+              {activeAgents.length === 0
+                ? t(($) => $.detail.no_agents_in_workspace)
+                : t(($) => $.detail.all_agents_in_session)}
+            </p>
+          ) : (
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {availableAgents.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  disabled={addParticipant.isPending}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => addParticipant.mutate(
+                    { participantType: "agent", participantId: agent.id },
+                    {
+                      onError: (error) =>
+                        toast.error(
+                          error instanceof Error && error.message
+                            ? error.message
+                            : t(($) => $.detail.add_participant_failed),
+                        ),
+                    },
+                  )}
+                >
+                  <ActorAvatar actorType="agent" actorId={agent.id} size={22} showStatusDot />
+                  <span className="truncate">{agent.name}</span>
+                  {pendingAgentId === agent.id && (
+                    <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            {t(($) => $.detail.dialog_cancel)}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

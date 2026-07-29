@@ -26,6 +26,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multiremi/ui/components/ui/alert-dialog";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@multiremi/ui/components/ui/tabs";
 import { ActivityTab } from "./tabs/activity-tab";
 import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
@@ -206,79 +212,90 @@ export function AgentOverviewPane({
     // page itself, so this pane has no inherited height. `min-h-[60vh]` keeps
     // the tab content area usably tall when content is short; `md:` restores
     // the grid-driven full-height behavior on tablet and up.
-    <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border bg-background md:h-full md:min-h-0">
-      <div className="flex shrink-0 items-center gap-0 overflow-x-auto border-b px-2 md:px-4">
+    <Tabs
+      value={effectiveTab}
+      onValueChange={(next) => requestTabChange(next as DetailTab)}
+      className="flex min-h-[60vh] flex-col gap-0 overflow-hidden rounded-lg border bg-background md:h-full md:min-h-0"
+    >
+      {/* `pb-[5px]` lands TabsTrigger's `after:bottom-[-5px]` underline
+          exactly on the list's bottom border, which is what the old
+          hand-rolled `border-b-2` buttons drew by hand. */}
+      <TabsList
+        variant="line"
+        className="h-auto w-full shrink-0 justify-start gap-0 overflow-x-auto rounded-none border-b px-2 pt-0 pb-[5px] md:px-4"
+      >
         {visibleTabs.map((tab) => (
-          <button
+          <TabsTrigger
             key={tab.id}
-            type="button"
-            onClick={() => requestTabChange(tab.id)}
-            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-xs font-medium transition-colors ${
-              effectiveTab === tab.id
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
+            value={tab.id}
+            className="h-auto flex-none shrink-0 rounded-none px-3 py-2.5 text-xs [&_svg:not([class*='size-'])]:size-3.5"
           >
-            <tab.icon className="h-3.5 w-3.5" />
+            <tab.icon />
             {t(($) => $.tabs[TAB_LABEL_KEY[tab.id]])}
-          </button>
+          </TabsTrigger>
         ))}
-      </div>
+      </TabsList>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {effectiveTab === "activity" && <ActivityTab agent={agent} />}
-        {effectiveTab === "tasks" && (
-          <div className="flex h-full min-h-[520px] flex-col">
-            <ActorIssuesPanel actorType="agent" actorId={agent.id} />
-          </div>
-        )}
-        {effectiveTab === "instructions" && (
-          <TabContent>
-            <InstructionsTab
-              agent={agent}
-              onSave={(instructions) => onUpdate(agent.id, { instructions })}
-              onDirtyChange={setActiveDirty}
-            />
-          </TabContent>
-        )}
-        {effectiveTab === "skills" && (
-          <TabContent>
-            <SkillsTab agent={agent} />
-          </TabContent>
-        )}
-        {effectiveTab === "env" && (
-          <TabContent>
-            <EnvTab
-              agent={agent}
-              onDirtyChange={setActiveDirty}
-            />
-          </TabContent>
-        )}
-        {effectiveTab === "custom_args" && (
-          <TabContent>
-            <CustomArgsTab
-              agent={agent}
-              runtimeDevice={engineRuntime ?? undefined}
-              onSave={(updates) => onUpdate(agent.id, updates)}
-              onDirtyChange={setActiveDirty}
-            />
-          </TabContent>
-        )}
-        {effectiveTab === "mcp_config" && (
-          <TabContent>
-            <McpConfigTab
-              agent={agent}
-              onSave={(updates) => onUpdate(agent.id, updates)}
-              onDirtyChange={setActiveDirty}
-            />
-          </TabContent>
-        )}
-        {effectiveTab === "integrations" && (
-          <TabContent>
-            <IntegrationsTab agent={agent} />
-          </TabContent>
-        )}
-      </div>
+      <TabsContent value="activity" className="min-h-0 flex-1 overflow-y-auto">
+        <ActivityTab agent={agent} />
+      </TabsContent>
+      <TabsContent value="tasks" className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex h-full min-h-[520px] flex-col">
+          <ActorIssuesPanel actorType="agent" actorId={agent.id} />
+        </div>
+      </TabsContent>
+      <TabsContent
+        value="instructions"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <TabContent>
+          <InstructionsTab
+            agent={agent}
+            onSave={(instructions) => onUpdate(agent.id, { instructions })}
+            onDirtyChange={setActiveDirty}
+          />
+        </TabContent>
+      </TabsContent>
+      <TabsContent value="skills" className="min-h-0 flex-1 overflow-y-auto">
+        <TabContent>
+          <SkillsTab agent={agent} />
+        </TabContent>
+      </TabsContent>
+      <TabsContent value="env" className="min-h-0 flex-1 overflow-y-auto">
+        <TabContent>
+          <EnvTab agent={agent} onDirtyChange={setActiveDirty} />
+        </TabContent>
+      </TabsContent>
+      <TabsContent
+        value="custom_args"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <TabContent>
+          <CustomArgsTab
+            agent={agent}
+            runtimeDevice={engineRuntime ?? undefined}
+            onSave={(updates) => onUpdate(agent.id, updates)}
+            onDirtyChange={setActiveDirty}
+          />
+        </TabContent>
+      </TabsContent>
+      <TabsContent value="mcp_config" className="min-h-0 flex-1 overflow-y-auto">
+        <TabContent>
+          <McpConfigTab
+            agent={agent}
+            onSave={(updates) => onUpdate(agent.id, updates)}
+            onDirtyChange={setActiveDirty}
+          />
+        </TabContent>
+      </TabsContent>
+      <TabsContent
+        value="integrations"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <TabContent>
+          <IntegrationsTab agent={agent} />
+        </TabContent>
+      </TabsContent>
 
       {pendingTab !== null && (
         <AlertDialog
@@ -306,7 +323,7 @@ export function AgentOverviewPane({
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </Tabs>
   );
 }
 

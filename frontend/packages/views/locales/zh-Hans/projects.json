@@ -64,7 +64,10 @@
     "no_issues_yet": "目前还没有 issue",
     "toast_link_copied": "已复制链接",
     "toast_project_deleted": "已删除项目",
-    "toast_move_issue_failed": "移动 issue 失败"
+    "toast_move_issue_failed": "移动 issue 失败",
+    "issues_error_title": "无法加载 issue",
+    "issues_error_hint": "获取该项目的 issue 时出错。",
+    "issues_error_retry": "重试"
   },
   "resources": {
     "section_header": "资源",
@@ -118,7 +121,12 @@
     "unknown_author": "未知",
     "version": "v{{version}}",
     "empty_title": "还没有知识条目",
-    "empty_hint": "把项目交给智能体干活，或用 CLI 写入第一条。"
+    "empty_hint": "把项目交给智能体干活，或用 CLI 写入第一条。",
+    "load_error_title": "无法加载知识库",
+    "load_error_hint": "获取该项目的 wiki 和记忆时出错。",
+    "load_error_retry": "重试",
+    "memory_expand": "展开",
+    "memory_collapse": "收起"
   },
   "repo_source": {
     "tab_git": "Git 仓库",

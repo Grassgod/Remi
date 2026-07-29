@@ -209,7 +209,6 @@
     "session_participants": "セッション参加者",
     "session_actions_aria": "セッションの操作",
     "add_agent": "エージェントを追加",
-    "no_agents_available": "追加できるエージェントがいません",
     "delegate_task": "タスクを委任",
     "delegate_task_title": "このセッションでタスクを委任",
     "delegate_agent": "エージェント",
@@ -255,7 +254,22 @@
     "link_copy_failed": "リンクをコピーできませんでした",
     "workdir_path_copied": "作業ディレクトリのパスをコピーしました",
     "workdir_path_copy_failed": "作業ディレクトリのパスをコピーできませんでした",
-    "workdir_path_unavailable": "まだローカルの作業ディレクトリがありません。ローカルエージェントがこのイシューを実行していません"
+    "workdir_path_unavailable": "まだローカルの作業ディレクトリがありません。ローカルエージェントがこのイシューを実行していません",
+    "dialog_cancel": "キャンセル",
+    "new_session_description": "セッションごとに会話とエージェントの実行履歴が分かれます。",
+    "delegate_task_description": "エージェントはこのセッション内で作業し、結果もここに戻ります。",
+    "delegate_agent_placeholder": "エージェントを選択",
+    "delegate_agent_search_placeholder": "エージェントを検索",
+    "no_agents_in_workspace": "このワークスペースにはまだエージェントがいません。先に作成してください。",
+    "all_agents_in_session": "ワークスペースのエージェントはすべてこのセッションに参加済みです。",
+    "session_participants_description": "参加者はこのセッションを閲覧し、委任されたタスクを受け取れます。",
+    "add_participant_failed": "参加者の追加に失敗しました",
+    "result_unknown_session": "別のセッション",
+    "select_sub_issue_aria": "{{identifier}} を選択",
+    "select_all_sub_issues_aria": "すべてのサブイシューを選択",
+    "timeline_unavailable_title": "この Issue のセッションを読み込めませんでした",
+    "timeline_unavailable_hint": "コメントとアクティビティはセッションに属するため、セッション一覧を読み込めないと表示できません。",
+    "timeline_retry": "再試行"
   },
   "timeline": {
     "loading": "読み込み中..."

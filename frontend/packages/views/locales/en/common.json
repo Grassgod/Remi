@@ -24,5 +24,10 @@
     "error_already_bound": "This Lark account is already bound to a different Multiremi user. Account transfers must go through an explicit unbind first.",
     "error_not_member": "You're signed in to a Multiremi account that isn't a member of this workspace.",
     "error_unknown": "Something went wrong. Try again, and if the problem persists, contact the workspace admin."
+  },
+  "load_error": {
+    "title": "Something went wrong",
+    "description": "The request failed. Check your connection and try again.",
+    "retry": "Try again"
   }
 }

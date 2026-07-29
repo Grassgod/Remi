@@ -534,6 +534,78 @@ describe("RepoSourcePopover — fleet import tab", () => {
       resource_ref: { url: "git@github.com:org/api.git" },
     });
   });
+
+  it("wires the visible field labels to the machine picker and the root input", async () => {
+    renderPopover();
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+
+    // Both fields carry a real <Label htmlFor> rather than a bare <label>, so
+    // the visible text is the control's accessible name.
+    expect(await screen.findByLabelText("Fleet computer")).toBe(
+      screen.getByRole("combobox"),
+    );
+    const rootInput = screen.getByLabelText("Scan from");
+    expect(rootInput).toHaveValue("~");
+
+    // The labelled input still drives the scan root.
+    fireEvent.change(rootInput, { target: { value: "/srv/code" } });
+    const scanButton = screen.getByRole("button", {
+      name: /Scan this directory/i,
+    });
+    await waitFor(() => expect(scanButton).not.toBeDisabled());
+    fireEvent.click(scanButton);
+
+    await waitFor(() =>
+      expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
+        root: "/srv/code",
+      }),
+    );
+  });
+
+  it("disables a browse row's import checkbox once the daemon already has a local directory", async () => {
+    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+      id: "rds-b",
+      runtime_id: "runtime-1",
+      status: "completed",
+      params: { root: "~", mode: "browse" },
+      candidates: [
+        {
+          path: "/home/dev/notes",
+          name: "notes",
+          remote_url: null,
+          current_branch: null,
+          is_dirty: null,
+          is_git_repo: true,
+        },
+      ],
+      supported: true,
+      error: null,
+      run_started_at: null,
+      created_at: "2026-04-16T00:00:00Z",
+      updated_at: "2026-04-16T00:00:00Z",
+    });
+    const { onAdd } = renderPopover({
+      resources: [
+        {
+          resource_type: "local_directory",
+          resource_ref: {
+            local_path: "/home/dev/existing",
+            daemon_id: "daemon-1",
+          },
+        },
+      ],
+    });
+    fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
+    const browseButton = await screen.findByRole("button", { name: /^Browse$/i });
+    await waitFor(() => expect(browseButton).not.toBeDisabled());
+    fireEvent.click(browseButton);
+
+    // The per-daemon cap disables the import control, and clicking it is inert.
+    const checkbox = await screen.findByRole("checkbox", { name: "notes" });
+    expect(checkbox).toHaveAttribute("data-disabled");
+    fireEvent.click(checkbox);
+    expect(onAdd).not.toHaveBeenCalled();
+  });
 });
 
 describe("RepoSourcePopover — reference project tab", () => {

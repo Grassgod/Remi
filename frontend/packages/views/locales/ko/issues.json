@@ -212,7 +212,6 @@
     "session_participants": "세션 참여자",
     "session_actions_aria": "세션 작업",
     "add_agent": "에이전트 추가",
-    "no_agents_available": "추가할 에이전트가 없습니다",
     "delegate_task": "작업 위임",
     "delegate_task_title": "이 세션에서 작업 위임",
     "delegate_agent": "에이전트",
@@ -258,7 +257,22 @@
     "link_copy_failed": "링크를 복사하지 못했습니다",
     "workdir_path_copied": "작업 디렉터리 경로를 복사했습니다",
     "workdir_path_copy_failed": "작업 디렉터리 경로를 복사하지 못했습니다",
-    "workdir_path_unavailable": "아직 로컬 작업 디렉터리가 없습니다. 로컬 에이전트가 이 이슈를 실행하지 않았습니다"
+    "workdir_path_unavailable": "아직 로컬 작업 디렉터리가 없습니다. 로컬 에이전트가 이 이슈를 실행하지 않았습니다",
+    "dialog_cancel": "취소",
+    "new_session_description": "세션마다 대화와 에이전트 실행 기록이 따로 유지됩니다.",
+    "delegate_task_description": "에이전트가 이 세션에서 작업하고 결과도 여기에 남습니다.",
+    "delegate_agent_placeholder": "에이전트 선택",
+    "delegate_agent_search_placeholder": "에이전트 검색",
+    "no_agents_in_workspace": "이 워크스페이스에는 아직 에이전트가 없습니다. 먼저 에이전트를 만드세요.",
+    "all_agents_in_session": "워크스페이스의 모든 에이전트가 이미 이 세션에 있습니다.",
+    "session_participants_description": "참여자는 이 세션을 보고 여기서 위임된 작업을 받을 수 있습니다.",
+    "add_participant_failed": "참여자를 추가하지 못했습니다",
+    "result_unknown_session": "다른 세션",
+    "select_sub_issue_aria": "{{identifier}} 선택",
+    "select_all_sub_issues_aria": "모든 하위 이슈 선택",
+    "timeline_unavailable_title": "이 Issue의 세션을 불러오지 못했습니다",
+    "timeline_unavailable_hint": "댓글과 활동은 세션에 속하므로 세션 목록을 불러오기 전에는 표시할 수 없습니다.",
+    "timeline_retry": "다시 시도"
   },
   "timeline": {
     "loading": "불러오는 중..."

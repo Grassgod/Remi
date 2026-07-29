@@ -9,6 +9,7 @@ import {
   EMPTY_FLEET_MODELS,
   EMPTY_ISSUE_SESSION_TASKS,
   EMPTY_ISSUE_SESSIONS,
+  EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
   EMPTY_SESSION_EVENTS,
   EMPTY_SESSION_PARTICIPANTS,
   EMPTY_SESSION_RESULTS,
@@ -20,6 +21,7 @@ import {
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   ListIssuesResponseSchema,
+  ListLarkInstallationsResponseSchema,
   ListProjectDocsResponseSchema,
   ListProjectDocRevisionsResponseSchema,
   ProjectDocResponseSchema,
@@ -839,5 +841,71 @@ describe("ProjectDocResponseSchema", () => {
       opts,
     );
     expect(parsed.doc).toBe(EMPTY_PROJECT_DOC);
+  });
+});
+
+describe("ListLarkInstallationsResponseSchema", () => {
+  const opts = { endpoint: "GET /api/workspaces/:id/lark/installations (test)" };
+  const validInstallation = {
+    id: "lark-1",
+    workspace_id: "ws-1",
+    agent_id: "agent-1",
+    app_id: "cli_app",
+    tenant_key: null,
+    bot_open_id: "ou_bot",
+    installer_user_id: "user-1",
+    status: "active",
+    region: "feishu",
+    installed_at: "2026-01-01T00:00:00Z",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  it("parses a well-formed listing", () => {
+    const parsed = parseWithFallback(
+      { installations: [validInstallation], configured: true, install_supported: true },
+      ListLarkInstallationsResponseSchema,
+      EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed.installations).toHaveLength(1);
+    expect(parsed.configured).toBe(true);
+    expect(parsed.install_supported).toBe(true);
+  });
+
+  it("keeps an unknown status / region instead of dropping the row", () => {
+    const parsed = parseWithFallback(
+      {
+        installations: [{ ...validInstallation, status: "suspended", region: "lark-eu" }],
+        configured: true,
+      },
+      ListLarkInstallationsResponseSchema,
+      EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed.installations[0]?.status).toBe("suspended");
+    expect(parsed.installations[0]?.region).toBe("lark-eu");
+  });
+
+  it("defaults a missing installations array and capability flags", () => {
+    const parsed = parseWithFallback(
+      {},
+      ListLarkInstallationsResponseSchema,
+      EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed.installations).toEqual([]);
+    expect(parsed.configured).toBe(false);
+    expect(parsed.install_supported).toBeUndefined();
+  });
+
+  it("falls back to the empty listing on a wrong-typed payload", () => {
+    const parsed = parseWithFallback(
+      { installations: [{ id: 42 }], configured: "yes" },
+      ListLarkInstallationsResponseSchema,
+      EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE,
+      opts,
+    );
+    expect(parsed).toBe(EMPTY_LIST_LARK_INSTALLATIONS_RESPONSE);
   });
 });

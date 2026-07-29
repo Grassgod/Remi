@@ -22,11 +22,13 @@ import { useActorName } from "@multiremi/core/workspace/hooks";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@multiremi/ui/components/ui/dialog";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { DocRefs } from "../../common/doc-refs";
+import { ReadonlyContent } from "../../editor";
 import { useT, useTimeAgo } from "../../i18n";
 
 // Published Session results are the issue's durable output — the one thing an
@@ -104,9 +106,13 @@ export function IssueKeyResultsSection({
             <KeyResultCard
               key={result.id}
               result={result}
+              // The source session is unresolvable while the sessions query is
+              // still in flight, and permanently once it has been archived
+              // (the list endpoint drops archived sessions). Neither case may
+              // leak the raw session id into the copy.
               sourceTitle={
                 sessions.find((session) => session.id === result.source_session_id)?.title
-                ?? result.source_session_id
+                ?? t(($) => $.detail.result_unknown_session)
               }
             />
           ))}
@@ -187,15 +193,20 @@ function KeyResultDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      {/* An agent writes the body through the CLI as Markdown and it has no
+          length bound — the dialog has to scroll rather than grow past the
+          viewport, and the Markdown has to render as Markdown. */}
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {t(($) => $.detail.result_from_session, { session: sourceTitle })}
+          </DialogDescription>
         </DialogHeader>
-        <p className="text-xs text-muted-foreground">
-          {t(($) => $.detail.result_from_session, { session: sourceTitle })}
-        </p>
-        <p className="whitespace-pre-wrap text-sm text-muted-foreground">{result.body}</p>
-        <DocRefs refs={refs} />
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <ReadonlyContent content={result.body} />
+          <DocRefs refs={refs} />
+        </div>
       </DialogContent>
     </Dialog>
   );

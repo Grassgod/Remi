@@ -210,7 +210,6 @@
     "session_participants": "会话参与者",
     "session_actions_aria": "会话操作",
     "add_agent": "添加 Agent",
-    "no_agents_available": "暂无可添加的 Agent",
     "delegate_task": "派发任务",
     "delegate_task_title": "在当前会话中派发任务",
     "delegate_agent": "Agent",
@@ -256,7 +255,22 @@
     "link_copy_failed": "复制链接失败",
     "workdir_path_copied": "已复制本地 workdir 路径",
     "workdir_path_copy_failed": "复制本地 workdir 路径失败",
-    "workdir_path_unavailable": "暂无本地 workdir — 这个 issue 还没被本地 agent 运行过"
+    "workdir_path_unavailable": "暂无本地 workdir — 这个 issue 还没被本地 agent 运行过",
+    "dialog_cancel": "取消",
+    "new_session_description": "每个会话有独立的对话和 Agent 运行记录，互不干扰。",
+    "delegate_task_description": "Agent 会在当前会话中执行，过程和结果都回到这里。",
+    "delegate_agent_placeholder": "选择 Agent",
+    "delegate_agent_search_placeholder": "搜索 Agent",
+    "no_agents_in_workspace": "当前空间还没有 Agent，先创建一个再派发任务。",
+    "all_agents_in_session": "空间里的 Agent 都已经在这个会话中了。",
+    "session_participants_description": "参与者可以看到这个会话，并接收在其中派发的任务。",
+    "add_participant_failed": "添加参与者失败",
+    "result_unknown_session": "其他会话",
+    "select_sub_issue_aria": "选择 {{identifier}}",
+    "select_all_sub_issues_aria": "选择全部子 issue",
+    "timeline_unavailable_title": "无法加载这个 Issue 的会话",
+    "timeline_unavailable_hint": "评论和动态都属于某个会话，会话列表加载失败时无法显示。",
+    "timeline_retry": "重试"
   },
   "timeline": {
     "loading": "加载中…"

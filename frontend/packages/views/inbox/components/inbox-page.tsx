@@ -26,6 +26,7 @@ import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
 import {
+  AlertCircle,
   MoreHorizontal,
   Inbox,
   CheckCheck,
@@ -56,8 +57,30 @@ import { useTypeLabels } from "./inbox-detail-label";
 import { getInboxDisplayTitle } from "./inbox-display";
 import { useT } from "../../i18n";
 
+// A failed inbox fetch resolves to an empty list, and an empty list renders
+// the cheerful "you're all caught up" zero-state — telling the user their
+// inbox is empty when it is only unreachable. Errors get their own state.
+function InboxLoadError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useT("common");
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+      <AlertCircle className="h-8 w-8 text-destructive" />
+      <div>
+        <p className="text-sm font-medium">{t(($) => $.load_error.title)}</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {t(($) => $.load_error.description)}
+        </p>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+        {t(($) => $.load_error.retry)}
+      </Button>
+    </div>
+  );
+}
+
 export function InboxPage() {
   const { t } = useT("inbox");
+  const { t: tCommon } = useT("common");
   const { searchParams, replace } = useNavigation();
   const urlIssue = searchParams.get("issue") ?? "";
   const wsPaths = useWorkspacePaths();
@@ -70,7 +93,12 @@ export function InboxPage() {
   }, [urlIssue]);
 
   const wsId = useWorkspaceId();
-  const { data: rawItems = [], isLoading: loading } = useQuery(inboxListOptions(wsId));
+  const {
+    data: rawItems = [],
+    isLoading: loading,
+    isError: loadFailed,
+    refetch: refetchInbox,
+  } = useQuery(inboxListOptions(wsId));
   const items = useMemo(() => deduplicateInboxItems(rawItems), [rawItems]);
 
   const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
@@ -99,6 +127,10 @@ export function InboxPage() {
   // too — clear the selection and stay on /inbox instead.
   useEffect(() => {
     if (loading) return;
+    // A failed list request says nothing about whether the key is in this
+    // user's inbox — redirecting on it would bounce the user off /inbox for
+    // a transient network error.
+    if (loadFailed) return;
     if (!selectedKey) return;
     if (selected) return;
     if (lastResolvedKeyRef.current === selectedKey) {
@@ -106,7 +138,7 @@ export function InboxPage() {
       return;
     }
     replace(wsPaths.issueDetail(selectedKey));
-  }, [loading, selectedKey, selected, replace, wsPaths, setSelectedKey]);
+  }, [loading, loadFailed, selectedKey, selected, replace, wsPaths, setSelectedKey]);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multimira_inbox_layout",
@@ -267,7 +299,9 @@ export function InboxPage() {
     </PageHeader>
   );
 
-  const listBody = items.length === 0 ? (
+  const listBody = loadFailed ? (
+    <InboxLoadError onRetry={() => void refetchInbox()} />
+  ) : items.length === 0 ? (
     <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
       <Inbox className="mb-3 h-8 w-8 text-muted-foreground/50" />
       <p className="text-sm">{t(($) => $.list.empty)}</p>
@@ -473,9 +507,11 @@ export function InboxPage() {
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
             <Inbox className="mb-3 h-10 w-10 text-muted-foreground/30" />
             <p className="text-sm">
-              {items.length === 0
-                ? t(($) => $.detail.empty)
-                : t(($) => $.detail.select_prompt)}
+              {loadFailed
+                ? tCommon(($) => $.load_error.title)
+                : items.length === 0
+                  ? t(($) => $.detail.empty)
+                  : t(($) => $.detail.select_prompt)}
             </p>
           </div>
         )}

@@ -454,6 +454,7 @@ const mockTimeline: TimelineEntry[] = [
 // Import component under test (after mocks)
 // ---------------------------------------------------------------------------
 
+import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
 import { IssueDetail } from "./issue-detail";
 
 // ---------------------------------------------------------------------------
@@ -822,7 +823,11 @@ describe("IssueDetail (shared)", () => {
 
     // "Add agent" only exists inside the participants dialog.
     expect(await screen.findByText("Add agent")).toBeInTheDocument();
-    expect(screen.getByText("No agents available")).toBeInTheDocument();
+    // The workspace fixture has no agents at all — the empty state has to name
+    // that cause rather than the "already participating" one.
+    expect(
+      screen.getByText("This workspace has no agents yet. Create one before delegating work."),
+    ).toBeInTheDocument();
   });
 
   it("keeps session agent runs out of the timeline", async () => {
@@ -963,6 +968,80 @@ describe("IssueDetail (shared)", () => {
     fireEvent.click(screen.getByText('published the result "Architecture decision"'));
     expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
     expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe("issue-key-results");
+  });
+
+  it("gives sub-issue selection localized, design-system checkboxes", async () => {
+    const child: Issue = {
+      ...mockIssue,
+      id: "issue-2",
+      number: 2,
+      identifier: "TES-2",
+      title: "Add refresh tokens",
+      parent_issue_id: "issue-1",
+      status: "todo",
+    };
+    mockApiObj.listChildIssues.mockResolvedValue({ issues: [child] });
+    useIssueSelectionStore.getState().clear();
+    renderIssueDetail();
+
+    // aria-labels route through t(), so a zh/ja/ko user doesn't get English
+    // accessible names, and both controls are the shadcn Checkbox.
+    const rowBox = await screen.findByRole("checkbox", { name: "Select TES-2" });
+    expect(screen.getByLabelText("Select all sub-issues")).toBeInTheDocument();
+    expect(rowBox).toHaveAttribute("data-slot", "checkbox");
+    expect(rowBox).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(rowBox);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("checkbox", { name: "Select TES-2" }),
+      ).toHaveAttribute("aria-checked", "true");
+    });
+    useIssueSelectionStore.getState().clear();
+  });
+
+  it("keeps the activity skeleton up while the session list is still resolving", async () => {
+    // The timeline query is disabled until a session id exists, and a disabled
+    // TanStack query reports isLoading === false — without explicit gating the
+    // activity area renders as a blank gap instead of a skeleton.
+    mockApiObj.listIssueSessions.mockReturnValue(new Promise(() => {}));
+    renderIssueDetail();
+
+    await screen.findByText("Activity");
+    expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
+    expect(
+      screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
+    ).toBe(true);
+    expect(
+      screen.queryByText("Couldn't load this issue's sessions"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers a retry instead of a permanently blank activity area when sessions fail", async () => {
+    mockApiObj.listIssueSessions.mockRejectedValue(new Error("boom"));
+    renderIssueDetail();
+
+    expect(
+      await screen.findByText("Couldn't load this issue's sessions"),
+    ).toBeInTheDocument();
+
+    const callsBeforeRetry = mockApiObj.listIssueSessions.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => {
+      expect(mockApiObj.listIssueSessions.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+    });
+  });
+
+  it("treats an empty session list as unavailable rather than as an empty timeline", async () => {
+    // No session id means no timeline query can ever run; silently rendering
+    // an empty activity list would claim the issue has no history.
+    mockApiObj.listIssueSessions.mockResolvedValue([]);
+    renderIssueDetail();
+
+    expect(
+      await screen.findByText("Couldn't load this issue's sessions"),
+    ).toBeInTheDocument();
+    expect(mockApiObj.listTimeline).not.toHaveBeenCalled();
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {

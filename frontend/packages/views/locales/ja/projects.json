@@ -64,7 +64,10 @@
     "no_issues_yet": "イシューはまだありません",
     "toast_link_copied": "リンクをコピーしました",
     "toast_project_deleted": "プロジェクトを削除しました",
-    "toast_move_issue_failed": "イシューを移動できませんでした"
+    "toast_move_issue_failed": "イシューを移動できませんでした",
+    "issues_error_title": "イシューを読み込めませんでした",
+    "issues_error_hint": "このプロジェクトのイシューの取得中に問題が発生しました。",
+    "issues_error_retry": "再試行"
   },
   "resources": {
     "section_header": "リソース",
@@ -118,7 +121,12 @@
     "unknown_author": "不明",
     "version": "v{{version}}",
     "empty_title": "ナレッジはまだありません",
-    "empty_hint": "プロジェクトをエージェントに任せるか、CLI から最初のエントリを書き込んでください。"
+    "empty_hint": "プロジェクトをエージェントに任せるか、CLI から最初のエントリを書き込んでください。",
+    "load_error_title": "ナレッジベースを読み込めませんでした",
+    "load_error_hint": "このプロジェクトの wiki とメモリの取得中に問題が発生しました。",
+    "load_error_retry": "再試行",
+    "memory_expand": "もっと見る",
+    "memory_collapse": "折りたたむ"
   },
   "repo_source": {
     "tab_git": "Git リポジトリ",

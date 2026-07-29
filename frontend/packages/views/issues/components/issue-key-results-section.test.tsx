@@ -45,6 +45,15 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
+// ReadonlyContent drags in lowlight + KaTeX + Mermaid. The contract this file
+// cares about is "the body goes through the Markdown renderer", so a stub that
+// records what it received is enough.
+vi.mock("../../editor", () => ({
+  ReadonlyContent: ({ content }: { content: string }) => (
+    <div data-testid="readonly-content">{content}</div>
+  ),
+}));
+
 import {
   IssueKeyResultsSection,
   IssueResultActivityLines,
@@ -174,6 +183,29 @@ describe("IssueKeyResultsSection", () => {
     expect(screen.queryByText("MUL-13")).not.toBeInTheDocument();
   });
 
+  it("marks navigable refs apart from inert ones", async () => {
+    const { container } = renderSection([
+      makeResult({
+        metadata: {
+          refs: [
+            { type: "issue", value: "MUL-12" },
+            { type: "dashboard", value: "ops-7" },
+          ],
+        },
+      }),
+    ]);
+
+    const linked = (await screen.findByText("MUL-12")).closest("[data-slot='badge']");
+    const inert = screen.getByText("ops-7").closest("[data-slot='badge']");
+    // The arrow glyph is the only thing that tells a user a badge navigates.
+    expect(linked?.querySelector(".lucide-arrow-up-right")).not.toBeNull();
+    expect(inert?.querySelector(".lucide-arrow-up-right")).toBeNull();
+    expect(linked).toHaveClass("hover:bg-accent");
+    expect(inert).not.toHaveClass("hover:bg-accent");
+    // Truncated values stay readable on hover.
+    expect(container.querySelector('[title="ops-7"]')).not.toBeNull();
+  });
+
   it("opens the full result body from a card", async () => {
     renderSection([makeResult()]);
 
@@ -189,6 +221,30 @@ describe("IssueKeyResultsSection", () => {
       await screen.findByText("Use an append-only canonical event log."),
     ).toBeInTheDocument();
     expect(screen.getByText("From Main")).toBeInTheDocument();
+  });
+
+  it("renders the agent-written body as Markdown, not preformatted text", async () => {
+    renderSection([
+      makeResult({ body: "## Outcome\n\n- shipped\n- rolled back once" }),
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Architecture decision/ }));
+
+    const rendered = await screen.findByTestId("readonly-content");
+    expect(rendered).toHaveTextContent("## Outcome");
+  });
+
+  it("never leaks a raw session id when the source session can't be resolved", async () => {
+    // Archived sessions are excluded from the sessions list, so the lookup
+    // misses and the id would otherwise be printed verbatim.
+    renderSection([makeResult({ source_session_id: "9f2a1c34-dead-beef-0000-000000000001" })]);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Architecture decision/ }));
+
+    expect(await screen.findByText("From another session")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/9f2a1c34-dead-beef-0000-000000000001/),
+    ).not.toBeInTheDocument();
   });
 });
 

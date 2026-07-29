@@ -8,22 +8,34 @@ import enSettings from "../../locales/en/settings.json";
 
 const membersRef = vi.hoisted(() => ({
   current: [{ user_id: "user-1", role: "owner" as "owner" | "admin" | "member" }],
+  pending: false,
 }));
 const relayRef = vi.hoisted(() => ({
   current: {
     claude: { fragment: '{"env":{"ANTHROPIC_BASE_URL":"https://ai.openremi.fun"}}', hasToken: true, revision: 3 },
     codex: { fragment: "", hasToken: false, revision: 0 },
     modelDiscovery: true,
-  },
+  } as Record<string, unknown> | undefined,
+  pending: false,
+  error: null as Error | null,
 }));
+const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey?: unknown[] }) => {
     const key = JSON.stringify(opts?.queryKey ?? []);
-    if (key.includes("relay-config")) return { data: relayRef.current };
-    return { data: membersRef.current };
+    if (key.includes("relay-config")) {
+      return {
+        data: relayRef.error ? undefined : relayRef.current,
+        isPending: relayRef.pending,
+        isError: relayRef.error !== null,
+        error: relayRef.error,
+        refetch: mockRefetchRelay,
+      };
+    }
+    return { data: membersRef.current, isPending: membersRef.pending };
   },
   useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
 }));
@@ -59,6 +71,14 @@ describe("ModelGatewayTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     membersRef.current = [{ user_id: "user-1", role: "owner" }];
+    membersRef.pending = false;
+    relayRef.current = {
+      claude: { fragment: '{"env":{"ANTHROPIC_BASE_URL":"https://ai.openremi.fun"}}', hasToken: true, revision: 3 },
+      codex: { fragment: "", hasToken: false, revision: 0 },
+      modelDiscovery: true,
+    };
+    relayRef.pending = false;
+    relayRef.error = null;
   });
 
   it("renders discovery toggle and both engine sections for an admin", () => {
@@ -88,5 +108,43 @@ describe("ModelGatewayTab", () => {
       "claude",
       expect.objectContaining({ token_op: "keep", fragment: expect.stringContaining("ANTHROPIC_BASE_URL") }),
     );
+  });
+
+  it("renders a skeleton instead of an empty savable form while the config loads", () => {
+    relayRef.pending = true;
+    relayRef.current = undefined;
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByTestId("model-gateway-skeleton")).toBeInTheDocument();
+    // A blank textarea + live Save would PUT fragment:"" as a full replace
+    // and wipe the fleet's relay config, so neither may exist yet.
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Save/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("says the config failed to load and offers a retry", async () => {
+    relayRef.error = new Error("relay unreachable");
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Couldn't load the gateway configuration",
+    );
+    expect(screen.getByText("relay unreachable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Save$/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(mockRefetchRelay).toHaveBeenCalled();
+  });
+
+  it("waits for the member query before deciding the viewer lacks permission", () => {
+    // `members` defaults to [] while in flight, which used to read as "no
+    // role" and flashed the denial at owners deep-linking the tab.
+    membersRef.pending = true;
+    membersRef.current = [];
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    expect(screen.queryByText(/Only workspace owners and admins/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("model-gateway-skeleton")).toBeInTheDocument();
   });
 });

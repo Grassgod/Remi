@@ -212,7 +212,6 @@
     "session_participants": "Session participants",
     "session_actions_aria": "Session actions",
     "add_agent": "Add agent",
-    "no_agents_available": "No agents available",
     "delegate_task": "Delegate task",
     "delegate_task_title": "Delegate in this session",
     "delegate_agent": "Agent",
@@ -258,7 +257,22 @@
     "link_copy_failed": "Failed to copy link",
     "workdir_path_copied": "Workdir path copied",
     "workdir_path_copy_failed": "Failed to copy workdir path",
-    "workdir_path_unavailable": "No local workdir yet — issue has not been run by a local agent"
+    "workdir_path_unavailable": "No local workdir yet — issue has not been run by a local agent",
+    "dialog_cancel": "Cancel",
+    "new_session_description": "A session keeps its own conversation and agent runs, separate from the others on this issue.",
+    "delegate_task_description": "The agent works inside this session and posts everything it does back here.",
+    "delegate_agent_placeholder": "Select an agent",
+    "delegate_agent_search_placeholder": "Search agents",
+    "no_agents_in_workspace": "This workspace has no agents yet. Create one before delegating work.",
+    "all_agents_in_session": "Every agent in this workspace is already in this session.",
+    "session_participants_description": "Participants can read this session and take tasks delegated inside it.",
+    "add_participant_failed": "Failed to add participant",
+    "result_unknown_session": "another session",
+    "select_sub_issue_aria": "Select {{identifier}}",
+    "select_all_sub_issues_aria": "Select all sub-issues",
+    "timeline_unavailable_title": "Couldn't load this issue's sessions",
+    "timeline_unavailable_hint": "Comments and activity live inside a session, so none of them can be shown until the session list loads.",
+    "timeline_retry": "Try again"
   },
   "timeline": {
     "loading": "Loading..."

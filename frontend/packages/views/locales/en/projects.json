@@ -64,7 +64,10 @@
     "no_issues_yet": "No issues yet",
     "toast_link_copied": "Link copied",
     "toast_project_deleted": "Project deleted",
-    "toast_move_issue_failed": "Failed to move issue"
+    "toast_move_issue_failed": "Failed to move issue",
+    "issues_error_title": "Couldn't load issues",
+    "issues_error_hint": "Something went wrong fetching this project's issues.",
+    "issues_error_retry": "Try again"
   },
   "resources": {
     "section_header": "Resources",
@@ -118,7 +121,12 @@
     "unknown_author": "Unknown",
     "version": "v{{version}}",
     "empty_title": "No knowledge entries yet",
-    "empty_hint": "Hand the project to an agent, or write the first entry with the CLI."
+    "empty_hint": "Hand the project to an agent, or write the first entry with the CLI.",
+    "load_error_title": "Couldn't load the knowledge base",
+    "load_error_hint": "Something went wrong fetching this project's wiki and memory.",
+    "load_error_retry": "Try again",
+    "memory_expand": "Show more",
+    "memory_collapse": "Show less"
   },
   "repo_source": {
     "tab_git": "Git",

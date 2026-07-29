@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -132,7 +133,7 @@ describe("AgentOverviewPane MCP tab visibility", () => {
     ["OpenClaw", "openclaw"],
   ])("renders the MCP tab when the agent runs on the %s runtime", (_label, provider) => {
     renderPane([makeRuntime(provider)]);
-    expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^MCP$/i })).toBeInTheDocument();
   });
 
   it("hides the MCP tab for providers whose backend does not read mcp_config", () => {
@@ -140,7 +141,7 @@ describe("AgentOverviewPane MCP tab visibility", () => {
     // time — that's the bug this hiding logic is meant to prevent.
     renderPane([makeRuntime("gemini")]);
     expect(
-      screen.queryByRole("button", { name: /^MCP$/i }),
+      screen.queryByRole("tab", { name: /^MCP$/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -149,7 +150,35 @@ describe("AgentOverviewPane MCP tab visibility", () => {
     // the runtimes query resolving. Hiding the tab would flicker it off and
     // then back on, which reads as a bug.
     renderPane([]);
-    expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^MCP$/i })).toBeInTheDocument();
+  });
+});
+
+describe("AgentOverviewPane tab semantics", () => {
+  it("exposes the strip as a tablist whose active tab controls a panel", () => {
+    renderPane([makeRuntime("claude")]);
+
+    const list = screen.getByRole("tablist");
+    expect(list).toBeInTheDocument();
+
+    const activity = screen.getByRole("tab", { name: /^Activity$/i });
+    expect(activity).toHaveAttribute("aria-selected", "true");
+
+    // The panel exists and is the one the active tab points at — without a
+    // registered panel the tab would announce as controlling nothing.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveTextContent("activity-tab");
+    expect(activity.getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("switches the rendered panel when another tab is activated", async () => {
+    const user = userEvent.setup();
+    renderPane([makeRuntime("claude")]);
+
+    await user.click(screen.getByRole("tab", { name: /^Instructions$/i }));
+
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("instructions-tab");
+    expect(screen.queryByText("activity-tab")).not.toBeInTheDocument();
   });
 });
 
@@ -158,7 +187,7 @@ describe("AgentOverviewPane Integrations tab visibility", () => {
     larkListingRef.current = { installations: [], configured: true };
     renderPane([makeRuntime("claude")]);
     expect(
-      await screen.findByRole("button", { name: /^Integrations$/i }),
+      await screen.findByRole("tab", { name: /^Integrations$/i }),
     ).toBeInTheDocument();
   });
 
@@ -167,7 +196,7 @@ describe("AgentOverviewPane Integrations tab visibility", () => {
     // deployments without the integration, which are the common case.
     renderPane([makeRuntime("claude")]);
     expect(
-      screen.queryByRole("button", { name: /^Integrations$/i }),
+      screen.queryByRole("tab", { name: /^Integrations$/i }),
     ).not.toBeInTheDocument();
   });
 });

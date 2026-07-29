@@ -85,7 +85,8 @@
     "first_time_actions": "要約を頼んだり、今日の予定を立てたり、簡単なタスクを任せたりしてみましょう。",
     "returning_title_named": "こんにちは、{{name}} です",
     "returning_title_default": "Multiremi へようこそ",
-    "returning_subtitle": "こう聞いてみましょう"
+    "returning_subtitle": "こう聞いてみましょう",
+    "no_agent_hint": "まずワークスペースにエージェントを追加してください。これらのプロンプトを実行するにはエージェントが必要です。"
   },
   "starter_prompts": {
     "list_open": "オープンなタスクを優先度順にまとめて",

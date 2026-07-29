@@ -88,7 +88,8 @@
     "first_time_actions": "요약을 요청하거나, 오늘 할 일을 계획하거나, 간단한 작업을 맡겨보세요.",
     "returning_title_named": "안녕하세요, 저는 {{name}}입니다",
     "returning_title_default": "Multiremi에 오신 것을 환영합니다",
-    "returning_subtitle": "이렇게 요청해 보세요"
+    "returning_subtitle": "이렇게 요청해 보세요",
+    "no_agent_hint": "먼저 워크스페이스에 에이전트를 추가하세요. 이 프롬프트를 실행하려면 에이전트가 필요합니다."
   },
   "starter_prompts": {
     "list_open": "열린 작업을 우선순위별로 정리해 줘",

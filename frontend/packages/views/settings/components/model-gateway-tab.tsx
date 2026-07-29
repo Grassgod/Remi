@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Eye, EyeOff, Save, Waypoints } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Save, Waypoints } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Card, CardContent } from "@multiremi/ui/components/ui/card";
 import { Label } from "@multiremi/ui/components/ui/label";
+import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
@@ -34,11 +35,19 @@ export function ModelGatewayTab() {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
 
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: members = [], isPending: membersPending } = useQuery(
+    memberListOptions(wsId),
+  );
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManage = currentMember?.role === "owner" || currentMember?.role === "admin";
 
-  const { data: config } = useQuery({
+  const {
+    data: config,
+    isPending: configPending,
+    isError: configError,
+    error: configErrorValue,
+    refetch: refetchConfig,
+  } = useQuery({
     queryKey: relayKeys.config(wsId),
     queryFn: () => api.getRelayConfig(wsId),
     enabled: !!wsId && canManage,
@@ -55,6 +64,14 @@ export function ModelGatewayTab() {
     }
   }
 
+  // Membership decides whether this tab is a form or a denial. `members`
+  // defaults to [] while the query is in flight, which reads as "no role" —
+  // rendering the denial then would flash it at every owner/admin who
+  // deep-links `?tab=model-gateway`. Wait for the query to settle first.
+  if (membersPending) {
+    return <ConfigSkeleton />;
+  }
+
   if (!canManage) {
     return <p className="text-sm text-muted-foreground">{t(($) => $.modelGateway.insufficient)}</p>;
   }
@@ -69,26 +86,94 @@ export function ModelGatewayTab() {
         <p className="text-sm text-muted-foreground">{t(($) => $.modelGateway.description)}</p>
       </section>
 
-      {/* Fleet-wide model discovery toggle */}
+      {/* The editors are a full replace of the stored relay config, so they
+          must never render seeded from a not-yet-loaded (or failed) response:
+          saving a blank textarea would wipe the fleet's gateway. Loading is a
+          skeleton, failure is an explicit error with retry — neither exposes
+          a savable form. */}
+      {configError ? (
+        <ConfigLoadError
+          error={configErrorValue}
+          onRetry={() => void refetchConfig()}
+        />
+      ) : configPending || !config ? (
+        <ConfigSkeleton />
+      ) : (
+        <>
+          {/* Fleet-wide model discovery toggle */}
+          <Card>
+            <CardContent>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <Label className="text-sm font-medium">{t(($) => $.modelGateway.discovery_title)}</Label>
+                  <p className="text-sm text-muted-foreground">{t(($) => $.modelGateway.discovery_desc)}</p>
+                </div>
+                <Switch
+                  checked={config.modelDiscovery === true}
+                  onCheckedChange={toggleDiscovery}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <EngineSection engine="claude" config={config.claude ?? null} wsId={wsId} />
+          <EngineSection engine="codex" config={config.codex ?? null} wsId={wsId} />
+
+          <p className="text-xs text-muted-foreground">{t(($) => $.modelGateway.applied_note)}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ConfigSkeleton() {
+  return (
+    <div className="space-y-8" data-testid="model-gateway-skeleton" aria-busy="true">
       <Card>
         <CardContent>
           <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <Label className="text-sm font-medium">{t(($) => $.modelGateway.discovery_title)}</Label>
-              <p className="text-sm text-muted-foreground">{t(($) => $.modelGateway.discovery_desc)}</p>
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-full max-w-lg" />
             </div>
-            <Switch
-              checked={config?.modelDiscovery === true}
-              onCheckedChange={toggleDiscovery}
-            />
+            <Skeleton className="h-5 w-9 rounded-full" />
           </div>
         </CardContent>
       </Card>
+      {[0, 1].map((i) => (
+        <section key={i} className="space-y-3">
+          <Skeleton className="h-4 w-20" />
+          <Card>
+            <CardContent className="space-y-3">
+              <Skeleton className="h-[120px] w-full" />
+              <Skeleton className="h-9 w-full" />
+            </CardContent>
+          </Card>
+        </section>
+      ))}
+    </div>
+  );
+}
 
-      <EngineSection engine="claude" config={config?.claude ?? null} wsId={wsId} />
-      <EngineSection engine="codex" config={config?.codex ?? null} wsId={wsId} />
-
-      <p className="text-xs text-muted-foreground">{t(($) => $.modelGateway.applied_note)}</p>
+function ConfigLoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  const { t } = useT("settings");
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-10 text-center"
+    >
+      <AlertCircle className="h-6 w-6 text-destructive" />
+      <div>
+        <p className="text-sm font-medium">{t(($) => $.modelGateway.load_failed)}</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {error instanceof Error
+            ? error.message
+            : t(($) => $.modelGateway.load_failed_default)}
+        </p>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+        {t(($) => $.modelGateway.try_again)}
+      </Button>
     </div>
   );
 }

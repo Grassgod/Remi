@@ -385,6 +385,9 @@
     "saved": "Saved",
     "save_failed": "Save failed",
     "applied_note": "Only relay keys are overwritten; each machine's other settings are preserved. Agents apply on their next heartbeat.",
-    "insufficient": "Only workspace owners and admins can manage the model gateway."
+    "insufficient": "Only workspace owners and admins can manage the model gateway.",
+    "load_failed": "Couldn't load the gateway configuration",
+    "load_failed_default": "Something went wrong fetching the relay settings.",
+    "try_again": "Retry"
   }
 }

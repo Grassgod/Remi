@@ -7,7 +7,6 @@ import {
   type AgentActivity,
   type AgentPresenceDetail,
   summarizeActivityWindow,
-  VISIBILITY_TOOLTIP,
 } from "@multiremi/core/agents";
 import {
   Tooltip,
@@ -200,7 +199,7 @@ function AgentNameCell({ row }: { row: AgentRow }) {
                 }
               />
               <TooltipContent>
-                {VISIBILITY_TOOLTIP.private}
+                {t(($) => $.visibility.private.tooltip)}
               </TooltipContent>
             </Tooltip>
           )}
