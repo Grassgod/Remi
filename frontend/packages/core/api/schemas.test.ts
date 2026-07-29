@@ -406,6 +406,28 @@ describe("Issue Session boundary list schemas", () => {
       { endpoint: "GET Session results" },
     )).toEqual([]);
   });
+
+  it("keeps a result whose metadata bag is missing or malformed", () => {
+    const result = (metadata: unknown) => ({
+      id: "sres_1",
+      issue_id: "iss_1",
+      source_session_id: "sess_main",
+      body: "Landed on main.",
+      published_by_type: "agent",
+      created_at: "2026-01-01T00:00:00Z",
+      ...(metadata === undefined ? {} : { metadata }),
+    });
+
+    const parsed = parseWithFallback(
+      [result(undefined), result(null), result("{}"), result([]), result({ kind: "mr" })],
+      SessionResultListSchema,
+      EMPTY_SESSION_RESULTS,
+      { endpoint: "GET Session results" },
+    );
+    // The bag is decoration: a bad one costs the result its kind/refs, never
+    // the result itself — and never the rest of the list.
+    expect(parsed.map((row) => row.metadata)).toEqual([{}, {}, {}, {}, { kind: "mr" }]);
+  });
 });
 
 describe("CliLatestVersionResponseSchema", () => {

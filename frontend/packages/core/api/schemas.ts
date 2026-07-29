@@ -274,7 +274,15 @@ export const SessionResultSchema = z.object({
   source_session_id: z.string(),
   title: z.string().default(""),
   body: z.string(),
-  metadata: z.record(z.string(), z.unknown()).default({}),
+  // The kind/refs conventions the issue page reads live in here (see
+  // docs/issue-key-results.md), so the bag is decoration on top of a result:
+  // a server that sends null — or a JSON string it forgot to parse — must
+  // cost the result its badges, not drop it (and with it the whole list) from
+  // the key-results panel.
+  metadata: z.preprocess(
+    (value) => (typeof value === "object" && value !== null && !Array.isArray(value) ? value : {}),
+    z.record(z.string(), z.unknown()),
+  ),
   published_by_type: z.string(),
   published_by_id: z.string().nullable().default(null),
   created_at: z.string(),

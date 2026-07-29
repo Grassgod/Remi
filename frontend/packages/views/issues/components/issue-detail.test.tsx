@@ -1,6 +1,6 @@
 import { forwardRef, useRef, useState, useImperativeHandle } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Issue, TimelineEntry } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
@@ -600,10 +600,191 @@ describe("IssueDetail (shared)", () => {
     ]);
     renderIssueDetail();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+    // The row's accessible name is "<title> <last activity>", so match on
+    // the title prefix rather than the whole string.
+    fireEvent.click(await screen.findByRole("button", { name: /^Review/ }));
     await waitFor(() => {
       expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
     });
+  });
+
+  it("hides the session list on a single-session issue and keeps its actions in the properties panel", async () => {
+    // Default fixture: one default "Main" session — nothing to switch to.
+    renderIssueDetail();
+
+    expect(await screen.findByRole("button", { name: "Publish result" })).toBeInTheDocument();
+    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
+    expect(screen.queryByText("Session participants")).not.toBeInTheDocument();
+    // Exactly one mount of the actions — the list must not double them up.
+    expect(screen.getAllByRole("button", { name: "Publish result" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Delegate task" })).toHaveLength(1);
+    // The session column is the only other home of "New session"; while it is
+    // hidden the panel must carry the affordance, or a single-session issue
+    // could never open a second session.
+    expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
+  });
+
+  it("creates a second session from the properties panel and reveals the session list", async () => {
+    const sessionMain = {
+      id: "session-main",
+      issue_id: mockIssue.id,
+      workspace_id: "ws-1",
+      title: "Main",
+      status: "active",
+      is_default: true,
+      summary: null,
+      created_by_type: "system",
+      created_by_id: null,
+      created_at: "2025-01-01T00:00:00Z",
+      updated_at: "2025-01-01T00:00:00Z",
+      participants: [],
+    };
+    const sessionReview = {
+      ...sessionMain,
+      id: "session-review",
+      title: "Review",
+      is_default: false,
+      created_by_type: "member",
+      created_by_id: "user-1",
+      created_at: "2025-01-02T00:00:00Z",
+      updated_at: "2025-01-02T00:00:00Z",
+    };
+    mockApiObj.listIssueSessions.mockResolvedValue([sessionMain]);
+    // The mutation invalidates the sessions query on settle, so the refetch
+    // must see the new session — that refetch is what mounts the column.
+    mockApiObj.createIssueSession.mockImplementation(async () => {
+      mockApiObj.listIssueSessions.mockResolvedValue([sessionMain, sessionReview]);
+      return sessionReview;
+    });
+    renderIssueDetail();
+
+    fireEvent.click(await screen.findByRole("button", { name: "New session" }));
+
+    const createDialog = within(await screen.findByRole("dialog"));
+    expect(createDialog.getByText("Create session")).toBeInTheDocument();
+    fireEvent.change(createDialog.getByLabelText("Session name"), {
+      target: { value: "Review" },
+    });
+    fireEvent.click(createDialog.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(mockApiObj.createIssueSession).toHaveBeenCalledWith("issue-1", "Review");
+    });
+    // Sessions refetched → the switcher column mounts with both sessions and
+    // the new one is selected.
+    expect(await screen.findByText("Sessions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Review/ })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
+    });
+  });
+
+  it("renders the session list once the issue has more than one session", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+    renderIssueDetail();
+
+    expect(await screen.findByText("Sessions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Main/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Review/ })).toBeInTheDocument();
+    // The + affordance lives in the list header — and only there, so the
+    // panel must not mount a second copy.
+    expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
+    // Per-session actions moved into each row's ⋯ menu, so the properties
+    // panel no longer carries them on a multi-session issue.
+    expect(screen.queryByRole("button", { name: "Publish result" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Session actions" })).toHaveLength(2);
+  });
+
+  it("opens participant management from a session row's actions menu", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+    renderIssueDetail();
+
+    const rowMenus = await screen.findAllByRole("button", { name: "Session actions" });
+    fireEvent.click(rowMenus[0]!);
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Session participants" }));
+
+    // "Add agent" only exists inside the participants dialog.
+    expect(await screen.findByText("Add agent")).toBeInTheDocument();
+    expect(screen.getByText("No agents available")).toBeInTheDocument();
+  });
+
+  it("keeps session agent runs out of the timeline", async () => {
+    // Runs belong to the right panel's execution log; the timeline used to
+    // repeat them as task cards.
+    mockApiObj.listSessionTasks.mockResolvedValue([{
+      id: "task-1",
+      issue_id: mockIssue.id,
+      issue_session_id: "session-main",
+      agent_id: "agent-1",
+      status: "running",
+      prompt: "Investigate the flaky test",
+      trigger_summary: null,
+      created_at: "2025-01-03T00:00:00Z",
+    }]);
+    renderIssueDetail();
+
+    await screen.findByDisplayValue("Implement authentication");
+    expect(screen.queryByText("Investigate the flaky test")).not.toBeInTheDocument();
+    expect(mockApiObj.listSessionTasks).not.toHaveBeenCalled();
   });
 
   it("opens the Session that owns an inbox deep-linked comment", async () => {
@@ -670,12 +851,24 @@ describe("IssueDetail (shared)", () => {
     });
     renderIssueDetail();
 
-    expect(await screen.findByText("Use an append-only canonical event log.")).toBeInTheDocument();
+    // The result itself lives in the right panel's key-results section; the
+    // timeline only carries a one-line pointer at it.
+    expect(await screen.findByText("Architecture decision")).toBeInTheDocument();
+    expect(
+      screen.getByText('published the result "Architecture decision"'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Use an append-only canonical event log."),
+    ).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "Publish result" }));
-    fireEvent.change(screen.getByLabelText("Title (optional)"), {
+    // Scoped to the dialog: the panel card's generic kind icon is also
+    // labelled "Result".
+    const publishDialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(publishDialog.getByLabelText("Title (optional)"), {
       target: { value: "API contract" },
     });
-    fireEvent.change(screen.getByLabelText("Result"), {
+    fireEvent.change(publishDialog.getByLabelText("Result"), {
       target: { value: "Sibling sessions consume explicit results only." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Publish" }));
@@ -688,6 +881,30 @@ describe("IssueDetail (shared)", () => {
         "Sibling sessions consume explicit results only.",
       );
     });
+  });
+
+  it("points the timeline's published-result line at the key-results panel section", async () => {
+    mockApiObj.listIssueSessionResults.mockResolvedValue([{
+      id: "result-1",
+      issue_id: mockIssue.id,
+      source_session_id: "session-main",
+      title: "Architecture decision",
+      body: "Use an append-only canonical event log.",
+      metadata: { kind: "decision" },
+      published_by_type: "member",
+      published_by_id: "user-1",
+      created_at: "2025-01-03T00:00:00Z",
+    }]);
+    renderIssueDetail();
+
+    // Panel section carries the typed card...
+    expect(await screen.findByText("Key results")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Decision" })).toBeInTheDocument();
+
+    // ...and the timeline line scrolls to it.
+    fireEvent.click(screen.getByText('published the result "Architecture decision"'));
+    expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
+    expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe("issue-key-results");
   });
 
   it("renders the issue title leaf as a link to the issue detail page", async () => {

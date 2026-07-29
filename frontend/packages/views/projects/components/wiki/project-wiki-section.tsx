@@ -9,8 +9,9 @@ import { projectDocListOptions } from "@multiremi/core/project-docs";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
-import type { ProjectDoc, ProjectDocRef } from "@multiremi/core/types";
+import type { ProjectDoc } from "@multiremi/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
+import { DocRefs } from "../../../common/doc-refs";
 import { ReadonlyContent } from "../../../editor";
 import { AppLink } from "../../../navigation";
 import { useT } from "../../../i18n";
@@ -60,58 +61,6 @@ function SidebarRow({
         <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
       )}
     </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Refs — the sources an agent cited when it wrote the entry
-// ---------------------------------------------------------------------------
-
-const EXTERNAL_HREF_RE = /^https?:\/\//i;
-
-function DocRefBadge({ docRef }: { docRef: ProjectDocRef }) {
-  const paths = useWorkspacePaths();
-  const badge = (
-    <Badge variant="outline" className="max-w-64 font-normal">
-      <span className="text-muted-foreground">{docRef.type}</span>
-      <span className="truncate">{docRef.value}</span>
-    </Badge>
-  );
-
-  if (docRef.type === "issue") {
-    return <AppLink href={paths.issueDetail(docRef.value)}>{badge}</AppLink>;
-  }
-  // The protocol check is not cosmetic: `value` is whatever an agent wrote,
-  // and a `javascript:` href would execute on click.
-  if (docRef.type === "url" && EXTERNAL_HREF_RE.test(docRef.value)) {
-    return (
-      <a href={docRef.value} target="_blank" rel="noopener noreferrer">
-        {badge}
-      </a>
-    );
-  }
-  // Everything else stays plain text: a task has no page of its own, and an
-  // unknown ref type is data we can show but not resolve into a URL.
-  return badge;
-}
-
-function DocRefs({
-  refs,
-  className,
-}: {
-  refs: ProjectDocRef[];
-  className?: string;
-}) {
-  if (refs.length === 0) return null;
-  return (
-    <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-      {refs.map((docRef, index) => (
-        <DocRefBadge
-          key={`${docRef.type}:${docRef.value}:${index}`}
-          docRef={docRef}
-        />
-      ))}
-    </div>
   );
 }
 

@@ -56,11 +56,13 @@ import { CommentInput } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
+import { IssueSessionActions } from "./issue-session-bar";
+import { IssueSessionList } from "./issue-session-list";
 import {
-  IssueSessionBar,
-  IssueSessionResultCards,
-  IssueSessionTaskCards,
-} from "./issue-session-bar";
+  IssueKeyResultsSection,
+  IssueResultActivityLines,
+  KEY_RESULTS_SECTION_ID,
+} from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multiremi/core/github";
@@ -695,6 +697,10 @@ export function IssueDetail({
     ?? issueSessions.find((session) => session.is_default)?.id
     ?? issueSessions[0]?.id
     ?? "";
+  // The session bar is pure overhead on an issue that only has the default
+  // Main session — there is nothing to switch to. It appears once a second
+  // session exists; until then its two actions live in the right panel.
+  const hasMultipleSessions = issueSessions.length > 1;
   useEffect(() => {
     if (activeIssueSessionId && activeIssueSessionId !== selectedIssueSessionId) {
       setSelectedIssueSessionId(activeIssueSessionId);
@@ -1263,6 +1269,16 @@ export function IssueDetail({
     else panel.collapse();
   }, [isMobile, sidebarRef]);
 
+  // A timeline "published a result" line points at the panel section that
+  // holds the result itself. Open the panel first when it is closed —
+  // otherwise the click would scroll to something the user can't see.
+  const handleShowKeyResults = useCallback(() => {
+    if (!sidebarOpen) handleToggleSidebar();
+    document
+      .getElementById(KEY_RESULTS_SECTION_ID)
+      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [handleToggleSidebar, sidebarOpen]);
+
   if (loading) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
@@ -1514,6 +1530,24 @@ export function IssueDetail({
           </PropRow>
         </div>}
       </div>
+
+      {/* Session actions — the session list is hidden while the issue has only
+          the default Main session, so its actions (publish result / delegate
+          task / new session) stay reachable here. */}
+      {!hasMultipleSessions && activeIssueSessionId && (
+        <div className="flex flex-wrap items-center gap-2 pl-2">
+          <IssueSessionActions
+            issueId={id}
+            issueSessionId={activeIssueSessionId}
+            agents={agents}
+            onSelectSession={setSelectedIssueSessionId}
+          />
+        </div>
+      )}
+
+      {/* Key results — what the sessions published, typed by kind. Hides
+          itself until the first result lands. */}
+      <IssueKeyResultsSection issueId={id} sessions={issueSessions} />
 
       {/* Execution log — active runs + collapsed past runs. Self-contained;
           owns its own collapse state and WS subscriptions. Hides itself
@@ -1989,116 +2023,122 @@ export function IssueDetail({
               </div>
             </div>
 
-            <IssueSessionBar
-              issueId={id}
-              sessions={issueSessions}
-              selectedSessionId={activeIssueSessionId}
-              agents={agents}
-              onSelectSession={setSelectedIssueSessionId}
-            />
-
-            <LocalDirectoryHint projectId={issue?.project_id} />
-
-            {/* Agent live output — sticky banner in the activity section,
-                keyed by issue id so switching issues remounts the card and
-                clears any in-flight task state from the previous issue.
-                The execution log itself (per-task timeline + past runs)
-                lives in the right panel via ExecutionLogSection — this
-                card is just a header-style "agent is working" anchor. */}
-            {activeIssueSessionId && (
-              <>
-                <AgentLiveCard
-                  key={`${id}:${activeIssueSessionId}`}
+            {/* Session switcher column + conversation. The column only
+                mounts on multi-session issues; single-session issues render
+                the conversation full width, exactly as before. */}
+            <div className="flex gap-4">
+              {hasMultipleSessions && (
+                <IssueSessionList
                   issueId={id}
-                  issueSessionId={activeIssueSessionId}
-                />
-                <IssueSessionTaskCards
-                  issueId={id}
-                  issueSessionId={activeIssueSessionId}
-                />
-                <IssueSessionResultCards
-                  issueId={id}
-                  issueSessionId={activeIssueSessionId}
                   sessions={issueSessions}
+                  selectedSessionId={activeIssueSessionId}
+                  agents={agents}
+                  onSelectSession={setSelectedIssueSessionId}
                 />
-              </>
-            )}
+              )}
 
-            {/* Timeline entries — virtualized via react-virtuoso to keep
-                first-paint cost O(viewport) instead of O(N). On a 500-comment
-                issue the unvirtualized .map froze the page for several
-                seconds (markdown parse + lowlight code highlight runs per
-                CommentCard on mount).
+              <div className="min-w-0 flex-1">
+                <LocalDirectoryHint projectId={issue?.project_id} />
 
-                customScrollParent guard: callback ref populates after the
-                first commit. Without this null guard Virtuoso falls back to
-                its own scroller, grabs 0 height inside overflow-y-auto, and
-                miscomputes total-height on first paint. */}
-            {timelineLoading && timelineView.groups.length === 0 ? (
-              <TimelineSkeleton />
-            ) : (
-              // Two render modes:
-              //   - `highlightCommentId` set (came from inbox deep-link) →
-              //     render flat. Every comment mounts, every height is real,
-              //     the target id is in the DOM the instant the useEffect
-              //     above runs `scrollIntoView`. No virtualization estimate
-              //     errors, no spacer reflow drift. Pays cold-mount cost
-              //     proportional to items.length (markdown + lowlight per
-              //     comment), which is acceptable in the deep-link case —
-              //     the user has explicit intent to land on a specific item.
-              //   - otherwise → Virtuoso. Browsing mode, virtualization
-              //     wins on first-paint perf for long timelines.
-              //
-              // The split is deliberate: virtualization and "land precisely
-              // on a target" have fundamentally opposed contracts (estimated
-              // heights vs real heights). Trying to satisfy both in one
-              // path is what produced the bug history this PR closes.
-              !highlightCommentId ? (
-                !scrollContainerEl ? (
-                  // Skeleton while the callback ref populates so the gap
-                  // between IssueDetail mount and Virtuoso mount doesn't
-                  // flash empty.
+                {/* Agent live output — sticky banner in the activity section,
+                    keyed by issue id so switching issues remounts the card and
+                    clears any in-flight task state from the previous issue.
+                    The execution log itself (per-task timeline + past runs)
+                    lives in the right panel via ExecutionLogSection — this
+                    card is just a header-style "agent is working" anchor. */}
+                {activeIssueSessionId && (
+                  <AgentLiveCard
+                    key={`${id}:${activeIssueSessionId}`}
+                    issueId={id}
+                    issueSessionId={activeIssueSessionId}
+                  />
+                )}
+
+                {/* Published results are shown in full by the right panel's
+                    key-results section; the timeline only notes that one
+                    landed and points at it. */}
+                <IssueResultActivityLines
+                  issueId={id}
+                  onShowResults={handleShowKeyResults}
+                />
+
+                {/* Timeline entries — virtualized via react-virtuoso to keep
+                    first-paint cost O(viewport) instead of O(N). On a 500-comment
+                    issue the unvirtualized .map froze the page for several
+                    seconds (markdown parse + lowlight code highlight runs per
+                    CommentCard on mount).
+
+                    customScrollParent guard: callback ref populates after the
+                    first commit. Without this null guard Virtuoso falls back to
+                    its own scroller, grabs 0 height inside overflow-y-auto, and
+                    miscomputes total-height on first paint. */}
+                {timelineLoading && timelineView.groups.length === 0 ? (
                   <TimelineSkeleton />
                 ) : (
-                  <div className="mt-4">
-                    <Virtuoso
-                      key={`${wsId}:${id}:${activeIssueSessionId}`}
-                      customScrollParent={scrollContainerEl}
-                      data={items}
-                      increaseViewportBy={{ top: 800, bottom: 800 }}
-                      computeItemKey={(_i, item) => `${item.kind}:${item.id}`}
-                      skipAnimationFrameInResizeObserver
-                      // followOutput intentionally NOT set. Virtuoso treats
-                      // it as a sticky "is at bottom" flag and resets
-                      // scrollTop to maxScrollTop on every height-change
-                      // tick — issue-detail is document-shaped, not chat.
-                      itemContent={renderItem}
-                    />
-                  </div>
-                )
-              ) : (
-                <div className="mt-4">
-                  {items.map((item, i) => (
-                    <Fragment key={`${item.kind}:${item.id}`}>
-                      {renderItem(i, item)}
-                    </Fragment>
-                  ))}
-                </div>
-              )
-            )}
+                  // Two render modes:
+                  //   - `highlightCommentId` set (came from inbox deep-link) →
+                  //     render flat. Every comment mounts, every height is real,
+                  //     the target id is in the DOM the instant the useEffect
+                  //     above runs `scrollIntoView`. No virtualization estimate
+                  //     errors, no spacer reflow drift. Pays cold-mount cost
+                  //     proportional to items.length (markdown + lowlight per
+                  //     comment), which is acceptable in the deep-link case —
+                  //     the user has explicit intent to land on a specific item.
+                  //   - otherwise → Virtuoso. Browsing mode, virtualization
+                  //     wins on first-paint perf for long timelines.
+                  //
+                  // The split is deliberate: virtualization and "land precisely
+                  // on a target" have fundamentally opposed contracts (estimated
+                  // heights vs real heights). Trying to satisfy both in one
+                  // path is what produced the bug history this PR closes.
+                  !highlightCommentId ? (
+                    !scrollContainerEl ? (
+                      // Skeleton while the callback ref populates so the gap
+                      // between IssueDetail mount and Virtuoso mount doesn't
+                      // flash empty.
+                      <TimelineSkeleton />
+                    ) : (
+                      <div className="mt-4">
+                        <Virtuoso
+                          key={`${wsId}:${id}:${activeIssueSessionId}`}
+                          customScrollParent={scrollContainerEl}
+                          data={items}
+                          increaseViewportBy={{ top: 800, bottom: 800 }}
+                          computeItemKey={(_i, item) => `${item.kind}:${item.id}`}
+                          skipAnimationFrameInResizeObserver
+                          // followOutput intentionally NOT set. Virtuoso treats
+                          // it as a sticky "is at bottom" flag and resets
+                          // scrollTop to maxScrollTop on every height-change
+                          // tick — issue-detail is document-shaped, not chat.
+                          itemContent={renderItem}
+                        />
+                      </div>
+                    )
+                  ) : (
+                    <div className="mt-4">
+                      {items.map((item, i) => (
+                        <Fragment key={`${item.kind}:${item.id}`}>
+                          {renderItem(i, item)}
+                        </Fragment>
+                      ))}
+                    </div>
+                  )
+                )}
 
-            {/* Bottom comment input — no avatar, full width */}
-            <div className="mt-4">
-              {/* key={id}: web's /issues/[id] route doesn't remount on
-                  issueId change, so without an explicit key the editor
-                  keeps the previous issue's in-memory content and the
-                  next keystroke would flush it into the new issue's
-                  draft key. */}
-              <CommentInput
-                key={`${id}:${activeIssueSessionId}`}
-                issueId={id}
-                onSubmit={submitComment}
-              />
+                {/* Bottom comment input — no avatar, full width */}
+                <div className="mt-4">
+                  {/* key={id}: web's /issues/[id] route doesn't remount on
+                      issueId change, so without an explicit key the editor
+                      keeps the previous issue's in-memory content and the
+                      next keystroke would flush it into the new issue's
+                      draft key. */}
+                  <CommentInput
+                    key={`${id}:${activeIssueSessionId}`}
+                    issueId={id}
+                    onSubmit={submitComment}
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
