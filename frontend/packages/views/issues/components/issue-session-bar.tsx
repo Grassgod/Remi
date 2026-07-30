@@ -141,7 +141,6 @@ export function NewSessionButton({
               value={sessionTitle}
               onChange={(event) => setSessionTitle(event.target.value)}
               placeholder={t(($) => $.detail.session_name_placeholder)}
-              autoFocus
               onKeyDown={(event) => {
                 if (event.key === "Enter") void submitCreate();
               }}
@@ -328,7 +327,6 @@ export function SessionDelegateTaskDialog({
                 onChange={(event) => setPrompt(event.target.value)}
                 placeholder={t(($) => $.detail.delegate_prompt_placeholder)}
                 rows={5}
-                autoFocus
               />
             </div>
           </div>
@@ -406,7 +404,6 @@ export function SessionPublishResultDialog({
               value={resultTitle}
               onChange={(event) => setResultTitle(event.target.value)}
               placeholder={t(($) => $.detail.result_title_placeholder)}
-              autoFocus
             />
           </div>
           <div className="space-y-2">
