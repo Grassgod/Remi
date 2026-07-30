@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  MessagesSquare,
   MoreHorizontal,
   PanelRight,
   Pin,
@@ -52,10 +53,9 @@ import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
-import { CommentCard } from "./comment-card";
+import { CommentCard, type CommentParentRef } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
-import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
 import { IssueSessionActions } from "./issue-session-bar";
 import { IssueSessionList } from "./issue-session-list";
@@ -80,6 +80,7 @@ import {
   issueUsageOptions,
   issueAttachmentsOptions,
   issueSessionsOptions,
+  issueSessionResultsOptions,
 } from "@multiremi/core/issues/queries";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -89,6 +90,7 @@ import { useRecentIssuesStore } from "@multiremi/core/issues/stores";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import { useIssueTimeline } from "../hooks/use-issue-timeline";
+import { getSessionDisplayName } from "../utils/session-display";
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { useIssueSubscribers } from "../hooks/use-issue-subscribers";
 import { ReactionBar } from "@multiremi/ui/components/common/reaction-bar";
@@ -289,9 +291,10 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
-// Stable reference for threads with no replies. Inline `[]` would create a
-// new array on every render and bust React.memo on CommentCard / ResolvedThreadBar.
-const EMPTY_REPLIES: TimelineEntry[] = [];
+// How much of the parent comment a reply's reference chip quotes. Long enough
+// to recognise which message is being answered, short enough to stay one line
+// next to the author name.
+const PARENT_PREVIEW_CHARS = 40;
 
 // ---------------------------------------------------------------------------
 // Sidebar progressive disclosure
@@ -328,19 +331,6 @@ function isOptionalPropSet(
     case "labels":
       return attachedLabelsCount > 0;
   }
-}
-
-// Shallow array equality by element identity. Used to reuse the previous
-// render's per-thread reply slice when nothing in *this* thread changed,
-// even if the surrounding `timeline` array was rebuilt by a WS event in
-// some unrelated thread.
-function shallowEqualEntries(a: TimelineEntry[], b: TimelineEntry[]): boolean {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
 }
 
 // Flat per-item shape consumed by <Virtuoso>. Virtuoso needs a flat array
@@ -397,6 +387,22 @@ function TimelineSkeleton() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// A session that has never been used at all. Distinct from
+// `TimelineUnavailable`: nothing failed here, there is simply nothing yet, and
+// the two ways to change that both live one click away.
+function SessionEmptyState() {
+  const { t } = useT("issues");
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center">
+      <MessagesSquare className="h-6 w-6 text-muted-foreground" />
+      <p className="text-sm font-medium">{t(($) => $.detail.session_empty_title)}</p>
+      <p className="text-xs text-muted-foreground">
+        {t(($) => $.detail.session_empty_hint)}
+      </p>
     </div>
   );
 }
@@ -736,10 +742,8 @@ export function IssueDetail({
     ?? issueSessions.find((session) => session.is_default)?.id
     ?? issueSessions[0]?.id
     ?? "";
-  // The session bar is pure overhead on an issue that only has the default
-  // Main session — there is nothing to switch to. It appears once a second
-  // session exists; until then its two actions live in the right panel.
-  const hasMultipleSessions = issueSessions.length > 1;
+  const activeIssueSession =
+    issueSessions.find((session) => session.id === activeIssueSessionId) ?? null;
   useEffect(() => {
     if (activeIssueSessionId && activeIssueSessionId !== selectedIssueSessionId) {
       setSelectedIssueSessionId(activeIssueSessionId);
@@ -947,48 +951,40 @@ export function IssueDetail({
     [clearResolvedExpand, toggleResolveComment],
   );
 
-  // Memoized timeline grouping. Each render rebuilds the per-parent map from
-  // the latest timeline, then pre-flattens each thread's reply subtree into a
-  // dedicated `threadReplies` slice per root. Slices are stabilized against
-  // the previous render via `prevThreadRepliesRef`: if a thread's flat list
-  // is shallow-equal to the previous one, we reuse the previous array so
-  // React.memo on CommentCard / ResolvedThreadBar can short-circuit. Without
-  // this, every WS event (including reactions, edits, AI streaming on an
-  // unrelated thread) hands every card a brand-new prop reference and forces
-  // every thread subtree to re-render in lockstep.
-  const prevThreadRepliesRef = useRef<Map<string, TimelineEntry[]>>(new Map());
+  // Memoized timeline projection. A session is already one parallel track, so
+  // the timeline inside it is a single chronological stream: every comment —
+  // root or reply — is an entry of its own, in `created_at` order, exactly as
+  // the server returned it. Nothing is hoisted under a parent any more.
+  //
+  // Threading survives as metadata only: `parentRefs` maps a reply's id to the
+  // comment it answers (author + opening slice), and `parentIds` records which
+  // comments have answers so the delete dialog can warn about the cascade.
+  // Both are built inside this useMemo, so the objects handed to a memoized
+  // CommentCard keep their identity until the timeline itself changes.
   const timelineView = useMemo(() => {
-    // Group entries: top-level = activities + root comments; replies are
-    // bucketed under their parent's id and rendered nested inside CommentCard.
-    // No orphan rescue needed: the timeline is fetched in full, so every
-    // reply's parent is always in the same array.
-    const topLevel = timeline.filter(
-      (e) => e.type === "activity" || !e.parent_id,
-    );
-    const repliesByParent = new Map<string, TimelineEntry[]>();
+    const byId = new Map<string, TimelineEntry>();
     for (const e of timeline) {
-      if (e.type === "comment" && e.parent_id) {
-        const list = repliesByParent.get(e.parent_id) ?? [];
-        list.push(e);
-        repliesByParent.set(e.parent_id, list);
-      }
+      if (e.type === "comment") byId.set(e.id, e);
     }
-
-    // Pre-flatten each top-level comment's thread subtree (parent + every
-    // descendant in render order). Reuse the previous array reference when
-    // the thread is unchanged so unrelated CommentCards keep their memo.
-    const prevThreadReplies = prevThreadRepliesRef.current;
-    const threadReplies = new Map<string, TimelineEntry[]>();
-    for (const root of topLevel) {
-      if (root.type !== "comment") continue;
-      const fresh = collectThreadReplies(root.id, repliesByParent);
-      const previous = prevThreadReplies.get(root.id);
-      threadReplies.set(
-        root.id,
-        previous && shallowEqualEntries(previous, fresh) ? previous : fresh,
-      );
+    const parentRefs = new Map<string, CommentParentRef>();
+    const parentIds = new Set<string>();
+    for (const e of timeline) {
+      if (e.type !== "comment" || !e.parent_id) continue;
+      const parent = byId.get(e.parent_id);
+      // A parent outside the loaded window cannot be described, so the reply
+      // renders chip-less rather than pointing at a blank.
+      if (!parent) continue;
+      parentIds.add(parent.id);
+      parentRefs.set(e.id, {
+        id: parent.id,
+        actorType: parent.actor_type,
+        actorId: parent.actor_id,
+        preview: (parent.content ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, PARENT_PREVIEW_CHARS),
+      });
     }
-    prevThreadRepliesRef.current = threadReplies;
 
     // Coalesce consecutive activities from the same actor + action.
     // - task_completed / task_failed: no time limit (these repeat across runs)
@@ -998,7 +994,7 @@ export function IssueDetail({
     const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed"]);
     const NEVER_COALESCE_ACTIONS = new Set(["squad_leader_evaluated"]);
     const coalesced: TimelineEntry[] = [];
-    for (const entry of topLevel) {
+    for (const entry of timeline) {
       if (entry.type === "activity") {
         const prev = coalesced[coalesced.length - 1];
         if (
@@ -1032,7 +1028,7 @@ export function IssueDetail({
       }
     }
 
-    return { threadReplies, groups };
+    return { parentRefs, parentIds, groups };
   }, [timeline]);
 
   // Flat array consumed by <Virtuoso>. Recomputed when timelineView.groups
@@ -1053,31 +1049,6 @@ export function IssueDetail({
     return null;
   }, [timelineView.groups]);
 
-  // Map of reply-comment id → root-comment id, so a deep-link to a reply
-  // (which lives inside a CommentCard, not in the flat items array) can fall
-  // back to scrolling the root thread into view. Without this, an inbox
-  // notification on a reply would land at items[-1] and short-circuit.
-  const replyToRoot = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const [rootId, replies] of timelineView.threadReplies) {
-      for (const reply of replies) {
-        map.set(reply.id, rootId);
-      }
-    }
-    return map;
-  }, [timelineView.threadReplies]);
-
-  // Deep-link target index in the flat items array. For root comments this is
-  // a direct findIndex hit; for reply ids we look up the enclosing root.
-  const targetIdx = useMemo(() => {
-    if (!highlightCommentId) return -1;
-    const direct = items.findIndex((it) => it.id === highlightCommentId);
-    if (direct >= 0) return direct;
-    const rootId = replyToRoot.get(highlightCommentId);
-    if (!rootId) return -1;
-    return items.findIndex((it) => it.id === rootId);
-  }, [items, highlightCommentId, replyToRoot]);
-
   const {
     reactions: issueReactions,
     toggleReaction: handleToggleIssueReaction,
@@ -1089,6 +1060,11 @@ export function IssueDetail({
 
   // Token usage
   const { data: usage } = useQuery(issueUsageOptions(id));
+
+  // Published results render their own timeline lines (and panel cards), so an
+  // otherwise-empty timeline still has content when one exists. Same query key
+  // as those components — this shares their cache entry, it doesn't add a fetch.
+  const { data: publishedResults = [] } = useQuery(issueSessionResultsOptions(id));
 
   // Attachments uploaded against this issue. Drives the description
   // editor's click-time fresh-sign download: NodeViews match
@@ -1153,11 +1129,8 @@ export function IssueDetail({
   // `#comment-${id}`: find the element with that id, scrollIntoView it.
   // When `highlightCommentId` is set the timeline below renders flat (no
   // virtualization), so every comment id is in the DOM by the time this
-  // effect runs after commit.
-  //
-  // For a reply inside a folded resolved thread, the reply is not in items
-  // (only the resolved-bar root is). Auto-expand the thread first; the
-  // effect re-runs once items re-flatten.
+  // effect runs after commit. Every comment — reply included — is its own
+  // timeline item now, so there is no enclosing thread to unfold first.
   //
   // `scrollContainerEl` is in deps because the component early-returns a
   // loading skeleton while the issue query is pending. The scroll-container
@@ -1166,16 +1139,6 @@ export function IssueDetail({
   useEffect(() => {
     if (!highlightCommentId || items.length === 0) return;
     if (didHighlightRef.current === highlightCommentId) return;
-
-    const rootId = replyToRoot.get(highlightCommentId);
-    if (
-      rootId &&
-      rootId !== highlightCommentId &&
-      items[targetIdx]?.kind === "resolved-bar"
-    ) {
-      toggleResolvedExpand(rootId, true);
-      return;
-    }
 
     const el = document.getElementById(`comment-${highlightCommentId}`);
     if (!el) return;
@@ -1186,7 +1149,28 @@ export function IssueDetail({
     setHighlightedId(highlightCommentId);
     const fade = window.setTimeout(() => setHighlightedId(null), 2500);
     return () => clearTimeout(fade);
-  }, [highlightCommentId, items, targetIdx, scrollContainerEl, replyToRoot, toggleResolvedExpand]);
+  }, [highlightCommentId, items, scrollContainerEl]);
+
+  // Reference-chip navigation: jump to the comment a reply answers and flash
+  // it. Same contract as the deep-link above, minus the one-shot guard — the
+  // user can follow the same chip repeatedly. A parent that isn't mounted
+  // (virtualized far off-screen, or outside the loaded window) is a no-op
+  // rather than a jump to the wrong place.
+  const parentFadeRef = useRef<number | null>(null);
+  const handleNavigateToParent = useCallback((parentId: string) => {
+    const el = document.getElementById(`comment-${parentId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(parentId);
+    if (parentFadeRef.current !== null) clearTimeout(parentFadeRef.current);
+    parentFadeRef.current = window.setTimeout(() => setHighlightedId(null), 2500);
+  }, []);
+  useEffect(
+    () => () => {
+      if (parentFadeRef.current !== null) clearTimeout(parentFadeRef.current);
+    },
+    [],
+  );
 
   // Cmd-F / Ctrl-F on a virtualized timeline only searches what's mounted in
   // the viewport — off-screen comments are invisible to browser find-in-page.
@@ -1570,16 +1554,15 @@ export function IssueDetail({
         </div>}
       </div>
 
-      {/* Session actions — the session list is hidden while the issue has only
-          the default Main session, so its actions (publish result / delegate
-          task / new session) stay reachable here. */}
-      {!hasMultipleSessions && activeIssueSessionId && (
+      {/* Session actions for whichever session is open — publish a result,
+          delegate a task. Creating a session is not here on purpose: the rail
+          header is the single create-session entry point. */}
+      {activeIssueSessionId && (
         <div className="flex flex-wrap items-center gap-2 pl-2">
           <IssueSessionActions
             issueId={id}
             issueSessionId={activeIssueSessionId}
             agents={agents}
-            onSelectSession={setSelectedIssueSessionId}
           />
         </div>
       )}
@@ -1679,7 +1662,6 @@ export function IssueDetail({
         <div className="pb-3" id={`comment-${item.id}`}>
           <ResolvedThreadBar
             entry={item.entry}
-            replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
             onExpand={() => toggleResolvedExpand(item.id, true)}
           />
         </div>
@@ -1692,7 +1674,9 @@ export function IssueDetail({
           <CommentCard
             issueId={id}
             entry={item.entry}
-            replies={timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES}
+            parentRef={timelineView.parentRefs.get(item.id)}
+            onNavigateToParent={handleNavigateToParent}
+            hasReplies={timelineView.parentIds.has(item.id)}
             currentUserId={user?.id}
             canModerate={canModerateComments}
             onReply={submitReply}
@@ -1852,18 +1836,17 @@ export function IssueDetail({
             The rail lives outside the centered reading container so it fills
             the gutter that layout leaves empty instead of eating the
             timeline's width, and it stays put while the content scrolls.
-            Only multi-session issues mount it — a single-session issue keeps
-            the previous full-width centered layout untouched. */}
+            Every issue mounts it, at every width: it is both the switcher and
+            the only place a session can be created, so hiding it on
+            single-session issues hid the concept itself. */}
         <div className="flex min-h-0 flex-1">
-        {hasMultipleSessions && (
-          <IssueSessionList
-            issueId={id}
-            sessions={issueSessions}
-            selectedSessionId={activeIssueSessionId}
-            agents={agents}
-            onSelectSession={setSelectedIssueSessionId}
-          />
-        )}
+        <IssueSessionList
+          issueId={id}
+          sessions={issueSessions}
+          selectedSessionId={activeIssueSessionId}
+          agents={agents}
+          onSelectSession={setSelectedIssueSessionId}
+        />
         <div
           ref={setScrollContainerEl}
           data-tab-scroll-root
@@ -2126,6 +2109,11 @@ export function IssueDetail({
               )
             ) : timelineLoading && timelineView.groups.length === 0 ? (
               <TimelineSkeleton />
+            ) : items.length === 0 && publishedResults.length === 0 ? (
+              // A brand-new session has no comments, no activity and no
+              // published result. Say so, and say what the two ways forward
+              // are, instead of leaving a blank column under the header.
+              <SessionEmptyState />
             ) : (
               // Two render modes:
               //   - `highlightCommentId` set (came from inbox deep-link) →
@@ -2188,6 +2176,16 @@ export function IssueDetail({
                 key={`${id}:${activeIssueSessionId}`}
                 issueId={id}
                 onSubmit={submitComment}
+                // Naming the target session is the only thing that tells the
+                // user which of the issue's parallel tracks their comment
+                // joins — the composer sits far below the rail's selection.
+                placeholder={
+                  activeIssueSession
+                    ? t(($) => $.comment.comment_in_session_placeholder, {
+                        session: getSessionDisplayName(t, activeIssueSession),
+                      })
+                    : undefined
+                }
               />
             </div>
           </div>

@@ -5,42 +5,20 @@ import type { TimelineEntry } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 
 interface ResolvedThreadBarProps {
-  /** The resolved root comment. */
+  /** The resolved comment. */
   entry: TimelineEntry;
-  /**
-   * Flat list of every nested reply under this thread root. Precomputed by
-   * `issue-detail.tsx`'s `timelineView` from the same walk that CommentCard
-   * uses, so the count + author list match what the expanded view renders
-   * (direct-children-only would undercount nested replies).
-   */
-  replies: TimelineEntry[];
   onExpand: () => void;
 }
 
-const MAX_NAMED_AUTHORS = 2;
-
-export function ResolvedThreadBar({ entry, replies, onExpand }: ResolvedThreadBarProps) {
+// Collapsed form of a single resolved comment. The session timeline is flat —
+// replies are entries of their own, so a resolved comment folds away on its
+// own and never drags a subtree with it.
+export function ResolvedThreadBar({ entry, onExpand }: ResolvedThreadBarProps) {
   const { t } = useT("issues");
   const { getActorName } = useActorName();
 
-  const authorKeys = new Set<string>();
-  const authors: Array<{ type: string; id: string }> = [];
-  for (const e of [entry, ...replies]) {
-    const key = `${e.actor_type}:${e.actor_id}`;
-    if (authorKeys.has(key)) continue;
-    authorKeys.add(key);
-    authors.push({ type: e.actor_type, id: e.actor_id });
-  }
-  const count = 1 + replies.length;
-
-  let authorsLabel: string;
-  if (authors.length <= MAX_NAMED_AUTHORS) {
-    authorsLabel = authors.map((a) => getActorName(a.type, a.id)).join(", ");
-  } else {
-    const named = authors.slice(0, MAX_NAMED_AUTHORS).map((a) => getActorName(a.type, a.id)).join(", ");
-    const remaining = authors.length - MAX_NAMED_AUTHORS;
-    authorsLabel = t(($) => $.comment.resolve.bar_authors_more, { names: named, count: remaining });
-  }
+  const count = 1;
+  const authorsLabel = getActorName(entry.actor_type, entry.actor_id);
 
   return (
     <Card className="!py-0 !gap-0 overflow-hidden">

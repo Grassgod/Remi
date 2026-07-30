@@ -74,8 +74,8 @@ function makeSession(overrides: Partial<IssueSession> = {}): IssueSession {
 
 const SESSIONS = [makeSession(), makeSession({ id: "session-2", title: "Review", is_default: false })];
 
-async function openParticipants(agents: Agent[], sessions = SESSIONS) {
-  render(
+function renderRail(sessions: IssueSession[], agents: Agent[] = []) {
+  return render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <IssueSessionList
         issueId="issue-1"
@@ -86,6 +86,10 @@ async function openParticipants(agents: Agent[], sessions = SESSIONS) {
       />
     </I18nProvider>,
   );
+}
+
+async function openParticipants(agents: Agent[], sessions = SESSIONS) {
+  renderRail(sessions, agents);
   fireEvent.click(screen.getAllByRole("button", { name: "Session actions" })[0]!);
   fireEvent.click(await screen.findByText("Session participants"));
   await screen.findByText("Add agent");
@@ -95,6 +99,41 @@ beforeEach(() => {
   vi.clearAllMocks();
   addParticipantState.isPending = false;
   addParticipantState.variables = undefined;
+});
+
+describe("IssueSessionList rail", () => {
+  it("renders a single session as one highlighted row, header included", () => {
+    renderRail([makeSession()]);
+
+    // The rail is not conditional on having something to switch to.
+    expect(screen.getByText("Sessions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Main/ })).toBeInTheDocument();
+    // Exactly one create-session control, in the header.
+    const newSession = screen.getAllByRole("button", { name: "New session" });
+    expect(newSession).toHaveLength(1);
+    expect(screen.getByText("Sessions").parentElement).toContainElement(newSession[0]!);
+  });
+
+  it("carries the scope as a tooltip so the narrow header can stay one word", () => {
+    renderRail(SESSIONS);
+
+    expect(screen.getByText("Sessions")).toHaveAttribute(
+      "title",
+      "Sessions on this issue",
+    );
+  });
+
+  it("shows the localized name for the default session, not its stored title", () => {
+    renderRail([
+      makeSession({ title: "Main-RAW", is_default: true }),
+      makeSession({ id: "session-2", title: "Review", is_default: false }),
+    ]);
+
+    expect(screen.getByText("Main")).toBeInTheDocument();
+    expect(screen.queryByText("Main-RAW")).not.toBeInTheDocument();
+    // A user-named session keeps exactly what the user typed.
+    expect(screen.getByRole("button", { name: /^Review/ })).toBeInTheDocument();
+  });
 });
 
 describe("SessionParticipantsDialog", () => {

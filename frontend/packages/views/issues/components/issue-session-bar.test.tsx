@@ -40,6 +40,7 @@ const mockToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock("sonner", () => ({ toast: mockToast }));
 
 import {
+  IssueSessionActions,
   NewSessionButton,
   SessionDelegateTaskDialog,
   SessionPublishResultDialog,
@@ -151,6 +152,24 @@ describe("SessionDelegateTaskDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delegate" }));
 
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith("runtime offline"));
+  });
+});
+
+describe("IssueSessionActions", () => {
+  it("acts on the open session only — creating one belongs to the rail header", () => {
+    renderWithI18n(
+      <IssueSessionActions
+        issueId="issue-1"
+        issueSessionId="session-main"
+        agents={[makeAgent()]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Publish result" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delegate task" })).toBeInTheDocument();
+    // Two create-session entry points made "where do sessions come from?"
+    // ambiguous; the rail header is now the single one.
+    expect(screen.queryByRole("button", { name: "New session" })).not.toBeInTheDocument();
   });
 });
 

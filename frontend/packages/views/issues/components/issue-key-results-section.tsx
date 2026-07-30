@@ -30,6 +30,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { DocRefs } from "../../common/doc-refs";
 import { ReadonlyContent } from "../../editor";
 import { useT, useTimeAgo } from "../../i18n";
+import { getSessionDisplayName } from "../utils/session-display";
 
 // Published Session results are the issue's durable output — the one thing an
 // agent hands back that outlives its transcript. They live in the right
@@ -110,10 +111,14 @@ export function IssueKeyResultsSection({
               // still in flight, and permanently once it has been archived
               // (the list endpoint drops archived sessions). Neither case may
               // leak the raw session id into the copy.
-              sourceTitle={
-                sessions.find((session) => session.id === result.source_session_id)?.title
-                ?? t(($) => $.detail.result_unknown_session)
-              }
+              sourceTitle={(() => {
+                const source = sessions.find(
+                  (session) => session.id === result.source_session_id,
+                );
+                return source
+                  ? getSessionDisplayName(t, source)
+                  : t(($) => $.detail.result_unknown_session);
+              })()}
             />
           ))}
         </div>

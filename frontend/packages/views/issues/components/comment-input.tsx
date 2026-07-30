@@ -14,9 +14,15 @@ import { useT } from "../../i18n";
 interface CommentInputProps {
   issueId: string;
   onSubmit: (content: string, attachmentIds?: string[]) => Promise<void>;
+  /**
+   * Names the session the comment will land in ("Comment in Review…").
+   * Falls back to the generic prompt while no session is resolved yet —
+   * a placeholder that names nothing beats one that names the wrong thing.
+   */
+  placeholder?: string;
 }
 
-function CommentInput({ issueId, onSubmit }: CommentInputProps) {
+function CommentInput({ issueId, onSubmit, placeholder }: CommentInputProps) {
   const { t } = useT("issues");
   const editorRef = useRef<ContentEditorRef>(null);
   // Read the persisted draft once on mount. ContentEditor only honors
@@ -93,7 +99,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
         <ContentEditor
           ref={editorRef}
           defaultValue={initialDraft}
-          placeholder={t(($) => $.comment.leave_comment_placeholder)}
+          placeholder={placeholder ?? t(($) => $.comment.leave_comment_placeholder)}
           onUpdate={(md) => {
             setIsEmpty(!md.trim());
             // Debounced upstream (debounceMs=100). Persist on every tick so a

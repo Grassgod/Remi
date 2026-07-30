@@ -26,20 +26,18 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n";
 import { PickerEmpty, PickerItem, PropertyPicker } from "./pickers/property-picker";
 
-// Publish-result / delegate-task / new-session actions for one session, as
-// buttons. Rendered from the issue detail's right panel on single-session
-// issues; multi-session issues reach the same dialogs from the session list's
-// per-row menu and its header instead.
+// Publish-result / delegate-task actions for the active session, as buttons.
+// Rendered from the issue detail's right panel; the session list's per-row
+// menu reaches the same dialogs for any other session. Creating a session is
+// deliberately absent — the rail header owns that, and only that.
 export function IssueSessionActions({
   issueId,
   issueSessionId,
   agents,
-  onSelectSession,
 }: {
   issueId: string;
   issueSessionId: string;
   agents: Agent[];
-  onSelectSession?: (sessionId: string) => void;
 }) {
   const { t } = useT("issues");
   const [delegateOpen, setDelegateOpen] = useState(false);
@@ -67,7 +65,6 @@ export function IssueSessionActions({
         <Bot className="h-3.5 w-3.5" />
         {t(($) => $.detail.delegate_task)}
       </Button>
-      <NewSessionButton issueId={issueId} onCreated={onSelectSession} />
 
       <SessionDelegateTaskDialog
         issueId={issueId}
@@ -86,18 +83,15 @@ export function IssueSessionActions({
   );
 }
 
-// The one create-session affordance. Two mount points, one implementation:
-// the session list's column header (`iconOnly`, multi-session issues) and the
-// right panel's action row (labelled, single-session issues) — without the
-// latter a single-session issue would have no way to open a second session.
+// The one create-session affordance, with exactly one mount point: the
+// session rail's header. The rail is always on screen, so a second copy in
+// the right panel would only make "where do sessions come from?" ambiguous.
 export function NewSessionButton({
   issueId,
   onCreated,
-  iconOnly = false,
 }: {
   issueId: string;
   onCreated?: (sessionId: string) => void;
-  iconOnly?: boolean;
 }) {
   const { t } = useT("issues");
   const createSession = useCreateIssueSession(issueId);
@@ -125,12 +119,11 @@ export function NewSessionButton({
       <Button
         type="button"
         variant="ghost"
-        size={iconOnly ? "icon-sm" : "sm"}
+        size="icon-sm"
         aria-label={t(($) => $.detail.new_session)}
         onClick={() => setCreateOpen(true)}
       >
         <Plus className="h-3.5 w-3.5" />
-        {!iconOnly && t(($) => $.detail.new_session)}
       </Button>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

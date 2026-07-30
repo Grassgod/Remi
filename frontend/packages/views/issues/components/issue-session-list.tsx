@@ -25,6 +25,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT, useTimeAgo } from "../../i18n";
+import { getSessionDisplayName } from "../utils/session-display";
 import {
   NewSessionButton,
   SessionDelegateTaskDialog,
@@ -40,9 +41,10 @@ interface IssueSessionListProps {
 }
 
 // Narrow session switcher rail on the far left of the issue detail panel.
-// Only mounted on issues that have more than one session — an issue with
-// just the default Main session has nothing to switch to, and its session
-// actions live in the right properties panel instead.
+// Mounted for every issue at every width, including the single-session case:
+// the rail is where sessions are read *and* created, so hiding it made the
+// concept appear only after someone had already found it somewhere else.
+// One session renders as one highlighted row.
 //
 // It is a sibling of the issue's scroll container, not a child: the rail
 // keeps the full panel height, scrolls on its own once the list outgrows
@@ -60,10 +62,16 @@ export function IssueSessionList({
   return (
     <div className="w-44 shrink-0 overflow-y-auto border-r px-2 py-8 lg:w-56">
       <div className="flex items-center gap-1 pl-2">
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+        {/* The header stays the bare word "Sessions" — the column is too
+            narrow for "Sessions on this issue" — so the scope rides along
+            as the native tooltip / accessible description instead. */}
+        <span
+          className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground"
+          title={t(($) => $.detail.sessions_scope_hint)}
+        >
           {t(($) => $.detail.sessions_label)}
         </span>
-        <NewSessionButton issueId={issueId} onCreated={onSelectSession} iconOnly />
+        <NewSessionButton issueId={issueId} onCreated={onSelectSession} />
       </div>
 
       <div className="mt-1 space-y-0.5">
@@ -134,7 +142,7 @@ function SessionRow({
               isSelected ? "font-medium text-foreground" : "text-muted-foreground",
             )}
           >
-            {session.title}
+            {getSessionDisplayName(t, session)}
           </span>
           <span className="block truncate text-[11px] text-muted-foreground">
             {timeAgo(session.updated_at)}

@@ -609,23 +609,115 @@ describe("IssueDetail (shared)", () => {
     });
   });
 
-  it("hides the session list on a single-session issue and keeps its actions in the properties panel", async () => {
-    // Default fixture: one default "Main" session — nothing to switch to.
+  it("keeps the session rail mounted on a single-session issue, with the only New-session control in its header", async () => {
+    // Default fixture: one default "Main" session. The rail still mounts —
+    // it is where sessions are read *and* created, so hiding it on the
+    // single-session case hid the concept from everyone who never had two.
     renderIssueDetail();
 
-    expect(await screen.findByRole("button", { name: "Publish result" })).toBeInTheDocument();
-    expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
-    expect(screen.queryByText("Session participants")).not.toBeInTheDocument();
-    // Exactly one mount of the actions — the list must not double them up.
+    const railLabel = await screen.findByText("Sessions");
+    expect(screen.getByRole("button", { name: /^Main/ })).toBeInTheDocument();
+
+    // Exactly one create-session control in the whole page, and it lives in
+    // the rail header.
+    const newSessionControls = screen.getAllByRole("button", { name: "New session" });
+    expect(newSessionControls).toHaveLength(1);
+    expect(railLabel.parentElement).toContainElement(newSessionControls[0]!);
+
+    // The panel keeps the per-session actions, one copy each.
     expect(screen.getAllByRole("button", { name: "Publish result" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Delegate task" })).toHaveLength(1);
-    // The session column is the only other home of "New session"; while it is
-    // hidden the panel must carry the affordance, or a single-session issue
-    // could never open a second session.
-    expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
   });
 
-  it("creates a second session from the properties panel and reveals the session list", async () => {
+  it("mounts the rail in the panel's left gutter even for a single-session issue", async () => {
+    // Default fixture: one default "Main" session.
+    renderIssueDetail();
+
+    await screen.findByDisplayValue("Implement authentication");
+    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
+    expect(scrollRoot).not.toBeNull();
+    // Sibling of the scroll container, immediately before it — same slot the
+    // multi-session case uses, so the reading column never shifts when a
+    // second session appears.
+    expect(scrollRoot!.previousElementSibling).toContainElement(
+      screen.getByText("Sessions"),
+    );
+  });
+
+  it("explains the rail's scope without widening the column", async () => {
+    renderIssueDetail();
+
+    // The header text stays the bare word; the scope rides along as the
+    // tooltip / accessible description.
+    const railLabel = await screen.findByText("Sessions");
+    expect(railLabel).toHaveAttribute("title", "Sessions on this issue");
+  });
+
+  it("shows the localized default-session name instead of the stored title", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([{
+      id: "session-main",
+      issue_id: mockIssue.id,
+      workspace_id: "ws-1",
+      // Server-side constant nobody typed — it must never reach the screen.
+      title: "Main-RAW",
+      status: "active",
+      is_default: true,
+      summary: null,
+      created_by_type: "system",
+      created_by_id: null,
+      created_at: "2025-01-01T00:00:00Z",
+      updated_at: "2025-01-01T00:00:00Z",
+      participants: [],
+    }]);
+    renderIssueDetail();
+
+    expect(await screen.findByText("Main")).toBeInTheDocument();
+    expect(screen.queryByText("Main-RAW")).not.toBeInTheDocument();
+  });
+
+  it("names the target session in the comment composer placeholder", async () => {
+    mockApiObj.listIssueSessions.mockResolvedValue([
+      {
+        id: "session-main",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Main-RAW",
+        status: "active",
+        is_default: true,
+        summary: null,
+        created_by_type: "system",
+        created_by_id: null,
+        created_at: "2025-01-01T00:00:00Z",
+        updated_at: "2025-01-01T00:00:00Z",
+        participants: [],
+      },
+      {
+        id: "session-review",
+        issue_id: mockIssue.id,
+        workspace_id: "ws-1",
+        title: "Review",
+        status: "active",
+        is_default: false,
+        summary: null,
+        created_by_type: "member",
+        created_by_id: "user-1",
+        created_at: "2025-01-02T00:00:00Z",
+        updated_at: "2025-01-02T00:00:00Z",
+        participants: [],
+      },
+    ]);
+    renderIssueDetail();
+
+    // The composer sits far below the rail, so it has to say which of the
+    // issue's parallel tracks a comment would join — under the localized
+    // default name, not the raw stored title.
+    expect(await screen.findByPlaceholderText("Comment in Main…")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
+    expect(await screen.findByPlaceholderText("Comment in Review…")).toBeInTheDocument();
+  });
+
+  it("creates a second session from the rail header and switches to it", async () => {
     const sessionMain = {
       id: "session-main",
       issue_id: mockIssue.id,
@@ -671,16 +763,15 @@ describe("IssueDetail (shared)", () => {
     await waitFor(() => {
       expect(mockApiObj.createIssueSession).toHaveBeenCalledWith("issue-1", "Review");
     });
-    // Sessions refetched → the switcher column mounts with both sessions and
-    // the new one is selected.
-    expect(await screen.findByText("Sessions")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Review/ })).toBeInTheDocument();
+    // Sessions refetched → the rail gains a second row and the new session
+    // is the one being read.
+    expect(await screen.findByRole("button", { name: /^Review/ })).toBeInTheDocument();
     await waitFor(() => {
       expect(mockApiObj.listTimeline).toHaveBeenCalledWith("issue-1", "session-review");
     });
   });
 
-  it("renders the session list once the issue has more than one session", async () => {
+  it("renders one rail row per session, one New-session control, and the panel actions", async () => {
     mockApiObj.listIssueSessions.mockResolvedValue([
       {
         id: "session-main",
@@ -716,12 +807,13 @@ describe("IssueDetail (shared)", () => {
     expect(await screen.findByText("Sessions")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Main/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Review/ })).toBeInTheDocument();
-    // The + affordance lives in the list header — and only there, so the
+    // The + affordance lives in the rail header — and only there, so the
     // panel must not mount a second copy.
     expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
-    // Per-session actions moved into each row's ⋯ menu, so the properties
-    // panel no longer carries them on a multi-session issue.
-    expect(screen.queryByRole("button", { name: "Publish result" })).not.toBeInTheDocument();
+    // The panel carries publish / delegate for whichever session is open;
+    // every *other* session is reached through its row's ⋯ menu.
+    expect(screen.getAllByRole("button", { name: "Publish result" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Delegate task" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Session actions" })).toHaveLength(2);
   });
 
@@ -769,18 +861,6 @@ describe("IssueDetail (shared)", () => {
     expect(scrollRoot!.previousElementSibling).toContainElement(sessionsLabel);
     // The timeline itself stays inside the scroll container.
     expect(scrollRoot!.contains(screen.getAllByText("Activity")[0]!)).toBe(true);
-  });
-
-  it("keeps the content full width with no session column on a single-session issue", async () => {
-    // Default fixture: one default "Main" session.
-    renderIssueDetail();
-
-    await screen.findByDisplayValue("Implement authentication");
-    const scrollRoot = document.querySelector<HTMLElement>("[data-tab-scroll-root]");
-    expect(scrollRoot).not.toBeNull();
-    // Nothing renders to the left of the content — the centered container
-    // keeps the whole panel to itself, exactly as before the rail existed.
-    expect(scrollRoot!.previousElementSibling).toBeNull();
   });
 
   it("opens participant management from a session row's actions menu", async () => {
@@ -1272,6 +1352,127 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText("I can help with this")).toBeInTheDocument();
   });
 
+  describe("flat session stream", () => {
+    // comment-1 and comment-2 are roots; reply-1 answers comment-1 but was
+    // written last. The old grouping hoisted it inside comment-1's card, so it
+    // appeared *before* comment-2 — a second layer of parallelism inside a
+    // session that is already one parallel track.
+    const threadedTimeline: TimelineEntry[] = [
+      {
+        type: "comment", id: "comment-1", actor_type: "member", actor_id: "user-1",
+        content: "Started working on this", parent_id: null,
+        created_at: "2026-01-16T00:00:00Z", updated_at: "2026-01-16T00:00:00Z",
+        comment_type: "comment",
+      },
+      {
+        type: "comment", id: "comment-2", actor_type: "agent", actor_id: "agent-1",
+        content: "I can help with this", parent_id: null,
+        created_at: "2026-01-17T00:00:00Z", updated_at: "2026-01-17T00:00:00Z",
+        comment_type: "comment",
+      },
+      {
+        type: "comment", id: "reply-1", actor_type: "member", actor_id: "user-1",
+        content: "Answering the first one", parent_id: "comment-1",
+        created_at: "2026-01-18T00:00:00Z", updated_at: "2026-01-18T00:00:00Z",
+        comment_type: "comment",
+      },
+    ] as TimelineEntry[];
+
+    it("renders every comment as its own entry in created_at order", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      renderIssueDetail();
+
+      await screen.findByText("Answering the first one");
+
+      const ids = Array.from(document.querySelectorAll("[id^='comment-']")).map(
+        (el) => el.id,
+      );
+      expect(ids).toEqual(["comment-comment-1", "comment-comment-2", "comment-reply-1"]);
+      // Flat means flat: the reply is a sibling of its parent, not a child.
+      expect(
+        document.getElementById("comment-comment-1")!.contains(
+          document.getElementById("comment-reply-1"),
+        ),
+      ).toBe(false);
+      // No thread box, so no reply tally either.
+      expect(screen.queryByText(/\d+ repl(y|ies)/)).not.toBeInTheDocument();
+      // A session with entries is not an empty session.
+      expect(screen.queryByText("Nothing in this session yet")).not.toBeInTheDocument();
+    });
+
+    it("marks a reply with a reference chip that scrolls to its parent", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      renderIssueDetail();
+
+      // Only the reply carries a chip; the two roots answer nobody.
+      const chip = await screen.findByRole("button", {
+        name: "Replying to Test User: Started working on this",
+      });
+      expect(screen.getAllByRole("button", { name: /^Replying to/ })).toHaveLength(1);
+
+      fireEvent.click(chip);
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+      expect((scrollIntoViewSpy.mock.contexts[0] as HTMLElement).id).toBe(
+        "comment-comment-1",
+      );
+    });
+
+    it("still posts a reply against its parent from the card's composer", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      mockApiObj.createComment.mockResolvedValue({
+        id: "reply-2",
+        issue_id: "issue-1",
+        issue_session_id: "session-main",
+        author_type: "member",
+        author_id: "user-1",
+        content: "On it",
+        parent_id: "comment-1",
+        type: "comment",
+        reactions: [],
+        attachments: [],
+        created_at: "2026-01-19T00:00:00Z",
+        updated_at: "2026-01-19T00:00:00Z",
+      });
+      renderIssueDetail();
+
+      await screen.findByText("Started working on this");
+      // First card in the stream is comment-1, so its composer is the first
+      // reply box in the DOM.
+      const replyEditor = screen.getAllByPlaceholderText("Leave a reply...")[0]!;
+      fireEvent.change(replyEditor, { target: { value: "On it" } });
+      // The send control is an icon-only button inside the composer shell.
+      const composer = replyEditor.parentElement!.parentElement!;
+      const buttons = composer.querySelectorAll("button");
+      fireEvent.click(buttons[buttons.length - 1]!);
+
+      await waitFor(() => {
+        expect(mockApiObj.createComment).toHaveBeenCalledWith(
+          "issue-1",
+          "On it",
+          "comment",
+          "comment-1",
+          undefined,
+          "session-main",
+        );
+      });
+    });
+
+    it("offers a way forward instead of a blank column on an untouched session", async () => {
+      mockApiObj.listTimeline.mockResolvedValue([]);
+      mockApiObj.listIssueSessionResults.mockResolvedValue([]);
+      renderIssueDetail();
+
+      expect(
+        await screen.findByText("Nothing in this session yet"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Leave a comment, or delegate a task from the right panel to get started.",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("collapses non-trailing activity blocks and expands the last one by default", async () => {
     // Timeline shape:
     //   [activities: status_changed, priority_changed] ← block A (older)
@@ -1530,12 +1731,11 @@ describe("IssueDetail (shared)", () => {
       });
     });
 
-    it("auto-expands a folded resolved thread when deep-link target is a reply inside it", async () => {
-      // Seed a timeline where comment-3 is resolved (so it renders as a
-      // resolved-bar by default) and has a reply, reply-1, whose id is the
-      // deep-link target. The reply is not in the flat items array — only
-      // the resolved-bar root is. The effect must detect this, expand the
-      // thread, then on re-run scroll to the reply's id="comment-reply-1" node.
+    it("lands directly on a reply whose parent is folded away as resolved", async () => {
+      // comment-3 is resolved, so it renders as a collapsed bar. Its reply,
+      // reply-1, is the deep-link target — and in the flat stream it is an
+      // entry of its own, so there is no thread to unfold first: the
+      // id="comment-reply-1" node is in the DOM on the first commit.
       const timelineWithResolvedThread: TimelineEntry[] = [
         ...mockTimeline,
         {
@@ -1573,8 +1773,6 @@ describe("IssueDetail (shared)", () => {
         </I18nProvider>,
       );
 
-      // After expansion, the reply must appear in the DOM (inside the now
-      // -unfolded CommentCard) and the deep-link effect must scroll to it.
       await waitFor(() => {
         expect(
           document.getElementById("comment-reply-1"),
@@ -1585,6 +1783,9 @@ describe("IssueDetail (shared)", () => {
           expect.objectContaining({ block: "center" }),
         );
       });
+      // The parent stayed folded — the reply is readable without it.
+      expect(screen.getByText("Reply inside resolved thread")).toBeInTheDocument();
+      expect(screen.queryByText("Resolved root")).not.toBeInTheDocument();
     });
   });
 
