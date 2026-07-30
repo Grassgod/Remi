@@ -248,7 +248,7 @@ function SessionParticipantsDialog({
             {t(($) => $.detail.session_participants_description)}
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto outline-none">
           {session.participants.length > 0 && (
             <AvatarGroup>
               {session.participants.slice(0, 8).map((participant) => (

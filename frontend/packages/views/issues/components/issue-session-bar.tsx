@@ -134,7 +134,7 @@ export function NewSessionButton({
               {t(($) => $.detail.new_session_description)}
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto outline-none">
             <Label htmlFor={titleFieldId}>{t(($) => $.detail.session_name)}</Label>
             <Input
               id={titleFieldId}
@@ -305,11 +305,11 @@ export function SessionDelegateTaskDialog({
             agents at all. Say so instead of presenting an empty picker and
             a permanently disabled submit button. */}
         {!hasAgents ? (
-          <p className="min-h-0 flex-1 overflow-y-auto rounded-md border border-dashed bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
+          <p className="min-h-0 flex-1 overflow-y-auto outline-none rounded-md border border-dashed bg-muted/30 px-3 py-4 text-sm text-muted-foreground">
             {t(($) => $.detail.no_agents_in_workspace)}
           </p>
         ) : (
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto outline-none">
             <div className="space-y-2">
               <Label htmlFor={agentFieldId}>{t(($) => $.detail.delegate_agent)}</Label>
               <DelegateAgentPicker
@@ -396,7 +396,7 @@ export function SessionPublishResultDialog({
             {t(($) => $.detail.publish_result_description)}
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto outline-none">
           <div className="space-y-2">
             <Label htmlFor={titleFieldId}>{t(($) => $.detail.result_title)}</Label>
             <Input
