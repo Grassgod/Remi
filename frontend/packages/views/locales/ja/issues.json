@@ -321,6 +321,9 @@
     "send_reply_failed": "返信を送信できませんでした",
     "delete_failed": "コメントを削除できませんでした",
     "parent_ref": "{{author}} への返信: {{preview}}",
+    "reply_aria": "返信",
+    "more_actions_aria": "その他の操作",
+    "cancel_reply_aria": "返信を取り消す",
     "leave_comment_placeholder": "コメントを残す...",
     "comment_in_session_placeholder": "{{session}} にコメント…",
     "send_tooltip": "送信",
@@ -332,9 +335,6 @@
       "resolve_failed": "スレッドを解決できませんでした",
       "unresolve_failed": "スレッドの解決を取り消せませんでした"
     }
-  },
-  "reply": {
-    "placeholder": "返信を残す..."
   },
   "agent_activity": {
     "hover_header_other": "作業中のエージェント {{count}} 件",

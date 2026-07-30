@@ -54,7 +54,7 @@ import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
 import { CommentCard, type CommentParentRef } from "./comment-card";
-import { CommentInput } from "./comment-input";
+import { CommentInput, type ReplyTarget } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { AgentLiveCard } from "./agent-live-card";
 import { IssueSessionActions } from "./issue-session-bar";
@@ -91,6 +91,7 @@ import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-
 import { BatchActionToolbar } from "./batch-action-toolbar";
 import { useIssueTimeline } from "../hooks/use-issue-timeline";
 import { getSessionDisplayName } from "../utils/session-display";
+import { quotePreview } from "../utils/quote-preview";
 import { useIssueReactions } from "../hooks/use-issue-reactions";
 import { useIssueSubscribers } from "../hooks/use-issue-subscribers";
 import { ReactionBar } from "@multiremi/ui/components/common/reaction-bar";
@@ -290,11 +291,6 @@ function formatTokenCount(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
-
-// How much of the parent comment a reply's reference chip quotes. Long enough
-// to recognise which message is being answered, short enough to stay one line
-// next to the author name.
-const PARENT_PREVIEW_CHARS = 40;
 
 // ---------------------------------------------------------------------------
 // Sidebar progressive disclosure
@@ -951,6 +947,32 @@ export function IssueDetail({
     [clearResolvedExpand, toggleResolveComment],
   );
 
+  // The session stream has exactly one composer, so "reply" is a context it
+  // carries: a row's toolbar sets the target, the composer shows it as a chip,
+  // and the send routes through `submitReply` (parent_id) instead of
+  // `submitComment`. Ephemeral by design — not persisted with the draft.
+  const [replyTo, setReplyTo] = useState<ReplyTarget | null>(null);
+  const handleStartReply = useCallback((target: ReplyTarget) => {
+    setReplyTo(target);
+  }, []);
+  const handleCancelReply = useCallback(() => setReplyTo(null), []);
+  // A target from another session (or another issue) would send a reply into a
+  // conversation the user is no longer looking at.
+  useEffect(() => {
+    setReplyTo(null);
+  }, [id, activeIssueSessionId]);
+  const handleComposerSubmit = useCallback(
+    async (content: string, attachmentIds?: string[]) => {
+      if (!replyTo) {
+        await submitComment(content, attachmentIds);
+        return;
+      }
+      await submitReply(replyTo.commentId, content, attachmentIds);
+      setReplyTo(null);
+    },
+    [replyTo, submitComment, submitReply],
+  );
+
   // Memoized timeline projection. A session is already one parallel track, so
   // the timeline inside it is a single chronological stream: every comment —
   // root or reply — is an entry of its own, in `created_at` order, exactly as
@@ -979,10 +1001,7 @@ export function IssueDetail({
         id: parent.id,
         actorType: parent.actor_type,
         actorId: parent.actor_id,
-        preview: (parent.content ?? "")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, PARENT_PREVIEW_CHARS),
+        preview: quotePreview(parent.content ?? ""),
       });
     }
 
@@ -1679,7 +1698,7 @@ export function IssueDetail({
             hasReplies={timelineView.parentIds.has(item.id)}
             currentUserId={user?.id}
             canModerate={canModerateComments}
-            onReply={submitReply}
+            onStartReply={handleStartReply}
             onEdit={editComment}
             onDelete={deleteComment}
             onToggleReaction={handleToggleReaction}
@@ -2165,7 +2184,8 @@ export function IssueDetail({
               )
             )}
 
-            {/* Bottom comment input — no avatar, full width */}
+            {/* Bottom comment input — the session's only composer. A reply is
+                the same box carrying a parent_id, announced by the chip. */}
             <div className="mt-4">
               {/* key={id}: web's /issues/[id] route doesn't remount on
                   issueId change, so without an explicit key the editor
@@ -2175,7 +2195,9 @@ export function IssueDetail({
               <CommentInput
                 key={`${id}:${activeIssueSessionId}`}
                 issueId={id}
-                onSubmit={submitComment}
+                onSubmit={handleComposerSubmit}
+                replyTo={replyTo}
+                onCancelReply={handleCancelReply}
                 // Naming the target session is the only thing that tells the
                 // user which of the issue's parallel tracks their comment
                 // joins — the composer sits far below the rail's selection.

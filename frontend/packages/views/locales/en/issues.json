@@ -328,6 +328,9 @@
     "send_reply_failed": "Failed to send reply",
     "delete_failed": "Failed to delete comment",
     "parent_ref": "Replying to {{author}}: {{preview}}",
+    "reply_aria": "Reply",
+    "more_actions_aria": "More actions",
+    "cancel_reply_aria": "Cancel reply",
     "leave_comment_placeholder": "Leave a comment...",
     "comment_in_session_placeholder": "Comment in {{session}}…",
     "send_tooltip": "Send",
@@ -340,9 +343,6 @@
       "resolve_failed": "Failed to resolve thread",
       "unresolve_failed": "Failed to unresolve thread"
     }
-  },
-  "reply": {
-    "placeholder": "Leave a reply..."
   },
   "agent_activity": {
     "hover_header_one": "{{count}} agent working",

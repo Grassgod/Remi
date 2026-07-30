@@ -326,6 +326,9 @@
     "send_reply_failed": "发送回复失败",
     "delete_failed": "删除评论失败",
     "parent_ref": "回复 {{author}}：{{preview}}",
+    "reply_aria": "回复",
+    "more_actions_aria": "更多操作",
+    "cancel_reply_aria": "取消回复",
     "leave_comment_placeholder": "留下评论...",
     "comment_in_session_placeholder": "在 {{session}} 中评论…",
     "send_tooltip": "发送",
@@ -337,9 +340,6 @@
       "resolve_failed": "标记已解决失败",
       "unresolve_failed": "重新打开失败"
     }
-  },
-  "reply": {
-    "placeholder": "回复..."
   },
   "agent_activity": {
     "hover_header_other": "{{count}} 个智能体正在工作",

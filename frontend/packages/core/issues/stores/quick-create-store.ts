@@ -14,8 +14,7 @@ export type QuickCreateActorType = "agent" | "squad";
 // prompt. Persisted with the workspace-aware StateStorage so switching
 // workspaces shows the right default automatically. Per-user scoping comes
 // for free from localStorage being browser-profile-local — matches how
-// draft-store / issues-scope-store / comment-collapse-store already
-// namespace themselves.
+// draft-store / issues-scope-store already namespace themselves.
 //
 // lastActorType + lastActorId replace the prior `lastAgentId` field once
 // squads became selectable. Users who had a persisted agent preference

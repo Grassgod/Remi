@@ -290,14 +290,6 @@ vi.mock("@multiremi/core/issues/stores", () => ({
     },
   ),
   selectRecentIssues: () => () => [],
-  useCommentCollapseStore: (selector?: any) => {
-    const state = {
-      collapsedByIssue: {},
-      isCollapsed: () => false,
-      toggle: () => {},
-    };
-    return selector ? selector(state) : state;
-  },
   useCommentDraftStore: Object.assign(
     (selector?: any) => {
       const state = {
@@ -1400,6 +1392,41 @@ describe("IssueDetail (shared)", () => {
       expect(screen.queryByText("Nothing in this session yet")).not.toBeInTheDocument();
     });
 
+    it("renders messages as rows, with one composer for the whole session", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      renderIssueDetail();
+
+      await screen.findByText("Answering the first one");
+
+      // One editor for the description, one for the composer — and nothing
+      // per message. A per-message input is what made the stream a stack of
+      // little forms instead of a chat log.
+      expect(screen.getByPlaceholderText("Comment in Main…")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Leave a reply...")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("rich-text-editor")).toHaveLength(2);
+
+      // Each row keeps its own toolbar: react / reply / ⋯.
+      expect(screen.getAllByRole("button", { name: "Reply" })).toHaveLength(3);
+      expect(screen.getAllByRole("button", { name: "More actions" })).toHaveLength(3);
+    });
+
+    it("reveals the row toolbar on focus, not on hover alone", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      renderIssueDetail();
+
+      await screen.findByText("Started working on this");
+
+      // jsdom can't evaluate :hover, so the class list is the contract: a
+      // keyboard user has to be able to reach these controls, which means
+      // focus-within must reveal the toolbar alongside group-hover.
+      const toolbar = screen.getAllByRole("button", { name: "Reply" })[0]!
+        .parentElement!;
+      expect(toolbar.className).toContain("group-hover/msg:opacity-100");
+      expect(toolbar.className).toContain("focus-within:opacity-100");
+      // Touch devices never fire hover at all.
+      expect(toolbar.className).toContain("[@media(hover:none)]:opacity-100");
+    });
+
     it("marks a reply with a reference chip that scrolls to its parent", async () => {
       mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
       renderIssueDetail();
@@ -1417,7 +1444,35 @@ describe("IssueDetail (shared)", () => {
       );
     });
 
-    it("still posts a reply against its parent from the card's composer", async () => {
+    it("strips markdown out of the quoted preview", async () => {
+      // A raw slice would spend the 40-char budget on a mention URL and show
+      // markdown punctuation the reader has to decode.
+      mockApiObj.listTimeline.mockResolvedValue([
+        {
+          type: "comment", id: "comment-1", actor_type: "member", actor_id: "user-1",
+          content:
+            "**Ping** [@Claude Agent](mention://agent/agent-1), see [the plan](https://example.com/plan)",
+          parent_id: null,
+          created_at: "2026-01-16T00:00:00Z", updated_at: "2026-01-16T00:00:00Z",
+          comment_type: "comment",
+        },
+        {
+          type: "comment", id: "reply-1", actor_type: "agent", actor_id: "agent-1",
+          content: "On it", parent_id: "comment-1",
+          created_at: "2026-01-17T00:00:00Z", updated_at: "2026-01-17T00:00:00Z",
+          comment_type: "comment",
+        },
+      ] as TimelineEntry[]);
+      renderIssueDetail();
+
+      expect(
+        await screen.findByRole("button", {
+          name: "Replying to Test User: Ping @Claude Agent, see the plan",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("posts a reply through the single composer once a row sets the target", async () => {
       mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
       mockApiObj.createComment.mockResolvedValue({
         id: "reply-2",
@@ -1436,13 +1491,23 @@ describe("IssueDetail (shared)", () => {
       renderIssueDetail();
 
       await screen.findByText("Started working on this");
-      // First card in the stream is comment-1, so its composer is the first
-      // reply box in the DOM.
-      const replyEditor = screen.getAllByPlaceholderText("Leave a reply...")[0]!;
-      fireEvent.change(replyEditor, { target: { value: "On it" } });
-      // The send control is an icon-only button inside the composer shell.
-      const composer = replyEditor.parentElement!.parentElement!;
-      const buttons = composer.querySelectorAll("button");
+      const editor = await screen.findByPlaceholderText("Comment in Main…");
+      // reply-1 already quotes comment-1 in the stream, so the chip has to be
+      // read inside the composer to tell the two apart.
+      const composer = within(editor.parentElement!.parentElement!);
+
+      // First row in the stream is comment-1 — its toolbar aims the composer.
+      fireEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]!);
+
+      // The composer says who it is answering…
+      await waitFor(() => {
+        expect(
+          composer.getByText("Replying to Test User: Started working on this"),
+        ).toBeInTheDocument();
+      });
+      fireEvent.change(editor, { target: { value: "On it" } });
+      // …and sends with parent_id, from the one send control in the shell.
+      const buttons = editor.parentElement!.parentElement!.querySelectorAll("button");
       fireEvent.click(buttons[buttons.length - 1]!);
 
       await waitFor(() => {
@@ -1454,6 +1519,35 @@ describe("IssueDetail (shared)", () => {
           undefined,
           "session-main",
         );
+      });
+      // Sending consumes the context — the next message is a new one.
+      await waitFor(() => {
+        expect(
+          composer.queryByText("Replying to Test User: Started working on this"),
+        ).toBeNull();
+      });
+    });
+
+    it("drops the reply target when × clears the chip", async () => {
+      mockApiObj.listTimeline.mockResolvedValue(threadedTimeline);
+      renderIssueDetail();
+
+      await screen.findByText("Started working on this");
+      const editor = await screen.findByPlaceholderText("Comment in Main…");
+      const composer = within(editor.parentElement!.parentElement!);
+      fireEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]!);
+
+      await waitFor(() => {
+        expect(
+          composer.getByText("Replying to Test User: Started working on this"),
+        ).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel reply" }));
+
+      await waitFor(() => {
+        expect(
+          composer.queryByText("Replying to Test User: Started working on this"),
+        ).toBeNull();
       });
     });
 

@@ -1,9 +1,8 @@
 "use client";
 
 import { memo, useCallback, useRef, useState } from "react";
-import { CheckCircle2, ChevronRight, Copy, MoreHorizontal, Pencil, Reply, RotateCcw, Trash2 } from "lucide-react";
+import { CheckCircle2, Copy, MoreHorizontal, Pencil, Reply, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Card } from "@multiremi/ui/components/ui/card";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -23,7 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multiremi/ui/components/ui/alert-dialog";
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multiremi/ui/components/ui/collapsible";
+import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ReactionBar } from "@multiremi/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multiremi/ui/components/common/quick-emoji-picker";
@@ -35,9 +34,10 @@ import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone,
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { api } from "@multiremi/core/api";
-import { ReplyInput } from "./reply-input";
+import type { ReplyTarget } from "./comment-input";
+import { quotePreview } from "../utils/quote-preview";
 import type { TimelineEntry, Attachment } from "@multiremi/core/types";
-import { useCommentCollapseStore, useCommentDraftStore } from "@multiremi/core/issues/stores";
+import { useCommentDraftStore } from "@multiremi/core/issues/stores";
 import { useT } from "../../i18n";
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ interface CommentParentRef {
   id: string;
   actorType: string;
   actorId: string;
-  /** Opening slice of the parent body, newlines collapsed. */
+  /** Opening slice of the parent body, markdown stripped (see `quotePreview`). */
   preview: string;
 }
 
@@ -80,16 +80,21 @@ interface CommentCardProps {
    * rule per row.
    */
   canModerate?: boolean;
-  onReply: (parentId: string, content: string, attachmentIds?: string[]) => Promise<void>;
+  /**
+   * Points the session's single composer at this message. There is no
+   * per-message input any more — replying is a context the bottom composer
+   * carries until it sends or the user clears it.
+   */
+  onStartReply: (target: ReplyTarget) => void;
   onEdit: (commentId: string, content: string, attachmentIds: string[]) => Promise<void>;
   onDelete: (commentId: string) => void;
   onToggleReaction: (commentId: string, emoji: string) => void;
   /** Toggle the resolved state on this comment. */
   onResolveToggle?: (commentId: string, resolved: boolean) => void;
   /**
-   * When non-null, this comment is currently rendered as a resolved-but-
-   * expanded card. Pass a "Collapse" affordance into the header so the user
-   * can fold it back to the bar; the parent owns the session state.
+   * When non-null, this comment is currently a resolved-but-expanded row.
+   * Renders a "Collapse" affordance above it so the user can fold it back to
+   * the bar; the parent owns the session state.
    */
   onCollapseResolved?: () => void;
   /** ID of the comment to highlight (flash animation). */
@@ -328,14 +333,16 @@ function useEditAttachmentState(
 }
 
 // ---------------------------------------------------------------------------
-// ParentRefChip — the only trace threading leaves in the flat stream
+// ParentQuoteLine — the only trace threading leaves in the flat stream
 // ---------------------------------------------------------------------------
 
 // A reply is an ordinary entry in the session's chronological stream; nothing
-// nests it under its parent any more. This chip is what keeps the link
-// legible — it names who is being answered, quotes the opening of what they
-// said, and jumps to that entry on click.
-function ParentRefChip({
+// nests it under its parent any more. This quote line is what keeps the link
+// legible — one muted line behind a quote rule that names who is being
+// answered, quotes the opening of what they said, and jumps to that entry on
+// click. The preview is plain text (`quotePreview`): raw markdown here would
+// spend the char budget on link targets instead of words.
+function ParentQuoteLine({
   parentRef,
   onNavigate,
 }: {
@@ -349,7 +356,7 @@ function ParentRefChip({
     <button
       type="button"
       onClick={() => onNavigate?.(parentRef.id)}
-      className="mb-1.5 flex w-full min-w-0 items-center gap-1 rounded text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+      className="mb-1 flex w-full min-w-0 items-center gap-1 border-l-2 border-border py-0.5 pl-2 text-left text-xs text-muted-foreground transition-colors hover:border-brand/40 hover:text-foreground"
     >
       <Reply className="h-3 w-3 shrink-0" />
       <span className="truncate">
@@ -363,7 +370,7 @@ function ParentRefChip({
 }
 
 // ---------------------------------------------------------------------------
-// CommentCard — one card per comment, root and reply alike
+// CommentCard — one message row per comment, root and reply alike
 // ---------------------------------------------------------------------------
 
 function CommentCardImpl({
@@ -374,7 +381,7 @@ function CommentCardImpl({
   hasReplies,
   currentUserId,
   canModerate = false,
-  onReply,
+  onStartReply,
   onEdit,
   onDelete,
   onToggleReaction,
@@ -385,10 +392,10 @@ function CommentCardImpl({
   const { t } = useT("issues");
   const timeAgo = useTimeAgo();
   const { getActorName } = useActorName();
-  const isCollapsed = useCommentCollapseStore((s) => s.isCollapsed(issueId, entry.id));
-  const toggleCollapse = useCommentCollapseStore((s) => s.toggle);
-  const open = !isCollapsed;
-  const handleOpenChange = useCallback((_open: boolean) => toggleCollapse(issueId, entry.id), [toggleCollapse, issueId, entry.id]);
+  // Touch has no hover, so a hover-only toolbar is unreachable there. The
+  // media query below covers touch at desktop widths; this covers the phone
+  // layout, where the row is too narrow to leave the toolbar floating.
+  const isMobile = useIsMobile();
 
   const edit = useEditAttachmentState(issueId, entry, onEdit);
 
@@ -397,7 +404,7 @@ function CommentCardImpl({
   const canDeleteEntry = isOwn || canModerate;
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const contentPreview = (entry.content ?? "").replace(/\n/g, " ").slice(0, 80);
+  const authorLabel = getActorName(entry.actor_type, entry.actor_id);
   const reactions = entry.reactions ?? [];
   const contentText = entry.content ?? "";
   const isLongContent = contentText.length > 500 || contentText.split("\n").length > 8;
@@ -405,219 +412,223 @@ function CommentCardImpl({
   const isHighlighted = highlightedCommentId === entry.id;
 
   return (
-    <Card className={cn("!py-0 !gap-0 overflow-hidden transition-colors duration-700", isHighlighted && "ring-2 ring-brand/50 bg-brand/5")}>
+    <div
+      className={cn(
+        "group/msg relative -mx-2 rounded-md px-2 py-1.5 transition-colors duration-700 hover:bg-muted/30",
+        isHighlighted && "bg-brand/5 ring-1 ring-brand/40",
+      )}
+    >
       {onCollapseResolved && (
         <button
           type="button"
           onClick={onCollapseResolved}
-          className="flex w-full items-center justify-between border-b border-border/50 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
-          aria-label={t(($) => $.comment.resolve.collapse)}
+          className="mb-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
-          <span className="flex items-center gap-2">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            {t(($) => $.comment.resolve.collapse)}
-          </span>
-          <ChevronRight className="h-3.5 w-3.5 -rotate-90" />
+          <CheckCircle2 className="h-3 w-3 shrink-0" />
+          {t(($) => $.comment.resolve.collapse)}
         </button>
       )}
-      <Collapsible open={open} onOpenChange={handleOpenChange}>
-        {/* Header — always visible, acts as toggle */}
-        <div className="px-4 py-3">
-          {parentRef && (
-            <ParentRefChip parentRef={parentRef} onNavigate={onNavigateToParent} />
-          )}
-          <div className="flex items-center gap-2.5">
-            <CollapsibleTrigger className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
-              <ChevronRight className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-90")} />
-            </CollapsibleTrigger>
-            <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size={24} enableHoverCard showStatusDot />
-            <span className="shrink-0 cursor-pointer text-sm font-medium">
-              {getActorName(entry.actor_type, entry.actor_id)}
-            </span>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className="shrink-0 text-xs text-muted-foreground cursor-default">
-                    {timeAgo(entry.created_at)}
-                  </span>
-                }
-              />
-              <TooltipContent side="top">
-                {new Date(entry.created_at).toLocaleString()}
-              </TooltipContent>
-            </Tooltip>
+      {parentRef && (
+        <ParentQuoteLine parentRef={parentRef} onNavigate={onNavigateToParent} />
+      )}
 
-            {!open && contentPreview && (
-              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                {contentPreview}
+      {/* Header line — who spoke, and when. */}
+      <div className="flex items-center gap-2">
+        <ActorAvatar actorType={entry.actor_type} actorId={entry.actor_id} size={24} enableHoverCard showStatusDot />
+        <span className="shrink-0 cursor-pointer text-sm font-medium">
+          {authorLabel}
+        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span className="shrink-0 text-xs text-muted-foreground cursor-default">
+                {timeAgo(entry.created_at)}
               </span>
-            )}
-            {open && (
-              <div className="ml-auto flex items-center gap-0.5">
-                <QuickEmojiPicker
-                  onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
-                  align="end"
-                />
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <Button variant="ghost" size="icon-sm" className="text-muted-foreground">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  }
-                />
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => {
-                    void copyText(entry.content ?? "").then((ok) => {
-                      if (ok) toast.success(t(($) => $.comment.copied_toast));
-                    });
-                  }}>
-                    <Copy className="h-3.5 w-3.5" />
-                    {t(($) => $.comment.copy_action)}
-                  </DropdownMenuItem>
-                  {onResolveToggle && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => onResolveToggle(entry.id, !entry.resolved_at)}>
-                        {entry.resolved_at ? (
-                          <>
-                            <RotateCcw className="h-3.5 w-3.5" />
-                            {t(($) => $.comment.resolve.unresolve_action)}
-                          </>
-                        ) : (
-                          <>
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            {t(($) => $.comment.resolve.resolve_action)}
-                          </>
-                        )}
-                      </DropdownMenuItem>
-                    </>
-                  )}
-                  {(canEditEntry || canDeleteEntry) && (
-                    <>
-                      <DropdownMenuSeparator />
-                      {canEditEntry && (
-                        <DropdownMenuItem onClick={edit.startEdit}>
-                          <Pencil className="h-3.5 w-3.5" />
-                          {t(($) => $.comment.edit_action)}
-                        </DropdownMenuItem>
-                      )}
-                      {canEditEntry && canDeleteEntry && <DropdownMenuSeparator />}
-                      {canDeleteEntry && (
-                        <DropdownMenuItem onClick={() => setConfirmDelete(true)} variant="destructive">
-                          <Trash2 className="h-3.5 w-3.5" />
-                          {t(($) => $.comment.delete_action)}
-                        </DropdownMenuItem>
-                      )}
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <DeleteCommentDialog
-                open={confirmDelete}
-                onOpenChange={setConfirmDelete}
-                onConfirm={() => onDelete(entry.id)}
-                hasReplies={hasReplies}
-              />
-              </div>
-            )}
-          </div>
-        </div>
+            }
+          />
+          <TooltipContent side="top">
+            {new Date(entry.created_at).toLocaleString()}
+          </TooltipContent>
+        </Tooltip>
+      </div>
 
-        {/* Collapsible body */}
-        <CollapsibleContent>
-          {/* Comment body */}
-          <div className="px-4 pb-3">
-            {edit.editing ? (
-              <div
-                {...edit.dropZoneProps}
-                className="relative pl-10"
-                onKeyDown={(e) => { if (e.key === "Escape") edit.cancelEdit(); }}
-              >
-                <div className="text-sm leading-relaxed">
-                  <ContentEditor
-                    ref={edit.editorRef}
-                    defaultValue={edit.initialValue}
-                    placeholder={t(($) => $.comment.edit_placeholder)}
-                    onUpdate={(md) => {
-                      if (md.trim().length > 0) edit.setDraft(edit.draftKey, md);
-                      else edit.clearDraft(edit.draftKey);
-                    }}
-                    onSubmit={edit.saveEdit}
-                    onUploadFile={edit.handleUpload}
-                    debounceMs={100}
-                    currentIssueId={issueId}
-                    attachments={edit.editorAttachments}
+      {/* Body — indented to the header's text column (24px avatar + gap-2). */}
+      <div className="pl-8">
+        {edit.editing ? (
+          <div
+            {...edit.dropZoneProps}
+            className="relative"
+            onKeyDown={(e) => { if (e.key === "Escape") edit.cancelEdit(); }}
+          >
+            <div className="text-sm leading-relaxed">
+              <ContentEditor
+                ref={edit.editorRef}
+                defaultValue={edit.initialValue}
+                placeholder={t(($) => $.comment.edit_placeholder)}
+                onUpdate={(md) => {
+                  if (md.trim().length > 0) edit.setDraft(edit.draftKey, md);
+                  else edit.clearDraft(edit.draftKey);
+                }}
+                onSubmit={edit.saveEdit}
+                onUploadFile={edit.handleUpload}
+                debounceMs={100}
+                currentIssueId={issueId}
+                attachments={edit.editorAttachments}
+              />
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                {edit.standaloneEditAttachments.length > 0 && (
+                  <AttachmentList
+                    attachments={edit.standaloneEditAttachments}
+                    className="max-w-full"
+                    onRemove={(attachmentId) =>
+                      edit.setRetainedStandaloneIds((ids) => {
+                        const next = new Set(ids ?? []);
+                        next.delete(attachmentId);
+                        return next;
+                      })
+                    }
                   />
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    {edit.standaloneEditAttachments.length > 0 && (
-                      <AttachmentList
-                        attachments={edit.standaloneEditAttachments}
-                        className="max-w-full"
-                        onRemove={(attachmentId) =>
-                          edit.setRetainedStandaloneIds((ids) => {
-                            const next = new Set(ids ?? []);
-                            next.delete(attachmentId);
-                            return next;
-                          })
-                        }
-                      />
-                    )}
-                    <FileUploadButton
-                      size="sm"
-                      multiple
-                      onSelect={(file) => edit.editorRef.current?.uploadFile(file)}
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="ghost" onClick={edit.cancelEdit}>{t(($) => $.comment.cancel_edit)}</Button>
-                    <Button size="sm" variant="outline" onClick={edit.saveEdit}>{t(($) => $.comment.save_action)}</Button>
-                  </div>
-                </div>
-                {edit.isDragOver && <FileDropOverlay />}
-              </div>
-            ) : (
-              <>
-                <div className="pl-10 text-sm leading-relaxed text-foreground/85">
-                  <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
-                </div>
-                <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5 pl-10" />
-                <ReactionBar
-                  reactions={reactions}
-                  currentUserId={currentUserId}
-                  onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
-                  getActorName={getActorName}
-                  hideAddButton={!isLongContent}
-                  className="mt-1.5 pl-10"
+                )}
+                <FileUploadButton
+                  size="sm"
+                  multiple
+                  onSelect={(file) => edit.editorRef.current?.uploadFile(file)}
                 />
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="ghost" onClick={edit.cancelEdit}>{t(($) => $.comment.cancel_edit)}</Button>
+                <Button size="sm" variant="outline" onClick={edit.saveEdit}>{t(($) => $.comment.save_action)}</Button>
+              </div>
+            </div>
+            {edit.isDragOver && <FileDropOverlay />}
+          </div>
+        ) : (
+          <>
+            <div className="text-sm leading-relaxed text-foreground/85">
+              <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments} />
+            </div>
+            <AttachmentList attachments={entry.attachments} content={entry.content} className="mt-1.5" />
+            <ReactionBar
+              reactions={reactions}
+              currentUserId={currentUserId}
+              onToggle={(emoji) => onToggleReaction(entry.id, emoji)}
+              getActorName={getActorName}
+              // The row toolbar already carries an add-reaction control; a
+              // second one down here only earns its place when the body is
+              // long enough that the toolbar has scrolled out of reach.
+              hideAddButton={!isLongContent}
+              className="mt-1.5"
+            />
+          </>
+        )}
+      </div>
+
+      {/* Hover toolbar — react / reply / everything else. Revealed on hover
+          AND on focus-within, so the keyboard reaches every action; kept
+          permanently visible where there is no hover to reveal it with.
+          `data-popup-open` holds it open while its own menu/picker is up:
+          Base UI moves focus into the portaled popup, which would otherwise
+          fade the very button the popup is anchored to. */}
+      <div
+        className={cn(
+          "absolute right-2 top-1 flex items-center gap-0.5 rounded-md border bg-background/95 p-0.5 opacity-0 shadow-sm transition-opacity focus-within:opacity-100 has-[[data-popup-open]]:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:opacity-100",
+          isMobile && "opacity-100",
+        )}
+      >
+        <QuickEmojiPicker
+          onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
+          align="end"
+        />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground"
+          aria-label={t(($) => $.comment.reply_aria)}
+          onClick={() =>
+            onStartReply({
+              commentId: entry.id,
+              authorLabel,
+              strippedPreview: quotePreview(entry.content ?? ""),
+            })
+          }
+        >
+          <Reply className="h-4 w-4" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-muted-foreground"
+                aria-label={t(($) => $.comment.more_actions_aria)}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => {
+              void copyText(entry.content ?? "").then((ok) => {
+                if (ok) toast.success(t(($) => $.comment.copied_toast));
+              });
+            }}>
+              <Copy className="h-3.5 w-3.5" />
+              {t(($) => $.comment.copy_action)}
+            </DropdownMenuItem>
+            {onResolveToggle && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onResolveToggle(entry.id, !entry.resolved_at)}>
+                  {entry.resolved_at ? (
+                    <>
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      {t(($) => $.comment.resolve.unresolve_action)}
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      {t(($) => $.comment.resolve.resolve_action)}
+                    </>
+                  )}
+                </DropdownMenuItem>
               </>
             )}
-          </div>
-
-          {/* Reply input — the affordance that sets `parent_id`. Replies are
-              not nested here any more; they land as their own entries in the
-              session stream, carrying a reference chip back to this comment. */}
-          <div className="border-t border-border/50 px-4 py-2.5">
-            <ReplyInput
-              issueId={issueId}
-              placeholder={t(($) => $.reply.placeholder)}
-              size="sm"
-              avatarType="member"
-              avatarId={currentUserId ?? ""}
-              draftKey={`reply:${issueId}:${entry.id}`}
-              onSubmit={(content, attachmentIds) => onReply(entry.id, content, attachmentIds)}
-            />
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-    </Card>
+            {(canEditEntry || canDeleteEntry) && (
+              <>
+                <DropdownMenuSeparator />
+                {canEditEntry && (
+                  <DropdownMenuItem onClick={edit.startEdit}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    {t(($) => $.comment.edit_action)}
+                  </DropdownMenuItem>
+                )}
+                {canEditEntry && canDeleteEntry && <DropdownMenuSeparator />}
+                {canDeleteEntry && (
+                  <DropdownMenuItem onClick={() => setConfirmDelete(true)} variant="destructive">
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {t(($) => $.comment.delete_action)}
+                  </DropdownMenuItem>
+                )}
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DeleteCommentDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          onConfirm={() => onDelete(entry.id)}
+          hasReplies={hasReplies}
+        />
+      </div>
+    </div>
   );
 }
 
 // Memoized so a long timeline (e.g. Inbox-embedded IssueDetail with thousands
-// of comments) does not re-render every card on each parent state update or
+// of comments) does not re-render every row on each parent state update or
 // WS-driven cache refresh. Default shallow comparison is sufficient: the
 // timeline grouping is useMemo'd in issue-detail.tsx (stable Map ref), and
 // every callback is stabilized via useCallback in use-issue-timeline.ts.

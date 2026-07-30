@@ -11,13 +11,12 @@ import { defaultStorage } from "../../platform/storage";
  *  - reload
  *
  * Keys are issue-scoped because createWorkspaceAwareStorage only partitions
- * by workspace, not by issue. Without issueId in the key, two issues with
- * thread replies open in adjacent desktop tabs would collide.
+ * by workspace, not by issue. Without issueId in the key, two issues open in
+ * adjacent desktop tabs would collide.
  */
 
 export type CommentDraftKey =
-  | `new:${string}`              // top-level CommentInput, key = `new:${issueId}`
-  | `reply:${string}:${string}`  // ReplyInput inside a thread, key = `reply:${issueId}:${rootCommentId}`
+  | `new:${string}`              // the session's single composer, key = `new:${issueId}`
   | `edit:${string}:${string}`;  // inline edit on existing comment, key = `edit:${issueId}:${commentId}`
 
 interface CommentDraft {

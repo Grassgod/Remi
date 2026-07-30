@@ -3,8 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
 import { renderWithI18n } from "../../test/i18n";
-import { CommentInput } from "./comment-input";
-import { ReplyInput } from "./reply-input";
+import { CommentInput, type ReplyTarget } from "./comment-input";
 
 const uploadWithToast = vi.hoisted(() => vi.fn());
 
@@ -76,32 +75,29 @@ vi.mock("../../editor", () => ({
   }),
 }));
 
-function renderCommentInput(onSubmit = vi.fn().mockResolvedValue(undefined)) {
-  const view = renderWithI18n(<CommentInput issueId="issue-1" onSubmit={onSubmit} />);
-  return { ...view, onSubmit };
-}
-
-function renderReplyInput({
+function renderCommentInput({
   onSubmit = vi.fn().mockResolvedValue(undefined),
-  size = "sm",
+  replyTo,
+  onCancelReply = vi.fn(),
 }: {
   onSubmit?: (content: string, attachmentIds?: string[]) => Promise<void>;
-  size?: "sm" | "default";
+  replyTo?: ReplyTarget | null;
+  onCancelReply?: () => void;
 } = {}) {
   const view = renderWithI18n(
-    <ReplyInput
+    <CommentInput
       issueId="issue-1"
-      avatarType="member"
-      avatarId="user-1"
       onSubmit={onSubmit}
-      size={size}
+      replyTo={replyTo}
+      onCancelReply={onCancelReply}
     />,
   );
-  return { ...view, onSubmit };
+  return { ...view, onSubmit, onCancelReply };
 }
 
 function getSubmitButton(container: HTMLElement): HTMLButtonElement {
-  const button = container.querySelectorAll("button")[1];
+  const buttons = container.querySelectorAll("button");
+  const button = buttons[buttons.length - 1];
   if (!button) throw new Error("Expected submit button to render");
   return button;
 }
@@ -111,8 +107,14 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+const replyTarget: ReplyTarget = {
+  commentId: "comment-1",
+  authorLabel: "带头大哥",
+  strippedPreview: "收到，以后我就叫周周",
+};
+
 describe("comment composers", () => {
-  it("renders the main comment composer without a manual expand control", () => {
+  it("renders the single composer without a manual expand control", () => {
     const { container } = renderCommentInput();
 
     expect(screen.getByPlaceholderText("Leave a comment...")).toBeInTheDocument();
@@ -122,28 +124,6 @@ describe("comment composers", () => {
     const shell = screen.getByTestId("drop-zone");
     expect(shell.className).not.toMatch(/max-h-/);
     expect(shell.className).not.toContain("h-[70vh]");
-  });
-
-  it("renders reply composer without a manual expand control", () => {
-    const { container } = renderReplyInput();
-
-    expect(screen.getByPlaceholderText("Leave a reply...")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Attach file" })).toBeInTheDocument();
-    expect(container.querySelectorAll("button")).toHaveLength(2);
-
-    const shell = screen.getByTestId("drop-zone");
-    expect(shell.className).not.toMatch(/max-h-/);
-    expect(shell.className).not.toContain("h-[60vh]");
-  });
-
-  it("lets default-size replies grow without a height cap", () => {
-    const { container } = renderReplyInput({ size: "default" });
-
-    expect(screen.getByPlaceholderText("Leave a reply...")).toBeInTheDocument();
-    expect(container.querySelectorAll("button")).toHaveLength(2);
-
-    const shell = screen.getByTestId("drop-zone");
-    expect(shell.className).not.toMatch(/max-h-/);
   });
 
   it("keeps main comment submission wired after removing expand", async () => {
@@ -159,16 +139,42 @@ describe("comment composers", () => {
     });
   });
 
-  it("keeps reply submission wired after removing expand", async () => {
-    const { container, onSubmit } = renderReplyInput();
+  describe("reply context", () => {
+    it("shows no chip when the composer is writing a new message", () => {
+      renderCommentInput();
 
-    fireEvent.change(screen.getByTestId("editor"), {
-      target: { value: "thread reply" },
+      expect(screen.queryByText(/^Replying to/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Cancel reply" }),
+      ).not.toBeInTheDocument();
     });
-    fireEvent.click(getSubmitButton(container));
 
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith("thread reply", undefined);
+    it("names the message being answered, quoting its stripped preview", () => {
+      renderCommentInput({ replyTo: replyTarget });
+
+      expect(
+        screen.getByText("Replying to 带头大哥: 收到，以后我就叫周周"),
+      ).toBeInTheDocument();
+    });
+
+    it("clears the context from the chip's × control", () => {
+      const { onCancelReply } = renderCommentInput({ replyTo: replyTarget });
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel reply" }));
+      expect(onCancelReply).toHaveBeenCalledTimes(1);
+    });
+
+    it("still submits through the same handler while a reply is pending", async () => {
+      const { container, onSubmit } = renderCommentInput({ replyTo: replyTarget });
+
+      fireEvent.change(screen.getByTestId("editor"), {
+        target: { value: "On it" },
+      });
+      fireEvent.click(getSubmitButton(container));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith("On it", undefined);
+      });
     });
   });
 });

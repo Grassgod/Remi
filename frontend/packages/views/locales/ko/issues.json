@@ -328,6 +328,9 @@
     "send_reply_failed": "답글을 보내지 못했습니다",
     "delete_failed": "댓글을 삭제하지 못했습니다",
     "parent_ref": "{{author}}에게 답글: {{preview}}",
+    "reply_aria": "답글",
+    "more_actions_aria": "추가 작업",
+    "cancel_reply_aria": "답글 취소",
     "leave_comment_placeholder": "댓글 남기기...",
     "comment_in_session_placeholder": "{{session}}에 댓글…",
     "send_tooltip": "보내기",
@@ -340,9 +343,6 @@
       "resolve_failed": "스레드를 해결하지 못했습니다",
       "unresolve_failed": "스레드 해결을 취소하지 못했습니다"
     }
-  },
-  "reply": {
-    "placeholder": "답글 남기기..."
   },
   "agent_activity": {
     "hover_header_one": "작업 중인 에이전트 {{count}}개",
