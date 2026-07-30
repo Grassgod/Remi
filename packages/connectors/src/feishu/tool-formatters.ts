@@ -181,7 +181,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
   },
 
   Bash: (input) => {
-    const cmd = truncate(shortPath(str(input.command)), MAX_INPUT_LINE);
+    const cmd = commandSummary(str(input.command), MAX_INPUT_LINE);
     return `\`$ ${cmd}\``;
   },
 
@@ -291,6 +291,20 @@ function str(val: unknown): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + "...";
+}
+
+/**
+ * Summarize a shell command for a one-line header — first line, head-truncated,
+ * plus how many lines were dropped. A command is not a path, so shortPath() must
+ * not touch it; and a raw multi-line command would break the inline code span the
+ * caller wraps it in. The `(+N)` suffix stays symbols-only on purpose: it renders
+ * inside a monospaced command string, not prose.
+ */
+function commandSummary(command: string, max: number): string {
+  const lines = command.trimEnd().split("\n");
+  const dropped = lines.length - 1;
+  const head = truncate(lines[0] ?? "", max);
+  return dropped > 0 ? `${head} (+${dropped})` : head;
 }
 
 /** Shorten a file path for display — replace home dir with ~/, keep relative. */

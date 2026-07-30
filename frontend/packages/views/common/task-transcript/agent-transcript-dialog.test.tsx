@@ -44,6 +44,19 @@ describe("transcript step card — Bash command", () => {
     expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
   });
 
+  it("renders a slash-heavy command verbatim rather than as a compressed path", () => {
+    renderTranscript(bashStep({ command: 'grep -rn "foo" ./src | head -30 > /dev/null' }));
+
+    expect(screen.getByText('$ grep -rn "foo" ./src | head -30 > /dev/null')).toBeInTheDocument();
+    expect(screen.queryByText("$ .../dev/null")).not.toBeInTheDocument();
+  });
+
+  it("renders a multiline command as its first line plus a dropped-line count", () => {
+    renderTranscript(bashStep({ command: "cd frontend/packages/views\nbun run test\nbun run lint" }));
+
+    expect(screen.getByText("$ cd frontend/packages/views (+2)")).toBeInTheDocument();
+  });
+
   it("explains the gap instead of showing a bare $ when the step has no input", () => {
     renderTranscript(bashStep(undefined));
 

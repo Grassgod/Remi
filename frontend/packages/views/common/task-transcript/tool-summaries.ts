@@ -31,6 +31,18 @@ function shortPath(p: string): string {
   if (parts.length <= 3) return p;
   return ".../" + parts.slice(-2).join("/");
 }
+/**
+ * A shell command is not a path — shortPath() would eat every segment before the
+ * last two and turn `... | head -30 > /dev/null` into `.../dev/null`. Show the
+ * first line head-truncated, then how many lines were dropped. The `(+N)` suffix
+ * stays symbols-only: it renders inside a font-mono command string, not prose.
+ */
+function commandSummary(command: string, max: number): string {
+  const lines = command.trimEnd().split("\n");
+  const dropped = lines.length - 1;
+  const head = truncate(lines[0] ?? "", max);
+  return dropped > 0 ? `${head} (+${dropped})` : head;
+}
 
 type Formatter = (input: Record<string, unknown>) => string;
 
@@ -44,7 +56,7 @@ const FORMATTERS: Record<string, Formatter> = {
   Edit: (i) => shortPath(str(i.file_path)),
   Write: (i) => shortPath(str(i.file_path)),
   NotebookEdit: (i) => shortPath(str(i.notebook_path ?? i.file_path)),
-  Bash: (i) => `$ ${truncate(shortPath(str(i.command)), MAX)}`,
+  Bash: (i) => `$ ${commandSummary(str(i.command), MAX)}`,
   Grep: (i) => {
     const path = i.path ? ` in ${shortPath(str(i.path))}` : "";
     const glob = i.glob ? ` (${str(i.glob)})` : "";
