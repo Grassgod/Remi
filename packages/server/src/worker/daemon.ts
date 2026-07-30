@@ -1145,6 +1145,19 @@ interface ToolCallState {
 const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
 
 /**
+ * The only key the claude bridge's initial `tool_call` yields for a shell call:
+ * the terminal content block resolves to `{ terminal_id }` while the real args
+ * (command/description) arrive in the following `tool_call_update`.
+ */
+const TERMINAL_PLACEHOLDER_KEY = "terminal_id";
+
+/** Whether an input carries real tool args, not just the terminal placeholder. */
+function hasMeaningfulInput(input: Record<string, unknown> | undefined): boolean {
+  if (!input) return false;
+  return Object.keys(input).some((key) => key !== TERMINAL_PLACEHOLDER_KEY);
+}
+
+/**
  * A stateful ACP-event → task-message mapper. Unlike the old one-in-one-out
  * function it can emit 0..N messages per event (an initial tool_call that
  * already carries output produces both a tool_use and its paired tool_result),
@@ -1153,7 +1166,7 @@ const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
  * assigns a distinct seq to every emitted message — reusing one seq for two
  * messages would collide on UNIQUE(task_id, seq).
  */
-function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent) => TaskMessageInput[] {
+export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent) => TaskMessageInput[] {
   const tools = new Map<string, ToolCallState>();
   let synCounter = 0;
 
@@ -1222,22 +1235,32 @@ function mapToolEvent(
     terminalEmitted: false,
     inputOnUse: false,
   };
-  // Merge late-arriving fields; keep the first non-empty input.
+  // Merge late-arriving fields; a refining event's keys win over the earlier
+  // ones (claude's initial tool_call only yields a terminal placeholder, the
+  // real command lands in the following update) while bridges that send the
+  // full input up front keep every key they already reported.
   state.name = name;
   if (raw.kind) state.kind = raw.kind;
-  if (input && !state.input) state.input = input;
+  if (input) state.input = { ...state.input, ...input };
   if (status) state.status = status;
   tools.set(id, state);
 
   if (isInitial) {
-    const hasInput = Boolean(state.input && Object.keys(state.input).length > 0);
-    state.inputOnUse = hasInput;
+    // A placeholder-only input isn't the tool's args — emitting it would pin the
+    // frontend's step card to `{terminal_id}` and the real command (which only
+    // arrives in the refining update) would never render. Park the id in meta
+    // and leave the input to the paired tool_result.
+    const meaningful = hasMeaningfulInput(state.input);
+    state.inputOnUse = meaningful;
+    if (!meaningful && state.input?.[TERMINAL_PLACEHOLDER_KEY] != null) {
+      meta[TERMINAL_PLACEHOLDER_KEY] = state.input[TERMINAL_PLACEHOLDER_KEY];
+    }
     messages.push({
       type: "tool_use",
       toolCallId: id,
       status: status ?? "pending",
       tool: state.name,
-      input: state.input,
+      input: meaningful ? state.input : undefined,
       meta: Object.keys(meta).length ? meta : undefined,
     });
   }
@@ -1265,7 +1288,7 @@ function mapToolEvent(
         output,
         meta: Object.keys(resultMeta).length ? resultMeta : undefined,
       });
-      if (!state.inputOnUse && state.input) state.inputOnUse = true;
+      if (!state.inputOnUse && hasMeaningfulInput(state.input)) state.inputOnUse = true;
     }
   }
 

@@ -139,6 +139,18 @@ describe("buildEntries pairing", () => {
     expect((entries[0] as { input?: unknown }).input).toEqual({ command: "ls" });
   });
 
+  it("takes the input from the result when the use had none (claude terminal calls)", () => {
+    // The claude bridge's initial tool_call only resolves to a terminal id, so
+    // the daemon emits the use without input and lets the result carry the
+    // merged args — the step card must still show the command.
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash", toolCallId: "tc_1", status: "pending", meta: { terminal_id: "term_42" } }),
+      item({ seq: 2, type: "tool_result", tool: "Bash", toolCallId: "tc_1", status: "completed", input: { command: "echo hi", terminal_id: "term_42" }, output: "hi" }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect((entries[0] as { input?: Record<string, unknown> }).input?.command).toBe("echo hi");
+  });
+
   it("falls back to createdAt delta when meta.duration_ms is absent", () => {
     const entries = buildEntries([
       item({ seq: 1, type: "tool_use", toolCallId: "tc", createdAt: "2026-07-12T00:00:00.000Z" }),
