@@ -429,7 +429,8 @@
     "sort_label": "Sort",
     "sort_chronological": "Oldest first",
     "sort_newest_first": "Newest first",
-    "plan": "Plan"
+    "plan": "Plan",
+    "command_not_recorded": "Command not recorded (task from an older version)"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

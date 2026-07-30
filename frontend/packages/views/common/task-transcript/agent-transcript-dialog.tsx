@@ -41,7 +41,7 @@ import { useTranscriptViewStore, type TranscriptSortDirection } from "@multiremi
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
 import { buildEntries, isStepRunning, type TimelineItem, type TranscriptEntry, type UsageSnapshot } from "./build-timeline";
-import { formatToolInputSummary, toolIcon } from "./tool-summaries";
+import { formatToolInputSummary, isBashCommandMissing, toolIcon } from "./tool-summaries";
 import { useT } from "../../i18n";
 
 interface AgentTranscriptDialogProps {
@@ -988,9 +988,11 @@ const TranscriptStepRow = ({
   step,
   isSelected,
 }: TranscriptStepRowProps & { ref?: React.Ref<HTMLDivElement> }) => {
+  const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
   const Icon = toolIcon(step.tool);
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
+  const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
   const failed = step.status === "failed";
   const hasDetail =
@@ -1030,7 +1032,13 @@ const TranscriptStepRow = ({
                   )}
                 />
               )}
-              <span className="truncate font-mono">{summary}</span>
+              {commandMissing ? (
+                <span className="truncate italic text-muted-foreground/70">
+                  {t(($) => $.transcript.command_not_recorded)}
+                </span>
+              ) : (
+                <span className="truncate font-mono">{summary}</span>
+              )}
             </div>
           </CollapsibleTrigger>
           <span className="shrink-0 flex items-center gap-1.5 text-[10px] text-muted-foreground/50 tabular-nums mt-1">

@@ -70,6 +70,15 @@ const FORMATTERS: Record<string, Formatter> = {
   Skill: (i) => str(i.skill ?? i.command ?? ""),
 };
 
+/**
+ * Bash steps recorded before v0.2.20 carry no command — the daemon dropped it,
+ * leaving the input null or a `{terminal_id}`-only placeholder. The command is
+ * unrecoverable, so callers render an explanatory label instead of a bare `$`.
+ */
+export function isBashCommandMissing(name?: string, input?: Record<string, unknown>): boolean {
+  return name === "Bash" && str(input?.command).trim().length === 0;
+}
+
 export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
   const formatter = FORMATTERS[name];

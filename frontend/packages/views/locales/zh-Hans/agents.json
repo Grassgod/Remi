@@ -418,7 +418,8 @@
     "sort_label": "排序",
     "sort_chronological": "时间顺序",
     "sort_newest_first": "最新在前",
-    "plan": "计划"
+    "plan": "计划",
+    "command_not_recorded": "命令未记录（旧版本任务）"
   },
   "task_failure": {
     "agent_error": "智能体执行出错",

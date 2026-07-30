@@ -418,7 +418,8 @@
     "sort_label": "並び替え",
     "sort_chronological": "古い順",
     "sort_newest_first": "新しい順",
-    "plan": "計画"
+    "plan": "計画",
+    "command_not_recorded": "コマンドは記録されていません（以前のバージョンのタスク）"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",
