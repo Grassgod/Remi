@@ -190,6 +190,23 @@ message, one block per thread); `spawnAgent` steps reuse the Agent icon with
 the prompt summary (already works via `FORMATTERS.Agent` reading `prompt`);
 `wait` gets its own icon + count summary.
 
+### 4.5 Production verification addenda (2026-08-06, v0.2.22)
+
+- **Third collab verb observed live: `closeAgent`** (not in the C0 fixture).
+  Same rawInput shape, and its terminal frame repeats the closed agent's
+  final `message` — the shape-based detection covers it with no code change.
+- **Pre-existing fleet blocker found and fixed (v0.2.22, b3a722e6):** every
+  codex session died at startup with `-32602` because
+  `resolveAvailableAcpPermissionMode` passed claude-flavored mode ids
+  (`bypassPermissions`) to `session/set_mode`, which codex-acp validates
+  against its advertised modes (`read-only`/`agent`/`agent-full-access`).
+  The resolver now maps to the closest advertised mode and skips the call
+  when nothing matches. Unrelated to this spec's batches, but it gated every
+  codex smoke.
+- End-to-end confirmed on the fleet: `wait`/`closeAgent` tool_results carry
+  `input.agentsStates` with verbatim subagent answers (P2.5 path), and claude
+  subagent steps carry `meta.parent_tool_call_id` (P2 path).
+
 ---
 
 ## 5. Batch P2 — Claude subagent nesting
