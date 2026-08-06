@@ -7,6 +7,7 @@ import {
   Bot,
   Sparkles,
   ListChecks,
+  Hourglass,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -75,12 +76,65 @@ const FORMATTERS: Record<string, Formatter> = {
     const active = todos.filter((t) => t.status === "in_progress").length;
     return `${todos.length} tasks (${done} done, ${active} active)`;
   },
-  Agent: (i) => {
-    const d = str(i.description ?? i.prompt ?? "");
-    return d ? `"${truncate(d, 200)}"` : "";
-  },
+  Agent: (i) => agentPromptSummary(i),
   Skill: (i) => str(i.skill ?? i.command ?? ""),
 };
+
+function agentPromptSummary(input: Record<string, unknown>): string {
+  const d = str(input.description ?? input.prompt ?? "");
+  return d ? `"${truncate(d, 200)}"` : "";
+}
+
+/**
+ * Codex collab (subagent delegation) calls, recognized by input shape rather
+ * than verb name: `spawnAgent` normalizes to `Agent` but `wait` — and any
+ * send/close verb — passes through raw, and the generic fallback would print
+ * the first short string it finds, i.e. a bare thread id. Every collab rawInput
+ * carries senderThreadId + receiverThreadIds (verified in
+ * tests/fixtures/acp/codex-collab-notifications-1786010059380.json); `prompt` is
+ * null on `wait`, so it can't be the discriminator.
+ */
+export function isCollabInput(input?: Record<string, unknown>): boolean {
+  return typeof input?.senderThreadId === "string" && Array.isArray(input.receiverThreadIds);
+}
+
+/** One agent's state inside a collab call's `agentsStates` map. */
+export interface CollabAgentState {
+  threadId: string;
+  status: string;
+  message?: string;
+}
+
+/** Read `agentsStates` defensively — a malformed map yields no chips, never a throw. */
+export function collabAgentStates(input?: Record<string, unknown>): CollabAgentState[] {
+  const states = input?.agentsStates;
+  if (!states || typeof states !== "object" || Array.isArray(states)) return [];
+  return Object.entries(states as Record<string, unknown>).map(([threadId, value]) => {
+    const state = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const message = typeof state.message === "string" && state.message ? state.message : undefined;
+    return { threadId, status: str(state.status ?? "unknown"), message };
+  });
+}
+
+export function collabReceiverThreadIds(input?: Record<string, unknown>): string[] {
+  const ids = input?.receiverThreadIds;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
+
+/**
+ * Counts, never ids. Only `completed` is terminal (`pendingInit` and the
+ * camelCase `inProgress` are not), so anything else counts as running.
+ */
+function collabStateSummary(input: Record<string, unknown>): string {
+  const states = collabAgentStates(input);
+  const done = states.filter((s) => s.status === "completed").length;
+  const running = states.length - done;
+  const parts: string[] = [];
+  if (running > 0) parts.push(`${running} running`);
+  if (done > 0) parts.push(`${done} done`);
+  if (parts.length > 0) return parts.join(" · ");
+  return `waiting for ${collabReceiverThreadIds(input).length} agents`;
+}
 
 /**
  * Bash steps recorded before v0.2.20 carry no command — the daemon dropped it,
@@ -93,6 +147,11 @@ export function isBashCommandMissing(name?: string, input?: Record<string, unkno
 
 export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
+  // Shape before name: a delegation keeps the prompt summary (spawnAgent already
+  // resolves to Agent), a prompt-less collab verb summarizes agent states.
+  if (isCollabInput(input)) {
+    return str(input.prompt) ? agentPromptSummary(input) : collabStateSummary(input);
+  }
   const formatter = FORMATTERS[name];
   if (formatter) return formatter(input);
   // Default: first short string-valued field.
@@ -116,6 +175,8 @@ const ICONS: Record<string, LucideIcon> = {
   Skill: Sparkles,
   TodoWrite: ListChecks,
   EnterPlanMode: ListChecks,
+  // Codex collab verb, lowercase as the bridge reports it.
+  wait: Hourglass,
 };
 
 export function toolIcon(name?: string): LucideIcon {

@@ -41,7 +41,14 @@ import { useTranscriptViewStore, type TranscriptSortDirection } from "@multiremi
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
 import { buildEntries, isStepRunning, nestEntries, type TimelineItem, type TranscriptEntry, type UsageSnapshot } from "./build-timeline";
-import { formatToolInputSummary, isBashCommandMissing, toolIcon } from "./tool-summaries";
+import {
+  collabAgentStates,
+  collabReceiverThreadIds,
+  formatToolInputSummary,
+  isBashCommandMissing,
+  isCollabInput,
+  toolIcon,
+} from "./tool-summaries";
 import { useT } from "../../i18n";
 
 interface AgentTranscriptDialogProps {
@@ -1022,6 +1029,10 @@ const TranscriptStepRow = ({
   const failed = step.status === "failed";
   const children = step.children ?? [];
   const isSelected = selectedSeq === step.seq || children.some((child) => child.seq === selectedSeq);
+  // Codex collab steps render their own structured pane; whatever CollabDetail
+  // doesn't show still goes through the generic JSON block.
+  const collabInput = isCollabInput(step.input) ? step.input : undefined;
+  const residualInput = collabInput ? omitKeys(collabInput, COLLAB_RENDERED_KEYS) : step.input;
   const hasDetail =
     (step.input && Object.keys(step.input).length > 0) ||
     Boolean(step.output && step.output.length > 0) ||
@@ -1092,9 +1103,10 @@ const TranscriptStepRow = ({
         {hasDetail && (
           <CollapsibleContent>
             <div className="px-4 pb-3 ml-[72px] space-y-2">
-              {step.input && Object.keys(step.input).length > 0 && (
+              {collabInput && <CollabDetail input={collabInput} />}
+              {residualInput && Object.keys(residualInput).length > 0 && (
                 <pre className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
-                  {JSON.stringify(step.input, null, 2)}
+                  {JSON.stringify(residualInput, null, 2)}
                 </pre>
               )}
               {children.length > 0 && (
@@ -1127,6 +1139,88 @@ const TranscriptStepRow = ({
     </div>
   );
 };
+
+// ─── Codex collab (subagent delegation) detail ──────────────────────────────
+
+/** Keys CollabDetail renders itself — kept out of the generic JSON block. */
+const COLLAB_RENDERED_KEYS = ["prompt", "senderThreadId", "receiverThreadIds", "agentsStates"];
+
+function omitKeys(input: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([k]) => !keys.includes(k)));
+}
+
+/** Thread ids are UUIDs — show a recognizable head, never the full id inline. */
+function shortThreadId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/**
+ * A collab step's payload lives entirely in its input: the prompt, the per-agent
+ * states, and — on a completed `wait` — each subagent's final answer in
+ * `agentsStates[*].message`. The frames carry no output at all, so this is the
+ * only place a delegation's result can come from.
+ */
+function CollabDetail({ input }: { input: Record<string, unknown> }) {
+  const { t } = useT("agents");
+  const prompt = typeof input.prompt === "string" && input.prompt ? input.prompt : undefined;
+  const states = collabAgentStates(input);
+  const receivers = collabReceiverThreadIds(input);
+
+  return (
+    <div className="space-y-2">
+      {prompt && (
+        <div className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-xs">
+          <Markdown mode="minimal">{prompt}</Markdown>
+        </div>
+      )}
+
+      {states.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {states.map((state) => (
+            <span
+              key={state.threadId}
+              title={state.threadId}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                // Only `completed` is terminal; every other value (pendingInit,
+                // inProgress, anything new) reads as in-progress.
+                state.status === "completed" ? "bg-success/15 text-success" : "bg-info/15 text-info",
+              )}
+            >
+              <span className="font-mono">{shortThreadId(state.threadId)}</span>
+              {state.status}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {states
+        .filter((state) => state.message)
+        .map((state) => (
+          <div key={`msg-${state.threadId}`} className="rounded bg-muted/40 border p-3 text-xs">
+            <div className="mb-1 font-mono text-[10px] text-muted-foreground">{shortThreadId(state.threadId)}</div>
+            <div className="max-h-72 overflow-auto">
+              <Markdown mode="minimal">{state.message ?? ""}</Markdown>
+            </div>
+          </div>
+        ))}
+
+      {receivers.length > 0 && (
+        <div className="text-[10px] text-muted-foreground/70 font-mono break-all">
+          {receivers.map((id) => (
+            <div key={id}>{id}</div>
+          ))}
+        </div>
+      )}
+
+      {/* The ceiling, stated on the card: codex-acp drops subAgentActivity, so
+          the subagent's own steps never reach this transcript. */}
+      <div className="text-[10px] text-muted-foreground/70 italic">
+        {t(($) => $.transcript.collab_activity_hidden)}
+      </div>
+    </div>
+  );
+}
 
 // Render a tool result: diff blocks (from meta.content_blocks) get +/- line
 // coloring; everything else is JSON-pretty-printed or shown raw.

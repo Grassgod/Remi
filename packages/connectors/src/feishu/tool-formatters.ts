@@ -27,6 +27,9 @@ export const TOOL_ICONS: Record<string, string> = {
   WebFetch:  "language_outlined",
   WebSearch: "search_outlined",
   Agent:     "robot_outlined",
+  // Codex collab verb, lowercase as the bridge reports it (spawnAgent resolves
+  // to Agent and reuses the robot icon).
+  wait:      "time_outlined",
   Skill:     "file-link-mindnote_outlined",
   TodoWrite: "list-check_outlined",
   NotebookEdit: "edit_outlined",
@@ -217,10 +220,7 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
     return `${count} tasks (${completed} done, ${inProgress} active)`;
   },
 
-  Agent: (input) => {
-    const desc = str(input.description ?? input.prompt ?? "");
-    return desc ? `"${truncate(desc, 200)}"` : "";
-  },
+  Agent: (input) => agentPromptSummary(input),
 
   Skill: (input) => {
     const skill = str(input.skill);
@@ -231,9 +231,51 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
 
 export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
+  // Shape before name: a delegation keeps the prompt summary (spawnAgent already
+  // resolves to Agent), a prompt-less collab verb summarizes agent states.
+  if (isCollabInput(input)) {
+    return str(input.prompt) ? agentPromptSummary(input) : collabStateSummary(input);
+  }
   const formatter = TOOL_FORMATTERS[name];
   if (formatter) return formatter(input);
   return defaultFormatter(input);
+}
+
+function agentPromptSummary(input: Record<string, unknown>): string {
+  const desc = str(input.description ?? input.prompt ?? "");
+  return desc ? `"${truncate(desc, 200)}"` : "";
+}
+
+/**
+ * Codex collab (subagent delegation) calls, recognized by input shape rather
+ * than verb name — mirrors isCollabInput in the web port
+ * (frontend/packages/views/common/task-transcript/tool-summaries.ts), as this
+ * whole file is intentionally parallel to it. `spawnAgent` normalizes to
+ * `Agent`, but `wait` and any send/close verb pass through raw and would hit
+ * defaultFormatter, which prints a bare senderThreadId. `prompt` is null on
+ * `wait`, so it cannot be the discriminator.
+ */
+export function isCollabInput(input?: Record<string, unknown>): boolean {
+  return typeof input?.senderThreadId === "string" && Array.isArray(input.receiverThreadIds);
+}
+
+/** Counts, never thread ids. Only `completed` is terminal. */
+function collabStateSummary(input: Record<string, unknown>): string {
+  const states = input.agentsStates;
+  const values =
+    states && typeof states === "object" && !Array.isArray(states)
+      ? Object.values(states as Record<string, unknown>)
+      : [];
+  const done = values.filter(
+    (v) => v && typeof v === "object" && (v as Record<string, unknown>).status === "completed",
+  ).length;
+  const running = values.length - done;
+  const parts: string[] = [];
+  if (running > 0) parts.push(`${running} running`);
+  if (done > 0) parts.push(`${done} done`);
+  if (parts.length > 0) return parts.join(" · ");
+  const receivers = Array.isArray(input.receiverThreadIds) ? input.receiverThreadIds.length : 0;
+  return `waiting for ${receivers} agents`;
 }
 
 function defaultFormatter(input: Record<string, unknown>): string {

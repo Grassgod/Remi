@@ -1,6 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { formatToolInputSummary, isBashCommandMissing, toolIcon } from "./tool-summaries";
-import { Terminal, FileText, Wrench } from "lucide-react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  collabAgentStates,
+  formatToolInputSummary,
+  isBashCommandMissing,
+  isCollabInput,
+  toolIcon,
+} from "./tool-summaries";
+import { Terminal, FileText, Hourglass, Wrench } from "lucide-react";
+
+// Real C0 capture (codex 0.142.5 collab run): 2× spawnAgent + 2× wait.
+// Tests read the frames rather than hand-written shapes so a bridge change that
+// moves a field fails here instead of silently producing empty cards.
+// Resolved from the vitest project root (frontend/packages/views) — jsdom does
+// not give this file a file:// import.meta.url.
+const COLLAB_FIXTURE = resolve(
+  process.cwd(),
+  "../../../tests/fixtures/acp/codex-collab-notifications-1786010059380.json",
+);
+
+function collabInputs(title: string, status: string): Record<string, unknown>[] {
+  const frames = JSON.parse(readFileSync(COLLAB_FIXTURE, "utf-8")) as Array<{
+    params?: { update?: Record<string, unknown> };
+  }>;
+  return frames
+    .map((frame) => frame.params?.update)
+    .filter((u): u is Record<string, unknown> => !!u && u.title === title && u.status === status)
+    .map((u) => u.rawInput as Record<string, unknown>);
+}
 
 describe("formatToolInputSummary", () => {
   it("summarizes per tool", () => {
@@ -60,5 +88,99 @@ describe("toolIcon", () => {
     expect(toolIcon("Read")).toBe(FileText);
     expect(toolIcon("Unknown")).toBe(Wrench);
     expect(toolIcon(undefined)).toBe(Wrench);
+  });
+
+  it("gives the codex collab wait verb its own icon", () => {
+    expect(toolIcon("wait")).toBe(Hourglass);
+  });
+});
+
+describe("codex collab steps", () => {
+  it("detects a collab call by input shape, including the prompt-less wait", () => {
+    const [spawn] = collabInputs("spawnAgent", "in_progress");
+    const [wait] = collabInputs("wait", "in_progress");
+
+    expect(isCollabInput(spawn)).toBe(true);
+    expect(wait!.prompt).toBeNull();
+    expect(isCollabInput(wait)).toBe(true);
+    // Shape, not name: a claude Agent step is not a collab step.
+    expect(isCollabInput({ description: "look around", prompt: "go" })).toBe(false);
+    expect(isCollabInput(undefined)).toBe(false);
+    expect(isCollabInput({ senderThreadId: "t1" })).toBe(false);
+  });
+
+  it("summarizes a spawnAgent delegation by its prompt", () => {
+    const [spawn] = collabInputs("spawnAgent", "in_progress");
+
+    expect(formatToolInputSummary("Agent", spawn)).toBe(
+      '"Write exactly one original English-language haiku about the sea. Return only the three-line haiku, with no title or commentary."',
+    );
+  });
+
+  it("summarizes a finished wait by agent-state counts", () => {
+    const [wait] = collabInputs("wait", "completed");
+
+    expect(formatToolInputSummary("wait", wait)).toBe("1 done");
+  });
+
+  it("counts unfinished states as running", () => {
+    const [spawnDone] = collabInputs("spawnAgent", "completed");
+    // The terminal spawnAgent frame reports the new thread as pendingInit; the
+    // prompt is still there, so the delegation keeps its prompt summary.
+    expect(collabAgentStates(spawnDone)).toEqual([
+      { threadId: "019fd67e-f5d8-7041-87ee-6f1d8d52280f", status: "pendingInit", message: undefined },
+    ]);
+    expect(
+      formatToolInputSummary("wait", { ...spawnDone, prompt: null }),
+    ).toBe("1 running");
+    expect(
+      formatToolInputSummary("wait", {
+        senderThreadId: "s",
+        receiverThreadIds: ["a", "b", "c"],
+        agentsStates: {
+          a: { status: "inProgress" },
+          b: { status: "someFutureValue" },
+          c: { status: "completed" },
+        },
+      }),
+    ).toBe("2 running · 1 done");
+  });
+
+  it("falls back to the receiver count while agentsStates is still empty", () => {
+    const [wait] = collabInputs("wait", "in_progress");
+
+    expect(wait!.agentsStates).toEqual({});
+    expect(formatToolInputSummary("wait", wait)).toBe("waiting for 2 agents");
+  });
+
+  it("never leaks a thread id into a one-line summary", () => {
+    const inputs = [
+      ...collabInputs("spawnAgent", "in_progress"),
+      ...collabInputs("spawnAgent", "completed"),
+      ...collabInputs("wait", "in_progress"),
+      ...collabInputs("wait", "completed"),
+    ];
+    // 2 spawnAgent + 2 wait, each with an initial and a terminal frame.
+    expect(inputs).toHaveLength(8);
+
+    for (const input of inputs) {
+      // Both the resolved name (spawnAgent → Agent) and the raw verb.
+      for (const name of ["Agent", "wait"]) {
+        const summary = formatToolInputSummary(name, input);
+        expect(summary).not.toContain(String(input.senderThreadId));
+        for (const id of input.receiverThreadIds as string[]) {
+          expect(summary).not.toContain(id);
+        }
+      }
+    }
+  });
+
+  it("reads malformed agent states as no chips rather than throwing", () => {
+    expect(collabAgentStates({ agentsStates: "nope" })).toEqual([]);
+    expect(collabAgentStates({ agentsStates: [1, 2] })).toEqual([]);
+    expect(collabAgentStates(undefined)).toEqual([]);
+    expect(collabAgentStates({ agentsStates: { t1: null } })).toEqual([
+      { threadId: "t1", status: "unknown", message: undefined },
+    ]);
   });
 });

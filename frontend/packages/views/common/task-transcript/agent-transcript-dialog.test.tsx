@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fireEvent, screen } from "@testing-library/react";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
@@ -28,6 +30,21 @@ function bashStep(input?: Record<string, unknown>): TimelineItem[] {
     { seq: 1, type: "tool_use", tool: "Bash", toolCallId: "call-1", input },
     { seq: 2, type: "tool_result", tool: "Bash", toolCallId: "call-1", status: "completed", output: "ok" },
   ];
+}
+
+/** One collab rawInput from the real C0 capture, by verb + ACP frame status. */
+function collabRawInput(title: string, status: string): Record<string, unknown> {
+  const frames = JSON.parse(
+    readFileSync(
+      resolve(process.cwd(), "../../../tests/fixtures/acp/codex-collab-notifications-1786010059380.json"),
+      "utf-8",
+    ),
+  ) as Array<{ params?: { update?: Record<string, unknown> } }>;
+  const frame = frames
+    .map((f) => f.params?.update)
+    .find((u) => u?.title === title && u?.status === status);
+  if (!frame) throw new Error(`no ${title}/${status} frame in the collab fixture`);
+  return frame.rawInput as Record<string, unknown>;
 }
 
 function renderTranscript(items: TimelineItem[]) {
@@ -137,5 +154,58 @@ describe("transcript subagent group", () => {
 
     expect(screen.getByText("**/*.ts")).toBeInTheDocument();
     expect(screen.queryByText("1 step")).not.toBeInTheDocument();
+  });
+});
+
+describe("transcript codex collab step", () => {
+  // Real C0 frames: the terminal `wait` carries the subagent's answer in
+  // agentsStates[threadId].message and no output at all.
+  const waitFinal = collabRawInput("wait", "completed");
+  const waitThreadId = "019fd67f-032c-7d80-9eca-e69c0ae2d4a6";
+
+  function collabStep(input: Record<string, unknown>): TimelineItem[] {
+    return [
+      { seq: 1, type: "tool_use", tool: "wait", toolCallId: "call-w", status: "in_progress", input },
+      { seq: 2, type: "tool_result", tool: "wait", toolCallId: "call-w", status: "completed" },
+    ];
+  }
+
+  it("summarizes the step by agent counts, never by a thread id", () => {
+    renderTranscript(collabStep(waitFinal));
+
+    expect(screen.getByText("1 done")).toBeInTheDocument();
+    expect(screen.queryByText(waitFinal.senderThreadId as string)).not.toBeInTheDocument();
+  });
+
+  it("renders state chips, the subagent's answer as Markdown, and the ceiling caption", () => {
+    renderTranscript(collabStep(waitFinal));
+
+    fireEvent.click(screen.getByText("1 done"));
+
+    // Chip: short thread id + status, full id only in its tooltip.
+    const chip = screen.getByTitle(waitThreadId);
+    expect(chip).toHaveTextContent(`${waitThreadId.slice(0, 8)}completed`);
+    // The answer is a Markdown block, not a JSON dump.
+    expect(screen.getByText(/Snow crowns silent peaks/)).toBeInTheDocument();
+    expect(screen.getByText("Subagent internal activity is not captured")).toBeInTheDocument();
+    // Receiver ids appear only in the muted list at the bottom, and the keys the
+    // structured pane already showed are gone from the raw JSON block.
+    expect(screen.getByText(waitThreadId)).toBeInTheDocument();
+    expect(screen.queryByText(/"agentsStates"/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"senderThreadId"/)).not.toBeInTheDocument();
+  });
+
+  it("renders a delegation prompt as Markdown and degrades when states are empty", () => {
+    const spawn = collabRawInput("spawnAgent", "in_progress");
+    renderTranscript([
+      { seq: 1, type: "tool_use", tool: "Agent", toolCallId: "call-s", status: "in_progress", input: spawn },
+    ]);
+
+    fireEvent.click(screen.getByText(`"${spawn.prompt as string}"`));
+
+    // The header summary carries the quoted prompt; this exact (unquoted) match
+    // can only be the Markdown paragraph in the detail pane.
+    expect(screen.getByText(spawn.prompt as string)).toBeInTheDocument();
+    expect(screen.getByText("Subagent internal activity is not captured")).toBeInTheDocument();
   });
 });
