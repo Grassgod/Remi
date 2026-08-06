@@ -401,6 +401,85 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
+  it("auto-checks out issue-task repos and publishes a branch result", async () => {
+    db = new Database(":memory:");
+    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-autorepo-"));
+    const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
+    const store = new MultiremiStore(db);
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      settings: { github_enabled: false, co_authored_by_enabled: false },
+      repos: [{ url: sourceRepo, description: "local source repo" }],
+    });
+    // No cwd: the task must land in the daemon-owned per-task dir, which is
+    // the only place auto-checkout is allowed to materialize worktrees.
+    const agent = store.createAgent({ name: "Repo Claude", provider: "claude" });
+    const issue = store.createIssue({ title: "Auto checkout issue" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Work in the repo" });
+    const daemonToken = await store.createAccessToken({
+      name: "Auto repo daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-repo-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    const prompts: string[] = [];
+    const providerFactory: MultiremiDaemonProviderFactory = () => ({
+      async *sendStream(message) {
+        prompts.push(message);
+        yield {
+          sessionUpdate: "agent_message_chunk",
+          content: [{ type: "text", text: "worked in checked-out repo" }],
+        } as any;
+      },
+      getLastResponse: () => ({
+        text: "worked in checked-out repo",
+        sessionId: "sess-auto-repo",
+        requestId: "req-auto-repo",
+      }),
+    });
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeName: "auto-repo-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(workDir, "workspaces"),
+        repoCacheRoot: join(workDir, ".repo-cache"),
+        providerFactory,
+      });
+
+      await daemon.start();
+
+      expect(store.getTask(task.id)?.status).toBe("completed");
+      const worktree = join(workDir, "workspaces", "local", task.id, "repo");
+      expect(existsSync(join(worktree, "README.md"))).toBe(true);
+      const branch = gitOutput(worktree, ["branch", "--show-current"]);
+      expect(branch.startsWith("agent/repo-claude/")).toBe(true);
+      expect(prompts[0]).toContain("already checked out into the working directory");
+      expect(prompts[0]).toContain(`on branch \`${branch}\``);
+      expect(prompts[0]).not.toContain("For repositories without a path above");
+
+      const results = store.listIssueSessionResults(issue.id);
+      expect(results.length).toBe(1);
+      expect(results[0]!.metadata.kind).toBe("branch");
+      expect(results[0]!.title).toBe(branch);
+      expect(results[0]!.body).toContain(worktree);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
     db = new Database(":memory:");
     workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-chat-resume-"));

@@ -7,6 +7,7 @@ import {
   FileCheck2,
   FileOutput,
   FileText,
+  GitBranch,
   GitMerge,
   Rocket,
   Scale,
@@ -47,6 +48,7 @@ export const KEY_RESULTS_SECTION_ID = "issue-key-results";
 
 const KIND_ICON: Record<SessionResultKind, typeof FileOutput> = {
   mr: GitMerge,
+  branch: GitBranch,
   report: FileCheck2,
   deploy: Rocket,
   decision: Scale,
@@ -58,6 +60,7 @@ function useKindLabel(kind: SessionResultKind): string {
   const { t } = useT("issues");
   switch (kind) {
     case "mr": return t(($) => $.detail.result_kind_mr);
+    case "branch": return t(($) => $.detail.result_kind_branch);
     case "report": return t(($) => $.detail.result_kind_report);
     case "deploy": return t(($) => $.detail.result_kind_deploy);
     case "decision": return t(($) => $.detail.result_kind_decision);

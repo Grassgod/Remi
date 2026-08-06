@@ -8,7 +8,7 @@ import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, Req
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider, ProviderEvent } from "@shared/contracts/provider-types.js";
 import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPrompt, type TaskRepoCheckout } from "@multiremi/prompt.js";
 import { MultiremiRepoCache, normalizeRepoList } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -694,6 +694,79 @@ export class MultiremiDaemon {
     });
   }
 
+  /**
+   * Pre-flight repo materialization: check out every task repo as a worktree
+   * in the task's workDir before the agent starts, so an issue's work is
+   * branch-isolated from the first turn without relying on the agent running
+   * `remi repo checkout` itself. Scope is deliberately narrow: issue tasks
+   * only, and only in daemon-owned dirs (never agent.cwd / local_directory).
+   * An existing worktree is reused as-is so a resumed task keeps uncommitted
+   * work, and any failure degrades to the manual-checkout prompt instead of
+   * failing the task.
+   */
+  private async autoCheckoutTaskRepos(
+    task: MultiremiTaskWithAgent,
+    resolvedWorkDir: ResolvedTaskWorkDir,
+  ): Promise<TaskRepoCheckout[]> {
+    const repos = normalizeRepoList(task.repos ?? []);
+    if (!repos.length || !task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) return [];
+    const checkouts: TaskRepoCheckout[] = [];
+    let createdAny = false;
+    for (const repo of repos) {
+      try {
+        await this.ensureRepoReady(task.workspaceId, repo.url);
+        const result = this.repoCache.createWorktree({
+          workspaceId: task.workspaceId,
+          repoUrl: repo.url,
+          workDir: resolvedWorkDir.workDir,
+          agentName: task.agent?.name ?? "agent",
+          // Issue key over task id: the branch then names the issue it serves
+          // (agent/<name>/REMI-42) and stays stable across the issue's tasks.
+          taskId: task.issue?.key || task.id,
+          reuseExisting: true,
+          coAuthoredByEnabled: this.workspaceCoAuthoredByEnabled(task.workspaceId),
+        });
+        checkouts.push({ repoUrl: repo.url, path: result.path, branch: result.branchName });
+        if (result.created) createdAny = true;
+      } catch (err) {
+        log.warn(`Auto checkout of ${repo.url} failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (createdAny) await this.publishBranchArtifact(task, checkouts);
+    return checkouts;
+  }
+
+  /**
+   * Surface freshly created worktree branches on the issue's key-results
+   * panel as a `branch` result. Published only when a worktree was newly
+   * created (a resumed task reusing its worktrees does not re-publish).
+   */
+  private async publishBranchArtifact(task: MultiremiTaskWithAgent, checkouts: TaskRepoCheckout[]): Promise<void> {
+    const issueId = task.issueId ?? task.issue?.id ?? null;
+    const sessionId = task.issueSessionId ?? task.issue_session_id ?? null;
+    if (!issueId || !sessionId || !checkouts.length) return;
+    const body = checkouts
+      .map((checkout) => `- ${basename(checkout.path)}: \`${checkout.branch}\`\n  \`${checkout.path}\``)
+      .join("\n");
+    try {
+      await this.client.publishTaskSessionResult(issueId, sessionId, {
+        title: checkouts[0]!.branch,
+        body,
+        metadata: {
+          kind: "branch",
+          refs: [{ type: "task", value: task.id }],
+          worktrees: checkouts.map((checkout) => ({
+            repo_url: checkout.repoUrl,
+            branch: checkout.branch,
+            path: checkout.path,
+          })),
+        },
+      }, task.authToken ?? task.auth_token ?? null);
+    } catch (err) {
+      log.warn(`Failed to publish branch result for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private localDirectoryDaemonIds(task: MultiremiTaskWithAgent): string[] {
     return [
       this.options.daemonId,
@@ -831,6 +904,7 @@ export class MultiremiDaemon {
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
+    const repoCheckouts = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
     try {
       writeTaskContext(workDir, task);
       writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
@@ -880,7 +954,7 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
-      const prompt = buildTaskPrompt(task);
+      const prompt = buildTaskPrompt(task, { repoCheckouts });
       for await (const event of session.run(prompt)) {
         // One event may yield several messages (e.g. a completed tool_call →
         // tool_use + tool_result). Each gets its own seq so none collides.

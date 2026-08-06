@@ -383,4 +383,48 @@ describe("project docs prompt injection", () => {
     expect(memorySection.length).toBeLessThan(4400);
     expect(wikiSection.length).toBeLessThan(2400);
   });
+
+  it("marks pre-checked-out repositories instead of suggesting manual checkout", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+
+    const prompt = buildTaskPrompt(task, {
+      repoCheckouts: [{
+        repoUrl: "https://github.com/example/knowledge",
+        path: "/tmp/work/knowledge",
+        branch: "agent/codex/REMI-1",
+      }],
+    });
+
+    expect(prompt).toContain("already checked out into the working directory");
+    expect(prompt).toContain("- https://github.com/example/knowledge — at `./knowledge` on branch `agent/codex/REMI-1`");
+    expect(prompt).not.toContain("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories");
+    // Every listed repo is checked out, so no residual manual-checkout hint.
+    expect(prompt).not.toContain("For repositories without a path above");
+  });
+
+  it("keeps the manual checkout hint for repos the daemon could not materialize", () => {
+    const store = createStore();
+    const { task } = createProjectTask(store);
+    const twoRepoTask = {
+      ...task,
+      repos: [
+        { url: "https://github.com/example/knowledge" },
+        { url: "https://github.com/example/unreachable" },
+      ],
+    };
+
+    const withPartialCheckout = buildTaskPrompt(twoRepoTask, {
+      repoCheckouts: [{
+        repoUrl: "https://github.com/example/knowledge",
+        path: "/tmp/work/knowledge",
+        branch: "agent/codex/REMI-1",
+      }],
+    });
+    expect(withPartialCheckout).toContain("- https://github.com/example/unreachable");
+    expect(withPartialCheckout).toContain("For repositories without a path above, use `remi repo checkout <url> [--ref <branch-or-sha>]`.");
+
+    const withoutCheckouts = buildTaskPrompt(twoRepoTask);
+    expect(withoutCheckouts).toContain("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
+  });
 });

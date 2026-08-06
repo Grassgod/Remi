@@ -245,6 +245,25 @@ export class MultiremiDaemonClient {
     });
   }
 
+  /**
+   * Publish a session result on the task's issue. Sent with the task's own
+   * auth token when available so the result is attributed to the agent (the
+   * same identity the in-task CLI publishes with), falling back to the
+   * daemon's runtime token.
+   */
+  async publishTaskSessionResult(
+    issueId: string,
+    sessionId: string,
+    input: { title: string; body: string; metadata?: Record<string, unknown> },
+    taskToken?: string | null,
+  ): Promise<void> {
+    await this.post(
+      `/api/issues/${encodeURIComponent(issueId)}/sessions/${encodeURIComponent(sessionId)}/results`,
+      input,
+      taskToken,
+    );
+  }
+
   async getTaskStatus(taskId: string): Promise<MultiremiTaskStatus> {
     const resp = await this.get<{ status: MultiremiTaskStatus }>(`/api/daemon/tasks/${taskId}/status`);
     return resp.status;
@@ -271,19 +290,20 @@ export class MultiremiDaemonClient {
     return parseResponse<T>(resp, "GET", path);
   }
 
-  private async post<T = unknown>(path: string, body: unknown): Promise<T> {
+  private async post<T = unknown>(path: string, body: unknown, tokenOverride?: string | null): Promise<T> {
     const resp = await fetch(this.baseUrl + path, {
       method: "POST",
-      headers: this.headers("application/json"),
+      headers: this.headers("application/json", tokenOverride),
       body: JSON.stringify(body),
     });
     return parseResponse<T>(resp, "POST", path);
   }
 
-  private headers(contentType?: string): HeadersInit {
+  private headers(contentType?: string, tokenOverride?: string | null): HeadersInit {
     const headers: Record<string, string> = {};
     if (contentType) headers["Content-Type"] = contentType;
-    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const token = tokenOverride ?? this.token;
+    if (token) headers.Authorization = `Bearer ${token}`;
     return headers;
   }
 }

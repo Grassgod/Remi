@@ -233,6 +233,7 @@
     "result_untitled": "未命名结果",
     "result_published_activity": "发布了结果《{{title}}》",
     "result_kind_mr": "合并请求",
+    "result_kind_branch": "分支",
     "result_kind_report": "报告",
     "result_kind_deploy": "部署",
     "result_kind_decision": "决策",

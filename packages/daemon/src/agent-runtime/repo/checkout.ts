@@ -16,12 +16,19 @@ export interface MultiremiWorktreeParams {
   agentName?: string;
   taskId?: string;
   coAuthoredByEnabled?: boolean;
+  // Leave an existing worktree untouched (no reset/clean/checkout) and return
+  // its current branch. Used by the daemon's pre-flight auto-checkout so a
+  // resumed task never wipes uncommitted work; the CLI keeps the default
+  // destructive-reset semantics (an agent asking again wants a clean tree).
+  reuseExisting?: boolean;
 }
 
 export interface MultiremiWorktreeResult {
   path: string;
   branch_name: string;
   branchName: string;
+  /** false when reuseExisting found the worktree already in place. */
+  created: boolean;
 }
 
 export interface MultiremiRepoCacheOptions {
@@ -127,11 +134,16 @@ export class MultiremiRepoCache {
   }
 
   private createWorktreeLocked(barePath: string, params: MultiremiWorktreeParams): MultiremiWorktreeResult {
+    const worktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
+    if (params.reuseExisting && existsSync(worktreePath) && isGitWorktree(worktreePath)) {
+      const currentBranch = git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false };
+    }
+
     gitFetch(barePath, { allowFailure: true });
 
     const baseRef = resolveBaseRef(barePath, params.ref);
     const branchBase = `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
-    const worktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
     let branchName = branchBase;
 
     if (existsSync(worktreePath)) {
@@ -149,7 +161,7 @@ export class MultiremiRepoCache {
       }
       excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-      return { path: worktreePath, branch_name: branchName, branchName };
+      return { path: worktreePath, branch_name: branchName, branchName, created: true };
     }
 
     mkdirSync(params.workDir, { recursive: true });
@@ -162,7 +174,7 @@ export class MultiremiRepoCache {
     }
     excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-    return { path: worktreePath, branch_name: branchName, branchName };
+    return { path: worktreePath, branch_name: branchName, branchName, created: true };
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {

@@ -232,6 +232,7 @@
     "result_untitled": "無題の結果",
     "result_published_activity": "結果「{{title}}」を公開しました",
     "result_kind_mr": "マージリクエスト",
+    "result_kind_branch": "ブランチ",
     "result_kind_report": "レポート",
     "result_kind_deploy": "デプロイ",
     "result_kind_decision": "意思決定",

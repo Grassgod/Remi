@@ -36,6 +36,40 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(result.path, "README.md"), "utf8")).toContain("main content");
   });
 
+  it("reuseExisting keeps an existing worktree's branch and uncommitted work", () => {
+    const source = createRepo("main", "reuse repo");
+    const cacheRoot = tempDir("multiremi-repo-reuse-");
+    const workDir = tempDir("multiremi-repo-reuse-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    cache.sync("local", [{ url: source }]);
+
+    const first = cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      agentName: "Claude",
+      taskId: "REMI-42",
+      reuseExisting: true,
+    });
+    expect(first.created).toBe(true);
+    expect(first.branchName).toBe("agent/claude/REMI-42");
+
+    writeFileSync(join(first.path, "wip.txt"), "uncommitted\n");
+
+    const second = cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      agentName: "Claude",
+      taskId: "REMI-42",
+      reuseExisting: true,
+    });
+    expect(second.created).toBe(false);
+    expect(second.path).toBe(first.path);
+    expect(second.branchName).toBe(first.branchName);
+    expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
+  });
+
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");

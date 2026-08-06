@@ -1,6 +1,17 @@
 import type { AgentTask, AgentTaskProjectDocEntry } from "@daemon/contracts/types.js";
 
-export function buildTaskPrompt(task: AgentTask): string {
+/** A repo the daemon pre-checked-out into the task workDir before the run. */
+export interface TaskRepoCheckout {
+  repoUrl: string;
+  path: string;
+  branch: string;
+}
+
+export interface BuildTaskPromptOptions {
+  repoCheckouts?: TaskRepoCheckout[];
+}
+
+export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = {}): string {
   const sections: string[] = [];
 
   sections.push("# Task");
@@ -44,11 +55,22 @@ export function buildTaskPrompt(task: AgentTask): string {
   }
 
   if (task.repos.length) {
+    const checkouts = opts.repoCheckouts ?? [];
+    const checkoutByUrl = new Map(checkouts.map((checkout) => [checkout.repoUrl.trim(), checkout]));
     sections.push("");
     sections.push("## Available Repositories");
-    sections.push("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
+    if (checkouts.length) {
+      sections.push("Repositories below marked with a path are already checked out into the working directory on a task branch — work in them directly, do not clone or re-checkout:");
+    } else {
+      sections.push("Use `remi repo checkout <url> [--ref <branch-or-sha>]` to check out repositories into the working directory.");
+    }
     for (const repo of task.repos) {
-      sections.push(repo.description ? `- ${repo.url} - ${repo.description}` : `- ${repo.url}`);
+      const base = repo.description ? `- ${repo.url} - ${repo.description}` : `- ${repo.url}`;
+      const checkout = checkoutByUrl.get(repo.url.trim());
+      sections.push(checkout ? `${base} — at \`./${lastPathSegment(checkout.path)}\` on branch \`${checkout.branch}\`` : base);
+    }
+    if (checkouts.length && checkouts.length < task.repos.length) {
+      sections.push("For repositories without a path above, use `remi repo checkout <url> [--ref <branch-or-sha>]`.");
     }
   }
 
@@ -431,6 +453,10 @@ function formatProjectWikiEntry(entry: AgentTaskProjectDocEntry): string {
   const head = `- ${entryTitle(entry)} (slug: ${entry.slug})`;
   const summary = firstLine(entry.summary);
   return summary ? `${head} - ${truncateText(summary, PROJECT_WIKI_SUMMARY_LIMIT)}` : head;
+}
+
+function lastPathSegment(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 }
 
 function firstLine(text: string | null | undefined): string {

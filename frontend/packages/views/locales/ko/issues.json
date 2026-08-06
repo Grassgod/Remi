@@ -235,6 +235,7 @@
     "result_untitled": "제목 없는 결과",
     "result_published_activity": "결과 \"{{title}}\"을(를) 게시했습니다",
     "result_kind_mr": "머지 리퀘스트",
+    "result_kind_branch": "브랜치",
     "result_kind_report": "리포트",
     "result_kind_deploy": "배포",
     "result_kind_decision": "결정",

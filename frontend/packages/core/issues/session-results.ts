@@ -9,6 +9,7 @@ import type { ProjectDocRef, SessionResult } from "../types";
 
 export const SESSION_RESULT_KINDS = [
   "mr",
+  "branch",
   "report",
   "deploy",
   "decision",

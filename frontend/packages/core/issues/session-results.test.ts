@@ -21,6 +21,8 @@ describe("sessionResultKind", () => {
   it("returns a known kind", () => {
     expect(sessionResultKind(makeResult({ kind: "mr" }))).toBe("mr");
     expect(sessionResultKind(makeResult({ kind: "deploy" }))).toBe("deploy");
+    // Published by the daemon's auto-checkout, not the CLI.
+    expect(sessionResultKind(makeResult({ kind: "branch" }))).toBe("branch");
   });
 
   it("degrades to other for absent, unknown, or non-string kinds", () => {

@@ -235,6 +235,7 @@
     "result_untitled": "Untitled result",
     "result_published_activity": "published the result \"{{title}}\"",
     "result_kind_mr": "Merge request",
+    "result_kind_branch": "Branch",
     "result_kind_report": "Report",
     "result_kind_deploy": "Deployment",
     "result_kind_decision": "Decision",
