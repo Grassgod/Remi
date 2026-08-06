@@ -48,6 +48,36 @@ describe("AcpProvider", () => {
     })).toBe("bypassPermissions");
   });
 
+  // codex-acp advertises read-only/agent/agent-full-access and rejects any
+  // other id on session/set_mode with -32602, which used to kill every codex
+  // session at startup (the resolver passed unadvertised modes through).
+  it("maps claude-flavored modes onto codex-acp's advertised modes", () => {
+    const codexModes = {
+      currentModeId: "agent",
+      availableModes: [
+        { id: "read-only", name: "Read-only" },
+        { id: "agent", name: "Agent" },
+        { id: "agent-full-access", name: "Agent (full access)" },
+      ],
+    };
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", codexModes)).toBe("agent-full-access");
+    expect(resolveAvailableAcpPermissionMode("dontAsk", codexModes)).toBe("agent-full-access");
+    expect(resolveAvailableAcpPermissionMode("acceptEdits", codexModes)).toBe("agent");
+    expect(resolveAvailableAcpPermissionMode("plan", codexModes)).toBe("read-only");
+  });
+
+  it("skips set_mode when the mode has no advertised equivalent", () => {
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", {
+      currentModeId: "agent",
+      availableModes: [{ id: "agent", name: "Agent" }],
+    })).toBe(null);
+  });
+
+  it("passes the mode through when the agent reports no mode list", () => {
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", undefined)).toBe("bypassPermissions");
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", { currentModeId: "x", availableModes: [] })).toBe("bypassPermissions");
+  });
+
   it("uses Remi's Claude ACP wrapper by default when available", () => {
     const previous = process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE;
     delete process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE;

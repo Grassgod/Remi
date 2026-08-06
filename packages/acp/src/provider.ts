@@ -110,6 +110,19 @@ export function resolveAcpPermissionMode(agentType: string, mode?: string | null
   return DEFAULT_PERMISSION_MODE_BY_AGENT[agentType] ?? null;
 }
 
+/**
+ * Claude-flavored mode ids translated to their closest codex-acp equivalent
+ * (codex advertises read-only / agent / agent-full-access). Checked only when
+ * the requested id isn't already among the session's advertised modes.
+ */
+const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
+  bypassPermissions: ["agent-full-access"],
+  dontAsk: ["agent-full-access"],
+  acceptEdits: ["agent"],
+  default: ["agent"],
+  plan: ["read-only"],
+};
+
 export function resolveAvailableAcpPermissionMode(
   mode: string | null,
   modes?: SessionModeState,
@@ -117,7 +130,14 @@ export function resolveAvailableAcpPermissionMode(
   if (!mode) return null;
   if (!modes?.availableModes?.length) return mode;
   if (modes.availableModes.some((m) => m.id === mode)) return mode;
-  return mode;
+  const available = new Set(modes.availableModes.map((m) => m.id));
+  for (const alias of PERMISSION_MODE_ALIASES[mode] ?? []) {
+    if (available.has(alias)) return alias;
+  }
+  // An id the agent doesn't advertise gets rejected with -32602 (codex-acp
+  // validates session/set_mode strictly) — skip the call and keep the agent's
+  // default mode rather than killing the session.
+  return null;
 }
 
 export function resolveAcpExecutableForAgent(agentType: string, executable: string | null | undefined, fallback: string): string {
