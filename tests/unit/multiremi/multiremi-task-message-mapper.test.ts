@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createAdapter } from "@acp/index.js";
 import type { ProviderEvent } from "@shared/contracts/provider-types.js";
 import { createEventMapper } from "@multiremi/daemon.js";
@@ -137,5 +138,141 @@ describe("daemon task-message mapper", () => {
       description: "first",
       terminal_id: "term_42",
     });
+  });
+});
+
+// ─── Subagent attribution ───────────────────────────────────────────────────
+
+const claudeTool = (
+  sessionUpdate: "tool_call" | "tool_call_update",
+  toolCallId: string,
+  toolName: string,
+  extra: Record<string, unknown> = {},
+): ProviderEvent =>
+  event({ sessionUpdate, toolCallId, _meta: { claudeCode: { toolName } }, ...extra });
+
+const spawnAgent = (id: string) =>
+  claudeTool("tool_call", id, "Agent", { status: "pending", rawInput: { description: "look around" } });
+
+const finishAgent = (id: string) =>
+  claudeTool("tool_call_update", id, "Agent", { status: "completed", rawOutput: "report" });
+
+describe("daemon mapper subagent attribution", () => {
+  it("attributes an inner call to the single open Agent on both the use and the result", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    map(spawnAgent("agent_1"));
+
+    const use = map(claudeTool("tool_call", "glob_1", "Glob", { status: "pending", rawInput: { pattern: "**/*.ts" } }));
+    expect(use).toHaveLength(1);
+    expect(use[0]?.meta?.parent_tool_call_id).toBe("agent_1");
+
+    const result = map(claudeTool("tool_call_update", "glob_1", "Glob", { status: "completed", rawOutput: "3 files" }));
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe("tool_result");
+    expect(result[0]?.meta?.parent_tool_call_id).toBe("agent_1");
+  });
+
+  it("leaves an inner call flat when two Agents are open (parallel subagents)", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    map(spawnAgent("agent_1"));
+    map(spawnAgent("agent_2"));
+
+    const use = map(claudeTool("tool_call", "glob_1", "Glob", { status: "pending", rawInput: { pattern: "*.ts" } }));
+    expect(use[0]?.meta?.parent_tool_call_id).toBeUndefined();
+  });
+
+  it("leaves a call flat once the Agent reached a terminal status", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    map(spawnAgent("agent_1"));
+    map(finishAgent("agent_1"));
+
+    const use = map(claudeTool("tool_call", "read_1", "Read", { status: "pending", rawInput: { file_path: "/a.ts" } }));
+    expect(use[0]?.meta?.parent_tool_call_id).toBeUndefined();
+  });
+
+  it("never attributes a call that itself spawns an agent", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    map(spawnAgent("agent_1"));
+
+    const use = map(spawnAgent("agent_2"));
+    expect(use[0]?.meta?.parent_tool_call_id).toBeUndefined();
+  });
+
+  it("decides attribution at the first event only", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    // The Glob starts with no Agent open, so it stays flat forever — a later
+    // event arriving while an Agent runs must not retro-attribute it.
+    map(claudeTool("tool_call", "glob_1", "Glob", { status: "pending", rawInput: { pattern: "*.ts" } }));
+    map(spawnAgent("agent_1"));
+
+    const result = map(claudeTool("tool_call_update", "glob_1", "Glob", { status: "completed", rawOutput: "x" }));
+    expect(result[0]?.type).toBe("tool_result");
+    expect(result[0]?.meta?.parent_tool_call_id).toBeUndefined();
+  });
+
+  it("never attributes under the codex adapter, where a collab spawn does not block the caller", () => {
+    const map = createEventMapper(createAdapter("codex"));
+
+    // C0 fixture shape (tests/fixtures/acp/codex-collab-notifications-1786010059380.json):
+    // codex-acp forwards a collab delegation as kind "other" / title "spawnAgent",
+    // which the adapter normalizes to `Agent` — but unlike claude's Agent tool it
+    // leaves the caller free to keep running its own tools.
+    const spawn = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "call_Cd4AlVGoR1OrcHqOcmpjR2mT",
+      kind: "other",
+      title: "spawnAgent",
+      status: "in_progress",
+      rawInput: {
+        prompt: "Write exactly one original English-language haiku about the sea.",
+        senderThreadId: "019fd67e-c843-7071-b5d6-66f42f33234c",
+        receiverThreadIds: [],
+        agentsStates: {},
+        status: "inProgress",
+      },
+    }));
+    // The gate, not a naming accident, is what keeps this flat.
+    expect(spawn[0]?.tool).toBe("Agent");
+
+    const use = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "call_1H8nfQQ8OK2ITwHsXAfX5XU2",
+      status: "in_progress",
+      kind: "execute",
+      title: "echo hello",
+      rawInput: { command: "echo hello" },
+    }));
+    expect(use[0]?.meta?.parent_tool_call_id).toBeUndefined();
+
+    const result = map(event({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "call_1H8nfQQ8OK2ITwHsXAfX5XU2",
+      status: "completed",
+      rawOutput: { formatted_output: "hello\n", exit_code: 0 },
+    }));
+    expect(result[0]?.meta?.parent_tool_call_id).toBeUndefined();
+  });
+
+  it("nests the subagent's Glob under the Agent step in the recorded spawn fixture", () => {
+    const frames = JSON.parse(
+      readFileSync(new URL("../../fixtures/acp/agent-spawn-notifications-1777954686821.json", import.meta.url), "utf-8"),
+    ) as Array<{ params?: { update?: Record<string, unknown> } }>;
+
+    const map = createEventMapper(createAdapter("claude"));
+    const emitted = frames.flatMap((frame) =>
+      frame.params?.update ? map(event(frame.params.update)) : [],
+    );
+
+    const agentUse = emitted.find((m) => m.type === "tool_use" && m.tool === "Agent");
+    const globMessages = emitted.filter((m) => m.tool === "Glob");
+    expect(agentUse?.toolCallId).toBeTruthy();
+    expect(globMessages.length).toBeGreaterThan(0);
+    for (const message of globMessages) {
+      expect(message.meta?.parent_tool_call_id).toBe(agentUse!.toolCallId!);
+    }
+    // The Agent step itself stays top-level.
+    for (const message of emitted.filter((m) => m.tool === "Agent")) {
+      expect(message.meta?.parent_tool_call_id).toBeUndefined();
+    }
   });
 });

@@ -430,7 +430,9 @@
     "sort_chronological": "Oldest first",
     "sort_newest_first": "Newest first",
     "plan": "Plan",
-    "command_not_recorded": "Command not recorded (task from an older version)"
+    "command_not_recorded": "Command not recorded (task from an older version)",
+    "nested_steps_one": "{{count}} step",
+    "nested_steps_other": "{{count}} steps"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

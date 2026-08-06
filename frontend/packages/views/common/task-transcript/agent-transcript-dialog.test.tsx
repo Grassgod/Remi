@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
@@ -78,5 +78,64 @@ describe("transcript step card — Bash command", () => {
 
     expect(screen.getByText(".../c/d.ts")).toBeInTheDocument();
     expect(screen.queryByText(MISSING_COMMAND_LABEL)).not.toBeInTheDocument();
+  });
+});
+
+describe("transcript subagent group", () => {
+  const agentWithChild: TimelineItem[] = [
+    { seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent-1", input: { description: "count files" } },
+    {
+      seq: 2,
+      type: "tool_use",
+      tool: "Glob",
+      toolCallId: "glob-1",
+      input: { pattern: "**/*.ts" },
+      meta: { parent_tool_call_id: "agent-1" },
+    },
+    {
+      seq: 3,
+      type: "tool_result",
+      tool: "Glob",
+      toolCallId: "glob-1",
+      status: "completed",
+      output: "3 files",
+      meta: { parent_tool_call_id: "agent-1" },
+    },
+    { seq: 4, type: "tool_result", tool: "Agent", toolCallId: "agent-1", status: "completed", output: "## Result\n\n3 files" },
+  ];
+
+  it("collapses the subagent's steps into the Agent group with a step count", () => {
+    renderTranscript(agentWithChild);
+
+    expect(screen.getByText("1 step")).toBeInTheDocument();
+    // Collapsed by default: the child's summary isn't rendered yet.
+    expect(screen.queryByText("**/*.ts")).not.toBeInTheDocument();
+  });
+
+  it("reveals the nested step and the Markdown report when the group is expanded", () => {
+    renderTranscript(agentWithChild);
+
+    fireEvent.click(screen.getByText('"count files"'));
+
+    expect(screen.getByText("**/*.ts")).toBeInTheDocument();
+    // The Agent's output is the subagent report — rendered as Markdown, so the
+    // heading is a heading rather than a literal "## Result" line.
+    expect(screen.getByRole("heading", { name: "Result" })).toBeInTheDocument();
+  });
+
+  it("keeps a step top-level when its parent is not in the transcript (old rows stay flat)", () => {
+    renderTranscript([
+      {
+        seq: 1,
+        type: "tool_use",
+        tool: "Glob",
+        toolCallId: "glob-1",
+        input: { pattern: "**/*.ts" },
+        meta: { parent_tool_call_id: "agent-gone" },
+      },
+    ]);
+
+    expect(screen.getByText("**/*.ts")).toBeInTheDocument();
+    expect(screen.queryByText("1 step")).not.toBeInTheDocument();
   });
 });

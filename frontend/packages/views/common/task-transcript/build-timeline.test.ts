@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskMessagePayload } from "@multiremi/core/types/events";
-import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, type TimelineItem } from "./build-timeline";
+import { appendTimelineItem, buildEntries, buildTimeline, coalesceTimelineItems, extractUsageFromMessages, nestEntries, type TimelineItem, type TranscriptEntry } from "./build-timeline";
 
 function message(seq: number, type: TaskMessagePayload["type"], content?: string): TaskMessagePayload {
   return {
@@ -174,6 +174,76 @@ describe("buildEntries pairing", () => {
     ]);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ kind: "step", tool: "Read", output: "done", status: "completed" });
+  });
+
+  it("nests steps the daemon attributed to an Agent call", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent_1", input: { description: "count files" } }),
+      item({ seq: 2, type: "tool_use", tool: "Glob", toolCallId: "glob_1", input: { pattern: "*.ts" }, meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 3, type: "tool_result", tool: "Glob", toolCallId: "glob_1", status: "completed", output: "3", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 4, type: "tool_result", tool: "Agent", toolCallId: "agent_1", status: "completed", output: "# report" }),
+    ]);
+    const nested = nestEntries(entries);
+
+    expect(nested).toHaveLength(1);
+    const agent = nested[0] as Extract<TranscriptEntry, { kind: "step" }>;
+    expect(agent).toMatchObject({ toolCallId: "agent_1", status: "completed", output: "# report" });
+    expect(agent.children?.map((c) => (c as { toolCallId: string }).toolCallId)).toEqual(["glob_1"]);
+  });
+
+  it("keeps children in chronological order under their parent", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent_1" }),
+      item({ seq: 2, type: "tool_use", tool: "Read", toolCallId: "read_1", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 3, type: "tool_use", tool: "Glob", toolCallId: "glob_1", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 4, type: "tool_use", tool: "Bash", toolCallId: "bash_1", meta: { parent_tool_call_id: "agent_1" } }),
+    ]);
+    const agent = nestEntries(entries)[0] as Extract<TranscriptEntry, { kind: "step" }>;
+
+    expect(agent.children?.map((c) => c.seq)).toEqual([2, 3, 4]);
+  });
+
+  it("survives meta redaction — the parent id must still match the parent's tool_call_id", () => {
+    // `meta` is recursively redacted while `tool_call_id` is not; if a future
+    // redaction rule masked parent_tool_call_id, nesting would silently stop.
+    const items = buildTimeline([
+      { task_id: "t", issue_id: "i", seq: 1, type: "tool_use", tool: "Agent", tool_call_id: "toolu_015zmm7GBgjJXXn8DQAGS5G4" },
+      { task_id: "t", issue_id: "i", seq: 2, type: "tool_use", tool: "Glob", tool_call_id: "toolu_01YZrpUvPqmyKMwwwouj2WZd", meta: { parent_tool_call_id: "toolu_015zmm7GBgjJXXn8DQAGS5G4" } },
+    ]);
+    const nested = nestEntries(buildEntries(items));
+
+    expect(nested).toHaveLength(1);
+    expect((nested[0] as { children?: unknown[] }).children).toHaveLength(1);
+  });
+
+  it("keeps a step top-level when its parent id is not in the list (fail open)", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Glob", toolCallId: "glob_1", meta: { parent_tool_call_id: "agent_gone" } }),
+    ]);
+    const nested = nestEntries(entries);
+
+    expect(nested).toHaveLength(1);
+    expect((nested[0] as { children?: unknown }).children).toBeUndefined();
+  });
+
+  it("never nests plain events, even between a parent and its children", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent_1" }),
+      item({ seq: 2, type: "text", content: "thinking out loud", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 3, type: "tool_use", tool: "Glob", toolCallId: "glob_1", meta: { parent_tool_call_id: "agent_1" } }),
+    ]);
+    const nested = nestEntries(entries);
+
+    expect(nested.map((e) => e.kind)).toEqual(["step", "event"]);
+    expect((nested[0] as { children?: unknown[] }).children).toHaveLength(1);
+  });
+
+  it("leaves entries untouched when nothing carries a parent id (old rows)", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash", toolCallId: "tc_1", input: { command: "ls" } }),
+      item({ seq: 2, type: "text", content: "done" }),
+    ]);
+    expect(nestEntries(entries)).toEqual(entries);
   });
 
   it("keeps the terminal status when items arrive newest-first (pending must not overwrite completed)", () => {

@@ -40,7 +40,7 @@ import { api } from "@multiremi/core/api";
 import { useTranscriptViewStore, type TranscriptSortDirection } from "@multiremi/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multiremi/core/types/agent";
 import { redactString } from "./redact";
-import { buildEntries, isStepRunning, type TimelineItem, type TranscriptEntry, type UsageSnapshot } from "./build-timeline";
+import { buildEntries, isStepRunning, nestEntries, type TimelineItem, type TranscriptEntry, type UsageSnapshot } from "./build-timeline";
 import { formatToolInputSummary, isBashCommandMissing, toolIcon } from "./tool-summaries";
 import { useT } from "../../i18n";
 
@@ -316,6 +316,10 @@ export function AgentTranscriptDialog({
     eventRefs.current.get(seq)?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
+  // Live-follow: the transcript is tailing a running task. Also gates the
+  // auto-expansion of running subagent groups.
+  const liveFollow = isLive && sortDirection === "chronological";
+
   // Follow the newest events while a task is live, but only when the user is
   // already parked near the bottom — scrolling up to read history pauses the
   // auto-follow (standard log-tail behavior). Only in chronological order.
@@ -340,11 +344,16 @@ export function AgentTranscriptDialog({
   }, [task.relative_work_dir]);
 
   const handleCopyAll = useCallback(() => {
+    // Flat chronological order, with subagent steps indented one level — same
+    // fail-open rule as nestEntries: an unknown parent id stays flush left.
+    const stepIds = new Set(displayItems.map((item) => item.toolCallId).filter(Boolean));
     const text = displayItems
       .map((item) => {
         const label = getEventLabel(item);
         const summary = getEventSummary(item);
-        return `[${label}] ${summary}`;
+        const parentId = item.meta?.parent_tool_call_id;
+        const nested = typeof parentId === "string" && parentId !== item.toolCallId && stepIds.has(parentId);
+        return `${nested ? "  " : ""}[${label}] ${summary}`;
       })
       .join("\n");
     void copyText(text).then((ok) => {
@@ -403,7 +412,9 @@ export function AgentTranscriptDialog({
   // buildEntries pairs chronologically; apply the display sort to the entries
   // afterward so newest-first doesn't corrupt the pairing.
   const entries = useMemo(() => {
-    const paired = buildEntries(filteredItems);
+    // Nest before the display sort so a subagent's steps stay chronological
+    // inside their group while the top level follows the chosen direction.
+    const paired = nestEntries(buildEntries(filteredItems));
     return sortDirection === "newest_first" ? [...paired].reverse() : paired;
   }, [filteredItems, sortDirection]);
   const planEntries = useMemo(() => {
@@ -720,11 +731,17 @@ export function AgentTranscriptDialog({
                   <TranscriptStepRow
                     key={`s-${entry.toolCallId}`}
                     ref={(el) => {
-                      if (el) eventRefs.current.set(entry.seq, el);
-                      else eventRefs.current.delete(entry.seq);
+                      // Nested children have no row of their own while the group
+                      // is collapsed — register the group for their seqs too, so
+                      // timeline-bar navigation still lands on them.
+                      for (const seq of [entry.seq, ...(entry.children ?? []).map((c) => c.seq)]) {
+                        if (el) eventRefs.current.set(seq, el);
+                        else eventRefs.current.delete(seq);
+                      }
                     }}
                     step={entry}
-                    isSelected={selectedSeq === entry.seq}
+                    selectedSeq={selectedSeq}
+                    liveFollow={liveFollow}
                   />
                 ) : (
                   <TranscriptEventRow
@@ -980,23 +997,44 @@ const TranscriptEventRow = ({
 
 interface TranscriptStepRowProps {
   step: Extract<TranscriptEntry, { kind: "step" }>;
-  isSelected: boolean;
+  selectedSeq: number | null;
+  liveFollow: boolean;
+}
+
+/** Agent / Task (legacy) steps delegate to a subagent — they own children and report Markdown. */
+function isSubagentStep(tool?: string): boolean {
+  return tool === "Agent" || tool === "Task";
 }
 
 const TranscriptStepRow = ({
   ref,
   step,
-  isSelected,
+  selectedSeq,
+  liveFollow,
 }: TranscriptStepRowProps & { ref?: React.Ref<HTMLDivElement> }) => {
   const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
+  const autoExpanded = useRef(false);
   const Icon = toolIcon(step.tool);
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
   const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
   const failed = step.status === "failed";
+  const children = step.children ?? [];
+  const isSelected = selectedSeq === step.seq || children.some((child) => child.seq === selectedSeq);
   const hasDetail =
-    (step.input && Object.keys(step.input).length > 0) || Boolean(step.output && step.output.length > 0);
+    (step.input && Object.keys(step.input).length > 0) ||
+    Boolean(step.output && step.output.length > 0) ||
+    children.length > 0;
+
+  // Open a running subagent group once while the dialog tails the task, so its
+  // steps appear as they arrive. Only once — a later collapse stays collapsed.
+  useEffect(() => {
+    if (autoExpanded.current) return;
+    if (!liveFollow || !running || !isSubagentStep(step.tool)) return;
+    autoExpanded.current = true;
+    setExpanded(true);
+  }, [liveFollow, running, step.tool]);
 
   return (
     <div ref={ref} className={cn("group transition-colors", isSelected && "bg-accent/50")}>
@@ -1016,6 +1054,11 @@ const TranscriptStepRow = ({
             <Icon className="h-3 w-3" />
             {step.tool ?? "Tool"}
           </span>
+          {children.length > 0 && (
+            <span className="inline-flex items-center shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium mt-0.5 bg-muted text-muted-foreground">
+              {t(($) => $.transcript.nested_steps, { count: children.length })}
+            </span>
+          )}
           <CollapsibleTrigger
             className={cn(
               "flex-1 text-left text-xs min-w-0 py-0.5 transition-colors text-muted-foreground",
@@ -1054,7 +1097,29 @@ const TranscriptStepRow = ({
                   {JSON.stringify(step.input, null, 2)}
                 </pre>
               )}
-              {step.output && <StepOutput output={step.output} meta={step.meta} />}
+              {children.length > 0 && (
+                <div className="border-l-2 border-border pl-2 divide-y">
+                  {children.map((child) =>
+                    child.kind === "step" ? (
+                      <TranscriptStepRow
+                        key={`s-${child.toolCallId}`}
+                        step={child}
+                        selectedSeq={selectedSeq}
+                        liveFollow={liveFollow}
+                      />
+                    ) : null,
+                  )}
+                </div>
+              )}
+              {step.output &&
+                (isSubagentStep(step.tool) ? (
+                  // The subagent's final report — Markdown, not a JSON dump.
+                  <div className="max-h-96 overflow-auto rounded bg-muted/40 border p-3 text-xs">
+                    <Markdown mode="minimal">{step.output}</Markdown>
+                  </div>
+                ) : (
+                  <StepOutput output={step.output} meta={step.meta} />
+                ))}
             </div>
           </CollapsibleContent>
         )}

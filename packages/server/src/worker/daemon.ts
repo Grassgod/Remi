@@ -1140,9 +1140,39 @@ interface ToolCallState {
   lastFingerprint?: string;
   /** Whether the emitted tool_use already carried the input (so the result needn't repeat it). */
   inputOnUse: boolean;
+  /** Owning subagent call, decided once at state creation (see resolveParentToolCallId). */
+  parentToolCallId?: string;
 }
 
 const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
+
+/** Tool names that spawn a subagent — `Task` is the legacy name of `Agent`. */
+const SUBAGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
+
+/**
+ * claude-agent-acp forwards a subagent's inner tool calls flat, dropping the
+ * SDK's `parent_tool_use_id`, so ownership can only be inferred from the time
+ * window: while an Agent call is open, the calls that start belong to it. With
+ * two or more Agents open (parallel / background subagents) the assignment
+ * would be a guess — wrong nesting is worse than none, so those stay flat.
+ */
+function resolveParentToolCallId(
+  id: string,
+  name: string,
+  tools: Map<string, ToolCallState>,
+): string | undefined {
+  // A subagent spawned by a subagent stays top-level.
+  if (SUBAGENT_TOOL_NAMES.has(name)) return undefined;
+  let parent: string | undefined;
+  for (const [candidateId, candidate] of tools) {
+    if (candidateId === id) continue;
+    if (!SUBAGENT_TOOL_NAMES.has(candidate.name)) continue;
+    if (TERMINAL_TOOL_STATUS.has(candidate.status)) continue;
+    if (parent !== undefined) return undefined;
+    parent = candidateId;
+  }
+  return parent;
+}
 
 /**
  * The only key the claude bridge's initial `tool_call` yields for a shell call:
@@ -1234,6 +1264,13 @@ function mapToolEvent(
     startMs: Date.now(),
     terminalEmitted: false,
     inputOnUse: false,
+    // Claude only: the heuristic's precondition — an open Agent call blocks the
+    // foreground until its subagent finishes — is verified for the claude bridge
+    // alone. Codex collab spawns normalize to `Agent` as well, but the caller
+    // keeps working alongside them, and codex carries real topology
+    // (receiverThreadIds) for a later batch to use.
+    parentToolCallId:
+      adapter.agentType === "claude" ? resolveParentToolCallId(id, name, tools) : undefined,
   };
   // Merge late-arriving fields; a refining event's keys win over the earlier
   // ones (claude's initial tool_call only yields a terminal placeholder, the
@@ -1244,6 +1281,9 @@ function mapToolEvent(
   if (input) state.input = { ...state.input, ...input };
   if (status) state.status = status;
   tools.set(id, state);
+  // Carried by every emission of this call (tool_use and tool_result) so the
+  // frontend can nest it whichever message it sees first.
+  if (state.parentToolCallId) meta.parent_tool_call_id = state.parentToolCallId;
 
   if (isInitial) {
     // A placeholder-only input isn't the tool's args — emitting it would pin the

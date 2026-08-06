@@ -55,8 +55,12 @@ export type TranscriptEntry =
       meta?: Record<string, unknown>;
       durationMs?: number;
       createdAt?: string;
+      /** Steps a subagent ran inside this one (see nestEntries). */
+      children?: TranscriptEntry[];
     }
   | { kind: "event"; seq: number; item: TimelineItem };
+
+type StepEntry = Extract<TranscriptEntry, { kind: "step" }>;
 
 const TERMINAL_STATUS = new Set(["completed", "failed"]);
 
@@ -108,6 +112,46 @@ export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
     out.push({ kind: "event", seq: item.seq, item });
   }
   return out;
+}
+
+/**
+ * Move steps the daemon attributed to a subagent call (`meta.parent_tool_call_id`)
+ * into that call's `children`, preserving their chronological order. A parent id
+ * that isn't a step in this list (filtered out, or a message predating the
+ * attribution) fails open: the step stays top-level, exactly as it renders today.
+ */
+export function nestEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const stepIds = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind === "step") stepIds.add(entry.toolCallId);
+  }
+
+  const childrenByParent = new Map<string, TranscriptEntry[]>();
+  const top: TranscriptEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "step") {
+      const parentId = parentIdOf(entry);
+      if (parentId && parentId !== entry.toolCallId && stepIds.has(parentId)) {
+        const siblings = childrenByParent.get(parentId);
+        if (siblings) siblings.push(entry);
+        else childrenByParent.set(parentId, [entry]);
+        continue;
+      }
+    }
+    top.push(entry);
+  }
+
+  if (childrenByParent.size === 0) return entries;
+  return top.map((entry) => {
+    if (entry.kind !== "step") return entry;
+    const children = childrenByParent.get(entry.toolCallId);
+    return children ? { ...entry, children } : entry;
+  });
+}
+
+function parentIdOf(step: StepEntry): string | undefined {
+  const parentId = step.meta?.parent_tool_call_id;
+  return typeof parentId === "string" && parentId ? parentId : undefined;
 }
 
 export function isStepRunning(status?: string): boolean {
