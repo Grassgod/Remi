@@ -463,7 +463,11 @@ export async function handleAgentStream(
               entry.status = "done";
               entry.durationMs = durationMs;
               entry.resultPreview = resultPreview;
-              if (resolvedInput && !entry.input) entry.input = resolvedInput;
+              // Latest wins: the terminal frame refines the args (claude sends
+              // the command after the initial call) and enriches them (codex
+              // collab lands agentsStates + the subagent's answer only here).
+              // Keys the terminal frame omits survive from the initial input.
+              if (resolvedInput) entry.input = { ...entry.input, ...resolvedInput };
               if (!entry.stepAdded) {
                 entry.stepAdded = true;
                 const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();

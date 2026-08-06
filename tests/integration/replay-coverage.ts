@@ -99,7 +99,8 @@ function processFixture(filePath: string): CoverageResult {
           if (entry) {
             entry.status = "done";
             const resolvedInput = adapter.extractToolInput(tc);
-            if (resolvedInput) entry.input = resolvedInput;
+            // Mirrors stream-handler.ts: latest wins, merged over the initial input.
+            if (resolvedInput) entry.input = { ...entry.input, ...resolvedInput };
             if (!entry.stepAdded) {
               entry.stepAdded = true;
               const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();

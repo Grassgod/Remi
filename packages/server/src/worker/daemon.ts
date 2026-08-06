@@ -1138,8 +1138,13 @@ interface ToolCallState {
   startMs: number;
   terminalEmitted: boolean;
   lastFingerprint?: string;
-  /** Whether the emitted tool_use already carried the input (so the result needn't repeat it). */
-  inputOnUse: boolean;
+  /**
+   * JSON of the input as last emitted for this call. A later message repeats the
+   * input only when the merged one differs, which covers both directions: claude
+   * emits nothing on the use and the args later, codex collab emits an input up
+   * front and enriches it (agentsStates, receiverThreadIds) on the terminal frame.
+   */
+  lastEmittedInputJson?: string;
   /** Owning subagent call, decided once at state creation (see resolveParentToolCallId). */
   parentToolCallId?: string;
 }
@@ -1263,7 +1268,6 @@ function mapToolEvent(
     status: status ?? "pending",
     startMs: Date.now(),
     terminalEmitted: false,
-    inputOnUse: false,
     // Claude only: the heuristic's precondition — an open Agent call blocks the
     // foreground until its subagent finishes — is verified for the claude bridge
     // alone. Codex collab spawns normalize to `Agent` as well, but the caller
@@ -1291,7 +1295,7 @@ function mapToolEvent(
     // arrives in the refining update) would never render. Park the id in meta
     // and leave the input to the paired tool_result.
     const meaningful = hasMeaningfulInput(state.input);
-    state.inputOnUse = meaningful;
+    if (meaningful) state.lastEmittedInputJson = JSON.stringify(state.input);
     if (!meaningful && state.input?.[TERMINAL_PLACEHOLDER_KEY] != null) {
       meta[TERMINAL_PLACEHOLDER_KEY] = state.input[TERMINAL_PLACEHOLDER_KEY];
     }
@@ -1317,18 +1321,22 @@ function mapToolEvent(
       if (isTerminal) state.terminalEmitted = true;
       const resultMeta: Record<string, unknown> = { ...meta };
       if (isTerminal) resultMeta.duration_ms = Date.now() - state.startMs;
+      // Repeat the input only when it changed since the last emission: claude
+      // sends the args after the use, codex collab enriches an already-emitted
+      // input with the subagent's states and answer on the terminal frame. An
+      // unchanged input stays off the result, as before.
+      const mergedInputJson = state.input ? JSON.stringify(state.input) : undefined;
+      const inputChanged = mergedInputJson != null && mergedInputJson !== state.lastEmittedInputJson;
       messages.push({
         type: "tool_result",
         toolCallId: id,
         status: status ?? state.status,
         tool: state.name,
-        // Carry the input only when the tool_use didn't (claude sends the args
-        // in the update, not the initial call), so the step card can show them.
-        input: state.inputOnUse ? undefined : state.input,
+        input: inputChanged ? state.input : undefined,
         output,
         meta: Object.keys(resultMeta).length ? resultMeta : undefined,
       });
-      if (!state.inputOnUse && hasMeaningfulInput(state.input)) state.inputOnUse = true;
+      if (inputChanged) state.lastEmittedInputJson = mergedInputJson;
     }
   }
 

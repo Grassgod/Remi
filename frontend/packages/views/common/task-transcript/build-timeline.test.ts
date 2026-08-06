@@ -151,6 +151,48 @@ describe("buildEntries pairing", () => {
     expect((entries[0] as { input?: Record<string, unknown> }).input?.command).toBe("echo hi");
   });
 
+  it("merges an enriched result input over the one the use carried (codex collab)", () => {
+    // The wait call's answer only exists on the terminal frame; taking the
+    // result's input as a fallback would pin the card to the initial snapshot.
+    const entries = buildEntries([
+      item({
+        seq: 1,
+        type: "tool_use",
+        tool: "wait",
+        toolCallId: "call_w",
+        status: "in_progress",
+        input: { prompt: null, senderThreadId: "s1", receiverThreadIds: ["a", "b"], agentsStates: {} },
+      }),
+      item({
+        seq: 2,
+        type: "tool_result",
+        tool: "wait",
+        toolCallId: "call_w",
+        status: "completed",
+        input: {
+          prompt: null,
+          senderThreadId: "s1",
+          receiverThreadIds: ["b"],
+          agentsStates: { b: { status: "completed", message: "Salt winds comb the waves" } },
+        },
+      }),
+    ]);
+
+    const input = (entries[0] as { input?: Record<string, unknown> }).input!;
+    expect(input.agentsStates).toEqual({ b: { status: "completed", message: "Salt winds comb the waves" } });
+    expect(input.receiverThreadIds).toEqual(["b"]);
+    expect(input.senderThreadId).toBe("s1");
+  });
+
+  it("keeps keys only the use carried when the result repeats a subset", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash", toolCallId: "tc", input: { command: "ls", cwd: "/repo" } }),
+      item({ seq: 2, type: "tool_result", tool: "Bash", toolCallId: "tc", status: "completed", input: { command: "ls -la" } }),
+    ]);
+
+    expect((entries[0] as { input?: Record<string, unknown> }).input).toEqual({ command: "ls -la", cwd: "/repo" });
+  });
+
   it("falls back to createdAt delta when meta.duration_ms is absent", () => {
     const entries = buildEntries([
       item({ seq: 1, type: "tool_use", toolCallId: "tc", createdAt: "2026-07-12T00:00:00.000Z" }),

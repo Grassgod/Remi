@@ -109,6 +109,18 @@ describe("Feishu codex collab summaries", () => {
     }
   });
 
+  it("summarizes the merged input the card now keeps, not the initial snapshot", () => {
+    // stream-handler.ts merges the terminal frame's input over the initial one
+    // (it used to keep the first). This is what the card summary reads: with
+    // first-wins the finished wait step still advertised pending agents.
+    const [initial] = collabInputs("wait", "in_progress");
+    const [terminal] = collabInputs("wait", "completed");
+    const merged = { ...initial, ...terminal };
+
+    expect(formatToolInputSummary("wait", initial)).toBe("waiting for 2 agents");
+    expect(formatToolInputSummary("wait", merged)).toBe("1 done");
+  });
+
   it("gives the wait verb its own card icon", () => {
     expect(TOOL_ICONS.wait).toBe("time_outlined");
     expect(TOOL_ICONS.Agent).toBe("robot_outlined");

@@ -276,3 +276,50 @@ describe("daemon mapper subagent attribution", () => {
     }
   });
 });
+
+// ─── Input refresh on the result ────────────────────────────────────────────
+
+function replayFixture(name: string, agentType: string) {
+  const frames = JSON.parse(
+    readFileSync(new URL(`../../fixtures/acp/${name}`, import.meta.url), "utf-8"),
+  ) as Array<{ params?: { update?: Record<string, unknown> } }>;
+  const map = createEventMapper(createAdapter(agentType));
+  return frames.flatMap((frame) => (frame.params?.update ? map(event(frame.params.update)) : []));
+}
+
+describe("daemon mapper input refresh", () => {
+  it("carries the subagent's answer to the result in the recorded collab fixture", () => {
+    // codex collab enriches an already-emitted input: the terminal `wait` frame
+    // is the only place agentsStates[*].message (the subagent's verbatim answer)
+    // ever appears, and no collab frame carries output at all.
+    const emitted = replayFixture("codex-collab-notifications-1786010059380.json", "codex");
+
+    const waitResults = emitted.filter((m) => m.type === "tool_result" && m.tool === "wait");
+    expect(waitResults).toHaveLength(2);
+    const answers = waitResults.flatMap((m) => {
+      const states = (m.input?.agentsStates ?? {}) as Record<string, { message?: string }>;
+      return Object.values(states).map((s) => s.message);
+    });
+    expect(answers).toEqual([
+      "Snow crowns silent peaks\nClouds drift through the granite dawn\nPines breathe in valleys",
+      "Salt winds comb the waves\nMoonlight drifts on deep water\nShells dream beneath foam",
+    ]);
+
+    // The spawn frames enrich too: the receiver list is empty on the initial
+    // frame and only fills in when the call completes.
+    const spawnUse = emitted.find((m) => m.type === "tool_use" && m.tool === "Agent");
+    const spawnResult = emitted.find((m) => m.type === "tool_result" && m.tool === "Agent");
+    expect(spawnUse?.input?.receiverThreadIds).toEqual([]);
+    expect(spawnResult?.input?.receiverThreadIds).toEqual(["019fd67e-f5d8-7041-87ee-6f1d8d52280f"]);
+  });
+
+  it("still omits the input from a result whose input never changed", () => {
+    const emitted = replayFixture("codex-bash-exec-notifications-1778495289225.json", "codex");
+
+    const use = emitted.find((m) => m.type === "tool_use");
+    const result = emitted.find((m) => m.type === "tool_result");
+    expect(use?.input).toMatchObject({ command: "echo hello_from_acp_test" });
+    // The initial frame already carried the args and nothing refined them.
+    expect(result?.input).toBeUndefined();
+  });
+});
