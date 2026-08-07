@@ -101,10 +101,6 @@ cat <<EOF
 │ nginx installed. Remi reachable at:                          │
 │   http://$(hostname)/                                        │
 │                                                              │
-│ One-time SSO chore: register the new callback URL in your    │
-│ identity provider (Google Cloud Console for Google):         │
-│   http://$(hostname)/api/auth/sso/google/callback           │
-│                                                              │
 │ Files installed:                                             │
 │   $CONF_DST                          │
 │   $LINK_DST                              │

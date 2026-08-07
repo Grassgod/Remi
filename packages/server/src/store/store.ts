@@ -1,5 +1,5 @@
 import { Cron } from "croner";
-import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/sql-database.js";
+import { type SqlDatabase, openMultiremiDatabase } from "@multiremi/store/db/postgres.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";

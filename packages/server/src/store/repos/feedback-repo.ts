@@ -1,5 +1,5 @@
 // Feedback CRUD + rate limiting, extracted verbatim from MultiremiStore (delegated).
-import { type SqlDatabase } from "@multiremi/store/db/sql-database.js";
+import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import { cleanOptionalString, nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import type {

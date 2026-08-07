@@ -142,9 +142,8 @@ bun test tests/memory.test.ts
 # Develop the Web Dashboard frontend
 cd web/frontend && bun install && bun run dev
 
-# Build a distributable bundle
-bun run build         # with obfuscation (release)
-bun run build:dev     # without obfuscation
+# Build the release archives (compiled binary + ACP wrapper, all platforms)
+bun run build:multiremi
 ```
 
 Conventions:

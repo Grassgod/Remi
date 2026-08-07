@@ -45,8 +45,5 @@ jobs:
       - name: Install dependencies from the public registry
         run: bun install --registry https://registry.npmjs.org --frozen-lockfile --ignore-scripts
 
-      - name: Build release archive
-        run: REMI_VERSION=0.0.0-ci bun run build
-
       - name: Build Multiremi daemon CLI release archives
         run: MULTIREMI_VERSION=v0.0.0-ci bun run build:multiremi

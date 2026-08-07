@@ -106,7 +106,7 @@ function showHelp(): void {
 function loadPluginCommands(): void {
   try {
     const { loadConfig } = require("@shared/config.js");
-    const { PluginRegistry } = require("../daemon/agent-runtime/plugins/registry.js");
+    const { PluginRegistry } = require("@daemon/agent-runtime/plugins/registry.js");
     const builtins = new Set(Object.keys(COMMANDS));
     // Guard: a plugin must not shadow a built-in command.
     const safeRegister: typeof register = (name, description, loader, hidden) => {
@@ -117,8 +117,10 @@ function loadPluginCommands(): void {
       register(name, description, loader, hidden);
     };
     new PluginRegistry().load(loadConfig()).dispatchCli(safeRegister);
-  } catch {
-    // never block the dispatcher on plugin load issues
+  } catch (e) {
+    // never block the dispatcher on plugin load issues — but say so, otherwise a
+    // broken require path silently disables every plugin command forever.
+    console.error(`[plugins] CLI command loading failed: ${e instanceof Error ? e.message : e}`);
   }
 }
 

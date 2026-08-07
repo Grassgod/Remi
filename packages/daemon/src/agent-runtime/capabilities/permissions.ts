@@ -13,8 +13,6 @@ export const permissionsBlock: CapabilityBlock = {
     };
     return {
       permissionMode: sessionRow?.mode ?? null,
-      permissionHandler: null,
-      elicitationHandler: null,
       recovery,
     };
   },
@@ -24,8 +22,6 @@ export const permissionsBlock: CapabilityBlock = {
       // "ask" keeps the agent's own permission gate active so requests reach
       // the daemon's permission handler (routed to a human via the server).
       permissionMode: ctx.approvalMode === "ask" ? "default" : ("bypassPermissions" as const),
-      permissionHandler: null,
-      elicitationHandler: null,
     };
   },
 };

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "@connectors/base.js";
-import type { MediaAttachment, RequestPermissionParams, PermissionOutcome, ElicitationCreateParams, ElicitationResult } from "@shared/contracts/acp-protocol.js";
+import type { MediaAttachment } from "@shared/contracts/acp-protocol.js";
 import type { AgentResponse, ProviderEvent } from "@shared/contracts/provider-types.js";
 import type { RemiConfig } from "@shared/config.js";
 import type { SessionRow } from "@shared/db/sessions.js";
@@ -8,11 +8,6 @@ import type { MemoryStore } from "@memory/store.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { LocalPathLocker } from "./workspace/ephemeral.js";
 import type { AcpMcpServer } from "./mcp/ephemeral.js";
-
-// ── Capability output types ──────────────────────────────
-
-export type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
-export type ElicitationHandler = (params: ElicitationCreateParams) => Promise<ElicitationResult>;
 
 // ── AgentSessionConfig ───────────────────────────────────
 
@@ -31,8 +26,6 @@ export interface AgentSessionConfig {
   media?: MediaAttachment[];
   addDirs?: string[];
   permissionMode: string | null;
-  permissionHandler: PermissionHandler | null;
-  elicitationHandler: ElicitationHandler | null;
   traceId?: string;
   signal?: AbortSignal;
   recovery?: RecoveryConfig;

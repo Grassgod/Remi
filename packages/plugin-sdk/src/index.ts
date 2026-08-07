@@ -37,7 +37,9 @@ export interface PluginManifest {
   engines?: { remiSdk?: string };
 }
 
-// ── Injected auth contract (structural mirror of src/auth/types.ts) ──────────
+// ── Injected auth contract ───────────────────────────────────────────────────
+// Structural mirror of packages/auth/src/types.ts (the source of truth). Kept
+// restated here rather than imported so the SDK stays dependency-free.
 export interface TokenEntry {
   value: string;
   expiresAt: number;
@@ -51,7 +53,7 @@ export interface TokenStatus {
   expiresAt: number;
   refreshable: boolean;
 }
-/** An auth adapter the host's AuthStore can manage. Matches src/auth/types.ts AuthAdapter. */
+/** An auth adapter the host's AuthStore can manage. Matches packages/auth/src/types.ts AuthAdapter. */
 export interface AuthAdapterLike {
   readonly service: string;
   getToken(type?: string): Promise<string>;

@@ -34,7 +34,6 @@
   "scripts": {
     "start": "bun run apps/remi/main.ts serve",
     "serve": "bun run apps/remi/main.ts serve",
-    "build": "bun run scripts/build.ts",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
     "test": "bun test",
     "test:frontend": "bun run --filter '@multiremi/*' test",

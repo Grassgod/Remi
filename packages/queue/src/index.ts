@@ -17,10 +17,6 @@ export class RemiQueueManager {
   // ── Workers ──
   private workers: Worker[] = [];
 
-  // ── Push rate limiter ──
-  private pushCount = 0;
-  private pushCountResetAt = Date.now();
-
   // ── Remi ref for cron handlers ──
   private remi: QueueHost | null = null;
 
@@ -28,32 +24,6 @@ export class RemiQueueManager {
     this.cronQueue = new Queue<CronJobData>(QUEUES.CRON, {
       embedded: true,
     });
-  }
-
-  /** Enqueue a one-shot cron job (e.g. release-notes generation). */
-  async enqueueCron(data: CronJobData): Promise<void> {
-    await this.cronQueue.add("cron", data, {
-      attempts: 2,
-      backoff: { type: "fixed", delay: 30_000 },
-      // Remove completed cron jobs. bunqueue@2.8.23 narrowed removeOnComplete to
-      // boolean (age-based retention was silently ignored, see bunqueue#90), so
-      // age-based GC is not available on the pinned version.
-      removeOnComplete: true,
-    });
-  }
-
-  // ══════════════════════════════════════════════════════════
-  //  Push rate limiter (for future cron push handlers)
-  // ══════════════════════════════════════════════════════════
-
-  /** Returns false if push rate exceeded (max 20/min). */
-  checkPushRate(): boolean {
-    if (Date.now() - this.pushCountResetAt > 60_000) {
-      this.pushCount = 0;
-      this.pushCountResetAt = Date.now();
-    }
-    this.pushCount++;
-    return this.pushCount <= 20;
   }
 
   // ══════════════════════════════════════════════════════════

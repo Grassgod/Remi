@@ -8,8 +8,20 @@
  * MultiremiStore, ...) structurally satisfy them at the injection sites, so no
  * multiremi runtime/import changes are needed.
  *
+ * Shapes that are already single-sourced in @multiremi/contracts (the L0
+ * protocol package, not the multiremi server) are re-exported from here rather
+ * than redeclared, so the daemon and the server never drift apart.
+ *
  * Behavior is unchanged — these are type-only declarations.
  */
+
+import type {
+  CreateSkillInput,
+  ImportSkillInput,
+  MultiremiSkillFile,
+  MultiremiSkillImportSource,
+  RunAutopilotInput,
+} from "@multiremi/contracts/types.js";
 
 // --- Task shape (prompts/ephemeral.ts, skills/ephemeral.ts) ----------------
 
@@ -231,41 +243,12 @@ export interface RepoSpec {
 
 // --- Skill import (skills/skill-import.ts) ---------------------------------
 
-export type SkillImportSource = "github" | "skills_sh" | "clawhub";
-
-export interface SkillImportFile {
-  id?: string;
-  skillId?: string;
-  path: string;
-  content: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface CreateSkillInput {
-  id?: string;
-  workspaceId?: string | null;
-  workspace_id?: string | null;
-  name: string;
-  description?: string;
-  content?: string;
-  config?: Record<string, unknown> | null;
-  files?: SkillImportFile[];
-  createdBy?: string | null;
-  created_by?: string | null;
-}
-
-export interface ImportSkillInput {
-  url?: string;
-  sourceUrl?: string;
-  source_url?: string;
-  workspaceId?: string | null;
-  workspace_id?: string | null;
-  name?: string | null;
-  description?: string | null;
-  createdBy?: string | null;
-  created_by?: string | null;
-}
+export type {
+  CreateSkillInput,
+  ImportSkillInput,
+  MultiremiSkillFile as SkillImportFile,
+  MultiremiSkillImportSource as SkillImportSource,
+};
 
 // --- Autopilot + store shapes (scheduler.ts) -------------------------------
 
@@ -316,11 +299,7 @@ export interface AutopilotFailureThresholdCandidate {
   failRatio: number;
 }
 
-export interface RunAutopilotInput {
-  source?: string;
-  prompt?: string | null;
-  payload?: unknown | null;
-}
+export type { RunAutopilotInput };
 
 /** Store surface the scheduler depends on (8 methods). */
 export interface AutopilotStore {

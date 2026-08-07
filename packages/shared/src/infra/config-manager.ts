@@ -283,6 +283,3 @@ export const configManager = new ConfigManager();
 
 /** Backward-compatible alias. */
 export const symlinkManager = configManager;
-
-/** Re-export SymlinkManager as alias for ConfigManager. */
-export { ConfigManager as SymlinkManager };

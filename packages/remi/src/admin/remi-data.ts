@@ -18,6 +18,7 @@ import { stripContextTags } from "../conversation/parser.js";
 import { getDb } from "@shared/db/index.js";
 import { readLogEntries, type LogEntry } from "@shared/logger.js";
 import { MemoryStore, type RecallDebugResult } from "@memory/store.js";
+import type { TokenStatus as AuthTokenStatus } from "@auth/types.js";
 import { ProjectStore } from "../project/store.js";
 import { Cron } from "croner";
 
@@ -41,13 +42,9 @@ export interface EntityDetail extends EntitySummary {
   metadata: Record<string, unknown>;  // complete YAML frontmatter
 }
 
-export interface TokenStatus {
-  service: string;
-  type: string;
-  valid: boolean;
-  expiresAt: number;
+/** The admin API's token row: AuthAdapter.status() plus a human-readable countdown. */
+export interface TokenStatus extends AuthTokenStatus {
   expiresIn: string;   // human-readable
-  refreshable: boolean;
 }
 
 export interface DailyLogEntry {

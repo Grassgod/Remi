@@ -1,10 +1,6 @@
 /**
  * Legacy bearer-token middleware for Hono.
  *
- * SSO session cookie auth is provided separately by the SSO plugin
- * (src/daemon/agent-runtime/plugins/sso) and is composed in
- * src/remi/admin/server.ts before this one.
- *
  * This middleware is a no-op unless REMI_WEB_AUTH_TOKEN is set.
  */
 

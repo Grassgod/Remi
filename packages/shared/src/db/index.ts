@@ -153,10 +153,6 @@ export function getDb(): Database {
       status        TEXT NOT NULL DEFAULT 'active'
     );
 
-    -- (SSO plugin tables — users, user_sessions, sso_providers, sso_settings,
-    --  clusters — are defined inside src/plugins/sso/db/migrations.ts and
-    --  installed by SsoPlugin.migrate() at startup.)
-
     -- Config store
     CREATE TABLE IF NOT EXISTS remi_config (
       section    TEXT NOT NULL,

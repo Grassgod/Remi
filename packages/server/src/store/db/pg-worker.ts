@@ -5,7 +5,7 @@
  * share one connection) and answers synchronous requests from the main thread:
  * the main thread posts a query then blocks on Atomics.wait; this worker runs
  * the async query and writes the JSON result into the shared data buffer, then
- * Atomics.notify wakes the main thread. See sql-database.ts (PostgresSyncDatabase).
+ * Atomics.notify wakes the main thread. See postgres.ts (PostgresSyncDatabase).
  */
 // In a Bun Worker, the global `self` is the Worker scope. tsc's default DOM lib
 // types `self` as `Window`, so reference it through a locally-typed alias rather

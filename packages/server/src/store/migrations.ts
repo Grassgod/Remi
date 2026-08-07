@@ -1,4 +1,4 @@
-import { type SqlDatabase } from "@multiremi/store/db/sql-database.js";
+import { type SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("multiremi-store");
