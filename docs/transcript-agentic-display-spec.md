@@ -203,6 +203,12 @@ the prompt summary (already works via `FORMATTERS.Agent` reading `prompt`);
   The resolver now maps to the closest advertised mode and skips the call
   when nothing matches. Unrelated to this spec's batches, but it gated every
   codex smoke.
+- **Coverage is path-dependent (MUL-23, multi_agent enabled fleet-wide):** when
+  codex spawns subagents one-per-call, spawns surface as `collabAgentToolCall`
+  and the cards render (MUL-20). When it batch-spawns in one shot, the spawn
+  events ride `subAgentActivity` — which the bridge drops — and the transcript
+  shows only an empty `wait` card while the answers still reach the final
+  reply. Raises the priority of the upstream codex-acp issue (§7).
 - End-to-end confirmed on the fleet: `wait`/`closeAgent` tool_results carry
   `input.agentsStates` with verbatim subagent answers (P2.5 path), and claude
   subagent steps carry `meta.parent_tool_call_id` (P2 path).
