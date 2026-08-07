@@ -55,7 +55,7 @@ export interface WebDashboardOptions {
 export function createApp(opts: { authToken?: string; devMode?: boolean } = {}): Hono {
   const authToken = opts.authToken ?? "";
   const devMode = opts.devMode ?? false;
-  // Frontend is now a separate Next.js app (frontend/apps/console), not served here.
+  // The web dashboard UI has been removed; this server exposes API routes only.
 
   const data = new RemiData();
   const app = new Hono();
@@ -212,10 +212,9 @@ export function createApp(opts: { authToken?: string; devMode?: boolean } = {}):
     return new Response(Bun.file(requested));
   });
 
-  // ── Catch-all: the frontend is now a separate Next.js app (frontend/apps/console).
-  // This backend only serves API routes; unknown paths get a JSON pointer.
+  // ── Catch-all: this backend only serves API routes; unknown paths get a JSON pointer.
   if (!devMode) {
-    app.all("/*", (c) => c.json({ service: "remi-api", ui: "frontend/apps/console" }));
+    app.all("/*", (c) => c.json({ service: "remi-api" }));
   }
 
   // Dev mode fallback
