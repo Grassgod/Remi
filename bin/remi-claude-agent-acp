@@ -145,18 +145,21 @@ function findUpstreamPackageRoot() {
     process.env.REMI_CLAUDE_AGENT_ACP_PATH,
   ];
 
-  const localPackage = resolvePackageWithRequire(PACKAGE_NAMES);
-  if (localPackage) candidates.push(localPackage);
-
-  const pathBinary = resolveCommand("claude-agent-acp");
-  if (pathBinary) candidates.push(pathBinary);
-
-  // remi-provisioned location (`remi` installs the bridge here when missing).
+  // remi-provisioned location first: this is the only copy BRIDGE_PIN
+  // converges, so it must beat require/PATH/global discovery — a stale
+  // npm-global install (0.44.0 was found shadowing the pin on a fleet
+  // machine) would otherwise silently downgrade every session.
   const remiHome = process.env.REMI_HOME || join(homedir(), ".remi");
   candidates.push(
     join(remiHome, "acp", "node_modules", "@zed-industries", "claude-agent-acp"),
     join(remiHome, "acp", "node_modules", "@agentclientprotocol", "claude-agent-acp"),
   );
+
+  const localPackage = resolvePackageWithRequire(PACKAGE_NAMES);
+  if (localPackage) candidates.push(localPackage);
+
+  const pathBinary = resolveCommand("claude-agent-acp");
+  if (pathBinary) candidates.push(pathBinary);
 
   candidates.push(
     join(homedir(), ".npm-global", "lib", "node_modules", "@zed-industries", "claude-agent-acp"),
