@@ -213,6 +213,26 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.searchProjectDocs(project.id, "%unrelated%")).toEqual([]);
   });
 
+  it("lists workspace docs with the project JOIN and literal LIKE on Postgres", () => {
+    // listWorkspaceDocs adds a JOIN with an aliased column plus the same
+    // ESCAPE'd LIKE block — both must survive translateSqliteToPg.
+    const ws = freshWorkspace();
+    const alpha = store.createProject({ title: "Alpha PG", workspaceId: ws });
+    const beta = store.createProject({ title: "Beta PG", workspaceId: ws });
+    const percent = store.createProjectDoc(alpha.id, { kind: "memory", title: "Cache hit 90% on warm runs" });
+    store.createProjectDoc(beta.id, { kind: "wiki", title: "Unrelated page" });
+
+    const all = store.listWorkspaceDocs(ws).filter((doc) => doc.slug !== "_schema");
+    expect(all.map((doc) => [doc.title, doc.projectTitle]).sort()).toEqual([
+      ["Cache hit 90% on warm runs", "Alpha PG"],
+      ["Unrelated page", "Beta PG"],
+    ]);
+
+    expect(store.listWorkspaceDocs(ws, { q: "90%" }).map((doc) => doc.id)).toEqual([percent.id]);
+    expect(store.listWorkspaceDocs(ws, { q: "90a" })).toHaveLength(0);
+    expect(store.listWorkspaceDocs(ws, { kind: "memory" }).map((doc) => doc.id)).toEqual([percent.id]);
+  });
+
   it("registers runtimes and upserts them via ON CONFLICT (id) DO UPDATE", () => {
     const ws = freshWorkspace();
     const first = store.registerRuntime({ name: "rt-a", provider: "claude", workspaceId: ws, maxConcurrency: 3 });

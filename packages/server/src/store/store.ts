@@ -117,6 +117,7 @@ import type {
   MultiremiRuntimeModelListRequestStatus,
   MultiremiRuntimeUpdateRequest,
   MultiremiRuntimeUpdateRequestStatus,
+  MultiremiWorkspaceProjectDoc,
   PublishSessionResultInput,
   QuickCreateIssueInput,
   ReportRuntimeDirectoryScanInput,
@@ -5787,6 +5788,39 @@ runMigrations(this.db);
   }
 
   /**
+   * Workspace-wide doc listing for the Knowledge view: every project's docs in
+   * one query, joined with the project title so the client can group without a
+   * second fetch. Ordered by recency (a browse view, unlike the pinned-first
+   * per-project listing).
+   */
+  listWorkspaceDocs(workspaceId: string, input: { kind?: string | null; q?: string | null; limit?: number } = {}): MultiremiWorkspaceProjectDoc[] {
+    const kind = cleanOptionalString(input.kind);
+    const conditions = ["d.workspace_id = ?"];
+    const params: unknown[] = [workspaceId];
+    if (kind) {
+      conditions.push("d.kind = ?");
+      params.push(normalizeProjectDocKind(kind));
+    }
+    const term = String(input.q ?? "").trim();
+    if (term) {
+      // Same literal-substring LIKE as searchProjectDocs: escape %, _ and the
+      // escape char itself, LOWER() both sides, columns kept separate so a NULL
+      // summary cannot swallow the predicate.
+      const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+      conditions.push("(LOWER(d.title) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.summary) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.body) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.tags) LIKE LOWER(?) ESCAPE '\\')");
+      params.push(pattern, pattern, pattern, pattern);
+    }
+    params.push(clampWorkspaceDocLimit(input.limit));
+    const rows = this.db.query(
+      `SELECT d.*, p.title AS project_title FROM multiremi_project_docs d
+       JOIN multiremi_projects p ON p.id = d.project_id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY d.updated_at DESC LIMIT ?`,
+    ).all(...params) as Row[];
+    return rows.map((row) => ({ ...toProjectDoc(row), projectTitle: String(row.project_title ?? "") }));
+  }
+
+  /**
    * Seeds the project's `_schema` doc (the wiki maintenance rules) when it is
    * missing. Otherwise `_schema` is an ordinary doc: readable, editable,
    * revisioned — only the slug is reserved.
@@ -10509,6 +10543,14 @@ function clampSearchLimit(value: number | undefined): number {
   const limit = Number(value ?? 20);
   if (!Number.isFinite(limit) || limit <= 0) return 20;
   return Math.min(50, Math.floor(limit));
+}
+
+// Wider than clampSearchLimit: the Knowledge view browses a whole workspace,
+// not a single result page.
+function clampWorkspaceDocLimit(value: number | undefined): number {
+  const limit = Number(value ?? 200);
+  if (!Number.isFinite(limit) || limit <= 0) return 200;
+  return Math.min(500, Math.floor(limit));
 }
 
 function searchMatch(value: string, query: string): boolean {

@@ -703,6 +703,11 @@ export interface MultiremiProjectDocRevision {
   createdAt: string;
 }
 
+/** Workspace-wide doc listing entry: a doc plus its project's title for grouping. */
+export interface MultiremiWorkspaceProjectDoc extends MultiremiProjectDoc {
+  projectTitle: string;
+}
+
 /** Injection index attached to task dispatch. Bodies only for memory entries, trimmed. */
 export interface MultiremiProjectDocIndexEntry {
   id: string;

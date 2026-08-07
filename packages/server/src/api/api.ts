@@ -2534,6 +2534,28 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     if (!doc) return c.json({ error: "project doc not found" }, 404);
     return c.json({ revisions: store.listProjectDocRevisions(doc.id).map(projectDocRevisionCompatibilityResponse) });
   });
+  app.get("/api/project-docs", (c) => {
+    const workspaceId = compatibilityWorkspaceId(c);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    // A task token is project-scoped (denyTaskTokenProjectAccess); this flat
+    // workspace-wide listing would silently widen it, so reject it outright.
+    if (currentTaskAccessToken(c)?.taskId) return c.json({ error: "forbidden" }, 403);
+    try {
+      const docs = store.listWorkspaceDocs(workspaceId, {
+        kind: cleanString(c.req.query("kind")),
+        q: cleanString(c.req.query("q")),
+        limit: parseOptionalInt(c.req.query("limit")),
+      });
+      return c.json({
+        docs: docs.map((doc) => ({ ...projectDocCompatibilityResponse(doc), project_title: doc.projectTitle })),
+      });
+    } catch (err) {
+      const response = projectDocErrorResponse(c, err);
+      if (response) return response;
+      throw err;
+    }
+  });
 
   app.get("/api/multiremi/squads", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? "local";

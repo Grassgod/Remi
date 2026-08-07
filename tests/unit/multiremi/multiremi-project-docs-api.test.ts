@@ -457,6 +457,78 @@ describe("Bun Multiremi project docs API", () => {
     expect(await listed.json()).toEqual({ error: "workspace not found" });
   });
 
+  it("lists workspace-wide docs with project titles and passes filters through", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const alpha = store.createProject({ title: "Alpha" });
+    const beta = store.createProject({ title: "Beta" });
+    store.createProjectDoc(alpha.id, { kind: "memory", title: "Build with bun", body: "bun install first" });
+    store.createProjectDoc(beta.id, { kind: "wiki", title: "Release notes" });
+
+    const listed = await app.request("/api/project-docs");
+    expect(listed.status).toBe(200);
+    const docs = (await listed.json()).docs.filter((doc: any) => doc.slug !== "_schema");
+    expect(docs.map((doc: any) => [doc.slug, doc.project_title]).sort()).toEqual([
+      ["build-with-bun", "Alpha"],
+      ["release-notes", "Beta"],
+    ]);
+    expect(docs.find((doc: any) => doc.slug === "build-with-bun")).toMatchObject({
+      project_id: alpha.id,
+      kind: "memory",
+      body: "bun install first",
+      pinned: true,
+    });
+
+    const memoryOnly = await app.request("/api/project-docs?kind=memory");
+    expect((await memoryOnly.json()).docs.map((doc: any) => doc.slug)).toEqual(["build-with-bun"]);
+
+    const searched = await app.request("/api/project-docs?q=release");
+    expect((await searched.json()).docs.map((doc: any) => doc.slug)).toEqual(["release-notes"]);
+
+    const limited = await app.request("/api/project-docs?limit=1");
+    expect((await limited.json()).docs).toHaveLength(1);
+
+    const badKind = await app.request("/api/project-docs?kind=notes");
+    expect(badKind.status).toBe(400);
+    expect(await badKind.json()).toEqual({ error: "unknown kind: notes" });
+  });
+
+  it("hides the workspace doc listing from non-members", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const workspace = store.createWorkspace({ name: "Private", slug: "private" });
+    const project = store.createProject({ title: "Private docs", workspaceId: workspace.id });
+    store.createProjectDoc(project.id, { kind: "wiki", title: "Secret" });
+    const outsider = store.getOrCreateUser({ externalId: "outsider", name: "Outsider" });
+    const pat = await store.createAccessToken({ name: "outsider pat", type: "pat", userId: outsider.id });
+
+    const listed = await app.request(`/api/project-docs?workspace_id=${workspace.id}`, {
+      headers: { Authorization: `Bearer ${pat.token}` },
+    });
+    expect(listed.status).toBe(404);
+    expect(await listed.json()).toEqual({ error: "workspace not found" });
+  });
+
+  it("rejects a task token on the workspace doc listing outright", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const agent = store.createAgent({ name: "Scribe", provider: "claude" });
+    const project = store.createProject({ title: "Own project" });
+    const issue = store.createIssue({ title: "Own issue", projectId: project.id });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "work" });
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    // Same workspace, different project — exactly what the per-project route
+    // denies and this flat route must not quietly allow.
+    const other = store.createProject({ title: "Other project" });
+    store.createProjectDoc(other.id, { kind: "wiki", title: "Other secret" });
+
+    const listed = await app.request("/api/project-docs", {
+      headers: { Authorization: `Bearer ${taskToken.token}` },
+    });
+    expect(listed.status).toBe(403);
+    expect(await listed.json()).toEqual({ error: "forbidden" });
+  });
+
   it("attaches the project knowledge index to a daemon claim", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });

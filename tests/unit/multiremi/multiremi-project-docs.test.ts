@@ -437,6 +437,54 @@ describe("Bun Multiremi project docs", () => {
     expect(store.ensureProjectDocSchema(project.id).id).toBe(own.id);
   });
 
+  it("lists workspace docs across projects, newest first, with project titles", () => {
+    const store = createStore();
+    const alpha = store.createProject({ title: "Alpha" });
+    const beta = store.createProject({ title: "Beta" });
+    const elsewhere = store.createWorkspace({ name: "Elsewhere", slug: "elsewhere" });
+    const foreign = store.createProject({ title: "Foreign", workspaceId: elsewhere.id });
+
+    const alphaMemory = store.createProjectDoc(alpha.id, { kind: "memory", title: "Build with bun" });
+    const alphaWiki = store.createProjectDoc(alpha.id, { kind: "wiki", title: "Alpha runbook" });
+    const betaWiki = store.createProjectDoc(beta.id, { kind: "wiki", title: "Beta notes" });
+    store.createProjectDoc(foreign.id, { kind: "wiki", title: "Foreign page" });
+    setUpdatedAt(alphaMemory.id, "2026-01-01T00:00:00.000Z");
+    setUpdatedAt(betaWiki.id, "2026-02-01T00:00:00.000Z");
+    setUpdatedAt(alphaWiki.id, "2026-03-01T00:00:00.000Z");
+
+    const docs = withoutSchema(store.listWorkspaceDocs("local"));
+    // Recency order, not pinned-first: this is a browse view. The pinned
+    // memory entry sits last because it is oldest.
+    expect(docs.map((doc) => doc.id)).toEqual([alphaWiki.id, betaWiki.id, alphaMemory.id]);
+    expect(docs.map((doc) => doc.projectTitle)).toEqual(["Alpha", "Beta", "Alpha"]);
+    expect(docs.every((doc) => doc.workspaceId === "local")).toBe(true);
+
+    expect(withoutSchema(store.listWorkspaceDocs(elsewhere.id)).map((doc) => doc.title)).toEqual(["Foreign page"]);
+    expect(store.listWorkspaceDocs("ws_missing")).toEqual([]);
+  });
+
+  it("filters and searches workspace docs with the same literal LIKE semantics", () => {
+    const store = createStore();
+    const alpha = store.createProject({ title: "Alpha" });
+    const beta = store.createProject({ title: "Beta" });
+    const memory = store.createProjectDoc(alpha.id, { kind: "memory", title: "Cache hit 90% on warm runs" });
+    const wiki = store.createProjectDoc(beta.id, { kind: "wiki", title: "Release notes", summary: "how we RELEASE" });
+    store.createProjectDoc(beta.id, { kind: "wiki", title: "Unrelated" });
+
+    expect(store.listWorkspaceDocs("local", { kind: "memory" }).map((doc) => doc.id)).toEqual([memory.id]);
+    expect(() => store.listWorkspaceDocs("local", { kind: "notes" })).toThrow("unknown kind: notes");
+
+    // Search spans projects, stays case-insensitive, treats metacharacters as text.
+    expect(store.listWorkspaceDocs("local", { q: "release" }).map((doc) => doc.id)).toEqual([wiki.id]);
+    expect(store.listWorkspaceDocs("local", { q: "90%" }).map((doc) => doc.id)).toEqual([memory.id]);
+    expect(store.listWorkspaceDocs("local", { q: "90a" })).toHaveLength(0);
+    expect(store.listWorkspaceDocs("local", { q: "   " }).length).toBeGreaterThan(1);
+
+    expect(store.listWorkspaceDocs("local", { limit: 1 })).toHaveLength(1);
+    // A junk limit falls back to the default instead of throwing or returning nothing.
+    expect(store.listWorkspaceDocs("local", { limit: -3 }).length).toBeGreaterThan(1);
+  });
+
   it("keeps _schema out of the index wiki list and exposes it as schema", () => {
     const store = createStore();
     const project = store.createProject({ title: "Index schema" });
