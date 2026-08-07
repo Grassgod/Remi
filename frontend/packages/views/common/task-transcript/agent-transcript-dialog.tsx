@@ -1423,6 +1423,7 @@ function EventDetailContent({ item }: { item: TimelineItem }) {
 // (options, chosen option, questions, answers) that the daemon writes as JSON.
 // Render it as a small key/value block rather than dumping raw JSON.
 function HumanInteractionDetail({ item }: { item: TimelineItem }) {
+  const { t } = useT("agents");
   const inp = (item.input ?? {}) as Record<string, unknown>;
   const options = Array.isArray(inp.options) ? (inp.options as Array<Record<string, unknown>>) : [];
   const questions = Array.isArray(inp.questions) ? (inp.questions as Array<Record<string, unknown>>) : [];
@@ -1460,11 +1461,11 @@ function HumanInteractionDetail({ item }: { item: TimelineItem }) {
           )}
         </div>
       ))}
-      {answers.length > 0 && <div><span className="text-foreground">Answer:</span> {answers.map(String).join(", ")}</div>}
+      {answers.length > 0 && <div><span className="text-foreground">{t(($) => $.transcript.human_answer_label)}</span> {answers.map(String).join(", ")}</div>}
       {(chosen || status || respondedBy) && (
         <div className="flex gap-3 pt-1 border-t border-border/50">
-          {status && <span>status: {status}</span>}
-          {respondedBy && <span>by: {respondedBy}</span>}
+          {status && <span>{t(($) => $.transcript.human_status, { value: status })}</span>}
+          {respondedBy && <span>{t(($) => $.transcript.human_responded_by, { value: respondedBy })}</span>}
         </div>
       )}
     </div>

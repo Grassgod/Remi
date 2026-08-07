@@ -434,7 +434,10 @@
     "nested_steps_one": "{{count}} step",
     "nested_steps_other": "{{count}} steps",
     "collab_activity_hidden": "Subagent internal activity is not captured",
-    "step_not_finished": "Not finished"
+    "step_not_finished": "Not finished",
+    "human_answer_label": "Answer:",
+    "human_status": "status: {{value}}",
+    "human_responded_by": "by: {{value}}"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

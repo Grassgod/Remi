@@ -422,7 +422,10 @@
     "command_not_recorded": "コマンドは記録されていません（以前のバージョンのタスク）",
     "nested_steps_other": "{{count}} ステップ",
     "collab_activity_hidden": "サブエージェントの内部処理は記録されません",
-    "step_not_finished": "未完了"
+    "step_not_finished": "未完了",
+    "human_answer_label": "回答：",
+    "human_status": "ステータス：{{value}}",
+    "human_responded_by": "応答者：{{value}}"
   },
   "task_failure": {
     "agent_error": "エージェント実行エラー",
