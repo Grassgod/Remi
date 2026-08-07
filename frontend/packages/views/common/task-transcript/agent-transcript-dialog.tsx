@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   Bot,
   ChevronRight,
+  CircleDashed,
   Brain,
   AlertCircle,
   CheckCircle2,
@@ -68,6 +69,9 @@ interface AgentTranscriptDialogProps {
 }
 
 // ─── Color mapping for timeline segments ────────────────────────────────────
+
+/** Task states after which no step can still be running. */
+const TERMINAL_TASK_STATUS = new Set<string>(["completed", "failed", "cancelled"]);
 
 type EventColor = "agent" | "thinking" | "tool" | "result" | "error";
 
@@ -326,6 +330,9 @@ export function AgentTranscriptDialog({
   // Live-follow: the transcript is tailing a running task. Also gates the
   // auto-expansion of running subagent groups.
   const liveFollow = isLive && sortDirection === "chronological";
+  // A finished task can't have running steps; `isLive` wins so a task whose
+  // status has landed while the stream is still open keeps its spinners.
+  const taskTerminal = !isLive && TERMINAL_TASK_STATUS.has(task.status);
 
   // Follow the newest events while a task is live, but only when the user is
   // already parked near the bottom — scrolling up to read history pauses the
@@ -749,6 +756,7 @@ export function AgentTranscriptDialog({
                     step={entry}
                     selectedSeq={selectedSeq}
                     liveFollow={liveFollow}
+                    taskTerminal={taskTerminal}
                   />
                 ) : (
                   <TranscriptEventRow
@@ -1006,6 +1014,8 @@ interface TranscriptStepRowProps {
   step: Extract<TranscriptEntry, { kind: "step" }>;
   selectedSeq: number | null;
   liveFollow: boolean;
+  /** The task itself has finished, so a step still marked running never will. */
+  taskTerminal: boolean;
 }
 
 /** Agent / Task (legacy) steps delegate to a subagent — they own children and report Markdown. */
@@ -1018,6 +1028,7 @@ const TranscriptStepRow = ({
   step,
   selectedSeq,
   liveFollow,
+  taskTerminal,
 }: TranscriptStepRowProps & { ref?: React.Ref<HTMLDivElement> }) => {
   const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
@@ -1026,6 +1037,10 @@ const TranscriptStepRow = ({
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
   const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
+  // Codex sometimes abandons a call and re-issues it under a new id; the orphan
+  // never gets a terminal frame. Once the task is done it cannot still be
+  // running, so show it as unfinished rather than spinning forever.
+  const abandoned = running && taskTerminal;
   const failed = step.status === "failed";
   const children = step.children ?? [];
   const isSelected = selectedSeq === step.seq || children.some((child) => child.seq === selectedSeq);
@@ -1053,7 +1068,9 @@ const TranscriptStepRow = ({
         <div className="flex items-start gap-2 px-4 py-2">
           {/* status dot */}
           <span className="mt-1 shrink-0">
-            {running ? (
+            {abandoned ? (
+              <CircleDashed className="h-3.5 w-3.5 text-muted-foreground/60" />
+            ) : running ? (
               <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />
             ) : failed ? (
               <XCircle className="h-3.5 w-3.5 text-destructive" />
@@ -1068,6 +1085,11 @@ const TranscriptStepRow = ({
           {children.length > 0 && (
             <span className="inline-flex items-center shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium mt-0.5 bg-muted text-muted-foreground">
               {t(($) => $.transcript.nested_steps, { count: children.length })}
+            </span>
+          )}
+          {abandoned && (
+            <span className="inline-flex items-center shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium mt-0.5 bg-muted text-muted-foreground">
+              {t(($) => $.transcript.step_not_finished)}
             </span>
           )}
           <CollapsibleTrigger
@@ -1118,6 +1140,7 @@ const TranscriptStepRow = ({
                         step={child}
                         selectedSeq={selectedSeq}
                         liveFollow={liveFollow}
+                        taskTerminal={taskTerminal}
                       />
                     ) : null,
                   )}

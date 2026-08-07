@@ -433,7 +433,8 @@
     "command_not_recorded": "Command not recorded (task from an older version)",
     "nested_steps_one": "{{count}} step",
     "nested_steps_other": "{{count}} steps",
-    "collab_activity_hidden": "Subagent internal activity is not captured"
+    "collab_activity_hidden": "Subagent internal activity is not captured",
+    "step_not_finished": "Not finished"
   },
   "task_failure": {
     "agent_error": "Agent execution error",

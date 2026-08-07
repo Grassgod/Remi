@@ -47,9 +47,19 @@ function collabRawInput(title: string, status: string): Record<string, unknown> 
   return frame.rawInput as Record<string, unknown>;
 }
 
-function renderTranscript(items: TimelineItem[]) {
+function renderTranscript(
+  items: TimelineItem[],
+  overrides: { task?: Partial<AgentTask>; isLive?: boolean } = {},
+) {
   return renderWithI18n(
-    <AgentTranscriptDialog open onOpenChange={() => {}} task={task} items={items} agentName="Remi" />,
+    <AgentTranscriptDialog
+      open
+      onOpenChange={() => {}}
+      task={{ ...task, ...overrides.task }}
+      items={items}
+      agentName="Remi"
+      isLive={overrides.isLive}
+    />,
   );
 }
 
@@ -207,5 +217,45 @@ describe("transcript codex collab step", () => {
     // can only be the Markdown paragraph in the detail pane.
     expect(screen.getByText(spawn.prompt as string)).toBeInTheDocument();
     expect(screen.getByText("Subagent internal activity is not captured")).toBeInTheDocument();
+  });
+});
+
+describe("transcript step abandoned by a finished task", () => {
+  // MUL-20: codex dropped call_pe1em… (only a tool_use, no terminal frame) and
+  // retried under a new id. The orphan spun forever next to a completed task.
+  const orphan: TimelineItem[] = [
+    { seq: 1, type: "tool_use", tool: "Bash", toolCallId: "call-orphan", status: "in_progress", input: { command: "echo hi" } },
+  ];
+
+  const stepRow = () => screen.getByText("$ echo hi").closest("div.group")!;
+
+  it("shows an unfinished step instead of a spinner once the task is done", () => {
+    renderTranscript(orphan, { task: { status: "completed" } });
+
+    expect(screen.getByText("Not finished")).toBeInTheDocument();
+    expect(stepRow().querySelector(".animate-spin")).toBeNull();
+  });
+
+  it("treats cancelled and failed tasks the same way", () => {
+    for (const status of ["cancelled", "failed"] as const) {
+      const { unmount } = renderTranscript(orphan, { task: { status } });
+      expect(screen.getByText("Not finished")).toBeInTheDocument();
+      expect(stepRow().querySelector(".animate-spin")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("keeps the spinner while the task is still live", () => {
+    renderTranscript(orphan, { task: { status: "running" }, isLive: true });
+
+    expect(screen.queryByText("Not finished")).not.toBeInTheDocument();
+    expect(stepRow().querySelector(".animate-spin")).not.toBeNull();
+  });
+
+  it("leaves finished steps of a finished task untouched", () => {
+    renderTranscript(bashStep({ command: "echo hi" }), { task: { status: "completed" } });
+
+    expect(screen.queryByText("Not finished")).not.toBeInTheDocument();
+    expect(stepRow().querySelector(".animate-spin")).toBeNull();
   });
 });

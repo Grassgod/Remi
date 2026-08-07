@@ -433,7 +433,8 @@
     "command_not_recorded": "명령이 기록되지 않았습니다(이전 버전 작업)",
     "nested_steps_one": "{{count}}단계",
     "nested_steps_other": "{{count}}단계",
-    "collab_activity_hidden": "서브에이전트의 내부 작업은 기록되지 않습니다"
+    "collab_activity_hidden": "서브에이전트의 내부 작업은 기록되지 않습니다",
+    "step_not_finished": "미완료"
   },
   "task_failure": {
     "agent_error": "에이전트 실행 오류",
