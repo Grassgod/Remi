@@ -10,6 +10,9 @@ export const projectDocKeys = {
   /** FULL KEY for queryOptions — includes the kind filter. */
   list: (wsId: string, projectId: string, kind?: string) =>
     [...projectDocKeys.project(wsId, projectId), "list", kind ?? "all"] as const,
+  /** FULL KEY for queryOptions — the workspace-wide listing across projects. */
+  workspaceList: (wsId: string) =>
+    [...projectDocKeys.all(wsId), "workspace-list"] as const,
   /** FULL KEY for queryOptions — `ref` is a doc id or slug. */
   detail: (wsId: string, projectId: string, ref: string) =>
     [...projectDocKeys.project(wsId, projectId), "detail", ref] as const,
@@ -24,6 +27,15 @@ export function projectDocListOptions(
   return queryOptions({
     queryKey: projectDocKeys.list(wsId, projectId, kind),
     queryFn: () => api.listProjectDocs(projectId, kind ? { kind } : undefined),
+    select: (data) => data.docs,
+  });
+}
+
+/** Every doc in the workspace — the Knowledge page groups them by project. */
+export function workspaceDocListOptions(wsId: string) {
+  return queryOptions({
+    queryKey: projectDocKeys.workspaceList(wsId),
+    queryFn: () => api.listWorkspaceDocs({ workspaceId: wsId }),
     select: (data) => data.docs,
   });
 }

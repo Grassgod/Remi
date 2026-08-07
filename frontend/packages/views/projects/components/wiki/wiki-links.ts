@@ -26,26 +26,34 @@ export function extractWikiLinkSlugs(body: string): string[] {
   return slugs;
 }
 
+// A title is agent-written free text, and it lands inside a markdown link's
+// `[…]`. An unescaped bracket would close the label early and spill link
+// syntax into the prose; a trailing backslash would escape the closing one.
+function escapeLinkText(title: string): string {
+  return title.replace(/[\\[\]]/g, (char) => `\\${char}`);
+}
+
 /**
  * Rewrite `[[slug]]` markers before the markdown renderer sees them.
  *
- * The reader gets the target page's title (falling back to the raw slug when
- * no such page exists) as an inline code span, so the wiki syntax never leaks
- * into the prose. Jumping to the target is handled by the chip row next to the
- * body — the shared markdown renderer resolves `mention://` links against a
- * fixed set of entity types and wiki pages have no route of their own, so an
- * inline anchor has nothing to point at.
+ * A slug `resolve` answers for becomes an ordinary markdown link to that
+ * page's route, so the reader clicks the target's title and the renderer's
+ * own link handling does the navigating. A slug with no page behind it keeps
+ * the older degradation — the raw slug as an inline code span — so the wiki
+ * syntax never leaks into the prose and a dead link is never clickable.
  */
 export function replaceWikiLinkMarkers(
   body: string,
-  titleOf: (slug: string) => string | null,
+  resolve: (slug: string) => { title: string; href: string } | null,
 ): string {
   return body.replace(
     WIKI_SCAN_RE,
     (_match, code: string | undefined, rawSlug: string | undefined) => {
       if (code !== undefined) return code;
       const slug = (rawSlug ?? "").trim();
-      return `\`${titleOf(slug) ?? slug}\``;
+      const target = resolve(slug);
+      if (!target) return `\`${slug}\``;
+      return `[${escapeLinkText(target.title)}](${target.href})`;
     },
   );
 }

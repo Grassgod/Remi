@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { BookText, ListTodo } from "lucide-react";
 import {
   Tabs,
@@ -8,10 +8,12 @@ import {
   TabsList,
   TabsTrigger,
 } from "@multiremi/ui/components/ui/tabs";
+import { useWorkspacePaths } from "@multiremi/core/paths";
 import { ProjectWikiSection } from "./project-wiki-section";
+import { useNavigation } from "../../../navigation";
 import { useT } from "../../../i18n";
 
-type ProjectContentTab = "issues" | "wiki";
+export type ProjectContentTab = "issues" | "wiki";
 
 /**
  * Issues | Wiki switch for the project detail content panel.
@@ -24,24 +26,35 @@ type ProjectContentTab = "issues" | "wiki";
  * a content region with no `tabpanel` role. The panels re-create the flex
  * column the panel column used to provide directly (`text-base` pins the
  * inherited font size the surfaces were built against — `TabsContent` ships
- * `text-sm`). Deliberately local state: the switch is view-only chrome, not a
- * route (Phase 1 keeps `/projects/:id` pointing at the same page whichever tab
- * is showing).
+ * `text-sm`). The active tab is route state, not local state: the caller
+ * derives it from the URL (`/projects/:id` vs `…/wiki`) and picking a tab
+ * navigates, so a wiki page survives a refresh and can be shared.
  */
 export function ProjectContentTabs({
   projectId,
   issues,
+  contentTab,
+  wikiSlug,
 }: {
   projectId: string;
   issues: ReactNode;
+  contentTab: ProjectContentTab;
+  wikiSlug?: string;
 }) {
   const { t } = useT("projects");
-  const [tab, setTab] = useState<ProjectContentTab>("issues");
+  const paths = useWorkspacePaths();
+  const { push } = useNavigation();
 
   return (
     <Tabs
-      value={tab}
-      onValueChange={(value) => setTab(value as ProjectContentTab)}
+      value={contentTab}
+      onValueChange={(value) =>
+        push(
+          value === "wiki"
+            ? paths.projectWiki(projectId)
+            : paths.projectDetail(projectId),
+        )
+      }
       className="min-h-0 flex-1 gap-0"
     >
       <TabsList variant="line" className="mx-3 mt-2 shrink-0">
@@ -58,7 +71,7 @@ export function ProjectContentTabs({
         {issues}
       </TabsContent>
       <TabsContent value="wiki" className="flex min-h-0 flex-col text-base">
-        <ProjectWikiSection projectId={projectId} />
+        <ProjectWikiSection projectId={projectId} selectedRef={wikiSlug} />
       </TabsContent>
     </Tabs>
   );

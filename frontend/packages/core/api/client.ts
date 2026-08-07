@@ -83,6 +83,7 @@ import type {
   ListProjectResourcesResponse,
   ProjectDoc,
   ListProjectDocsResponse,
+  ListWorkspaceDocsResponse,
   ListProjectDocRevisionsResponse,
   Label,
   CreateLabelRequest,
@@ -228,9 +229,11 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   ListProjectDocsResponseSchema,
+  ListWorkspaceDocsResponseSchema,
   ListProjectDocRevisionsResponseSchema,
   ProjectDocResponseSchema,
   EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+  EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
   EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
   EMPTY_PROJECT_DOC,
   ListLarkInstallationsResponseSchema,
@@ -2065,6 +2068,27 @@ export class ApiClient {
       ListProjectDocsResponseSchema,
       EMPTY_LIST_PROJECT_DOCS_RESPONSE,
       { endpoint: "GET /api/projects/:id/docs" },
+    );
+  }
+
+  /** Every doc in the workspace, each carrying its project's title. */
+  async listWorkspaceDocs(
+    params?: { workspaceId?: string; kind?: string; q?: string; limit?: number },
+  ): Promise<ListWorkspaceDocsResponse> {
+    const search = new URLSearchParams();
+    // Passed explicitly: the server resolves this endpoint's workspace from
+    // workspace_id (not the X-Workspace-Slug header), and without it every
+    // request would fall back to the token's default workspace.
+    if (params?.workspaceId) search.set("workspace_id", params.workspaceId);
+    if (params?.kind) search.set("kind", params.kind);
+    if (params?.q) search.set("q", params.q);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const raw = await this.fetch<unknown>(`/api/project-docs?${search}`);
+    return parseWithFallback(
+      raw,
+      ListWorkspaceDocsResponseSchema,
+      EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+      { endpoint: "GET /api/project-docs" },
     );
   }
 

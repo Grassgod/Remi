@@ -16,6 +16,7 @@ import {
   FleetModelsResponseSchema,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_LIST_PROJECT_DOCS_RESPONSE,
+  EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
   EMPTY_LIST_PROJECT_DOC_REVISIONS_RESPONSE,
   EMPTY_PROJECT_DOC,
   EMPTY_TIMELINE_ENTRIES,
@@ -23,6 +24,7 @@ import {
   ListIssuesResponseSchema,
   ListLarkInstallationsResponseSchema,
   ListProjectDocsResponseSchema,
+  ListWorkspaceDocsResponseSchema,
   ListProjectDocRevisionsResponseSchema,
   ProjectDocResponseSchema,
   IssueSessionListSchema,
@@ -782,6 +784,96 @@ describe("ListProjectDocsResponseSchema", () => {
     expect(
       (parsed.docs[0] as unknown as { reviewed_by?: string }).reviewed_by,
     ).toBe("user-9");
+  });
+});
+
+describe("ListWorkspaceDocsResponseSchema", () => {
+  const opts = { endpoint: "GET /api/project-docs (test)" };
+  const validDoc = {
+    id: "pdoc_1",
+    project_id: "proj-1",
+    workspace_id: "ws-1",
+    kind: "wiki",
+    slug: "build-notes",
+    title: "Build notes",
+    summary: "How to build",
+    body: "# Build\n\nRun `make`.",
+    tags: ["build"],
+    pinned: false,
+    refs: [{ type: "issue", value: "MUL-12" }],
+    source_task_id: null,
+    source_issue_id: null,
+    author_type: "agent",
+    author_id: "agent-1",
+    updated_by_type: "agent",
+    updated_by_id: "agent-1",
+    version: 2,
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-02T00:00:00Z",
+    project_title: "Apollo",
+  };
+
+  it("parses a well-formed list with the joined project title", () => {
+    const parsed = parseWithFallback(
+      { docs: [validDoc] },
+      ListWorkspaceDocsResponseSchema,
+      EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs).toHaveLength(1);
+    expect(parsed.docs[0]?.project_title).toBe("Apollo");
+  });
+
+  it("defaults a missing project_title so the doc still groups", () => {
+    const { project_title: _t, ...withoutTitle } = validDoc;
+    const parsed = parseWithFallback(
+      { docs: [withoutTitle] },
+      ListWorkspaceDocsResponseSchema,
+      EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs[0]?.project_title).toBe("");
+  });
+
+  it("defaults a missing docs array instead of blanking the Knowledge page", () => {
+    const parsed = parseWithFallback(
+      {},
+      ListWorkspaceDocsResponseSchema,
+      EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs).toEqual([]);
+  });
+
+  it("drops a drifted row without blanking the surviving ones", () => {
+    // One bad row must not amplify into an empty Knowledge page (the
+    // issue-timeline incident): the drifted rows go, the good row stays.
+    const parsed = parseWithFallback(
+      {
+        docs: [
+          { ...validDoc, project_title: 42 },
+          { ...validDoc, id: "pdoc_2", slug: "kept", title: undefined },
+          { ...validDoc, id: "pdoc_3", slug: "kept-too", tags: null },
+          validDoc,
+        ],
+      },
+      ListWorkspaceDocsResponseSchema,
+      EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+      opts,
+    );
+    expect(parsed.docs.map((doc) => doc.id)).toEqual([validDoc.id]);
+  });
+
+  it("treats a non-array docs value as an empty list", () => {
+    for (const bad of [{ docs: null }, { docs: "nope" }]) {
+      const parsed = parseWithFallback(
+        bad,
+        ListWorkspaceDocsResponseSchema,
+        EMPTY_LIST_WORKSPACE_DOCS_RESPONSE,
+        opts,
+      );
+      expect(parsed.docs).toEqual([]);
+    }
   });
 });
 

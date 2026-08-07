@@ -107,7 +107,9 @@ export type {
   ProjectDocAuthorType,
   ProjectDocRef,
   ProjectDocRevision,
+  WorkspaceDoc,
   ListProjectDocsResponse,
+  ListWorkspaceDocsResponse,
   ListProjectDocRevisionsResponse,
 } from "./project-doc";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";

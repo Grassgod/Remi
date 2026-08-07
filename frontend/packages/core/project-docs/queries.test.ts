@@ -1,10 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   projectDocDetailOptions,
   projectDocKeys,
   projectDocListOptions,
+  workspaceDocListOptions,
 } from "./queries";
+
+const { listWorkspaceDocsMock } = vi.hoisted(() => ({
+  listWorkspaceDocsMock: vi.fn(),
+}));
+
+vi.mock("../api", () => ({
+  api: {
+    listProjectDocs: vi.fn(),
+    getProjectDoc: vi.fn(),
+    listWorkspaceDocs: listWorkspaceDocsMock,
+  },
+}));
 
 describe("projectDocKeys", () => {
   it("scopes every key on the workspace so a workspace switch swaps the cache", () => {
@@ -32,9 +45,21 @@ describe("projectDocKeys", () => {
       projectDocKeys.list("ws-1", "proj-1"),
       projectDocKeys.list("ws-1", "proj-1", "memory"),
       projectDocKeys.detail("ws-1", "proj-1", "doc-1"),
+      projectDocKeys.workspaceList("ws-1"),
     ]) {
       expect(key.slice(0, prefix.length)).toEqual(prefix);
     }
+  });
+
+  it("keys the workspace-wide list apart from any project's list", () => {
+    expect(projectDocKeys.workspaceList("ws-1")).toEqual([
+      "project-docs",
+      "ws-1",
+      "workspace-list",
+    ]);
+    expect(projectDocKeys.workspaceList("ws-1")).not.toEqual(
+      projectDocKeys.list("ws-1", "proj-1"),
+    );
   });
 
   it("separates kind-filtered lists from the unfiltered one", () => {
@@ -61,6 +86,25 @@ describe("projectDocListOptions", () => {
     expect(projectDocListOptions("ws-1", "proj-1", "memory").queryKey).toEqual(
       projectDocKeys.list("ws-1", "proj-1", "memory"),
     );
+  });
+});
+
+describe("workspaceDocListOptions", () => {
+  it("keys on the workspace and selects the docs array", () => {
+    const options = workspaceDocListOptions("ws-1");
+
+    expect(options.queryKey).toEqual(projectDocKeys.workspaceList("ws-1"));
+    expect(options.select?.({ docs: [{ id: "pdoc_1" }] } as never)).toEqual([
+      { id: "pdoc_1" },
+    ]);
+  });
+
+  it("sends the workspace id with the request — the key alone scopes nothing", async () => {
+    listWorkspaceDocsMock.mockResolvedValue({ docs: [] });
+
+    await workspaceDocListOptions("ws-1").queryFn?.({} as never);
+
+    expect(listWorkspaceDocsMock).toHaveBeenCalledWith({ workspaceId: "ws-1" });
   });
 });
 

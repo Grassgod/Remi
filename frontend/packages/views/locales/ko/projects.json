@@ -126,7 +126,21 @@
     "load_error_hint": "이 프로젝트의 wiki와 메모리를 가져오는 중 문제가 발생했습니다.",
     "load_error_retry": "다시 시도",
     "memory_expand": "더 보기",
-    "memory_collapse": "접기"
+    "memory_collapse": "접기",
+    "not_found_title": "페이지를 찾을 수 없습니다",
+    "not_found_hint": "이 위키 페이지는 존재하지 않거나 삭제되었습니다.",
+    "not_found_back": "프로젝트 위키로 돌아가기"
+  },
+  "knowledge": {
+    "title": "지식 베이스",
+    "description": "이 워크스페이스의 모든 프로젝트에서 모은 위키 페이지와 에이전트 메모리",
+    "search_placeholder": "전체 지식 검색...",
+    "empty_title": "아직 지식이 없습니다",
+    "empty_hint": "프로젝트 이슈를 에이전트에게 할당하거나 CLI로 첫 항목을 작성하세요.",
+    "no_results": "검색과 일치하는 항목이 없습니다",
+    "load_error_title": "지식 베이스를 불러오지 못했습니다",
+    "load_error_hint": "이 워크스페이스의 wiki와 메모리를 가져오는 중 문제가 발생했습니다.",
+    "load_error_retry": "다시 시도"
   },
   "repo_source": {
     "tab_git": "Git 저장소",

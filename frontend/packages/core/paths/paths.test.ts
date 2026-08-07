@@ -10,6 +10,11 @@ describe("paths.workspace(slug)", () => {
     expect(ws.issueDetail("abc-123")).toBe("/acme/issues/abc-123");
     expect(ws.projects()).toBe("/acme/projects");
     expect(ws.projectDetail("p1")).toBe("/acme/projects/p1");
+    expect(ws.projectWiki("p1")).toBe("/acme/projects/p1/wiki");
+    expect(ws.projectWikiPage("p1", "build-notes")).toBe(
+      "/acme/projects/p1/wiki/build-notes",
+    );
+    expect(ws.knowledge()).toBe("/acme/knowledge");
     expect(ws.autopilots()).toBe("/acme/autopilots");
     expect(ws.autopilotDetail("a1")).toBe("/acme/autopilots/a1");
     expect(ws.agents()).toBe("/acme/agents");
@@ -27,6 +32,12 @@ describe("paths.workspace(slug)", () => {
 
   it("URL-encodes special characters in ids", () => {
     expect(ws.issueDetail("id with space")).toBe("/acme/issues/id%20with%20space");
+  });
+
+  it("URL-encodes a non-ASCII wiki slug", () => {
+    expect(ws.projectWikiPage("p1", "部署手册")).toBe(
+      `/acme/projects/p1/wiki/${encodeURIComponent("部署手册")}`,
+    );
   });
 });
 

@@ -44,6 +44,15 @@ export interface ProjectDoc {
   updated_at: string;
 }
 
+/**
+ * A doc from the workspace-wide listing (`GET /api/project-docs`), which joins
+ * the owning project so the aggregated view can group rows without a second
+ * request.
+ */
+export interface WorkspaceDoc extends ProjectDoc {
+  project_title: string;
+}
+
 export interface ProjectDocRevision {
   id: string;
   doc_id: string;
@@ -58,6 +67,10 @@ export interface ProjectDocRevision {
 
 export interface ListProjectDocsResponse {
   docs: ProjectDoc[];
+}
+
+export interface ListWorkspaceDocsResponse {
+  docs: WorkspaceDoc[];
 }
 
 export interface ListProjectDocRevisionsResponse {

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, useMemo, useTransition } from "react";
+import { createContext, use, useEffect, useMemo, useTransition } from "react";
 import type { NavigationAdapter } from "./types";
 
 const NavigationContext = createContext<NavigationAdapter | null>(null);
@@ -27,6 +27,21 @@ export function NavigationProvider({
     }),
     [value],
   );
+  // Counterpart of openLink's dispatch in editor/utils/link-handler.ts:
+  // internal-path links inside rendered markdown (readonly content, editor,
+  // link hover cards) navigate by dispatching "multimira:navigate" instead of
+  // importing a router. If a platform shell (e.g. a future desktop app) ships
+  // its own listener, it must NOT also mount this provider's listener or every
+  // link click would navigate twice.
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+      if (typeof path === "string" && path) wrapped.push(path);
+    };
+    window.addEventListener("multimira:navigate", onNavigate);
+    return () => window.removeEventListener("multimira:navigate", onNavigate);
+  }, [wrapped]);
+
   return (
     <NavigationContext.Provider value={wrapped}>
       <NavigationPendingContext.Provider value={isPending}>

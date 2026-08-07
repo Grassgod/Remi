@@ -29,6 +29,7 @@ import {
   SquarePen,
   CircleUser,
   FolderKanban,
+  Library,
   BarChart3,
   X,
   Zap,
@@ -107,6 +108,7 @@ type NavKey =
   | "myIssues"
   | "issues"
   | "projects"
+  | "knowledge"
   | "autopilots"
   | "agents"
   | "squads"
@@ -121,6 +123,7 @@ type NavLabelKey =
   | "my_issues"
   | "issues"
   | "projects"
+  | "knowledge"
   | "autopilots"
   | "agents"
   | "squads"
@@ -137,6 +140,7 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
+  { key: "knowledge", labelKey: "knowledge", icon: Library },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
@@ -454,10 +458,13 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
       if (isEditable) return;
       if (useModalStore.getState().modal) return;
       e.preventDefault();
-      // Auto-fill project when on a project detail page. The manual form
-      // consumes `project_id`; quick-create also honours it as a seed for
-      // its project picker, so passing it through is safe for both modes.
-      const projectMatch = pathname.match(/^\/[^/]+\/projects\/([^/]+)$/);
+      // Auto-fill project when on a project detail page — its wiki routes
+      // included. The manual form consumes `project_id`; quick-create also
+      // honours it as a seed for its project picker, so passing it through is
+      // safe for both modes.
+      const projectMatch = pathname.match(
+        /^\/[^/]+\/projects\/([^/]+)(?:\/wiki(?:\/[^/]+)?)?$/,
+      );
       const data = projectMatch ? { project_id: projectMatch[1] } : undefined;
       openCreateIssueWithPreference(data);
     };

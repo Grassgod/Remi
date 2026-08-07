@@ -126,7 +126,21 @@
     "load_error_hint": "このプロジェクトの wiki とメモリの取得中に問題が発生しました。",
     "load_error_retry": "再試行",
     "memory_expand": "もっと見る",
-    "memory_collapse": "折りたたむ"
+    "memory_collapse": "折りたたむ",
+    "not_found_title": "ページが見つかりません",
+    "not_found_hint": "この Wiki ページは存在しないか、削除されました。",
+    "not_found_back": "プロジェクト Wiki に戻る"
+  },
+  "knowledge": {
+    "title": "ナレッジ",
+    "description": "このワークスペースのすべてのプロジェクトの wiki ページとエージェントメモリ",
+    "search_placeholder": "ナレッジ全体を検索…",
+    "empty_title": "ナレッジはまだありません",
+    "empty_hint": "プロジェクトのイシューをエージェントに割り当てるか、CLI から最初のエントリを書き込んでください。",
+    "no_results": "検索に一致するものがありません",
+    "load_error_title": "ナレッジベースを読み込めませんでした",
+    "load_error_hint": "このワークスペースの wiki とメモリの取得中に問題が発生しました。",
+    "load_error_retry": "再試行"
   },
   "repo_source": {
     "tab_git": "Git リポジトリ",

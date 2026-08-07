@@ -22,6 +22,7 @@ import type {
   ListLarkInstallationsResponse,
   ListProjectDocRevisionsResponse,
   ListProjectDocsResponse,
+  ListWorkspaceDocsResponse,
   ListWebhookDeliveriesResponse,
   ProjectDoc,
   RuntimeDirectoryScanRequest,
@@ -1192,6 +1193,30 @@ export const ListProjectDocsResponseSchema = z.object({
 }).loose();
 
 export const EMPTY_LIST_PROJECT_DOCS_RESPONSE: ListProjectDocsResponse = {
+  docs: [],
+};
+
+// The workspace-wide listing joins the owning project's title. It defaults to
+// "" rather than failing the row: a doc whose project title didn't come back
+// still belongs in the list, just under an unnamed group.
+const WorkspaceDocSchema = ProjectDocSchema.extend({
+  project_title: z.string().default(""),
+});
+
+export const ListWorkspaceDocsResponseSchema = z.object({
+  // One drifted row must not blank the whole Knowledge page (an array-level
+  // fallback amplifying single-row drift is exactly the issue-timeline
+  // incident): rows that fail the schema are dropped, the rest survive.
+  docs: z.preprocess(
+    (value) =>
+      Array.isArray(value)
+        ? value.filter((entry) => WorkspaceDocSchema.safeParse(entry).success)
+        : [],
+    z.array(WorkspaceDocSchema),
+  ),
+}).loose();
+
+export const EMPTY_LIST_WORKSPACE_DOCS_RESPONSE: ListWorkspaceDocsResponse = {
   docs: [],
 };
 

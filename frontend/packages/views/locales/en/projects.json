@@ -126,7 +126,21 @@
     "load_error_hint": "Something went wrong fetching this project's wiki and memory.",
     "load_error_retry": "Try again",
     "memory_expand": "Show more",
-    "memory_collapse": "Show less"
+    "memory_collapse": "Show less",
+    "not_found_title": "Page not found",
+    "not_found_hint": "This wiki page does not exist or was deleted.",
+    "not_found_back": "Back to project wiki"
+  },
+  "knowledge": {
+    "title": "Knowledge",
+    "description": "Wiki pages and agent memory from every project in this workspace",
+    "search_placeholder": "Search all knowledge...",
+    "empty_title": "No knowledge yet",
+    "empty_hint": "Assign project issues to an agent, or add the first entry with the CLI.",
+    "no_results": "Nothing matches your search",
+    "load_error_title": "Couldn't load the knowledge base",
+    "load_error_hint": "Something went wrong fetching this workspace's wiki and memory.",
+    "load_error_retry": "Try again"
   },
   "repo_source": {
     "tab_git": "Git",

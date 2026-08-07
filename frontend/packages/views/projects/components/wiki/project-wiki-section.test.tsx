@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { ProjectDoc } from "@multiremi/core/types";
 import enCommon from "../../../locales/en/common.json";
@@ -41,6 +41,9 @@ vi.mock("@multiremi/core/hooks", () => ({
 vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     issueDetail: (id: string) => `/ws/issues/${id}`,
+    projectWiki: (id: string) => `/ws/projects/${id}/wiki`,
+    projectWikiPage: (id: string, ref: string) =>
+      `/ws/projects/${id}/wiki/${ref}`,
   }),
 }));
 
@@ -66,8 +69,19 @@ vi.mock("../../../editor", () => ({
 }));
 
 vi.mock("../../../navigation", () => ({
-  AppLink: ({ href, children }: { href: string; children: ReactNode }) => (
-    <a href={href}>{children}</a>
+  // Props are spread through: rows and chips carry their styling on the link
+  // itself now, and the assertions below read it back.
+  AppLink: ({
+    href,
+    children,
+    ...props
+  }: {
+    href: string;
+    children: ReactNode;
+  }) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
   ),
 }));
 
@@ -98,10 +112,10 @@ function doc(partial: Partial<ProjectDoc> & { id: string }): ProjectDoc {
   };
 }
 
-function renderSection() {
+function renderSection(selectedRef?: string) {
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ProjectWikiSection projectId="proj-1" />
+      <ProjectWikiSection projectId="proj-1" selectedRef={selectedRef} />
     </I18nProvider>,
   );
 }
@@ -184,8 +198,87 @@ describe("ProjectWikiSection", () => {
 
     renderSection();
 
-    const rows = screen.getAllByRole("button").map((el) => el.textContent);
-    expect(rows).toEqual(["Agent Memory1", "Runbook", "Wiki Schema"]);
+    const rows = screen.getAllByRole("link");
+    expect(rows.map((el) => el.textContent)).toEqual([
+      "Agent Memory1",
+      "Runbook",
+      "Wiki Schema",
+    ]);
+    // Every row is a real link, so a page can be shared and cmd-clicked.
+    expect(rows.map((el) => el.getAttribute("href"))).toEqual([
+      "/ws/projects/proj-1/wiki",
+      "/ws/projects/proj-1/wiki/runbook",
+      "/ws/projects/proj-1/wiki/_schema",
+    ]);
+  });
+
+  it("falls back to the doc id in the row href when the doc has no slug", () => {
+    state.docs = [doc({ id: "d1", slug: "", title: "Slugless" })];
+
+    renderSection();
+
+    expect(screen.getByRole("link", { name: "Slugless" })).toHaveAttribute(
+      "href",
+      "/ws/projects/proj-1/wiki/d1",
+    );
+  });
+
+  it("resolves the ref by id first, then by slug — the server's order", () => {
+    // Alpha's id equals Bravo's slug, so "runbook" is ambiguous on purpose.
+    state.docs = [
+      doc({
+        id: "runbook",
+        slug: "ops",
+        title: "Alpha page",
+        updated_at: "2026-07-09T00:00:00Z",
+      }),
+      doc({
+        id: "d2",
+        slug: "runbook",
+        title: "Bravo page",
+        updated_at: "2026-07-08T00:00:00Z",
+      }),
+    ];
+
+    // An id match beats another doc's slug match.
+    renderSection("runbook");
+    expect(
+      screen.getByRole("heading", { name: "Alpha page" }),
+    ).toBeInTheDocument();
+
+    // No id matches — the slug fallback kicks in.
+    cleanup();
+    renderSection("ops");
+    expect(
+      screen.getByRole("heading", { name: "Alpha page" }),
+    ).toBeInTheDocument();
+
+    // The doc whose slug is shadowed stays reachable by its id.
+    cleanup();
+    renderSection("d2");
+    expect(
+      screen.getByRole("heading", { name: "Bravo page" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a not-found pane with a way back when the ref matches no page", () => {
+    state.docs = [doc({ id: "d1", slug: "runbook", title: "Runbook" })];
+
+    renderSection("deleted-page");
+
+    expect(screen.getByText("Page not found")).toBeInTheDocument();
+    expect(
+      screen.getByText("This wiki page does not exist or was deleted."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Back to project wiki" }),
+    ).toHaveAttribute("href", "/ws/projects/proj-1/wiki");
+    // The memory stream must not stand in for the page that was asked for.
+    expect(
+      screen.queryByText(
+        "Durable facts agents learned while working on this project.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("opens on the memory stream: title, body, author, pinned badge, source issue", () => {
@@ -253,8 +346,7 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Runbook" }));
+    renderSection("runbook");
 
     expect(screen.getByRole("heading", { name: "Runbook" })).toBeInTheDocument();
     expect(screen.getByText("How to deploy")).toBeInTheDocument();
@@ -280,8 +372,7 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Runbook" }));
+    renderSection("runbook");
 
     expect(screen.getByRole("link", { name: /MUL-42/ })).toHaveAttribute(
       "href",
@@ -300,10 +391,14 @@ describe("ProjectWikiSection", () => {
     expect(screen.getByText("task_9")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /task_9/ })).not.toBeInTheDocument();
     expect(screen.getByText("grafana-7")).toBeInTheDocument();
-    expect(screen.getAllByRole("link")).toHaveLength(2);
+    // Sidebar rows are links too, so count only what the ref row produced.
+    const refLinks = screen
+      .getAllByRole("link")
+      .filter((el) => !el.getAttribute("href")!.startsWith("/ws/projects/"));
+    expect(refLinks).toHaveLength(2);
   });
 
-  it("rewrites [[slug]] to the target title and its chip selects that page", () => {
+  it("rewrites [[slug]] into a link to that page, and its chip points at the same route", () => {
     state.docs = [
       doc({
         id: "d1",
@@ -321,21 +416,20 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Index" }));
+    renderSection("index");
 
-    // The raw wiki syntax never reaches the reader — the target's title does.
+    // The raw wiki syntax never reaches the reader — a markdown link does.
     expect(screen.getByTestId("wiki-body").textContent).toBe(
-      "Deploy steps live in `Runbook`.",
+      "Deploy steps live in [Runbook](/ws/projects/proj-1/wiki/runbook).",
     );
 
-    // Chip row: the last "Runbook" button is the chip (the first is the
-    // sidebar row); clicking it opens that page.
-    const runbookButtons = screen.getAllByRole("button", { name: "Runbook" });
-    fireEvent.click(runbookButtons[runbookButtons.length - 1]!);
-
-    expect(screen.getByRole("heading", { name: "Runbook" })).toBeInTheDocument();
-    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Step 1. Ship it.");
+    // Chip row: the last "Runbook" link is the chip (the first is the sidebar
+    // row), and it deep-links to the same page.
+    const runbookLinks = screen.getAllByRole("link", { name: "Runbook" });
+    expect(runbookLinks[runbookLinks.length - 1]).toHaveAttribute(
+      "href",
+      "/ws/projects/proj-1/wiki/runbook",
+    );
   });
 
   it("leaves [[...]] inside fenced and inline code alone", () => {
@@ -363,17 +457,18 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Index" }));
+    renderSection("index");
 
     const rendered = screen.getByTestId("wiki-body").textContent!;
     // The prose link is rewritten; both code regions survive byte-for-byte.
-    expect(rendered).toContain("Prose links to `Runbook`.");
+    expect(rendered).toContain(
+      "Prose links to [Runbook](/ws/projects/proj-1/wiki/runbook).",
+    );
     expect(rendered).toContain('if [[ -f deploy.sh ]]; then echo "[[runbook]]"; fi');
     expect(rendered).toContain("Inline `[[ $x == y ]]` is a bash test");
 
     // Only the prose link becomes a chip — bash tests are not wiki pages.
-    const chipRow = screen.getAllByRole("button", { name: "Runbook" });
+    const chipRow = screen.getAllByRole("link", { name: "Runbook" });
     expect(chipRow).toHaveLength(2); // sidebar row + one chip
     expect(screen.queryByTitle("No page with this slug yet")).not.toBeInTheDocument();
   });
@@ -388,8 +483,7 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Index" }));
+    renderSection("index");
 
     expect(screen.getByTestId("wiki-body").textContent).toBe(
       "See `missing-page` once it exists.",
@@ -397,7 +491,7 @@ describe("ProjectWikiSection", () => {
     const chip = screen.getByTitle("No page with this slug yet");
     expect(chip).toHaveTextContent("missing-page");
     expect(
-      screen.queryByRole("button", { name: "missing-page" }),
+      screen.queryByRole("link", { name: "missing-page" }),
     ).not.toBeInTheDocument();
   });
 
@@ -417,7 +511,7 @@ describe("ProjectWikiSection", () => {
     // Same renderer + same [[slug]] rewrite the wiki page pane uses — the raw
     // marker and the markdown list syntax never reach the reader as text.
     expect(screen.getByTestId("wiki-body").textContent).toBe(
-      "- see `Runbook`\n- and `[[ -f x ]]`",
+      "- see [Runbook](/ws/projects/proj-1/wiki/runbook)\n- and `[[ -f x ]]`",
     );
   });
 
@@ -478,12 +572,11 @@ describe("ProjectWikiSection", () => {
       }),
     ];
 
-    renderSection();
-    fireEvent.click(screen.getByRole("button", { name: "Index" }));
+    renderSection("index");
 
     // Sidebar row first, chip last.
-    const buttons = screen.getAllByRole("button", { name: longTitle });
-    const chip = buttons[buttons.length - 1]!;
+    const links = screen.getAllByRole("link", { name: longTitle });
+    const chip = links[links.length - 1]!;
     expect(chip).toHaveClass("max-w-64");
     expect(chip).toHaveAttribute("title", longTitle);
   });

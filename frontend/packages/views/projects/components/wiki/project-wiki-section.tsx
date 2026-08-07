@@ -2,7 +2,14 @@
 
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, BookText, Brain, FileText, Pin } from "lucide-react";
+import {
+  AlertCircle,
+  BookText,
+  Brain,
+  FileQuestion,
+  FileText,
+  Pin,
+} from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -20,11 +27,6 @@ import { useT } from "../../../i18n";
 import { useFormatRelativeDate } from "../labels";
 import { extractWikiLinkSlugs, replaceWikiLinkMarkers } from "./wiki-links";
 
-// The memory node is a pseudo-entry pinned to the top of the left column: it
-// has no doc id of its own, it stands for "all memory entries of this
-// project". Selection state is a doc id or this sentinel.
-const MEMORY_NODE = "__memory__";
-
 function byUpdatedAtDesc(a: ProjectDoc, b: ProjectDoc): number {
   return b.updated_at.localeCompare(a.updated_at);
 }
@@ -38,18 +40,17 @@ function SidebarRow({
   label,
   count,
   active,
-  onSelect,
+  href,
 }: {
   icon: ReactNode;
   label: string;
   count?: number;
   active: boolean;
-  onSelect: () => void;
+  href: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <AppLink
+      href={href}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
         active
@@ -67,7 +68,7 @@ function SidebarRow({
       {count !== undefined && (
         <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
       )}
-    </button>
+    </AppLink>
   );
 }
 
@@ -79,13 +80,12 @@ function SidebarRow({
 function WikiLinkChips({
   slugs,
   pages,
-  onSelect,
 }: {
   slugs: string[];
   pages: ProjectDoc[];
-  onSelect: (docId: string) => void;
 }) {
   const { t } = useT("projects");
+  const paths = useWorkspacePaths();
   if (slugs.length === 0) return null;
 
   return (
@@ -104,8 +104,14 @@ function WikiLinkChips({
             key={slug}
             variant="secondary"
             className="max-w-64 cursor-pointer hover:bg-accent"
-            render={<button type="button" />}
-            onClick={() => onSelect(target.id)}
+            render={
+              <AppLink
+                href={paths.projectWikiPage(
+                  target.project_id,
+                  target.slug || target.id,
+                )}
+              />
+            }
             title={target.title}
           >
             <span className="truncate">{target.title}</span>
@@ -125,24 +131,27 @@ function WikiLinkChips({
   );
 }
 
-function WikiPagePane({
-  doc,
-  pages,
-  onSelect,
-}: {
-  doc: ProjectDoc;
-  pages: ProjectDoc[];
-  onSelect: (docId: string) => void;
-}) {
+function WikiPagePane({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) {
   const { t } = useT("projects");
+  const paths = useWorkspacePaths();
   const formatRelativeDate = useFormatRelativeDate();
   const updatedByType = doc.updated_by_type ?? doc.author_type;
   const updatedById = doc.updated_by_id ?? doc.author_id;
   const linkedSlugs = extractWikiLinkSlugs(doc.body);
-  const body = replaceWikiLinkMarkers(
-    doc.body,
-    (slug) => pages.find((page) => page.slug === slug)?.title ?? null,
-  );
+  // Links are built from the doc's own project rather than the section's, so
+  // the pane stays correct wherever a doc is rendered.
+  const body = replaceWikiLinkMarkers(doc.body, (slug) => {
+    const target = pages.find((page) => page.slug === slug);
+    return target
+      ? {
+          title: target.title,
+          href: paths.projectWikiPage(
+            doc.project_id,
+            target.slug || target.id,
+          ),
+        }
+      : null;
+  });
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-5">
@@ -154,7 +163,7 @@ function WikiPagePane({
       <div className="mt-4">
         <ReadonlyContent content={body} />
       </div>
-      <WikiLinkChips slugs={linkedSlugs} pages={pages} onSelect={onSelect} />
+      <WikiLinkChips slugs={linkedSlugs} pages={pages} />
       <div className="mt-6 flex flex-wrap items-center gap-1.5 border-t pt-3 text-xs text-muted-foreground">
         <span>{t(($) => $.wiki.updated_by)}</span>
         {updatedByType && updatedById ? (
@@ -193,7 +202,15 @@ function isLongMemoryBody(body: string): boolean {
   );
 }
 
-function MemoryCard({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) {
+// Exported for the workspace-wide Knowledge page, which renders the same
+// memory entries grouped by project.
+export function MemoryCard({
+  doc,
+  pages,
+}: {
+  doc: ProjectDoc;
+  pages: ProjectDoc[];
+}) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
   const formatRelativeDate = useFormatRelativeDate();
@@ -206,10 +223,18 @@ function MemoryCard({ doc, pages }: { doc: ProjectDoc; pages: ProjectDoc[] }) {
   // with `[[slug]]` cross-links. They go through the same pipeline WikiPagePane
   // uses, otherwise headings, bullets, fences and raw link markers leak.
   const body = detail
-    ? replaceWikiLinkMarkers(
-        detail,
-        (slug) => pages.find((page) => page.slug === slug)?.title ?? null,
-      )
+    ? replaceWikiLinkMarkers(detail, (slug) => {
+        const target = pages.find((page) => page.slug === slug);
+        return target
+          ? {
+              title: target.title,
+              href: paths.projectWikiPage(
+                doc.project_id,
+                target.slug || target.id,
+              ),
+            }
+          : null;
+      })
     : "";
   const isLong = isLongMemoryBody(body);
   const clamped = isLong && !expanded;
@@ -305,6 +330,38 @@ function MemoryPane({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Right pane — a slug in the URL that resolves to nothing
+// ---------------------------------------------------------------------------
+
+// A wiki URL outlives the page it points at (renamed slug, deleted doc, typo in
+// a shared link). Falling back to the memory stream would leave the reader
+// believing they are looking at the page they asked for, so the dead link is
+// stated and the way back offered.
+function WikiNotFoundPane({ projectId }: { projectId: string }) {
+  const { t } = useT("projects");
+  const paths = useWorkspacePaths();
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+        <FileQuestion className="h-6 w-6 text-muted-foreground" />
+      </div>
+      <h2 className="mt-4 text-base font-semibold">
+        {t(($) => $.wiki.not_found_title)}
+      </h2>
+      <p className="mt-1 max-w-md text-sm text-muted-foreground">
+        {t(($) => $.wiki.not_found_hint)}
+      </p>
+      <AppLink
+        href={paths.projectWiki(projectId)}
+        className="mt-4 text-sm text-muted-foreground hover:text-foreground hover:underline"
+      >
+        {t(($) => $.wiki.not_found_back)}
+      </AppLink>
+    </div>
+  );
+}
+
 // Small wrapper so the name resolution hook stays out of the card bodies.
 function ActorName({
   actorType,
@@ -321,11 +378,17 @@ function ActorName({
 // Section
 // ---------------------------------------------------------------------------
 
-export function ProjectWikiSection({ projectId }: { projectId: string }) {
+export function ProjectWikiSection({
+  projectId,
+  selectedRef,
+}: {
+  projectId: string;
+  selectedRef?: string;
+}) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
   const docsQuery = useQuery(projectDocListOptions(wsId, projectId));
-  const [selected, setSelected] = useState<string>(MEMORY_NODE);
   const docs = docsQuery.data ?? [];
 
   const memoryDocs = docs.filter((doc) => doc.kind === "memory");
@@ -401,10 +464,13 @@ export function ProjectWikiSection({ projectId }: { projectId: string }) {
     );
   }
 
-  // A doc can disappear under the selection (deleted elsewhere, WS
-  // invalidation refetches). Falling back to the memory node keeps the pane
-  // rendering instead of going blank.
-  const selectedDoc = wikiDocs.find((doc) => doc.id === selected);
+  // The ref in the URL is resolved the way the server's getProjectDocByRef
+  // resolves one — id first, then slug — so a link that opens a page through
+  // the API opens the same one here. No ref at all means the memory stream.
+  const selectedDoc = selectedRef
+    ? (wikiDocs.find((doc) => doc.id === selectedRef) ??
+      wikiDocs.find((doc) => doc.slug === selectedRef))
+    : undefined;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -413,8 +479,8 @@ export function ProjectWikiSection({ projectId }: { projectId: string }) {
           icon={<Brain className="h-4 w-4 shrink-0" />}
           label={t(($) => $.wiki.memory_node)}
           count={memoryDocs.length}
-          active={!selectedDoc}
-          onSelect={() => setSelected(MEMORY_NODE)}
+          active={!selectedRef}
+          href={paths.projectWiki(projectId)}
         />
         {wikiDocs.map((doc) => (
           <SidebarRow
@@ -422,17 +488,15 @@ export function ProjectWikiSection({ projectId }: { projectId: string }) {
             icon={<FileText className="h-4 w-4 shrink-0" />}
             label={doc.title}
             active={selectedDoc?.id === doc.id}
-            onSelect={() => setSelected(doc.id)}
+            href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
           />
         ))}
       </div>
       <div className="min-w-0 flex-1 overflow-y-auto">
         {selectedDoc ? (
-          <WikiPagePane
-            doc={selectedDoc}
-            pages={wikiDocs}
-            onSelect={setSelected}
-          />
+          <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
+        ) : selectedRef ? (
+          <WikiNotFoundPane projectId={projectId} />
         ) : (
           <MemoryPane docs={memoryDocs} pages={wikiDocs} />
         )}

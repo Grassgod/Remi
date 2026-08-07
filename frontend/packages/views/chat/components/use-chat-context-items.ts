@@ -62,7 +62,11 @@ export function parseCurrentContextRoute(pathname: string, searchParams: URLSear
   const issueMatch = pathname.match(/^\/[^/]+\/issues\/([^/]+)$/);
   if (issueMatch?.[1]) return { type: "issue", id: decodeURIComponent(issueMatch[1]) };
 
-  const projectMatch = pathname.match(/^\/[^/]+\/projects\/([^/]+)$/);
+  // The project's wiki routes live under the detail page, and reading a wiki
+  // page is still being in that project's context.
+  const projectMatch = pathname.match(
+    /^\/[^/]+\/projects\/([^/]+)(?:\/wiki(?:\/[^/]+)?)?$/,
+  );
   if (projectMatch?.[1]) return { type: "project", id: decodeURIComponent(projectMatch[1]) };
 
   const inboxMatch = pathname.match(/^\/[^/]+\/inbox$/);

@@ -48,7 +48,7 @@ import {
   PropertyPicker,
 } from "../../issues/components/pickers/property-picker";
 import { ProjectResourcesSection } from "./project-resources-section";
-import { ProjectContentTabs } from "./wiki/project-content-tabs";
+import { ProjectContentTabs, type ProjectContentTab } from "./wiki/project-content-tabs";
 import { IssuesHeader } from "../../issues/components/issues-header";
 import { BoardView } from "../../issues/components/board-view";
 import { ListView } from "../../issues/components/list-view";
@@ -452,7 +452,15 @@ function ProjectIssuesSurface({
 // ProjectDetail
 // ---------------------------------------------------------------------------
 
-export function ProjectDetail({ projectId }: { projectId: string }) {
+export function ProjectDetail({
+  projectId,
+  contentTab = "issues",
+  wikiSlug,
+}: {
+  projectId: string;
+  contentTab?: ProjectContentTab;
+  wikiSlug?: string;
+}) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
@@ -859,6 +867,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
           <ProjectContentTabs
             projectId={projectId}
+            contentTab={contentTab}
+            wikiSlug={wikiSlug}
             issues={
               <ViewStoreProvider store={projectViewStore}>
                 <ProjectIssuesSurface

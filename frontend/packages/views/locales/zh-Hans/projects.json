@@ -126,7 +126,21 @@
     "load_error_hint": "获取该项目的 wiki 和记忆时出错。",
     "load_error_retry": "重试",
     "memory_expand": "展开",
-    "memory_collapse": "收起"
+    "memory_collapse": "收起",
+    "not_found_title": "页面不存在",
+    "not_found_hint": "这个 wiki 页面不存在或已被删除。",
+    "not_found_back": "返回项目 Wiki"
+  },
+  "knowledge": {
+    "title": "知识库",
+    "description": "这个工作区里每个项目的 wiki 页面和智能体记忆",
+    "search_placeholder": "搜索全部知识...",
+    "empty_title": "还没有知识",
+    "empty_hint": "把项目 issue 派给智能体，或用 CLI 写入第一条。",
+    "no_results": "没有匹配的内容",
+    "load_error_title": "无法加载知识库",
+    "load_error_hint": "获取该工作区的 wiki 和记忆时出错。",
+    "load_error_retry": "重试"
   },
   "repo_source": {
     "tab_git": "Git 仓库",

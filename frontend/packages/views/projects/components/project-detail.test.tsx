@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { Project } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
@@ -176,7 +176,23 @@ vi.mock("./project-resources-section", () => ({
 }));
 
 vi.mock("./wiki/project-content-tabs", () => ({
-  ProjectContentTabs: ({ issues }: { issues: ReactNode }) => <div>{issues}</div>,
+  ProjectContentTabs: ({
+    issues,
+    contentTab,
+    wikiSlug,
+  }: {
+    issues: ReactNode;
+    contentTab: string;
+    wikiSlug?: string;
+  }) => (
+    <div
+      data-testid="content-tabs"
+      data-tab={contentTab}
+      data-wiki-slug={wikiSlug ?? ""}
+    >
+      {issues}
+    </div>
+  ),
 }));
 
 vi.mock("../../issues/components/issues-header", () => ({
@@ -224,10 +240,12 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   };
 }
 
-function renderDetail() {
+function renderDetail(
+  props: { contentTab?: "issues" | "wiki"; wikiSlug?: string } = {},
+) {
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <ProjectDetail projectId="proj-1" />
+      <ProjectDetail projectId="proj-1" {...props} />
     </I18nProvider>,
   );
 }
@@ -296,6 +314,22 @@ describe("ProjectDetail issues surface", () => {
     renderDetail();
 
     expect(screen.getByTestId("list-view")).toHaveTextContent("1");
+  });
+
+  it("hands the content tabs the route's tab and wiki ref, issues by default", () => {
+    renderDetail();
+
+    expect(screen.getByTestId("content-tabs")).toHaveAttribute(
+      "data-tab",
+      "issues",
+    );
+
+    cleanup();
+    renderDetail({ contentTab: "wiki", wikiSlug: "runbook" });
+
+    const tabs = screen.getByTestId("content-tabs");
+    expect(tabs).toHaveAttribute("data-tab", "wiki");
+    expect(tabs).toHaveAttribute("data-wiki-slug", "runbook");
   });
 });
 
