@@ -60,8 +60,6 @@ export type TranscriptEntry =
     }
   | { kind: "event"; seq: number; item: TimelineItem };
 
-type StepEntry = Extract<TranscriptEntry, { kind: "step" }>;
-
 const TERMINAL_STATUS = new Set(["completed", "failed"]);
 
 /**
@@ -131,14 +129,15 @@ export function nestEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
   const childrenByParent = new Map<string, TranscriptEntry[]>();
   const top: TranscriptEntry[] = [];
   for (const entry of entries) {
-    if (entry.kind === "step") {
-      const parentId = parentIdOf(entry);
-      if (parentId && parentId !== entry.toolCallId && stepIds.has(parentId)) {
-        const siblings = childrenByParent.get(parentId);
-        if (siblings) siblings.push(entry);
-        else childrenByParent.set(parentId, [entry]);
-        continue;
-      }
+    const parentId = parentIdOf(entry);
+    // A step never nests under itself; events (a subagent's prose) carry the
+    // same key and nest the same way.
+    const ownId = entry.kind === "step" ? entry.toolCallId : undefined;
+    if (parentId && parentId !== ownId && stepIds.has(parentId)) {
+      const siblings = childrenByParent.get(parentId);
+      if (siblings) siblings.push(entry);
+      else childrenByParent.set(parentId, [entry]);
+      continue;
     }
     top.push(entry);
   }
@@ -151,8 +150,9 @@ export function nestEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
   });
 }
 
-function parentIdOf(step: StepEntry): string | undefined {
-  const parentId = step.meta?.parent_tool_call_id;
+function parentIdOf(entry: TranscriptEntry): string | undefined {
+  const meta = entry.kind === "step" ? entry.meta : entry.item.meta;
+  const parentId = meta?.parent_tool_call_id;
   return typeof parentId === "string" && parentId ? parentId : undefined;
 }
 

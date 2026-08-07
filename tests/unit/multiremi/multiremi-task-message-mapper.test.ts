@@ -323,3 +323,100 @@ describe("daemon mapper input refresh", () => {
     expect(result?.input).toBeUndefined();
   });
 });
+
+// ─── Bridge-forwarded attribution (claude-agent-acp >= 0.66) ────────────────
+
+describe("daemon mapper real subagent attribution", () => {
+  it("prefers the bridge's parentToolUseId over the time-window heuristic", () => {
+    const map = createEventMapper(createAdapter("claude"));
+    // Two Agents open: the heuristic refuses to guess, but the bridge told us.
+    map(spawnAgent("agent_1"));
+    map(spawnAgent("agent_2"));
+
+    const use = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "glob_1",
+      _meta: { claudeCode: { toolName: "Glob", parentToolUseId: "agent_2" } },
+      status: "pending",
+      rawInput: { pattern: "*.ts" },
+    }));
+    expect(use[0]?.meta?.parent_tool_call_id).toBe("agent_2");
+
+    const result = map(event({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "glob_1",
+      _meta: { claudeCode: { toolName: "Glob", parentToolUseId: "agent_2" } },
+      status: "completed",
+      rawOutput: "3 files",
+    }));
+    expect(result[0]?.meta?.parent_tool_call_id).toBe("agent_2");
+  });
+
+  it("keeps a real parent even where the heuristic would never fire (codex)", () => {
+    const map = createEventMapper(createAdapter("codex"));
+
+    const use = map(event({
+      sessionUpdate: "tool_call",
+      toolCallId: "call_child",
+      _meta: { claudeCode: { parentToolUseId: "call_parent" } },
+      status: "in_progress",
+      kind: "execute",
+      title: "echo hi",
+      rawInput: { command: "echo hi" },
+    }));
+    expect(use[0]?.meta?.parent_tool_call_id).toBe("call_parent");
+  });
+
+  it("stamps the parent on the subagent's prose", () => {
+    const map = createEventMapper(createAdapter("claude"));
+
+    const thought = map(event({
+      sessionUpdate: "agent_thought_chunk",
+      _meta: { claudeCode: { parentToolUseId: "agent_1" } },
+      content: { type: "text", text: "checking the loader" },
+    }));
+    expect(thought[0]).toMatchObject({ type: "thinking", meta: { parent_tool_call_id: "agent_1" } });
+
+    const text = map(event({
+      sessionUpdate: "agent_message_chunk",
+      _meta: { claudeCode: { parentToolUseId: "agent_1" } },
+      content: { type: "text", text: "env vars win" },
+    }));
+    expect(text[0]).toMatchObject({ type: "text", meta: { parent_tool_call_id: "agent_1" } });
+
+    // The main agent's own prose stays unattributed, exactly as before.
+    const main = map(event({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } }));
+    expect(main[0]?.meta).toBeUndefined();
+  });
+
+  it("replays the claude subagent fixture into one nested group", () => {
+    const emitted = replayFixture("claude-subagent-transcript-notifications-1786500000000.json", "claude");
+    const agentUse = emitted.find((m) => m.type === "tool_use" && m.tool === "Agent");
+    const parent = agentUse!.toolCallId!;
+
+    // Every subagent-originated message — prose and tools alike — points at the
+    // Agent call; the Agent step and the main agent's reply stay top-level.
+    const attributed = emitted.filter((m) => m.meta?.parent_tool_call_id === parent);
+    expect(attributed.map((m) => m.type)).toEqual([
+      "thinking", "tool_use", "tool_result", "text",
+    ]);
+    const unattributed = emitted.filter((m) => !m.meta?.parent_tool_call_id);
+    expect(unattributed.every((m) => m.tool === "Agent" || m.type === "text")).toBe(true);
+  });
+
+  it("maps codex subagent activity into paired steps", () => {
+    const emitted = replayFixture("codex-subagent-activity-notifications-1786500000001.json", "codex");
+    const start = emitted.filter((m) => m.toolCallId === "call_SubAgentStart01");
+    expect(start.map((m) => m.type)).toEqual(["tool_use", "tool_result"]);
+    expect(start[0]?.input).toMatchObject({
+      agentThreadId: "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+      agentPath: "agents/reviewer",
+      activityKind: "start",
+    });
+    expect(start[0]?.meta).toMatchObject({ title: "Start subagent reviewer", kind: "other" });
+
+    // History replay: an already-completed initial frame still pairs.
+    const replayed = emitted.filter((m) => m.toolCallId === "call_SubAgentReplay02");
+    expect(replayed.map((m) => m.type)).toEqual(["tool_use", "tool_result"]);
+  });
+});

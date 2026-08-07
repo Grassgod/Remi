@@ -258,6 +258,37 @@ describe("buildEntries pairing", () => {
     expect((nested[0] as { children?: unknown[] }).children).toHaveLength(1);
   });
 
+  it("nests the subagent's own prose alongside its tool steps", () => {
+    // claude-agent-acp >= 0.66 forwards subagent text/thinking with the parent
+    // id, so the narrative belongs inside the Agent group, in order.
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent_1", input: { description: "audit" } }),
+      item({ seq: 2, type: "thinking", content: "let me read the loader", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 3, type: "tool_use", tool: "Read", toolCallId: "read_1", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 4, type: "text", content: "env vars win", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 5, type: "text", content: "main agent reply" }),
+    ]);
+    const nested = nestEntries(entries);
+
+    expect(nested.map((e) => e.kind)).toEqual(["step", "event"]);
+    const agent = nested[0] as Extract<TranscriptEntry, { kind: "step" }>;
+    expect(agent.children?.map((c) => [c.kind, c.seq])).toEqual([
+      ["event", 2],
+      ["step", 3],
+      ["event", 4],
+    ]);
+  });
+
+  it("keeps prose top-level when its parent id matches no step (fail open)", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "text", content: "orphan prose", meta: { parent_tool_call_id: "agent_gone" } }),
+    ]);
+    const nested = nestEntries(entries);
+
+    expect(nested).toHaveLength(1);
+    expect(nested[0]?.kind).toBe("event");
+  });
+
   it("keeps a step top-level when its parent id is not in the list (fail open)", () => {
     const entries = buildEntries([
       item({ seq: 1, type: "tool_use", tool: "Glob", toolCallId: "glob_1", meta: { parent_tool_call_id: "agent_gone" } }),
@@ -268,10 +299,12 @@ describe("buildEntries pairing", () => {
     expect((nested[0] as { children?: unknown }).children).toBeUndefined();
   });
 
-  it("never nests plain events, even between a parent and its children", () => {
+  it("leaves unattributed events top-level, even between a parent and its children", () => {
+    // Only the parent id nests an event; a main-agent line that happens to fall
+    // between the Agent call and its children keeps its place in the timeline.
     const entries = buildEntries([
       item({ seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent_1" }),
-      item({ seq: 2, type: "text", content: "thinking out loud", meta: { parent_tool_call_id: "agent_1" } }),
+      item({ seq: 2, type: "text", content: "main agent thinking out loud" }),
       item({ seq: 3, type: "tool_use", tool: "Glob", toolCallId: "glob_1", meta: { parent_tool_call_id: "agent_1" } }),
     ]);
     const nested = nestEntries(entries);

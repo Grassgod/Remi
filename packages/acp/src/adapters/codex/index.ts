@@ -11,6 +11,15 @@ import type {
 } from "../../protocol.js";
 import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
 
+/** Claude-flavored mode ids → their closest codex-acp equivalents. */
+const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
+  bypassPermissions: ["agent-full-access"],
+  dontAsk: ["agent-full-access"],
+  acceptEdits: ["agent"],
+  default: ["agent"],
+  plan: ["read-only"],
+};
+
 export class CodexAdapter implements AgentAdapter {
   readonly agentType = "codex";
 
@@ -106,10 +115,20 @@ export class CodexAdapter implements AgentAdapter {
     return this.resolveToolName(toolCall) === "ExitPlanMode";
   }
 
+  /**
+   * codex-acp advertises read-only / agent / agent-full-access and rejects any
+   * other id on session/set_mode with -32602. Our mode names are claude-flavored,
+   * so they only reach codex through this table.
+   */
+  mapPermissionMode(mode: string): string[] {
+    return PERMISSION_MODE_ALIASES[mode] ?? [];
+  }
+
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
     const codexOpts: Record<string, unknown> = {};
     if (options.model) codexOpts.model = options.model;
-    if (options.permissionMode) codexOpts.approval_mode = options.permissionMode;
+    // No approval mode here: the bridge ignores session meta for it — the real
+    // channel is session/set_mode, driven by mapPermissionMode above.
     if (options.additionalDirectories?.length) codexOpts.additionalDirectories = options.additionalDirectories;
 
     if (Object.keys(codexOpts).length === 0) return undefined;

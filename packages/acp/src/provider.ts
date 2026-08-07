@@ -111,28 +111,21 @@ export function resolveAcpPermissionMode(agentType: string, mode?: string | null
 }
 
 /**
- * Claude-flavored mode ids translated to their closest codex-acp equivalent
- * (codex advertises read-only / agent / agent-full-access). Checked only when
- * the requested id isn't already among the session's advertised modes.
+ * The mode id to send on session/set_mode, or null to skip the call. The agent's
+ * own advertised ids win; anything else is translated by the adapter (only codex
+ * needs a table — claude advertises our ids directly).
  */
-const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
-  bypassPermissions: ["agent-full-access"],
-  dontAsk: ["agent-full-access"],
-  acceptEdits: ["agent"],
-  default: ["agent"],
-  plan: ["read-only"],
-};
-
 export function resolveAvailableAcpPermissionMode(
   mode: string | null,
   modes?: SessionModeState,
+  adapter?: Pick<AgentAdapter, "mapPermissionMode">,
 ): string | null {
   if (!mode) return null;
   if (!modes?.availableModes?.length) return mode;
   if (modes.availableModes.some((m) => m.id === mode)) return mode;
   const available = new Set(modes.availableModes.map((m) => m.id));
-  for (const alias of PERMISSION_MODE_ALIASES[mode] ?? []) {
-    if (available.has(alias)) return alias;
+  for (const candidate of adapter?.mapPermissionMode?.(mode) ?? []) {
+    if (available.has(candidate)) return candidate;
   }
   // An id the agent doesn't advertise gets rejected with -32602 (codex-acp
   // validates session/set_mode strictly) — skip the call and keep the agent's
@@ -449,7 +442,7 @@ export class AcpProvider implements Provider {
         existing.modes = result.modes;
         this._sessionToChatId.set(existing.acpSessionId, chatId);
       }
-      const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, existing.modes);
+      const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, existing.modes, this._adapter);
       if (effectiveMode) {
         const appliedMode = await this._setMode(existing.client, existing.acpSessionId, effectiveMode);
         if (existing.modes) existing.modes = { ...existing.modes, currentModeId: appliedMode };
@@ -511,7 +504,7 @@ export class AcpProvider implements Provider {
       acpSessionId = result.sessionId;
       sessionModes = result.modes;
     }
-    const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes);
+    const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes, this._adapter);
     if (effectiveMode) {
       const appliedMode = await this._setMode(client, acpSessionId, effectiveMode);
       if (sessionModes) sessionModes = { ...sessionModes, currentModeId: appliedMode };

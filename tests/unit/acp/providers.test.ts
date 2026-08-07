@@ -8,6 +8,7 @@ import {
   ClaudeAdapter,
 } from "@acp/index.js";
 import { CodexAdapter } from "@acp/index.js";
+import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import { isAbsolute } from "node:path";
 
 /**
@@ -60,17 +61,24 @@ describe("AcpProvider", () => {
         { id: "agent-full-access", name: "Agent (full access)" },
       ],
     };
-    expect(resolveAvailableAcpPermissionMode("bypassPermissions", codexModes)).toBe("agent-full-access");
-    expect(resolveAvailableAcpPermissionMode("dontAsk", codexModes)).toBe("agent-full-access");
-    expect(resolveAvailableAcpPermissionMode("acceptEdits", codexModes)).toBe("agent");
-    expect(resolveAvailableAcpPermissionMode("plan", codexModes)).toBe("read-only");
+    const codex = new CodexAdapter();
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", codexModes, codex)).toBe("agent-full-access");
+    expect(resolveAvailableAcpPermissionMode("dontAsk", codexModes, codex)).toBe("agent-full-access");
+    expect(resolveAvailableAcpPermissionMode("acceptEdits", codexModes, codex)).toBe("agent");
+    expect(resolveAvailableAcpPermissionMode("plan", codexModes, codex)).toBe("read-only");
+
+    // Without the adapter (or with claude, which advertises our ids directly)
+    // there is no translation, so an unadvertised id skips set_mode.
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", codexModes)).toBe(null);
+    const claude: AgentAdapter = new ClaudeAdapter();
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", codexModes, claude)).toBe(null);
   });
 
   it("skips set_mode when the mode has no advertised equivalent", () => {
     expect(resolveAvailableAcpPermissionMode("bypassPermissions", {
       currentModeId: "agent",
       availableModes: [{ id: "agent", name: "Agent" }],
-    })).toBe(null);
+    }, new CodexAdapter())).toBe(null);
   });
 
   it("passes the mode through when the agent reports no mode list", () => {
@@ -259,12 +267,23 @@ describe("Codex ACP adapter", () => {
     })).toBe(false);
   });
 
-  it("builds Codex session meta with model and approval mode", () => {
+  it("keeps the permission mode out of Codex session meta (set_mode is the channel)", () => {
     const adapter = new CodexAdapter();
     const meta = adapter.buildSessionMeta({ model: "o3", permissionMode: "auto" });
-    expect(meta).toEqual({
-      codex: { options: { model: "o3", approval_mode: "auto" } },
-    });
+    // approval_mode was a dead letter: the bridge never read it, and the value
+    // was a claude-flavored id anyway.
+    expect(meta).toEqual({ codex: { options: { model: "o3" } } });
+    expect(adapter.buildSessionMeta({ permissionMode: "bypassPermissions" })).toBeUndefined();
+  });
+
+  it("maps our mode names to codex ids through the adapter hook", () => {
+    const adapter = new CodexAdapter();
+    expect(adapter.mapPermissionMode("bypassPermissions")).toEqual(["agent-full-access"]);
+    expect(adapter.mapPermissionMode("plan")).toEqual(["read-only"]);
+    expect(adapter.mapPermissionMode("nonsense")).toEqual([]);
+    // Claude advertises our ids directly, so it declares no mapping at all.
+    const claude: AgentAdapter = new ClaudeAdapter();
+    expect(claude.mapPermissionMode).toBeUndefined();
   });
 
   it("returns undefined session meta when no options provided", () => {

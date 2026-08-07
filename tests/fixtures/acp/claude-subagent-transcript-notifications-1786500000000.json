@@ -1,0 +1,130 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "toolu_01ParentAgentCall",
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent"
+          }
+        },
+        "status": "pending",
+        "title": "audit the config loader",
+        "kind": "other",
+        "rawInput": {
+          "description": "audit the config loader",
+          "prompt": "Read the config loader and report how defaults are resolved."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01ParentAgentCall"
+          }
+        },
+        "content": {
+          "type": "text",
+          "text": "I should read the loader before answering."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "toolu_01ChildReadCall",
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read",
+            "parentToolUseId": "toolu_01ParentAgentCall"
+          }
+        },
+        "status": "pending",
+        "title": "Read config.ts",
+        "kind": "read",
+        "rawInput": {
+          "file_path": "/repo/src/config.ts"
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "toolu_01ChildReadCall",
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Read",
+            "parentToolUseId": "toolu_01ParentAgentCall"
+          }
+        },
+        "status": "completed",
+        "rawOutput": "export const defaults = { … }"
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "_meta": {
+          "claudeCode": {
+            "parentToolUseId": "toolu_01ParentAgentCall"
+          }
+        },
+        "content": {
+          "type": "text",
+          "text": "Defaults come from `remi.toml`, then env vars override."
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "toolu_01ParentAgentCall",
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Agent"
+          }
+        },
+        "status": "completed",
+        "rawOutput": "## Config loader\n\nDefaults resolve from `remi.toml`, env vars win."
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-subagent-1",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "The subagent found the answer: env vars win."
+        }
+      }
+    }
+  }
+]

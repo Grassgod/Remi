@@ -378,6 +378,14 @@ export interface AgentAdapter {
   /** Check if a request_permission is an ExitPlanMode. */
   isExitPlanMode(toolCall: ToolCallProgressUpdate): boolean;
 
+  /**
+   * Agent-side mode ids that stand in for one of our mode names, most preferred
+   * first. Consulted only when the agent doesn't advertise the requested id
+   * itself — claude advertises our ids directly and needs no mapping, so this
+   * hook is optional.
+   */
+  mapPermissionMode?(mode: string): string[];
+
   /** Build agent-specific _meta for session/new. */
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined;
 

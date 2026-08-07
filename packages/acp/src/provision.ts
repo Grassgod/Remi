@@ -34,7 +34,7 @@ const PROVIDER_PACKAGES: Record<ProvisionProvider, string[]> = {
 // Pinned bridge versions — the whole fleet must run exactly these so machines
 // stay interchangeable. Bump deliberately alongside a remi release; daemons
 // converge on their next start (or via a scope="acp" update request).
-export const BRIDGE_PIN: Record<ProvisionProvider, string> = { claude: "0.57.0", codex: "1.1.0" };
+export const BRIDGE_PIN: Record<ProvisionProvider, string> = { claude: "0.66.0", codex: "1.1.14" };
 const PROVIDER_BIN: Record<ProvisionProvider, string> = { claude: "claude-agent-acp", codex: "codex-acp" };
 
 function remiHome(): string {

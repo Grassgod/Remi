@@ -6,9 +6,11 @@ import {
   formatToolInputSummary,
   isBashCommandMissing,
   isCollabInput,
+  isSubagentActivityInput,
+  subagentName,
   toolIcon,
 } from "./tool-summaries";
-import { Terminal, FileText, Hourglass, Wrench } from "lucide-react";
+import { Terminal, FileText, Hourglass, Bot, Wrench } from "lucide-react";
 
 // Real C0 capture (codex 0.142.5 collab run): 2× spawnAgent + 2× wait.
 // Tests read the frames rather than hand-written shapes so a bridge change that
@@ -182,5 +184,41 @@ describe("codex collab steps", () => {
     expect(collabAgentStates({ agentsStates: { t1: null } })).toEqual([
       { threadId: "t1", status: "unknown", message: undefined },
     ]);
+  });
+});
+
+describe("codex subagent activity steps", () => {
+  // codex-acp >= 1.1.14 forwards the inner activity it used to drop. The ACP
+  // title is "Start subagent <name>", so the resolved tool name is per-subagent
+  // and only the input shape identifies these calls.
+  const activity = {
+    agentThreadId: "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+    agentPath: "agents/reviewer",
+    activityKind: "start",
+  };
+
+  it("detects the shape without relying on the tool name", () => {
+    expect(isSubagentActivityInput(activity)).toBe(true);
+    expect(isSubagentActivityInput({ agentThreadId: "t" })).toBe(false);
+    expect(isSubagentActivityInput({ senderThreadId: "s", receiverThreadIds: [] })).toBe(false);
+    expect(isSubagentActivityInput(undefined)).toBe(false);
+  });
+
+  it("summarizes as verb plus subagent name, never the thread id", () => {
+    const summary = formatToolInputSummary("Start subagent reviewer", activity);
+    expect(summary).toBe("start · reviewer");
+    expect(summary).not.toContain(activity.agentThreadId);
+  });
+
+  it("takes the subagent name from the last path segment", () => {
+    expect(subagentName("agents/tools/formatter")).toBe("formatter");
+    expect(subagentName("reviewer")).toBe("reviewer");
+    expect(subagentName(undefined)).toBe("");
+  });
+
+  it("gives subagent activity the agent icon despite its per-subagent title", () => {
+    expect(toolIcon("Start subagent reviewer", activity)).toBe(Bot);
+    // Without the input there is no way to know — the generic fallback stands.
+    expect(toolIcon("Start subagent reviewer")).toBe(Wrench);
   });
 });

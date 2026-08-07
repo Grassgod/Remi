@@ -259,3 +259,54 @@ describe("transcript step abandoned by a finished task", () => {
     expect(stepRow().querySelector(".animate-spin")).toBeNull();
   });
 });
+
+describe("transcript subagent narrative", () => {
+  // claude-agent-acp >= 0.66 forwards the subagent's own prose (gated on the
+  // `subagent-transcript` capability); it belongs inside the Agent group.
+  const withProse: TimelineItem[] = [
+    { seq: 1, type: "tool_use", tool: "Agent", toolCallId: "agent-1", input: { description: "audit config" } },
+    { seq: 2, type: "thinking", content: "I should read the loader first", meta: { parent_tool_call_id: "agent-1" } },
+    {
+      seq: 3,
+      type: "tool_use",
+      tool: "Read",
+      toolCallId: "read-1",
+      input: { file_path: "/repo/src/config.ts" },
+      meta: { parent_tool_call_id: "agent-1" },
+    },
+    { seq: 4, type: "text", content: "## Finding\n\nEnv vars win.", meta: { parent_tool_call_id: "agent-1" } },
+    { seq: 5, type: "tool_result", tool: "Agent", toolCallId: "agent-1", status: "completed", output: "done" },
+  ];
+
+  it("counts prose and tool steps together in the group badge", () => {
+    renderTranscript(withProse);
+
+    expect(screen.getByText("3 steps")).toBeInTheDocument();
+    // Collapsed by default — the narrative is not loose in the timeline.
+    expect(screen.queryByText("I should read the loader first")).not.toBeInTheDocument();
+  });
+
+  it("renders the subagent's thinking and prose inside the expanded group", () => {
+    renderTranscript(withProse);
+
+    fireEvent.click(screen.getByText('"audit config"'));
+
+    expect(screen.getByText("I should read the loader first")).toBeInTheDocument();
+    expect(screen.getByText(".../src/config.ts")).toBeInTheDocument();
+    // Prose renders as Markdown, so the heading is a heading.
+    expect(screen.getByRole("heading", { name: "Finding" })).toBeInTheDocument();
+  });
+
+  it("does not mistake subagent prose for this agent's final answer", () => {
+    // The header shows the agent's own reply; the subagent's last line is not it.
+    renderTranscript([
+      ...withProse,
+      { seq: 6, type: "text", content: "Audit done: env vars win." },
+    ]);
+
+    // Header + its own timeline row both show it; the point is that it wins.
+    expect(screen.getAllByText("Audit done: env vars win.").length).toBeGreaterThan(0);
+    // The subagent heading only exists inside the (collapsed) group.
+    expect(screen.queryByRole("heading", { name: "Finding" })).not.toBeInTheDocument();
+  });
+});

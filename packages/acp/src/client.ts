@@ -392,7 +392,11 @@ export class AcpClient {
       protocolVersion: 1,
       clientInfo: { name: "remi", version: "0.1.0" },
       clientCapabilities: {
-        _meta: { terminal_output: true },
+        // `subagent-transcript` opts into subagent prose: claude-agent-acp >= 0.66
+        // strips a subagent's text/thinking chunks unless the client declares it
+        // (the bridge checks `capabilities?._meta?.["subagent-transcript"] === true`).
+        // Older bridges ignore the unknown key.
+        _meta: { terminal_output: true, "subagent-transcript": true },
         fs: { readTextFile: true, writeTextFile: true },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and
         // sends it to us as `elicitation/create` instead of disabling the tool.

@@ -98,6 +98,31 @@ export function isCollabInput(input?: Record<string, unknown>): boolean {
   return typeof input?.senderThreadId === "string" && Array.isArray(input.receiverThreadIds);
 }
 
+/**
+ * Codex subagent activity (codex-acp >= 1.1.14): the inner activity that used
+ * to be dropped entirely. A third shape, distinct from the `senderThreadId`
+ * collab calls — `{ agentThreadId, agentPath, activityKind }`. Shape detection
+ * is mandatory here: the ACP title is "Start subagent <name>", so the resolved
+ * tool name varies per subagent and can never be a lookup key.
+ */
+export function isSubagentActivityInput(input?: Record<string, unknown>): boolean {
+  return typeof input?.agentThreadId === "string" && typeof input.activityKind === "string";
+}
+
+/** Last segment of an agentPath — the subagent's name. */
+export function subagentName(agentPath: unknown): string {
+  const parts = str(agentPath).split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
+/** Verb plus subagent name; the thread id never reaches a one-line summary. */
+function subagentActivitySummary(input: Record<string, unknown>): string {
+  const kind = str(input.activityKind);
+  const name = subagentName(input.agentPath);
+  if (kind && name) return `${kind} · ${name}`;
+  return name || kind;
+}
+
 /** One agent's state inside a collab call's `agentsStates` map. */
 export interface CollabAgentState {
   threadId: string;
@@ -148,7 +173,9 @@ export function isBashCommandMissing(name?: string, input?: Record<string, unkno
 export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
   // Shape before name: a delegation keeps the prompt summary (spawnAgent already
-  // resolves to Agent), a prompt-less collab verb summarizes agent states.
+  // resolves to Agent), a prompt-less collab verb summarizes agent states, and
+  // subagent activity is titled per subagent so it has no usable name key.
+  if (isSubagentActivityInput(input)) return subagentActivitySummary(input);
   if (isCollabInput(input)) {
     return str(input.prompt) ? agentPromptSummary(input) : collabStateSummary(input);
   }
@@ -179,6 +206,9 @@ const ICONS: Record<string, LucideIcon> = {
   wait: Hourglass,
 };
 
-export function toolIcon(name?: string): LucideIcon {
+export function toolIcon(name?: string, input?: Record<string, unknown>): LucideIcon {
+  // Subagent activity carries a per-subagent title, so only its input shape
+  // identifies it.
+  if (isSubagentActivityInput(input)) return Bot;
   return (name && ICONS[name]) || Wrench;
 }

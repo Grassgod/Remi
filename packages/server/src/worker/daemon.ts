@@ -1229,6 +1229,16 @@ const TERMINAL_TOOL_STATUS = new Set(["completed", "failed"]);
 const SUBAGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
 
 /**
+ * The subagent attribution claude-agent-acp >= 0.66 forwards itself, on both
+ * prose chunks and tool events. Authoritative wherever it appears — the
+ * time-window heuristic below only covers bridges that don't send it.
+ */
+function metaParentToolUseId(raw: Record<string, any>): string | undefined {
+  const value = raw?._meta?.claudeCode?.parentToolUseId;
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/**
  * claude-agent-acp forwards a subagent's inner tool calls flat, dropping the
  * SDK's `parent_tool_use_id`, so ownership can only be inferred from the time
  * window: while an Agent call is open, the calls that start belong to it. With
@@ -1286,7 +1296,15 @@ export function createEventMapper(adapter: AgentAdapter): (event: ProviderEvent)
     if (su === "agent_message_chunk" || su === "agent_thought_chunk") {
       const content = extractText(raw.content);
       if (!content) return [];
-      return [{ type: su === "agent_thought_chunk" ? "thinking" : "text", content }];
+      // A subagent's prose (claude-agent-acp >= 0.66, gated on the
+      // `subagent-transcript` client capability) says which Agent call it came
+      // from; the frontend nests it under that step.
+      const parent = metaParentToolUseId(raw);
+      return [{
+        type: su === "agent_thought_chunk" ? "thinking" : "text",
+        content,
+        meta: parent ? { parent_tool_call_id: parent } : undefined,
+      }];
     }
 
     if (su === "usage_update") {
@@ -1342,13 +1360,14 @@ function mapToolEvent(
     status: status ?? "pending",
     startMs: Date.now(),
     terminalEmitted: false,
-    // Claude only: the heuristic's precondition — an open Agent call blocks the
-    // foreground until its subagent finishes — is verified for the claude bridge
-    // alone. Codex collab spawns normalize to `Agent` as well, but the caller
-    // keeps working alongside them, and codex carries real topology
-    // (receiverThreadIds) for a later batch to use.
+    // Real attribution from the bridge wins for any agent type. The time-window
+    // heuristic is the claude-only fallback for bridges that don't send it:
+    // its precondition — an open Agent call blocks the foreground until its
+    // subagent finishes — holds for claude alone. Codex collab spawns normalize
+    // to `Agent` as well, but the caller keeps working alongside them.
     parentToolCallId:
-      adapter.agentType === "claude" ? resolveParentToolCallId(id, name, tools) : undefined,
+      metaParentToolUseId(raw)
+      ?? (adapter.agentType === "claude" ? resolveParentToolCallId(id, name, tools) : undefined),
   };
   // Merge late-arriving fields; a refining event's keys win over the earlier
   // ones (claude's initial tool_call only yields a terminal placeholder, the

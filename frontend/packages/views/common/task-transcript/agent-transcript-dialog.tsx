@@ -48,6 +48,8 @@ import {
   formatToolInputSummary,
   isBashCommandMissing,
   isCollabInput,
+  isSubagentActivityInput,
+  subagentName,
   toolIcon,
 } from "./tool-summaries";
 import { useT } from "../../i18n";
@@ -408,6 +410,9 @@ export function AgentTranscriptDialog({
   const finalAnswer = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
+      // Skip subagent prose: it is the last text on the wire but not this
+      // agent's answer (bridges >= 0.66 forward it with a parent id).
+      if (it?.meta?.parent_tool_call_id) continue;
       if (it?.type === "text" && it.content?.trim()) return it.content;
     }
     return null;
@@ -1033,7 +1038,7 @@ const TranscriptStepRow = ({
   const { t } = useT("agents");
   const [expanded, setExpanded] = useState(false);
   const autoExpanded = useRef(false);
-  const Icon = toolIcon(step.tool);
+  const Icon = toolIcon(step.tool, step.input);
   const summary = formatToolInputSummary(step.tool ?? "", step.input);
   const commandMissing = isBashCommandMissing(step.tool, step.input);
   const running = isStepRunning(step.status);
@@ -1047,7 +1052,12 @@ const TranscriptStepRow = ({
   // Codex collab steps render their own structured pane; whatever CollabDetail
   // doesn't show still goes through the generic JSON block.
   const collabInput = isCollabInput(step.input) ? step.input : undefined;
-  const residualInput = collabInput ? omitKeys(collabInput, COLLAB_RENDERED_KEYS) : step.input;
+  const activityInput = isSubagentActivityInput(step.input) ? step.input : undefined;
+  const residualInput = collabInput
+    ? omitKeys(collabInput, COLLAB_RENDERED_KEYS)
+    : activityInput
+      ? omitKeys(activityInput, SUBAGENT_ACTIVITY_KEYS)
+      : step.input;
   const hasDetail =
     (step.input && Object.keys(step.input).length > 0) ||
     Boolean(step.output && step.output.length > 0) ||
@@ -1126,6 +1136,7 @@ const TranscriptStepRow = ({
           <CollapsibleContent>
             <div className="px-4 pb-3 ml-[72px] space-y-2">
               {collabInput && <CollabDetail input={collabInput} />}
+              {activityInput && <SubagentActivityDetail input={activityInput} />}
               {residualInput && Object.keys(residualInput).length > 0 && (
                 <pre className="max-h-52 overflow-auto rounded bg-muted/40 border p-3 text-[11px] text-muted-foreground whitespace-pre-wrap break-all">
                   {JSON.stringify(residualInput, null, 2)}
@@ -1142,7 +1153,11 @@ const TranscriptStepRow = ({
                         liveFollow={liveFollow}
                         taskTerminal={taskTerminal}
                       />
-                    ) : null,
+                    ) : (
+                      // The subagent's own narrative, interleaved with its tool
+                      // steps in the order it happened.
+                      <SubagentProse key={`e-${child.seq}`} item={child.item} />
+                    ),
                   )}
                 </div>
               )}
@@ -1163,10 +1178,67 @@ const TranscriptStepRow = ({
   );
 };
 
+/**
+ * A subagent's prose inside its Agent group. Text reads as prose (Markdown, the
+ * same treatment the agent's own replies get); thinking keeps the muted
+ * thinking styling used for top-level thought rows.
+ */
+function SubagentProse({ item }: { item: TimelineItem }) {
+  const thinking = item.type === "thinking";
+  const body = item.content ?? "";
+  if (!body) return null;
+  return (
+    <div className="px-4 py-1.5 text-xs">
+      {thinking ? (
+        <div className="flex items-start gap-1.5 text-muted-foreground">
+          <Brain className="h-3 w-3 shrink-0 mt-0.5" />
+          <span className="whitespace-pre-wrap break-words">{body}</span>
+        </div>
+      ) : (
+        <Markdown mode="minimal">{body}</Markdown>
+      )}
+    </div>
+  );
+}
+
 // ─── Codex collab (subagent delegation) detail ──────────────────────────────
 
 /** Keys CollabDetail renders itself — kept out of the generic JSON block. */
 const COLLAB_RENDERED_KEYS = ["prompt", "senderThreadId", "receiverThreadIds", "agentsStates"];
+
+/** Keys SubagentActivityDetail renders itself. */
+const SUBAGENT_ACTIVITY_KEYS = ["agentThreadId", "agentPath", "activityKind"];
+
+/**
+ * Codex subagent activity: which subagent, what it did. The thread id stays a
+ * muted monospace line at the bottom, like the collab pane.
+ */
+function SubagentActivityDetail({ input }: { input: Record<string, unknown> }) {
+  const name = subagentName(input.agentPath);
+  const kind = typeof input.activityKind === "string" ? input.activityKind : "";
+  const path = typeof input.agentPath === "string" ? input.agentPath : "";
+  const threadId = typeof input.agentThreadId === "string" ? input.agentThreadId : "";
+
+  return (
+    <div className="space-y-1.5 rounded bg-muted/40 border p-3 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-[10px] font-medium text-info">
+          <Bot className="h-3 w-3" />
+          {name || path}
+        </span>
+        {kind && (
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {kind}
+          </span>
+        )}
+      </div>
+      {path && <div className="font-mono text-[11px] text-muted-foreground break-all">{path}</div>}
+      {threadId && (
+        <div className="font-mono text-[10px] text-muted-foreground/70 break-all">{threadId}</div>
+      )}
+    </div>
+  );
+}
 
 function omitKeys(input: Record<string, unknown>, keys: string[]): Record<string, unknown> {
   return Object.fromEntries(Object.entries(input).filter(([k]) => !keys.includes(k)));

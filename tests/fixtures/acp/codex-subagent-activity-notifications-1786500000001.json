@@ -1,0 +1,82 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-codex-subagent",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_SubAgentStart01",
+        "title": "Start subagent reviewer",
+        "kind": "other",
+        "status": "in_progress",
+        "rawInput": {
+          "agentThreadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+          "agentPath": "agents/reviewer",
+          "activityKind": "start"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+              "path": "agents/reviewer",
+              "activity": "start"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-codex-subagent",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_SubAgentStart01",
+        "title": "Start subagent reviewer",
+        "status": "completed",
+        "rawInput": {
+          "agentThreadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+          "agentPath": "agents/reviewer",
+          "activityKind": "start"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+              "path": "agents/reviewer",
+              "activity": "start"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess-codex-subagent",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_SubAgentReplay02",
+        "title": "Start subagent formatter",
+        "kind": "other",
+        "status": "completed",
+        "rawInput": {
+          "agentThreadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+          "agentPath": "agents/tools/formatter",
+          "activityKind": "finish"
+        },
+        "_meta": {
+          "codex": {
+            "subagent": {
+              "threadId": "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+              "path": "agents/tools/formatter",
+              "activity": "finish"
+            }
+          }
+        }
+      }
+    }
+  }
+]

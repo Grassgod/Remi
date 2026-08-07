@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { formatToolInputSummary, isCollabInput, TOOL_ICONS } from "@connectors/feishu/tool-formatters.js";
+import { buildToolDiv, formatToolInputSummary, isCollabInput, isSubagentActivityInput, TOOL_ICONS } from "@connectors/feishu/tool-formatters.js";
 
 /** Collab rawInputs from the real C0 capture (codex 0.142.5), by verb + status. */
 function collabInputs(title: string, status: string): Record<string, unknown>[] {
@@ -124,5 +124,36 @@ describe("Feishu codex collab summaries", () => {
   it("gives the wait verb its own card icon", () => {
     expect(TOOL_ICONS.wait).toBe("time_outlined");
     expect(TOOL_ICONS.Agent).toBe("robot_outlined");
+  });
+});
+
+describe("Feishu codex subagent activity", () => {
+  const activity = {
+    agentThreadId: "01996f0c-1d2e-7a01-9f77-2b5c9f0a1c34",
+    agentPath: "agents/reviewer",
+    activityKind: "start",
+  };
+
+  it("detects the shape and keeps it distinct from collab calls", () => {
+    expect(isSubagentActivityInput(activity)).toBe(true);
+    expect(isSubagentActivityInput({ senderThreadId: "s", receiverThreadIds: [] })).toBe(false);
+    expect(isCollabInput(activity)).toBe(false);
+  });
+
+  it("summarizes as verb plus subagent name, never the thread id", () => {
+    const summary = formatToolInputSummary("Start subagent reviewer", activity);
+    expect(summary).toBe("start · reviewer");
+    expect(summary).not.toContain(activity.agentThreadId);
+  });
+
+  it("borrows the agent icon, since the tool name is per-subagent", () => {
+    const div = buildToolDiv({
+      name: "Start subagent reviewer",
+      input: activity,
+      status: "done",
+      thinkingBefore: "",
+    });
+    expect((div.icon as { token: string }).token).toBe(TOOL_ICONS.Agent);
+    expect((div.text as { content: string }).content).toContain("start · reviewer");
   });
 });

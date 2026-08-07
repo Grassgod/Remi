@@ -156,8 +156,11 @@ export function replaceLastPending(
 export function buildToolDiv(entry: ToolEntry): Record<string, unknown> {
   const dur = entry.durationMs != null ? ` (${(entry.durationMs / 1000).toFixed(1)}s)` : "";
   const summary = formatToolInputSummary(entry.name, entry.input);
+  // Subagent activity is titled "Start subagent <name>", so its tool name can't
+  // key the icon table — borrow the Agent robot instead of the wrench default.
+  const iconName = isSubagentActivityInput(entry.input) ? "Agent" : entry.name;
   const desc = `${entry.name} ${summary}${dur}`.trim();
-  return buildStepDiv(entry.name, desc);
+  return buildStepDiv(iconName, desc);
 }
 
 // ── Tool-specific input summary (one-liner for headers) ──
@@ -232,7 +235,9 @@ const TOOL_FORMATTERS: Record<string, ToolFormatter> = {
 export function formatToolInputSummary(name: string, input?: Record<string, unknown>): string {
   if (!input || Object.keys(input).length === 0) return "";
   // Shape before name: a delegation keeps the prompt summary (spawnAgent already
-  // resolves to Agent), a prompt-less collab verb summarizes agent states.
+  // resolves to Agent), a prompt-less collab verb summarizes agent states, and
+  // subagent activity is titled per subagent so it has no usable name key.
+  if (isSubagentActivityInput(input)) return subagentActivitySummary(input);
   if (isCollabInput(input)) {
     return str(input.prompt) ? agentPromptSummary(input) : collabStateSummary(input);
   }
@@ -257,6 +262,30 @@ function agentPromptSummary(input: Record<string, unknown>): string {
  */
 export function isCollabInput(input?: Record<string, unknown>): boolean {
   return typeof input?.senderThreadId === "string" && Array.isArray(input.receiverThreadIds);
+}
+
+/**
+ * Codex subagent activity (codex-acp >= 1.1.14) — a third shape, distinct from
+ * the `senderThreadId` collab calls. The ACP title is "Start subagent <name>",
+ * so the resolved tool name varies per subagent and only the shape identifies
+ * it. Mirrors isSubagentActivityInput in the web port.
+ */
+export function isSubagentActivityInput(input?: Record<string, unknown>): boolean {
+  return typeof input?.agentThreadId === "string" && typeof input.activityKind === "string";
+}
+
+/** Last segment of an agentPath — the subagent's name. */
+export function subagentName(agentPath: unknown): string {
+  const parts = str(agentPath).split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? "";
+}
+
+/** Verb plus subagent name; the thread id never reaches a one-line summary. */
+function subagentActivitySummary(input: Record<string, unknown>): string {
+  const kind = str(input.activityKind);
+  const name = subagentName(input.agentPath);
+  if (kind && name) return `${kind} · ${name}`;
+  return name || kind;
 }
 
 /** Counts, never thread ids. Only `completed` is terminal. */
