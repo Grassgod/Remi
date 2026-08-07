@@ -2021,7 +2021,7 @@ describe("Bun Multiremi core store", () => {
     expect(row.status).toBeNull();
   });
 
-  it("posts the agent's final reply as an issue comment on completion", () => {
+  it("posts the agent's final reply as an issue comment on completion", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_reply_comment", name: "reply comment", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({ name: "Reply Bot", provider: "claude", runtimeId: runtime.id });
@@ -2040,6 +2040,10 @@ describe("Bun Multiremi core store", () => {
       body: "Remi 是一个 AI 消息路由器。",
       parentId: null,
     });
+    // The reply carries its run so the chat stream can open that transcript.
+    expect(comments[0]).toMatchObject({ taskId: task.id, task_id: task.id });
+    // A human comment has no run attached.
+    expect(store.createIssueComment(issue.id, { authorType: "member", authorId: "local", body: "谢谢" }).taskId).toBeNull();
 
     // Comment-mention task: reply threads under the triggering comment.
     const trigger = store.createIssueComment(issue.id, {
@@ -2053,6 +2057,14 @@ describe("Bun Multiremi core store", () => {
     store.completeTask(mentionTask.id, { output: "好的:是一个消息路由器。" });
     const reply = store.listIssueComments(issue.id).find((c) => c.parentId === trigger.id);
     expect(reply).toMatchObject({ authorType: "agent", body: "好的:是一个消息路由器。" });
+    expect(reply?.taskId).toBe(mentionTask.id);
+
+    // …and reaches the browser through the timeline wire, where the chat
+    // stream reads it to offer that run's transcript.
+    const app = createMultiremiApp({ store });
+    const timeline = await (await app.request(`/api/issues/${issue.id}/timeline`)).json();
+    const agentEntry = timeline.find((entry: { id: string }) => entry.id === comments[0]!.id);
+    expect(agentEntry).toMatchObject({ actor_type: "agent", task_id: task.id });
 
     // Placeholder / empty outputs post nothing.
     const silent = store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "quiet" });

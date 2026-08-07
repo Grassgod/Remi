@@ -20,6 +20,8 @@ export interface Comment {
   issue_session_id?: string | null;
   author_type: CommentAuthorType;
   author_id: string;
+  /** Run that produced this comment (agent auto-reply only). */
+  task_id?: string | null;
   content: string;
   type: CommentType;
   parent_id: string | null;

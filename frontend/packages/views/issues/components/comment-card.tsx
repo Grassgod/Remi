@@ -29,6 +29,9 @@ import { QuickEmojiPicker } from "@multiremi/ui/components/common/quick-emoji-pi
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { useActorName } from "@multiremi/core/workspace/hooks";
+import { useQuery } from "@tanstack/react-query";
+import { issueKeys } from "@multiremi/core/issues/queries";
+import { TranscriptButton } from "../../common/task-transcript";
 import { useTimeAgo } from "../../i18n";
 import { ContentEditor, type ContentEditorRef, ReadonlyContent, useFileDropZone, FileDropOverlay, Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
@@ -541,6 +544,7 @@ function CommentCardImpl({
           onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
           align="end"
         />
+        <CommentTranscriptButton issueId={issueId} entry={entry} />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -632,6 +636,35 @@ function CommentCardImpl({
 // WS-driven cache refresh. Default shallow comparison is sufficient: the
 // timeline grouping is useMemo'd in issue-detail.tsx (stable Map ref), and
 // every callback is stabilized via useCallback in use-issue-timeline.ts.
+/**
+ * Transcript entry for an agent's reply. The comment carries the run that wrote
+ * it (`task_id`), and the issue's task list — already cached by the execution
+ * log on this page — supplies the task object the dialog needs. A task that is
+ * gone (deleted, or not in the list) renders nothing rather than a dead button.
+ */
+export function CommentTranscriptButton({ issueId, entry }: { issueId: string; entry: TimelineEntry }) {
+  const { t } = useT("issues");
+  // Only an agent reply that recorded its run gets an entry point; human and
+  // pre-linkage comments fetch nothing at all.
+  const taskId = entry.actor_type === "agent" ? entry.task_id ?? null : null;
+  const { data: tasks = [] } = useQuery({
+    queryKey: issueKeys.tasks(issueId),
+    queryFn: () => api.listTasksByIssue(issueId),
+    enabled: Boolean(taskId),
+    staleTime: 30_000,
+  });
+  const task = taskId ? tasks.find((item) => item.id === taskId) : undefined;
+  if (!task) return null;
+  return (
+    <TranscriptButton
+      task={task}
+      agentName=""
+      title={t(($) => $.comment.transcript_tooltip)}
+      className="h-8 w-8"
+    />
+  );
+}
+
 const CommentCard = memo(CommentCardImpl);
 
 export { CommentCard, type CommentCardProps, type CommentParentRef };

@@ -323,6 +323,7 @@
     "cancel_edit": "Cancel",
     "copy_action": "Copy",
     "copied_toast": "Copied",
+    "transcript_tooltip": "View transcript",
     "edit_action": "Edit",
     "update_failed": "Failed to update comment",
     "send_failed": "Failed to send comment",
@@ -353,6 +354,10 @@
     "chip_label": "working",
     "empty_hover": "No agents currently working",
     "filter_active_label": "Viewing only working agents"
+  },
+  "agent_stream": {
+    "failed": "{{name}} stopped — the run failed",
+    "cancelled": "{{name}} was cancelled"
   },
   "agent_live": {
     "is_working": "{{name}} is working",

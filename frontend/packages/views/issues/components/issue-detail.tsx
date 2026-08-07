@@ -57,6 +57,7 @@ import { CommentCard, type CommentParentRef } from "./comment-card";
 import { CommentInput, type ReplyTarget } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { AgentLiveCard } from "./agent-live-card";
+import { SessionAgentStreamRow } from "./session-agent-stream-row";
 import { IssueSessionActions } from "./issue-session-bar";
 import { IssueSessionList } from "./issue-session-list";
 import {
@@ -2182,6 +2183,13 @@ export function IssueDetail({
                   ))}
                 </div>
               )
+            )}
+
+            {/* Foot of the stream: what the agent is doing right now. Sits
+                outside the timeline list so neither render mode (Virtuoso /
+                flat map) has to carry a synthetic item. */}
+            {activeIssueSessionId && (
+              <SessionAgentStreamRow issueId={id} issueSessionId={activeIssueSessionId} />
             )}
 
             {/* Bottom comment input — the session's only composer. A reply is

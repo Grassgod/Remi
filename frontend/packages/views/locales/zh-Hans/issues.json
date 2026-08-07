@@ -321,6 +321,7 @@
     "cancel_edit": "取消",
     "copy_action": "复制",
     "copied_toast": "已复制",
+    "transcript_tooltip": "查看执行记录",
     "edit_action": "编辑",
     "update_failed": "更新评论失败",
     "send_failed": "发送评论失败",
@@ -349,6 +350,10 @@
     "chip_label": "工作中",
     "empty_hover": "当前没有智能体在工作",
     "filter_active_label": "正在查看工作中的智能体"
+  },
+  "agent_stream": {
+    "failed": "{{name}} 执行失败",
+    "cancelled": "{{name}} 已取消"
   },
   "agent_live": {
     "is_working": "{{name}} 正在处理",

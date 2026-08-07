@@ -13,6 +13,11 @@ export interface TimelineEntry {
   issue_session_id?: string | null;
   actor_type: string;
   actor_id: string;
+  /**
+   * Run that produced this comment (agent auto-reply only) — the stream offers
+   * its transcript. Absent on every comment created before the linkage landed.
+   */
+  task_id?: string | null;
   created_at: string;
   // Activity fields
   action?: string;

@@ -294,6 +294,9 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(timeline[0]).toMatchObject({
       issue_session_id: review.id,
       content: "Review context",
+      // Present but null on a human comment; the stream keys its transcript
+      // affordance off this field, so it must always be on the wire.
+      task_id: null,
     });
 
     const createdMessage = await app.request(

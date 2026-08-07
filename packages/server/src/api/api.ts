@@ -6118,6 +6118,7 @@ function commentCompatibilityResponse(comment: MultiremiIssueComment): Record<st
     issue_session_id: comment.issueSessionId,
     author_type: comment.authorType,
     author_id: comment.authorId,
+    task_id: comment.taskId ?? null,
     content: comment.body,
     type: comment.type ?? "comment",
     parent_id: comment.parentId,
@@ -9277,6 +9278,9 @@ function timelineEntryCompatibilityResponse(entry: MultiremiTimelineEntry): Reco
   }
 
   response.content = entry.content ?? null;
+  // Present only on agent auto-reply comments; the stream uses it to offer the
+  // run's transcript. Older comments have no task and stay null.
+  response.task_id = entry.task_id ?? entry.taskId ?? null;
   response.parent_id = entry.parent_id ?? entry.parentId ?? null;
   response.updated_at = entry.updated_at ?? entry.updatedAt ?? null;
   response.comment_type = entry.comment_type ?? entry.commentType ?? null;

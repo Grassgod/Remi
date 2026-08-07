@@ -4373,11 +4373,12 @@ runMigrations(this.db);
     const id = createId("cmt");
     const now = nowIso();
     const body = rawBody.trim();
+    const taskId = cleanOptionalString(input.taskId ?? input.task_id) ?? null;
     this.db.run(
       `INSERT INTO multiremi_issue_comments (
-         id, issue_id, issue_session_id, author_type, author_id, parent_id, body, type, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, issueId, issueSessionId, input.authorType ?? "member", input.authorId ?? null, parentId, body, "comment", now, now],
+         id, issue_id, issue_session_id, author_type, author_id, task_id, parent_id, body, type, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, issueId, issueSessionId, input.authorType ?? "member", input.authorId ?? null, taskId, parentId, body, "comment", now, now],
     );
     const attachmentIds = input.attachmentIds ?? input.attachment_ids ?? [];
     if (attachmentIds.length) this.linkAttachmentsToComment(id, issueId, attachmentIds);
@@ -8987,6 +8988,8 @@ runMigrations(this.db);
         issueSessionId: task.issueSessionId,
         authorType: "agent",
         authorId: task.agentId,
+        // Links the reply to its run so the chat stream can open the transcript.
+        taskId: task.id,
         parentId: parent && parent.issueId === task.issueId ? parent.id : null,
         body,
       });
@@ -11443,6 +11446,7 @@ function toIssueComment(row: Row): MultiremiIssueComment {
   const issueSessionId = nullableString(row.issue_session_id);
   const authorType = String(row.author_type ?? "member");
   const authorId = nullableString(row.author_id);
+  const taskId = nullableString(row.task_id);
   const parentId = nullableString(row.parent_id);
   const body = String(row.body ?? "");
   const type = String(row.type ?? "comment");
@@ -11461,6 +11465,8 @@ function toIssueComment(row: Row): MultiremiIssueComment {
     author_type: authorType,
     authorId,
     author_id: authorId,
+    taskId,
+    task_id: taskId,
     parentId,
     parent_id: parentId,
     body,
@@ -11504,6 +11510,8 @@ function commentToTimelineEntry(comment: MultiremiIssueComment): MultiremiTimeli
     actor_type: comment.authorType,
     actorId: comment.authorId,
     actor_id: comment.authorId,
+    taskId: comment.taskId,
+    task_id: comment.taskId,
     createdAt: comment.createdAt,
     created_at: comment.createdAt,
     content: comment.body,

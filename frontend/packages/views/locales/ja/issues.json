@@ -316,6 +316,7 @@
     "cancel_edit": "キャンセル",
     "copy_action": "コピー",
     "copied_toast": "コピーしました",
+    "transcript_tooltip": "実行記録を表示",
     "edit_action": "編集",
     "update_failed": "コメントを更新できませんでした",
     "send_failed": "コメントを送信できませんでした",
@@ -344,6 +345,10 @@
     "chip_label": "作業中",
     "empty_hover": "現在作業中のエージェントはありません",
     "filter_active_label": "作業中のエージェントのみ表示中"
+  },
+  "agent_stream": {
+    "failed": "{{name}} の実行が失敗しました",
+    "cancelled": "{{name}} はキャンセルされました"
   },
   "agent_live": {
     "is_working": "{{name}} が作業中",

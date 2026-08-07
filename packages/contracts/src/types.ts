@@ -927,6 +927,9 @@ export interface MultiremiIssueComment {
   author_type?: string;
   authorId: string | null;
   author_id?: string | null;
+  /** Task whose run produced this comment (agent auto-reply). Null for everything else. */
+  taskId: string | null;
+  task_id?: string | null;
   parentId: string | null;
   parent_id?: string | null;
   body: string;
@@ -995,6 +998,9 @@ export interface MultiremiTimelineEntry {
   actor_type?: string;
   actorId: string | null;
   actor_id?: string | null;
+  /** Task whose run produced this comment (agent auto-reply) — opens its transcript. */
+  taskId?: string | null;
+  task_id?: string | null;
   createdAt: string;
   created_at?: string;
   action?: string | null;
@@ -1902,6 +1908,9 @@ export interface CreateIssueCommentInput {
   issue_session_id?: string | null;
   authorType?: string;
   authorId?: string | null;
+  /** Set only by the agent auto-reply path, to link the comment to its run. */
+  taskId?: string | null;
+  task_id?: string | null;
   parentId?: string | null;
   parent_id?: string | null;
   attachmentIds?: string[];

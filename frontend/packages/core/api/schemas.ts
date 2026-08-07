@@ -140,6 +140,8 @@ const TimelineEntrySchema = z.object({
   // actor_id: null. A single null used to fail the whole array and blank the
   // activity feed via the fallback — normalize to "" instead.
   actor_id: z.preprocess((value) => value ?? "", z.string()),
+  // Agent auto-reply comments only; null/absent everywhere else.
+  task_id: z.string().nullable().optional(),
   created_at: z.string(),
   action: z.string().optional(),
   details: z.record(z.string(), z.unknown()).optional(),
@@ -195,6 +197,7 @@ export const CommentSchema = z.object({
   issue_session_id: z.string().nullable().optional(),
   author_type: z.string(),
   author_id: z.string(),
+  task_id: z.string().nullable().optional(),
   content: z.string(),
   type: z.string(),
   parent_id: z.string().nullable(),

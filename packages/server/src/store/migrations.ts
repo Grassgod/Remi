@@ -518,6 +518,7 @@ export function runMigrations(db: SqlDatabase): void {
       issue_session_id TEXT,
       author_type TEXT NOT NULL DEFAULT 'member',
       author_id TEXT,
+      task_id TEXT,
       parent_id TEXT,
       body TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'comment',
@@ -1076,6 +1077,9 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_type TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "resolved_by_id TEXT");
   addColumnIfMissing(db, "multiremi_issue_comments", "issue_session_id TEXT");
+  // Agent auto-reply comments point back at the run that produced them, so the
+  // chat stream can open that task's transcript. Forward-only: no backfill.
+  addColumnIfMissing(db, "multiremi_issue_comments", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_attachments", "chat_session_id TEXT");
   addColumnIfMissing(db, "multiremi_attachments", "chat_message_id TEXT");
   ensureIssueSubscriberTypedSchema(db);
