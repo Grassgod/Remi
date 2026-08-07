@@ -31,6 +31,11 @@ export interface AgentTaskAgent {
   name: string;
   provider: string;
   model: string | null;
+  /**
+   * Runtime-native reasoning effort (`thinking_level` on the wire), applied
+   * through the agent's effort config option. `""`/null means "no override".
+   */
+  thinkingLevel?: string | null;
   instructions: string;
   skills: AgentTaskSkill[];
 

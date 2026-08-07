@@ -6,7 +6,7 @@
 
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import type {
   Provider,
   SendOptions,
@@ -26,6 +26,11 @@ import type {
   PromptResult,
   UsageUpdate,
   SessionModeState,
+  SessionModelState,
+  SessionConfigOption,
+  McpServerConfig,
+  NewSessionMeta,
+  NewSessionResult,
 } from "./protocol.js";
 
 export interface AcpProviderOptions {
@@ -45,8 +50,8 @@ export interface AcpProviderOptions {
   allowedTools?: string[];
   /** Working directory. */
   cwd?: string;
-  /** Inject MCP servers at construction time. */
-  getMcpServers?: () => Array<{ name: string; command: string; args?: string[]; env?: Record<string, string> }>;
+  /** Inject MCP servers at construction time (ACP wire shape — see {@link McpServerConfig}). */
+  getMcpServers?: () => McpServerConfig[];
   /** Extra environment variables for the spawned ACP process. */
   env?: Record<string, string>;
 }
@@ -55,8 +60,24 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   claude: "bypassPermissions",
+  // codex advertises read-only/agent/agent-full-access, so the literal id is
+  // meaningless to it — CodexAdapter.mapPermissionMode translates this to
+  // `agent-full-access`. Without an entry here an unconfigured codex chat
+  // stayed in codex's own initial mode and prompted for every tool call.
+  codex: "bypassPermissions",
 };
 const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
+
+/**
+ * `category` values the two bridges use for the model and effort selectors.
+ * Reading the category rather than the id keeps one code path for both:
+ * claude-agent-acp uses ids `model`/`effort` (dist/acp-agent.js:5110, 5142)
+ * while codex-acp uses `model`/`reasoning_effort` (dist/index.js:27151-27152),
+ * but both tag them `model` and `thought_level` (acp-agent.js:5113, 5145;
+ * index.js:27177, 27188).
+ */
+const MODEL_OPTION_CATEGORY = "model";
+const EFFORT_OPTION_CATEGORY = "thought_level";
 
 interface PromptState {
   promptStartTime: number;
@@ -98,7 +119,23 @@ interface PoolEntry {
   acpSessionId: string;
   lastUsed: number;
   promptState: PromptState;
+  /** Everything the agent advertised for this session (session/new|load|resume). */
   modes?: SessionModeState;
+  configOptions?: SessionConfigOption[];
+  models?: SessionModelState;
+  /**
+   * The cwd and MCP server set this session was created with. Both bridges bind
+   * them at creation (claude-agent-acp dist/acp-agent.js:4447 `cwd: params.cwd`;
+   * codex-acp threadStart config, dist/index.js:26582-26586), so a change means
+   * the pooled session can no longer serve the request.
+   */
+  cwd: string;
+  mcpServersKey: string;
+  /** Values currently in force, so a re-apply is only sent when they change. */
+  appliedModel: string | null;
+  appliedEffort: string | null;
+  /** Last permission mode we logged about, so a fallback is reported once per session. */
+  warnedPermissionMode: string | null;
 }
 
 type PermissionHandler = (params: RequestPermissionParams) => Promise<PermissionOutcome>;
@@ -131,6 +168,33 @@ export function resolveAvailableAcpPermissionMode(
   // validates session/set_mode strictly) — skip the call and keep the agent's
   // default mode rather than killing the session.
   return null;
+}
+
+/**
+ * The `session/set_config_option` call for a requested model/effort value, or
+ * null to skip it. Both bridges reject an unknown option id or value outright
+ * (claude-agent-acp dist/acp-agent.js:3476, 3525; codex-acp dist/index.js:29328,
+ * 29370, 29379), so — as with permission modes — an unsupported value is skipped
+ * rather than allowed to kill the session.
+ */
+export function resolveConfigOptionChange(
+  configOptions: SessionConfigOption[] | undefined,
+  category: string,
+  value: string,
+): { configId: string; value: string } | null {
+  const option = configOptions?.find((o) => o.category === category);
+  if (!option || option.type !== "select") return null;
+  if (option.currentValue === value) return null;
+  const selectable = option.options.flatMap((o) => ("options" in o ? o.options : [o]));
+  if (!selectable.some((o) => o.value === value)) return null;
+  return { configId: option.id, value };
+}
+
+/** The agent's current value for a config category, if it advertises one. */
+function currentConfigValue(configOptions: SessionConfigOption[] | undefined, category: string): string | null {
+  const option = configOptions?.find((o) => o.category === category);
+  if (!option || option.type !== "select") return null;
+  return option.currentValue;
 }
 
 export function resolveAcpExecutableForAgent(agentType: string, executable: string | null | undefined, fallback: string): string {
@@ -433,42 +497,54 @@ export class AcpProvider implements Provider {
 
   private async _ensureSession(chatId: string, options?: SendOptions): Promise<PoolEntry> {
     const permissionMode = resolveAcpPermissionMode(this._adapter.agentType, options?.permissionMode);
-    const existing = this._pool.get(chatId);
-    if (existing?.client.alive) {
-      if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
-        this._sessionToChatId.delete(existing.acpSessionId);
-        const result = await existing.client.loadSession(options.sessionId);
-        existing.acpSessionId = result.sessionId;
-        existing.modes = result.modes;
-        this._sessionToChatId.set(existing.acpSessionId, chatId);
-      }
-      const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, existing.modes, this._adapter);
-      if (effectiveMode) {
-        const appliedMode = await this._setMode(existing.client, existing.acpSessionId, effectiveMode);
-        if (existing.modes) existing.modes = { ...existing.modes, currentModeId: appliedMode };
-      }
-      return existing;
-    }
-
-    if (existing) {
-      await existing.client.stop();
-      this._sessionToChatId.delete(existing.acpSessionId);
-      this._pool.delete(chatId);
-    }
-
     const cwd = options?.cwd ?? this._options.cwd ?? homedir();
-    const env: Record<string, string> = {};
-    if (this._options.apiKey) {
-      env.ANTHROPIC_API_KEY = this._options.apiKey;
+    const mcpServers = this._options.getMcpServers?.() ?? [];
+    const mcpServersKey = JSON.stringify(mcpServers);
+    const model = options?.model ?? this._options.model ?? null;
+    const effort = options?.effort ?? null;
+
+    const existing = this._pool.get(chatId);
+    if (existing) {
+      const stale =
+        !existing.client.alive ||
+        existing.cwd !== cwd ||
+        existing.mcpServersKey !== mcpServersKey;
+      if (stale && existing.client.alive) {
+        console.warn(
+          `[acp] ${this._adapter.agentType}: recreating session for ${chatId} — ` +
+            `${existing.cwd !== cwd ? `cwd ${existing.cwd} -> ${cwd}` : "mcpServers changed"} ` +
+            "(both are fixed at session creation and cannot be re-applied)",
+        );
+      }
+      if (stale) {
+        await this._discardEntry(chatId, existing);
+      } else {
+        if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
+          this._sessionToChatId.delete(existing.acpSessionId);
+          const result = await existing.client.loadSession(options.sessionId, cwd, mcpServers);
+          existing.acpSessionId = result.sessionId;
+          this._adoptSessionState(existing, result);
+          this._sessionToChatId.set(existing.acpSessionId, chatId);
+        }
+        await this._applyMode(existing, permissionMode);
+        await this._applyModelAndEffort(existing, model, effort);
+        return existing;
+      }
     }
-    if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
+
+    const env: Record<string, string> = {};
+    // Anthropic credentials are meaningless to a codex process and would put an
+    // Anthropic key in its environment for nothing.
+    if (this._adapter.agentType === "claude") {
+      if (this._options.apiKey) env.ANTHROPIC_API_KEY = this._options.apiKey;
+      if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
+    }
     if (this._options.env) Object.assign(env, this._options.env);
 
     const sessionMeta = this._adapter.buildSessionMeta({
-      model: this._options.model,
+      model,
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
-      permissionMode,
-      additionalDirectories: options?.addDirs,
+      systemPrompt: options?.systemPrompt,
     });
 
     const client = new AcpClient({
@@ -477,9 +553,9 @@ export class AcpProvider implements Provider {
         this._options.executable,
         this._adapter.defaultExecutable(),
       ),
+      agentType: this._adapter.agentType,
       cwd,
       env,
-      sessionMeta: sessionMeta ?? undefined,
       onPermissionRequest: (params) => this._handlePermission(params),
       onElicitationRequest: (params) => this._handleElicitation(params),
       onSessionUpdate: () => {},
@@ -489,44 +565,118 @@ export class AcpProvider implements Provider {
     });
 
     await client.start();
-    await client.initialize();
+    const initializeResult = await client.initialize();
 
-    const mcpServers = this._options.getMcpServers?.() ?? [];
+    // Official field when the agent advertises it, `_meta.additionalRoots`
+    // otherwise — both pinned bridges read the meta form as the compatibility
+    // fallback (claude-agent-acp dist/acp-agent.js:4549; codex-acp
+    // dist/index.js:27064-27072).
+    const addDirs = absoluteAdditionalDirectories(options?.addDirs, this._adapter.agentType);
+    const officialAddDirs = !!initializeResult.agentCapabilities?.sessionCapabilities?.additionalDirectories;
+    const meta: NewSessionMeta | undefined =
+      addDirs.length && !officialAddDirs ? { ...(sessionMeta ?? {}), additionalRoots: addDirs } : sessionMeta;
+    const additionalDirectories = officialAddDirs ? addDirs : undefined;
 
-    let acpSessionId: string;
-    let sessionModes: SessionModeState | undefined;
-    if (options?.sessionId) {
-      const result = await client.resumeSession(options.sessionId, cwd, mcpServers);
-      acpSessionId = result.sessionId;
-      sessionModes = result.modes;
-    } else {
-      const result = await client.newSession({ cwd, mcpServers, _meta: sessionMeta });
-      acpSessionId = result.sessionId;
-      sessionModes = result.modes;
-    }
-    const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, sessionModes, this._adapter);
-    if (effectiveMode) {
-      const appliedMode = await this._setMode(client, acpSessionId, effectiveMode);
-      if (sessionModes) sessionModes = { ...sessionModes, currentModeId: appliedMode };
-    }
+    const result = options?.sessionId
+      ? await client.resumeSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
+      : await client.newSession({ cwd, mcpServers, additionalDirectories, _meta: meta });
 
     const entry: PoolEntry = {
       client,
-      acpSessionId,
+      acpSessionId: result.sessionId,
       lastUsed: Date.now(),
       promptState: createPromptState(),
-      modes: sessionModes,
+      cwd,
+      mcpServersKey,
+      appliedModel: null,
+      appliedEffort: null,
+      warnedPermissionMode: null,
     };
+    this._adoptSessionState(entry, result);
+    await this._applyMode(entry, permissionMode);
+    await this._applyModelAndEffort(entry, model, effort);
 
     this._pool.set(chatId, entry);
-    this._sessionToChatId.set(acpSessionId, chatId);
+    this._sessionToChatId.set(entry.acpSessionId, chatId);
     this._startCleanupTimer();
     return entry;
   }
 
-  private async _setMode(client: AcpClient, sessionId: string, mode: string): Promise<string> {
-    await client.setMode(sessionId, mode);
-    return mode;
+  /** Record what the agent advertised for a freshly created/loaded session. */
+  private _adoptSessionState(entry: PoolEntry, result: NewSessionResult): void {
+    entry.modes = result.modes;
+    entry.configOptions = result.configOptions;
+    entry.models = result.models;
+    entry.appliedModel = currentConfigValue(result.configOptions, MODEL_OPTION_CATEGORY);
+    entry.appliedEffort = currentConfigValue(result.configOptions, EFFORT_OPTION_CATEGORY);
+  }
+
+  private async _discardEntry(chatId: string, entry: PoolEntry): Promise<void> {
+    try {
+      if (entry.client.alive) await entry.client.closeSession(entry.acpSessionId);
+    } catch {}
+    await entry.client.stop();
+    this._sessionToChatId.delete(entry.acpSessionId);
+    this._pool.delete(chatId);
+  }
+
+  private async _applyMode(entry: PoolEntry, permissionMode: string | null): Promise<void> {
+    const effectiveMode = resolveAvailableAcpPermissionMode(permissionMode, entry.modes, this._adapter);
+    // Report a translation or a skip once per session, not once per turn.
+    if (effectiveMode !== permissionMode && permissionMode !== entry.warnedPermissionMode) {
+      entry.warnedPermissionMode = permissionMode;
+      const available = entry.modes?.availableModes.map((m) => m.id).join(", ") ?? "unknown";
+      console.warn(
+        `[acp] ${this._adapter.agentType}: permission mode "${permissionMode}" is not advertised ` +
+          `(available: ${available}) — ` +
+          (effectiveMode
+            ? `using "${effectiveMode}"`
+            : `keeping the agent's "${entry.modes?.currentModeId}"`),
+      );
+    }
+    if (!effectiveMode) return;
+    await entry.client.setMode(entry.acpSessionId, effectiveMode);
+    if (entry.modes) entry.modes = { ...entry.modes, currentModeId: effectiveMode };
+  }
+
+  /**
+   * Model first, then effort: changing the model resets the effort to the new
+   * model's default and rewrites the effort option's valid values
+   * (claude-agent-acp dist/acp-agent.js:4084-4100, codex-acp dist/index.js:29369-29374).
+   */
+  private async _applyModelAndEffort(entry: PoolEntry, model: string | null, effort: string | null): Promise<void> {
+    if (model && model !== entry.appliedModel) {
+      if (await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model)) {
+        entry.appliedModel = model;
+        // The agent just rewrote the effort option: codex re-derives it from the
+        // new model's supported list (dist/index.js:29372-29374) and claude
+        // rebuilds and re-clamps it (dist/acp-agent.js:4084-4100). Re-read what
+        // it now reports, or a requested effort equal to the pre-switch value
+        // would look already-applied and be skipped.
+        entry.appliedEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
+      }
+    }
+    if (effort && effort !== entry.appliedEffort) {
+      if (await this._setConfigOption(entry, EFFORT_OPTION_CATEGORY, effort)) entry.appliedEffort = effort;
+    }
+  }
+
+  private async _setConfigOption(entry: PoolEntry, category: string, value: string): Promise<boolean> {
+    const change = resolveConfigOptionChange(entry.configOptions, category, value);
+    if (!change) {
+      console.warn(
+        `[acp] ${this._adapter.agentType}: skipping ${category}="${value}" — the agent does not offer it`,
+      );
+      return false;
+    }
+    const result = await entry.client.setConfigOption(entry.acpSessionId, change.configId, change.value);
+    if (result?.configOptions) entry.configOptions = result.configOptions;
+    return true;
+  }
+
+  /** The permission modes this chat's agent advertised, for `/switch`. */
+  advertisedModes(chatId: string): SessionModeState | undefined {
+    return this._pool.get(chatId)?.modes;
   }
 
   private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
@@ -660,6 +810,21 @@ function buildMediaContent(
     }));
 }
 
+/**
+ * codex-acp rejects the whole `session/new` with -32602 when any entry is
+ * relative or empty (dist/index.js:27078-27088), so a misconfigured extra root
+ * must not be able to take the session down with it.
+ */
+function absoluteAdditionalDirectories(addDirs: string[] | undefined, agentType: string): string[] {
+  if (!addDirs?.length) return [];
+  const kept = addDirs.filter((dir) => dir && isAbsolute(dir));
+  const dropped = addDirs.filter((dir) => !kept.includes(dir));
+  if (dropped.length) {
+    console.warn(`[acp] ${agentType}: ignoring non-absolute additionalDirectories: ${dropped.join(", ")}`);
+  }
+  return kept;
+}
+
 function extractChunkText(content: unknown): string {
   const blocks = Array.isArray(content) ? content : content ? [content] : [];
   let text = "";
@@ -674,13 +839,6 @@ function extractChunkText(content: unknown): string {
 
 function accumulateUsage(state: PromptState, update: SessionUpdate): void {
   const u = update as Record<string, any>;
-  if (u.inputTokens != null) state.usage.inputTokens = u.inputTokens;
-  if (u.outputTokens != null) state.usage.outputTokens = u.outputTokens;
-  if (u.cacheReadTokens != null) state.usage.cacheReadTokens = u.cacheReadTokens;
-  if (u.cacheWriteTokens != null) state.usage.cacheWriteTokens = u.cacheWriteTokens;
-  if (u.model) state.usage.model = u.model;
-  if (u.costUsd != null) state.usage.costUsd = u.costUsd;
-  if (u.contextWindowSize != null) state.usage.contextWindowSize = u.contextWindowSize;
   // ACP wire format ({used, size, cost}): `used` is total context tokens with
   // no input/output split — record it as such rather than faking input=used.
   if (u.used != null) state.usage.totalTokens = u.used;

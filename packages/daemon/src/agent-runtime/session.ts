@@ -106,6 +106,8 @@ export class AgentSession {
       chatId: c.chatId,
       sessionId: c.sessionId,
       cwd: c.cwd,
+      model: c.model,
+      effort: c.effort,
       media: c.media,
       allowedTools: c.allowedTools,
       addDirs: c.addDirs,

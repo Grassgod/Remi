@@ -33,6 +33,10 @@ export interface SendOptions {
   cwd?: string | null;
   sessionId?: string | null;
   chatId?: string | null;
+  /** Overrides the provider's construction-time model for this turn. */
+  model?: string | null;
+  /** Reasoning/effort level, applied through the agent's `thought_level` config option. */
+  effort?: string | null;
   media?: MediaAttachment[];
   allowedTools?: string[];
   addDirs?: string[];

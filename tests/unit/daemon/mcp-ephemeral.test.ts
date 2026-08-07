@@ -57,14 +57,14 @@ test("valid mcpConfig → ACP mcpServers shape", () => {
     },
   };
   expect(buildTaskMcpServers(taskWithMcpConfig(cfg))).toEqual([
-    { name: "local", command: "secret-command", env: { API_KEY: "secret" } },
-    { name: "tooling", command: "npx", args: ["-y", "some-mcp"] },
+    { name: "local", command: "secret-command", args: [], env: [{ name: "API_KEY", value: "secret" }] },
+    { name: "tooling", command: "npx", args: ["-y", "some-mcp"], env: [] },
   ]);
 });
 
 test("accepts a JSON string blob", () => {
   const json = JSON.stringify({ mcpServers: { s: { command: "run" } } });
-  expect(buildTaskMcpServers(taskWithMcpConfig(json))).toEqual([{ name: "s", command: "run" }]);
+  expect(buildTaskMcpServers(taskWithMcpConfig(json))).toEqual([{ name: "s", command: "run", args: [], env: [] }]);
 });
 
 test("skips entries without a usable command (e.g. http/url-only)", () => {
@@ -75,7 +75,7 @@ test("skips entries without a usable command (e.g. http/url-only)", () => {
       empty: { command: "" }, // empty command → skipped
     },
   };
-  expect(buildTaskMcpServers(taskWithMcpConfig(cfg))).toEqual([{ name: "stdio", command: "go" }]);
+  expect(buildTaskMcpServers(taskWithMcpConfig(cfg))).toEqual([{ name: "stdio", command: "go", args: [], env: [] }]);
 });
 
 test("drops non-string args / env members defensively", () => {
@@ -85,6 +85,23 @@ test("drops non-string args / env members defensively", () => {
     },
   };
   expect(buildTaskMcpServers(taskWithMcpConfig(cfg))).toEqual([
-    { name: "s", command: "go", args: ["ok"], env: { A: "1" } },
+    { name: "s", command: "go", args: ["ok"], env: [{ name: "A", value: "1" }] },
   ]);
+});
+
+test("emits the exact ACP McpServerStdio wire JSON (args + env required, env is EnvVariable[])", () => {
+  // These are the literal bytes that land in `session/new.mcpServers`. The
+  // schema requires all four keys and `env: EnvVariable[]`
+  // (sdk/schema/schema.json $defs.McpServerStdio.required, $defs.EnvVariable),
+  // and `mcpServers` is parsed with vecSkipError — a Record env or a missing
+  // `args` makes BOTH bridges drop the server silently, with no error back.
+  const cfg = { mcpServers: { gc: { command: "node", args: ["a.js"], env: { TOKEN: "x" } } } };
+  expect(JSON.stringify(buildTaskMcpServers(taskWithMcpConfig(cfg)))).toBe(
+    '[{"name":"gc","command":"node","args":["a.js"],"env":[{"name":"TOKEN","value":"x"}]}]',
+  );
+
+  // …and a bare command still ships both required keys as empty arrays.
+  expect(JSON.stringify(buildTaskMcpServers(taskWithMcpConfig({ mcpServers: { bare: { command: "run" } } })))).toBe(
+    '[{"name":"bare","command":"run","args":[],"env":[]}]',
+  );
 });

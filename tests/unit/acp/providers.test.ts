@@ -8,7 +8,8 @@ import {
   ClaudeAdapter,
 } from "@acp/index.js";
 import { CodexAdapter } from "@acp/index.js";
-import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
+import { resolveConfigOptionChange } from "@acp/provider.js";
+import type { AgentAdapter, SessionConfigOption } from "@shared/contracts/acp-protocol.js";
 import { isAbsolute } from "node:path";
 
 /**
@@ -34,8 +35,21 @@ describe("AcpProvider", () => {
     expect(resolveAcpPermissionMode("claude", "bypass")).toBe("bypassPermissions");
   });
 
+  // Codex used to have no default, so an unconfigured codex chat stayed in
+  // codex's own initial mode and prompted for every tool call. The literal id is
+  // claude-flavored; CodexAdapter.mapPermissionMode turns it into
+  // `agent-full-access`, so both agents now default the same way.
+  it("defaults Codex ACP sessions to bypassPermissions too", () => {
+    expect(resolveAcpPermissionMode("codex", null)).toBe("bypassPermissions");
+    expect(resolveAvailableAcpPermissionMode(
+      resolveAcpPermissionMode("codex", null),
+      { currentModeId: "agent", availableModes: [{ id: "agent", name: "Agent" }, { id: "agent-full-access", name: "Full" }] },
+      new CodexAdapter(),
+    )).toBe("agent-full-access");
+  });
+
   it("does not invent a default mode for unknown ACP agents", () => {
-    expect(resolveAcpPermissionMode("codex", null)).toBeNull();
+    expect(resolveAcpPermissionMode("gemini", null)).toBeNull();
   });
 
   it("passes through mode when agent advertises it", () => {
@@ -267,13 +281,43 @@ describe("Codex ACP adapter", () => {
     })).toBe(false);
   });
 
-  it("keeps the permission mode out of Codex session meta (set_mode is the channel)", () => {
+  // codex-acp dereferences exactly three client-supplied `_meta` paths —
+  // `terminal_output` (dist/index.js:22755), `additionalRoots` (:27064) and the
+  // auth/clientInfo keys — and `_meta.codex` is not among them. Model goes
+  // through session/set_config_option, mode through session/set_mode, extra
+  // roots through the top-level `additionalDirectories` param.
+  it("sends no session meta to codex at all", () => {
     const adapter = new CodexAdapter();
-    const meta = adapter.buildSessionMeta({ model: "o3", permissionMode: "auto" });
-    // approval_mode was a dead letter: the bridge never read it, and the value
-    // was a claude-flavored id anyway.
-    expect(meta).toEqual({ codex: { options: { model: "o3" } } });
-    expect(adapter.buildSessionMeta({ permissionMode: "bypassPermissions" })).toBeUndefined();
+    expect(adapter.buildSessionMeta({ model: "gpt-5.5" })).toBeUndefined();
+    expect(adapter.buildSessionMeta({ additionalDirectories: ["/w"] })).toBeUndefined();
+    expect(adapter.buildSessionMeta({})).toBeUndefined();
+  });
+
+  it("warns instead of silently dropping codex-incompatible session options", () => {
+    const adapter = new CodexAdapter();
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      adapter.buildSessionMeta({ allowedTools: ["Bash"], systemPrompt: "be nice" });
+    } finally {
+      console.warn = original;
+    }
+    expect(warnings.some((w) => w.includes("allowedTools"))).toBe(true);
+    expect(warnings.some((w) => w.includes("systemPrompt"))).toBe(true);
+  });
+
+  it("ignores speculative _meta tool names codex-acp never emits", () => {
+    const adapter = new CodexAdapter();
+    // `_meta.codex` on a tool call only ever carries permission params
+    // (dist/index.js:24369) — never a tool name. kind/rawInput are the contract.
+    expect(adapter.resolveToolName({
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Reading file",
+      kind: "read",
+      _meta: { codex: { name: "shell" } } as never,
+    })).toBe("Read");
   });
 
   it("maps our mode names to codex ids through the adapter hook", () => {
@@ -281,14 +325,6 @@ describe("Codex ACP adapter", () => {
     expect(adapter.mapPermissionMode("bypassPermissions")).toEqual(["agent-full-access"]);
     expect(adapter.mapPermissionMode("plan")).toEqual(["read-only"]);
     expect(adapter.mapPermissionMode("nonsense")).toEqual([]);
-    // Claude advertises our ids directly, so it declares no mapping at all.
-    const claude: AgentAdapter = new ClaudeAdapter();
-    expect(claude.mapPermissionMode).toBeUndefined();
-  });
-
-  it("returns undefined session meta when no options provided", () => {
-    const adapter = new CodexAdapter();
-    expect(adapter.buildSessionMeta({})).toBeUndefined();
   });
 
   it("extracts result previews from raw output and terminal metadata", () => {
@@ -306,6 +342,125 @@ describe("Codex ACP adapter", () => {
 
     expect(preview).toContain("\"exitCode\":0");
     expect(preview).toContain("/data00/home/hehuajie/project/remi");
+  });
+});
+
+describe("Claude ACP adapter session meta", () => {
+  // The bridge spreads `_meta.claudeCode.options` at dist/acp-agent.js:4433 and
+  // then sets an explicit `permissionMode` key at :4454 from its own settings,
+  // so our value was always overwritten. `additionalDirectories` moved to the
+  // official top-level session/new param the bridge prefers (:4549).
+  it("drops the permission mode and additionalDirectories the bridge overwrites/duplicates", () => {
+    const adapter = new ClaudeAdapter();
+    expect(adapter.buildSessionMeta({
+      model: "claude-sonnet-4-6",
+      allowedTools: ["Bash"],
+      permissionMode: "bypassPermissions",
+      additionalDirectories: ["/extra"],
+    })).toEqual({ claudeCode: { options: { model: "claude-sonnet-4-6", allowedTools: ["Bash"] } } });
+    expect(adapter.buildSessionMeta({ permissionMode: "plan" })).toBeUndefined();
+  });
+
+  // dist/acp-agent.js:4357-4374: a string REPLACES the claude_code preset, an
+  // object is merged as `{...value, type:"preset", preset:"claude_code"}`.
+  it("appends the system prompt instead of replacing the claude_code preset", () => {
+    const adapter = new ClaudeAdapter();
+    expect(adapter.buildSessionMeta({ systemPrompt: "You are Remi." })).toEqual({
+      systemPrompt: { append: "You are Remi." },
+    });
+    expect(adapter.buildSessionMeta({ systemPrompt: "   " })).toBeUndefined();
+  });
+
+  // ALLOW_BYPASS = !IS_ROOT || IS_SANDBOX (dist/acp-agent.js:287): running as
+  // root without IS_SANDBOX the bridge never advertises bypassPermissions, and
+  // without a fallback set_mode was skipped and the session silently ran in
+  // whatever mode the bridge chose.
+  it("falls back to the closest advertised mode when bypassPermissions is unavailable", () => {
+    const claude: AgentAdapter = new ClaudeAdapter();
+    const rootModes = {
+      currentModeId: "default",
+      availableModes: [
+        { id: "default", name: "Manual" },
+        { id: "acceptEdits", name: "Accept Edits" },
+        { id: "plan", name: "Plan Mode" },
+        { id: "dontAsk", name: "Don't Ask" },
+      ],
+    };
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", rootModes, claude)).toBe("acceptEdits");
+    // `auto` only exists on models reporting supportsAutoMode (:4911-4917).
+    expect(resolveAvailableAcpPermissionMode("auto", rootModes, claude)).toBe("default");
+    // When the bridge does advertise it, no translation happens.
+    expect(resolveAvailableAcpPermissionMode("bypassPermissions", {
+      currentModeId: "default",
+      availableModes: [...rootModes.availableModes, { id: "bypassPermissions", name: "Bypass" }],
+    }, claude)).toBe("bypassPermissions");
+  });
+});
+
+// `category` is what makes one code path work for both bridges: claude uses ids
+// `model`/`effort` (dist/acp-agent.js:5110, 5142) and codex `model`/
+// `reasoning_effort` (dist/index.js:27151-27152), but both tag them `model`
+// (acp-agent.js:5113 / index.js:27177) and `thought_level` (:5145 / :27188).
+describe("resolveConfigOptionChange", () => {
+  const claudeOptions: SessionConfigOption[] = [
+    {
+      id: "model", name: "Model", category: "model", type: "select",
+      currentValue: "claude-sonnet-4-6",
+      options: [{ value: "claude-sonnet-4-6", name: "Sonnet" }, { value: "claude-opus-4-6", name: "Opus" }],
+    },
+    {
+      id: "effort", name: "Effort", category: "thought_level", type: "select",
+      currentValue: "default",
+      options: [{ value: "default", name: "Default" }, { value: "high", name: "High" }],
+    },
+  ];
+  const codexOptions: SessionConfigOption[] = [
+    {
+      id: "model", name: "Model", category: "model", type: "select",
+      currentValue: "gpt-5.4",
+      options: [{ value: "gpt-5.4", name: "GPT-5.4" }, { value: "gpt-5.5", name: "GPT-5.5" }],
+    },
+    {
+      id: "reasoning_effort", name: "Reasoning effort", category: "thought_level", type: "select",
+      currentValue: "medium",
+      options: [{ value: "low", name: "Low" }, { value: "medium", name: "Medium" }, { value: "xhigh", name: "Extra high" }],
+    },
+  ];
+
+  it("resolves each agent's own config id from the advertised category", () => {
+    expect(resolveConfigOptionChange(claudeOptions, "model", "claude-opus-4-6")).toEqual({
+      configId: "model", value: "claude-opus-4-6",
+    });
+    expect(resolveConfigOptionChange(claudeOptions, "thought_level", "high")).toEqual({
+      configId: "effort", value: "high",
+    });
+    expect(resolveConfigOptionChange(codexOptions, "thought_level", "xhigh")).toEqual({
+      configId: "reasoning_effort", value: "xhigh",
+    });
+  });
+
+  it("skips values the agent does not offer instead of letting it reject the call", () => {
+    // Both bridges throw on an unknown option id or value (acp-agent.js:3476,
+    // 3525; codex index.js:29328, 29370, 29379) — a skipped call keeps the session.
+    expect(resolveConfigOptionChange(codexOptions, "model", "claude-opus-4-6")).toBeNull();
+    expect(resolveConfigOptionChange(codexOptions, "thought_level", "ludicrous")).toBeNull();
+    expect(resolveConfigOptionChange(undefined, "model", "gpt-5.5")).toBeNull();
+    expect(resolveConfigOptionChange([], "thought_level", "high")).toBeNull();
+  });
+
+  it("does not re-send a value the agent already reports as current", () => {
+    expect(resolveConfigOptionChange(codexOptions, "model", "gpt-5.4")).toBeNull();
+    expect(resolveConfigOptionChange(claudeOptions, "thought_level", "default")).toBeNull();
+  });
+
+  it("looks inside grouped select options", () => {
+    const grouped: SessionConfigOption[] = [{
+      id: "model", name: "Model", category: "model", type: "select",
+      currentValue: "a",
+      options: [{ group: "fast", name: "Fast", options: [{ value: "b", name: "B" }] }],
+    }];
+    expect(resolveConfigOptionChange(grouped, "model", "b")).toEqual({ configId: "model", value: "b" });
+    expect(resolveConfigOptionChange(grouped, "model", "c")).toBeNull();
   });
 });
 

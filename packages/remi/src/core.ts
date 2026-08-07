@@ -22,7 +22,7 @@ import { ProjectStore } from "./project/store.js";
 import type { Connector, IncomingMessage } from "@connectors/base.js";
 import { LaneScheduler, resolveSessionKey } from "@daemon/orchestrator.js";
 import { createAgentResponse, type AgentResponse, type Provider, type ProviderEvent } from "@shared/contracts/provider-types.js";
-import type { ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
+import type { ToolCallUpdate, ToolCallProgressUpdate, SessionModeState } from "@acp/protocol.js";
 import { AcpProvider, resolveAcpPermissionMode } from "@acp/index.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
@@ -603,8 +603,14 @@ export class Remi {
           return { text: `Provider "${providerAlias}" 不可用。可选: claude, codex, cli` };
         }
 
-        if (target.mode && !isKnownSwitchMode(providerName, target.mode)) {
-          const available = availableSwitchModes(providerName).join(", ");
+        // The agent's own list wins when we already have a live session for
+        // this chat: claude only advertises `bypassPermissions` off-root and
+        // `auto` on models that support it, and codex uses entirely different ids.
+        const advertised = (provider as Provider & {
+          advertisedModes?: (chatId: string) => SessionModeState | undefined;
+        }).advertisedModes?.(sessionKey);
+        if (target.mode && !isKnownSwitchMode(providerName, target.mode, advertised)) {
+          const available = availableSwitchModes(providerName, advertised).join(", ");
           return { text: `模式 "${modeArg}" 对 ${providerLabel(providerName)} 不可用。可选: ${available}` };
         }
 
@@ -876,9 +882,16 @@ export class Remi {
       allowedTools: agentCfg.allowedTools,
       cwd: homedir(),
       executable: agentCfg.executable,
+      // ACP wire shape: `args`/`env` are required and `env` is an
+      // EnvVariable[] — a Record env makes the agent drop the server silently.
       getMcpServers: () => config.mcp
         .filter((e) => !e.agents || e.agents.includes(type))
-        .map((e) => ({ name: e.name, command: e.command, args: e.args, env: e.env })),
+        .map((e) => ({
+          name: e.name,
+          command: e.command,
+          args: e.args ?? [],
+          env: Object.entries(e.env ?? {}).map(([name, value]) => ({ name, value })),
+        })),
     });
   }
 

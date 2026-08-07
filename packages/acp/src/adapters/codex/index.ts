@@ -24,9 +24,10 @@ export class CodexAdapter implements AgentAdapter {
   readonly agentType = "codex";
 
   resolveToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string {
-    const metaToolName = this._metaToolName(update);
-    if (metaToolName) return normalizeToolName(metaToolName, update.kind ?? undefined);
-
+    // No `_meta` probe here: the only tool-call `_meta` keys codex-acp emits are
+    // terminal_output/terminal_output_delta/terminal_exit (dist/index.js:
+    // 22761-22777, 22840-22855) and is_mcp_tool_call (:22860-22866) — none
+    // carries a tool name, so rawInput/kind/title are the whole contract.
     const raw = parseRawInput(update.rawInput);
     const rawName = firstString(raw, ["toolName", "tool_name", "name", "type"]);
     if (rawName) return normalizeToolName(rawName, update.kind ?? undefined);
@@ -124,34 +125,29 @@ export class CodexAdapter implements AgentAdapter {
     return PERMISSION_MODE_ALIASES[mode] ?? [];
   }
 
+  /**
+   * codex-acp has no session-meta channel at all: the only client `_meta` keys
+   * it ever dereferences are `terminal_output` (dist/index.js:22755),
+   * `additionalRoots` (:27064), and the auth/clientInfo keys (:25394, 26328,
+   * 28708). `_meta.codex` is never read, so model goes through
+   * session/set_config_option, permission mode through session/set_mode, and
+   * extra roots through the top-level `additionalDirectories` param.
+   * `allowedTools` has no codex equivalent — warn rather than drop it silently.
+   */
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
-    const codexOpts: Record<string, unknown> = {};
-    if (options.model) codexOpts.model = options.model;
-    // No approval mode here: the bridge ignores session meta for it — the real
-    // channel is session/set_mode, driven by mapPermissionMode above.
-    if (options.additionalDirectories?.length) codexOpts.additionalDirectories = options.additionalDirectories;
-
-    if (Object.keys(codexOpts).length === 0) return undefined;
-    return { codex: { options: codexOpts } };
+    if (options.allowedTools?.length) {
+      console.warn(
+        `[acp:codex] ignoring allowedTools (${options.allowedTools.join(", ")}): codex-acp has no allowed-tools mechanism`,
+      );
+    }
+    if (options.systemPrompt?.trim()) {
+      console.warn("[acp:codex] ignoring systemPrompt: codex-acp exposes no system-prompt channel");
+    }
+    return undefined;
   }
 
   defaultExecutable(): string {
     return "codex-acp";
-  }
-
-  private _metaToolName(update: ToolCallUpdate | ToolCallProgressUpdate): string | undefined {
-    const meta = update._meta as Record<string, unknown> | undefined;
-    if (!meta || typeof meta !== "object") return undefined;
-
-    for (const key of ["codex", "codexCli", "openaiCodex", "acpCodex"]) {
-      const candidate = meta[key];
-      if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-        const name = firstString(candidate as Record<string, unknown>, ["toolName", "tool_name", "name", "type"]);
-        if (name) return name;
-      }
-    }
-
-    return firstString(meta, ["toolName", "tool_name", "name", "type"]);
   }
 }
 

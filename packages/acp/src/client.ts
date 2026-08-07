@@ -24,24 +24,26 @@ import type {
   ElicitationCreateParams,
   ElicitationResult,
   SetSessionModeParams,
+  SetSessionConfigOptionParams,
+  SetSessionConfigOptionResult,
   CancelParams,
+  CancelRequestParams,
   ResumeSessionParams,
   LoadSessionParams,
   CloseSessionParams,
   McpServerConfig,
+  PromptContent,
 } from "./protocol.js";
 
 export interface AcpClientOptions {
   /** Path to ACP agent executable (default: searches for claude-agent-acp binary). */
   executable?: string;
+  /** Agent flavor ("claude" | "codex"); gates claude-only client capabilities. */
+  agentType?: string;
   /** Working directory for the agent process. */
   cwd?: string;
   /** Additional MCP servers to configure. */
   mcpServers?: McpServerConfig[];
-  /** Claude Code SDK options to pass through (legacy; prefer sessionMeta). */
-  claudeCodeOptions?: Record<string, unknown>;
-  /** Full session meta — passed as _meta to session/new. Takes precedence over claudeCodeOptions. */
-  sessionMeta?: import("./protocol.js").NewSessionMeta;
   /** Environment variables for the agent process. */
   env?: Record<string, string>;
   /** Handler for permission requests from the agent. */
@@ -72,6 +74,16 @@ export class AcpClient {
   private _readLoopRunning = false;
   private _options: AcpClientOptions;
   private _serverSessionId: string | null = null;
+  private _initializeResult: InitializeResult | null = null;
+  /**
+   * Inbound requests we are serving and haven't answered yet, keyed by the
+   * agent's request id. The value settles the request as cancelled; the agent
+   * abandons `session/request_permission` / `elicitation/create` by sending
+   * `$/cancel_request` (claude-agent-acp dist/acp-agent.js:552-567 wires a
+   * `cancellationSignal` into both), and without this the dialog would stay
+   * pending forever.
+   */
+  private _inflightServerRequests = new Map<number | string, () => void>();
 
   constructor(options: AcpClientOptions = {}) {
     this._options = options;
@@ -83,6 +95,11 @@ export class AcpClient {
 
   get initialized(): boolean {
     return this._initialized;
+  }
+
+  /** The agent's `initialize` response (protocol version + advertised capabilities). */
+  get initializeResult(): InitializeResult | null {
+    return this._initializeResult;
   }
 
   private _log(...args: unknown[]) {
@@ -141,6 +158,8 @@ export class AcpClient {
     this._readLoopRunning = false;
     this._initialized = false;
     this._serverSessionId = null;
+    this._initializeResult = null;
+    this._inflightServerRequests.clear();
 
     const err = new Error(`ACP agent died unexpectedly (${reason})`);
     for (const [, pending] of this._pending) {
@@ -159,6 +178,8 @@ export class AcpClient {
     this._reader = null;
     this._initialized = false;
     this._serverSessionId = null;
+    this._initializeResult = null;
+    this._inflightServerRequests.clear();
 
     for (const [, pending] of this._pending) {
       pending.reject(new Error("ACP client stopped"));
@@ -180,7 +201,7 @@ export class AcpClient {
     (this._process.stdin as any).write(line);
   }
 
-  private async _request<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  private async _request<T>(method: string, params?: unknown): Promise<T> {
     const id = this._nextId++;
     const msg: JsonRpcRequest = { jsonrpc: "2.0", id, method, params };
 
@@ -198,7 +219,7 @@ export class AcpClient {
     });
   }
 
-  private _notify(method: string, params?: Record<string, unknown>): void {
+  private _notify(method: string, params?: unknown): void {
     const msg: JsonRpcNotification = { jsonrpc: "2.0", method, params };
     this._send(msg);
   }
@@ -206,6 +227,18 @@ export class AcpClient {
   private _respond(id: number | string, result: unknown): void {
     const msg: JsonRpcResponse = { jsonrpc: "2.0", id, result };
     this._send(msg);
+  }
+
+  /**
+   * Answer an inbound request exactly once. Returns false when the request was
+   * already settled (e.g. cancelled by the agent while our handler was still
+   * waiting on a human), so the late answer is dropped instead of writing a
+   * duplicate response the agent would discard.
+   */
+  private _settleServerRequest(id: number | string, result: unknown): boolean {
+    if (!this._inflightServerRequests.delete(id)) return false;
+    this._respond(id, result);
+    return true;
   }
 
   // ── Read loop ──────────────────────────────────────────────────
@@ -303,55 +336,73 @@ export class AcpClient {
 
   private _handleNotification(msg: JsonRpcNotification): void {
     if (msg.method === "session/update") {
-      const notification = msg.params as unknown as SessionNotification;
+      const notification = msg.params as SessionNotification;
       this._options.onSessionUpdate?.(notification);
+      return;
+    }
+
+    if (msg.method === "$/cancel_request") {
+      const { requestId } = (msg.params ?? {}) as Partial<CancelRequestParams>;
+      if (requestId == null) return;
+      const cancel = this._inflightServerRequests.get(requestId);
+      if (!cancel) return;
+      slog.info(`$/cancel_request received: id=${requestId}`);
+      cancel();
     }
   }
 
   private async _handleServerRequest(msg: JsonRpcRequest): Promise<void> {
     if (msg.method === "session/request_permission") {
-      const params = msg.params as unknown as RequestPermissionParams;
+      const params = msg.params as RequestPermissionParams;
       const toolName = params.toolCall?._meta?.claudeCode?.toolName ?? params.toolCall?.title ?? "unknown";
       slog.info(`session/request_permission received: tool=${toolName} sessionId=${params.sessionId} id=${msg.id}`);
+      // The agent may abandon the dialog mid-flight; a `cancelled` outcome is
+      // exactly what it expects then (claude-agent-acp dist/acp-agent.js:3641-3647).
+      this._inflightServerRequests.set(msg.id, () =>
+        this._settleServerRequest(msg.id, { outcome: { outcome: "cancelled" } }),
+      );
       const handler = this._options.onPermissionRequest;
       if (handler) {
         try {
           const outcome = await handler(params);
           slog.info(`session/request_permission resolved: tool=${toolName} outcome=${outcome.outcome}`);
-          this._respond(msg.id, { outcome });
+          this._settleServerRequest(msg.id, { outcome });
         } catch (err) {
           slog.info(`session/request_permission error: tool=${toolName} err=${err}`);
-          this._respond(msg.id, { outcome: { outcome: "cancelled" } });
+          this._settleServerRequest(msg.id, { outcome: { outcome: "cancelled" } });
         }
       } else {
         slog.info(`session/request_permission no handler: tool=${toolName}`);
-        this._respond(msg.id, { outcome: { outcome: "cancelled" } });
+        this._settleServerRequest(msg.id, { outcome: { outcome: "cancelled" } });
       }
       return;
     }
 
     if (msg.method === "elicitation/create") {
-      const params = msg.params as unknown as ElicitationCreateParams;
+      const params = msg.params as ElicitationCreateParams;
       slog.info(`elicitation/create received: mode=${params.mode} sessionId=${params.sessionId} id=${msg.id}`);
+      this._inflightServerRequests.set(msg.id, () => this._settleServerRequest(msg.id, { action: "cancel" }));
       const handler = this._options.onElicitationRequest;
       if (handler) {
         try {
           const result = await handler(params);
           slog.info(`elicitation/create resolved: action=${result.action}`);
-          this._respond(msg.id, result);
+          this._settleServerRequest(msg.id, result);
         } catch (err) {
           slog.info(`elicitation/create error: ${err}`);
-          this._respond(msg.id, { action: "cancel" });
+          this._settleServerRequest(msg.id, { action: "cancel" });
         }
       } else {
         slog.info("elicitation/create no handler");
-        this._respond(msg.id, { action: "cancel" });
+        this._settleServerRequest(msg.id, { action: "cancel" });
       }
       return;
     }
 
-    if (msg.method === "fs/readTextFile" || msg.method === "fs/writeTextFile") {
-      // Delegate file operations to local filesystem
+    // ACP file-system method names are snake_case (sdk CLIENT_METHODS:
+    // `fs/read_text_file` / `fs/write_text_file`, dist/schema/index.js:35-36).
+    // No bridge ever sends the camelCase spelling.
+    if (msg.method === "fs/read_text_file" || msg.method === "fs/write_text_file") {
       await this._handleFsRequest(msg);
       return;
     }
@@ -367,11 +418,18 @@ export class AcpClient {
   private async _handleFsRequest(msg: JsonRpcRequest): Promise<void> {
     const { readFileSync, writeFileSync } = await import("node:fs");
     try {
-      if (msg.method === "fs/readTextFile") {
-        const { path } = msg.params as { path: string };
-        const content = readFileSync(path, "utf-8");
+      if (msg.method === "fs/read_text_file") {
+        // `line` is 1-based and `limit` caps the returned line count
+        // (sdk schema.json ReadTextFileRequest); both are optional.
+        const { path, line, limit } = msg.params as { path: string; line?: number | null; limit?: number | null };
+        let content = readFileSync(path, "utf-8");
+        if (line != null || limit != null) {
+          const start = line != null && line > 0 ? line - 1 : 0;
+          const lines = content.split("\n");
+          content = lines.slice(start, limit != null ? start + limit : undefined).join("\n");
+        }
         this._respond(msg.id, { content });
-      } else if (msg.method === "fs/writeTextFile") {
+      } else if (msg.method === "fs/write_text_file") {
         const { path, content } = msg.params as { path: string; content: string };
         writeFileSync(path, content, "utf-8");
         this._respond(msg.id, {});
@@ -388,15 +446,19 @@ export class AcpClient {
   // ── ACP protocol methods ───────────────────────────────────────
 
   async initialize(): Promise<InitializeResult> {
-    const params = {
+    const params: InitializeParams = {
       protocolVersion: 1,
       clientInfo: { name: "remi", version: "0.1.0" },
       clientCapabilities: {
         // `subagent-transcript` opts into subagent prose: claude-agent-acp >= 0.66
         // strips a subagent's text/thinking chunks unless the client declares it
         // (the bridge checks `capabilities?._meta?.["subagent-transcript"] === true`).
-        // Older bridges ignore the unknown key.
-        _meta: { terminal_output: true, "subagent-transcript": true },
+        // codex-acp reads exactly one client `_meta` key — `terminal_output`
+        // (dist/index.js:22754-22760) — so the claude-only key is left out there.
+        _meta: {
+          terminal_output: true,
+          ...(this._options.agentType === "codex" ? {} : { "subagent-transcript": true }),
+        },
         fs: { readTextFile: true, writeTextFile: true },
         // Form-elicitation support: the agent keeps AskUserQuestion enabled and
         // sends it to us as `elicitation/create` instead of disabling the tool.
@@ -406,74 +468,96 @@ export class AcpClient {
       },
     };
 
-    const result = await this._request<InitializeResult>("initialize", params as unknown as Record<string, unknown>);
+    const result = await this._request<InitializeResult>("initialize", params);
     this._initialized = true;
+    this._initializeResult = result;
     return result;
   }
 
   async newSession(params?: Partial<NewSessionParams>): Promise<NewSessionResult> {
-    const meta = params?._meta
-      ?? this._options.sessionMeta
-      ?? (this._options.claudeCodeOptions ? { claudeCode: { options: this._options.claudeCodeOptions } } : undefined);
+    const meta = params?._meta;
     const fullParams: NewSessionParams = {
       cwd: params?.cwd ?? this._options.cwd ?? process.cwd(),
       mcpServers: params?.mcpServers ?? this._options.mcpServers ?? [],
+      ...(params?.additionalDirectories?.length ? { additionalDirectories: params.additionalDirectories } : {}),
       _meta: meta,
     };
 
-    const result = await this._request<NewSessionResult>(
-      "session/new",
-      fullParams as unknown as Record<string, unknown>,
-    );
+    const result = await this._request<NewSessionResult>("session/new", fullParams);
     this._serverSessionId = result.sessionId;
     return result;
   }
 
   async prompt(sessionId: string, text: string, media?: Array<{ type: string; data: string; mimeType: string }>): Promise<PromptResult> {
-    const prompt: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [{ type: "text", text }];
+    const prompt: PromptContent[] = [{ type: "text", text }];
     if (media) {
       for (const m of media) {
         prompt.push({ type: "image", data: m.data, mimeType: m.mimeType });
       }
     }
 
-    const params = { sessionId, prompt };
-    return this._request<PromptResult>("session/prompt", params as unknown as Record<string, unknown>);
+    const params: PromptParams = { sessionId, prompt };
+    return this._request<PromptResult>("session/prompt", params);
   }
 
   async setMode(sessionId: string, modeId: string): Promise<void> {
     const params: SetSessionModeParams = { sessionId, modeId };
-    await this._request("session/set_mode", params as unknown as Record<string, unknown>);
+    await this._request("session/set_mode", params);
+  }
+
+  /**
+   * Change one of the agent's advertised config options (model, effort, …).
+   * The agent returns its refreshed option list, which callers should keep:
+   * changing the model rewrites the effort option's valid values on both
+   * bridges (claude-agent-acp dist/acp-agent.js:4084-4100, codex-acp
+   * dist/index.js:29369-29374).
+   */
+  async setConfigOption(
+    sessionId: string,
+    configId: string,
+    value: string | boolean,
+  ): Promise<SetSessionConfigOptionResult> {
+    const params: SetSessionConfigOptionParams = { sessionId, configId, value };
+    return this._request<SetSessionConfigOptionResult>("session/set_config_option", params);
   }
 
   async cancel(sessionId: string): Promise<void> {
     const params: CancelParams = { sessionId };
-    this._notify("session/cancel", params as unknown as Record<string, unknown>);
+    this._notify("session/cancel", params);
   }
 
-  async resumeSession(sessionId: string, cwd?: string, mcpServers?: McpServerConfig[]): Promise<NewSessionResult> {
-    const params: ResumeSessionParams = { sessionId, cwd: cwd ?? this._options.cwd, mcpServers };
-    const result = await this._request<NewSessionResult>(
-      "session/resume",
-      params as unknown as Record<string, unknown>,
-    );
+  async resumeSession(
+    sessionId: string,
+    cwd?: string,
+    mcpServers?: McpServerConfig[],
+    extra?: Pick<ResumeSessionParams, "additionalDirectories" | "_meta">,
+  ): Promise<NewSessionResult> {
+    const params: ResumeSessionParams = {
+      sessionId,
+      cwd: cwd ?? this._options.cwd,
+      mcpServers,
+      ...(extra?.additionalDirectories?.length ? { additionalDirectories: extra.additionalDirectories } : {}),
+      _meta: extra?._meta,
+    };
+    const result = await this._request<NewSessionResult>("session/resume", params);
     this._serverSessionId = result.sessionId ?? sessionId;
     return { ...result, sessionId: result.sessionId ?? sessionId };
   }
 
-  async loadSession(sessionId: string, cwd?: string): Promise<NewSessionResult> {
-    const params: LoadSessionParams = { sessionId, cwd: cwd ?? this._options.cwd };
-    const result = await this._request<NewSessionResult>(
-      "session/load",
-      params as unknown as Record<string, unknown>,
-    );
+  /**
+   * `cwd` and `mcpServers` are required by the schema — callers must supply
+   * both or the agent rejects the load with -32602 (see {@link LoadSessionParams}).
+   */
+  async loadSession(sessionId: string, cwd: string, mcpServers: McpServerConfig[]): Promise<NewSessionResult> {
+    const params: LoadSessionParams = { sessionId, cwd, mcpServers };
+    const result = await this._request<NewSessionResult>("session/load", params);
     this._serverSessionId = result.sessionId ?? sessionId;
     return { ...result, sessionId: result.sessionId ?? sessionId };
   }
 
   async closeSession(sessionId: string): Promise<void> {
     const params: CloseSessionParams = { sessionId };
-    await this._request("session/close", params as unknown as Record<string, unknown>);
+    await this._request("session/close", params);
     if (this._serverSessionId === sessionId) this._serverSessionId = null;
   }
 }

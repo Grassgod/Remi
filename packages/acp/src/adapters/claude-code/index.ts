@@ -10,6 +10,12 @@ import type {
 } from "../../protocol.js";
 import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
 
+/** Our mode ids → the closest mode the bridge still advertises when ours is absent. */
+const CLAUDE_PERMISSION_MODE_FALLBACKS: Record<string, string[]> = {
+  bypassPermissions: ["acceptEdits", "default"],
+  auto: ["default"],
+};
+
 export class ClaudeAdapter implements AgentAdapter {
   readonly agentType = "claude";
 
@@ -133,15 +139,34 @@ export class ClaudeAdapter implements AgentAdapter {
     return this.resolveToolName(toolCall) === "ExitPlanMode";
   }
 
+  /**
+   * The bridge advertises `bypassPermissions` only when
+   * `ALLOW_BYPASS = !IS_ROOT || !!process.env.IS_SANDBOX` (dist/acp-agent.js:287,
+   * 4938-4944), and `auto` only for models with `supportsAutoMode` (:4911-4917).
+   * Everything else in this table is always advertised, so the fallbacks only
+   * fire for those two. `acceptEdits` is the closest still-permissive stand-in:
+   * `dontAsk` never prompts but DENIES anything not pre-approved (:4933-4936),
+   * which would stall the turn instead of degrading it.
+   */
+  mapPermissionMode(mode: string): string[] {
+    return CLAUDE_PERMISSION_MODE_FALLBACKS[mode] ?? [];
+  }
+
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
+    const meta: NewSessionMeta = {};
     const claudeOpts: Record<string, unknown> = {};
+    // Both survive the bridge's options literal: `...userProvidedOptions` is
+    // spread at dist/acp-agent.js:4433 and no later key overrides either one.
     if (options.model) claudeOpts.model = options.model;
     if (options.allowedTools?.length) claudeOpts.allowedTools = options.allowedTools;
-    if (options.permissionMode) claudeOpts.permissionMode = options.permissionMode;
-    if (options.additionalDirectories?.length) claudeOpts.additionalDirectories = options.additionalDirectories;
+    if (Object.keys(claudeOpts).length > 0) meta.claudeCode = { options: claudeOpts };
 
-    if (Object.keys(claudeOpts).length === 0) return undefined;
-    return { claudeCode: { options: claudeOpts } };
+    // `{append}` keeps the claude_code preset and appends to it; a bare string
+    // would REPLACE the whole preset (dist/acp-agent.js:4357-4374).
+    if (options.systemPrompt?.trim()) meta.systemPrompt = { append: options.systemPrompt };
+
+    if (Object.keys(meta).length === 0) return undefined;
+    return meta;
   }
 
   defaultExecutable(): string {

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AcpClient } from "@acp/index.js";
-import type { ElicitationCreateParams } from "@acp/index.js";
+import type { ElicitationCreateParams, PermissionOutcome } from "@acp/index.js";
 
 function fakeAgent(script: string, ext = "sh"): string {
   const dir = mkdtempSync(join(tmpdir(), "acp-client-test-"));
@@ -12,6 +12,22 @@ function fakeAgent(script: string, ext = "sh"): string {
   writeFileSync(path, script);
   chmodSync(path, 0o755);
   return path;
+}
+
+function tempDir(): string {
+  return mkdtempSync(join(tmpdir(), "acp-client-test-"));
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/** Text of every agent_message_chunk the fake agent echoed back at us. */
+function echoes(updates: any[]): any[] {
+  return updates.map((u) => JSON.parse(u.update.content.text));
 }
 
 describe("AcpClient process death", () => {
@@ -102,5 +118,232 @@ rl.on("line", (line) => {
     expect(updates).toHaveLength(1);
     const echoed = JSON.parse(updates[0].update.content.text);
     expect(echoed).toEqual({ action: "accept", content: { question_0: "a" } });
+  });
+});
+
+// The ACP filesystem methods are snake_case (sdk dist/schema/index.js:35-36
+// `fs_read_text_file: "fs/read_text_file"`); claude-agent-acp reaches them via
+// `methods.client.fs.readTextFile` (dist/acp-agent.js:557-562) and codex-acp
+// registers the same constant (dist/index.js:21589). Nothing on the wire ever
+// uses the camelCase spelling we used to match on.
+describe("AcpClient fs methods", () => {
+  it("serves fs/read_text_file and fs/write_text_file, honoring line/limit", async () => {
+    const dir = tempDir();
+    const readPath = join(dir, "source.txt");
+    const writePath = join(dir, "written.txt");
+    writeFileSync(readPath, "l1\nl2\nl3\nl4\nl5");
+
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+const READ = ${JSON.stringify(readPath)};
+const WRITE = ${JSON.stringify(writePath)};
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+    send({ jsonrpc: "2.0", id: 10, method: "fs/read_text_file", params: { sessionId: "s1", path: READ } });
+    send({ jsonrpc: "2.0", id: 11, method: "fs/read_text_file", params: { sessionId: "s1", path: READ, line: 2, limit: 2 } });
+    send({ jsonrpc: "2.0", id: 12, method: "fs/write_text_file", params: { sessionId: "s1", path: WRITE, content: "hello" } });
+  } else if (msg.id >= 10 && msg.id <= 12) {
+    send({ jsonrpc: "2.0", method: "session/update", params: {
+      sessionId: "s1",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: JSON.stringify({ id: msg.id, result: msg.result, error: msg.error }) } },
+    } });
+  }
+});
+`,
+      "js",
+    );
+
+    const updates: any[] = [];
+    const client = new AcpClient({ executable, onSessionUpdate: (n) => updates.push(n) });
+    await client.start();
+    await client.initialize();
+    await waitFor(() => updates.length >= 3);
+    await client.stop();
+
+    const byId = new Map(echoes(updates).map((e) => [e.id, e]));
+    expect(byId.get(10)?.error).toBeUndefined();
+    expect(byId.get(10)?.result).toEqual({ content: "l1\nl2\nl3\nl4\nl5" });
+    expect(byId.get(11)?.result).toEqual({ content: "l2\nl3" });
+    expect(byId.get(12)?.error).toBeUndefined();
+    expect(readFileSync(writePath, "utf-8")).toBe("hello");
+  });
+});
+
+// The agent aborts a dialog it no longer needs by sending `$/cancel_request`
+// (sdk dist/jsonrpc.js:527-528, 852-863); claude-agent-acp wires a
+// cancellationSignal into both `session/request_permission` and
+// `elicitation/create` (dist/acp-agent.js:552-567) and expects us to settle the
+// request with a cancelled outcome (dist/acp-agent.js:3641-3647).
+describe("AcpClient $/cancel_request", () => {
+  it("settles an abandoned permission request as cancelled and drops the late answer", async () => {
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+    send({ jsonrpc: "2.0", id: 99, method: "session/request_permission", params: {
+      sessionId: "s1",
+      toolCall: { toolCallId: "t1", title: "Bash" },
+      options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+    } });
+    setTimeout(() => send({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 99 } }), 100);
+  } else if (msg.id === 99) {
+    send({ jsonrpc: "2.0", method: "session/update", params: {
+      sessionId: "s1",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: JSON.stringify(msg.result) } },
+    } });
+  }
+});
+`,
+      "js",
+    );
+
+    const updates: any[] = [];
+    let answer: (outcome: PermissionOutcome) => void = () => {};
+    const client = new AcpClient({
+      executable,
+      // The human never gets around to clicking before the agent gives up.
+      onPermissionRequest: () => new Promise<PermissionOutcome>((resolve) => { answer = resolve; }),
+      onSessionUpdate: (n) => updates.push(n),
+    });
+    await client.start();
+    await client.initialize();
+
+    await waitFor(() => updates.length >= 1);
+    expect(echoes(updates)).toEqual([{ outcome: { outcome: "cancelled" } }]);
+
+    // The late human decision must not produce a second response for id 99.
+    answer({ outcome: "selected", optionId: "allow" });
+    await new Promise((r) => setTimeout(r, 200));
+    await client.stop();
+    expect(updates).toHaveLength(1);
+  });
+
+  it("settles an abandoned elicitation as action=cancel", async () => {
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+    send({ jsonrpc: "2.0", id: 42, method: "elicitation/create", params: {
+      mode: "form", sessionId: "s1", message: "Pick one",
+      requestedSchema: { type: "object", properties: { question_0: { type: "string" } } },
+    } });
+    setTimeout(() => send({ jsonrpc: "2.0", method: "$/cancel_request", params: { requestId: 42 } }), 100);
+  } else if (msg.id === 42) {
+    send({ jsonrpc: "2.0", method: "session/update", params: {
+      sessionId: "s1",
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: JSON.stringify(msg.result) } },
+    } });
+  }
+});
+`,
+      "js",
+    );
+
+    const updates: any[] = [];
+    const client = new AcpClient({
+      executable,
+      onElicitationRequest: () => new Promise(() => {}),
+      onSessionUpdate: (n) => updates.push(n),
+    });
+    await client.start();
+    await client.initialize();
+    await waitFor(() => updates.length >= 1);
+    await client.stop();
+
+    expect(echoes(updates)).toEqual([{ action: "cancel" }]);
+  });
+});
+
+describe("AcpClient initialize result", () => {
+  it("retains the protocol version and agent capabilities for the caller", async () => {
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      protocolVersion: 1,
+      agentCapabilities: {
+        loadSession: true,
+        promptCapabilities: { image: true, embeddedContext: true },
+        sessionCapabilities: { resume: {}, close: {} },
+      },
+      agentInfo: { name: "claude-agent-acp", version: "0.66.0" },
+    } });
+  }
+});
+`,
+      "js",
+    );
+
+    const client = new AcpClient({ executable });
+    await client.start();
+    expect(client.initializeResult).toBeNull();
+
+    const result = await client.initialize();
+    expect(client.initializeResult).toEqual(result);
+    expect(client.initializeResult?.protocolVersion).toBe(1);
+    expect(client.initializeResult?.agentCapabilities?.sessionCapabilities?.resume).toEqual({});
+    expect(client.initializeResult?.agentCapabilities?.promptCapabilities?.image).toBe(true);
+
+    await client.stop();
+    expect(client.initializeResult).toBeNull();
+  });
+});
+
+// `mcpServers` and `cwd` are both required by zLoadSessionRequest
+// (sdk dist/schema/zod.gen.js:2457-2463, codex-acp dist/index.js:19550-19556);
+// `requiredDefaultOnError` raises "Required value is missing" for an omitted
+// `mcpServers` rather than defaulting it, so the load fails with -32602.
+describe("AcpClient loadSession", () => {
+  it("sends cwd and mcpServers on session/load", async () => {
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1 } });
+  } else if (msg.method === "session/load") {
+    send({ jsonrpc: "2.0", id: msg.id, result: { _meta: { echo: msg.params } } });
+  }
+});
+`,
+      "js",
+    );
+
+    const client = new AcpClient({ executable });
+    await client.start();
+    await client.initialize();
+    const servers = [{ name: "recall", command: "/bin/recall", args: [], env: [] }];
+    const result = await client.loadSession("sess_1", "/work/repo", servers);
+    await client.stop();
+
+    expect(result.sessionId).toBe("sess_1");
+    expect(result._meta?.echo).toEqual({
+      sessionId: "sess_1",
+      cwd: "/work/repo",
+      mcpServers: servers,
+    });
   });
 });

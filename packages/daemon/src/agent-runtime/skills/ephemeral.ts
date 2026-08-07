@@ -2,9 +2,9 @@
  * Ephemeral agent-runtime context writers.
  *
  * Per-task workdir preparation for Multiremi tasks: serialize task / GC /
- * project-resource metadata and materialize the agent's skills into the
- * task's .claude/skills/ before the agent runs. Extracted verbatim from
- * src/multiremi/daemon.ts in D6 (behavior unchanged).
+ * project-resource metadata and materialize the agent's skills into the skill
+ * root its runtime reads (`.claude/skills` for claude, `.agents/skills` for
+ * codex) before the agent runs. Extracted from src/multiremi/daemon.ts in D6.
  */
 
 import { join } from "node:path";
@@ -83,10 +83,24 @@ export function writeProjectResourceContext(workDir: string, task: AgentTask): v
   writeFileSync(join(dir, "resources.json"), JSON.stringify(payload, null, 2), { mode: 0o644 });
 }
 
+/**
+ * Skill root each runtime actually reads inside the task workdir.
+ *
+ * codex-acp never looks at `.claude/skills`: `refreshSkills(cwd, roots)` maps
+ * every root to `<root>/.agents/skills` for `skills/extraRoots/set` and lists
+ * `cwds: [cwd, ...roots]` (dist/index.js:26718-26731), so a codex task only
+ * sees skills materialized under `<workDir>/.agents/skills`.
+ */
+export function agentSkillRoot(workDir: string, provider: string | undefined): string {
+  return provider === "codex"
+    ? join(workDir, ".agents", "skills")
+    : join(workDir, ".claude", "skills");
+}
+
 export function writeAgentSkillContext(workDir: string, task: AgentTask): void {
   const skills = task.agent?.skills ?? [];
   if (!skills.length) return;
-  const root = join(workDir, ".claude", "skills");
+  const root = agentSkillRoot(workDir, task.agent?.provider);
   mkdirSync(root, { recursive: true });
   for (const skill of skills) {
     const dir = join(root, safeSkillDirName(skill.name));

@@ -488,6 +488,9 @@ describe("Bun Multiremi daemon smoke", () => {
       name: "Chat Claude",
       provider: "claude",
       cwd: workDir,
+      model: "claude-chat",
+      thinkingLevel: "xhigh",
+      mcpConfig: { mcpServers: { recall: { command: "/bin/recall", env: { TOKEN: "t" } } } },
     });
     const session = store.createChatSession({ agentId: agent.id, title: "Resume chat" });
     const first = store.sendChatMessage(session.id, { body: "Start the chat" });
@@ -506,11 +509,13 @@ describe("Bun Multiremi daemon smoke", () => {
 
     const prompts: string[] = [];
     const providerCwds: string[] = [];
+    const injectedMcpServers: unknown[] = [];
     const sendOptions: SendOptions[] = [];
     let providerIndex = 0;
     const providerFactory: MultiremiDaemonProviderFactory = (options) => {
       const turn = providerIndex++;
       providerCwds.push(options.cwd!);
+      injectedMcpServers.push(options.getMcpServers?.() ?? []);
       const text = turn === 0 ? "First answer" : "Second answer";
       return {
         async *sendStream(message, options) {
@@ -574,6 +579,17 @@ describe("Bun Multiremi daemon smoke", () => {
         chatId: second.task.id,
       });
       expect(providerCwds).toEqual([workDir, workDir]);
+      // The continued turn re-sends everything session/resume needs: the agent's
+      // model + thinking_level (claim → SendOptions) and the MCP servers, in the
+      // ACP wire shape (args/env required, env an EnvVariable[]).
+      expect(sendOptions.map((options) => [options.model, options.effort])).toEqual([
+        ["claude-chat", "xhigh"],
+        ["claude-chat", "xhigh"],
+      ]);
+      expect(JSON.stringify(injectedMcpServers)).toBe(
+        '[[{"name":"recall","command":"/bin/recall","args":[],"env":[{"name":"TOKEN","value":"t"}]}],'
+        + '[{"name":"recall","command":"/bin/recall","args":[],"env":[{"name":"TOKEN","value":"t"}]}]]',
+      );
       expect(prompts[0]).toContain("Start the chat");
       expect(prompts[1]).toContain("Continue with the same provider session");
       expect(store.listChatMessages(session.id).map((message) => message.role)).toEqual([

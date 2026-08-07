@@ -1,6 +1,16 @@
+import type { SessionModeState } from "./protocol.js";
+
 const ACP_CLAUDE_PROVIDER = "acp:claude";
 const ACP_CODEX_PROVIDER = "acp:codex";
 
+/**
+ * Fallback list, used only before a session exists. The real list is per-session
+ * and per-model: claude-agent-acp adds `auto` only when the model reports
+ * `supportsAutoMode` and `bypassPermissions` only when
+ * `!IS_ROOT || IS_SANDBOX` (dist/acp-agent.js:287, 4909-4945), and codex-acp
+ * advertises read-only/agent/agent-full-access instead. Whenever the agent has
+ * told us its `availableModes`, that wins.
+ */
 const ACP_MODES = new Set([
   "default",
   "acceptEdits",
@@ -50,11 +60,16 @@ export function normalizeSwitchMode(mode: string | null | undefined): string | n
   return trimmed;
 }
 
-export function isKnownSwitchMode(_providerName: string, mode: string): boolean {
-  return ACP_MODES.has(mode);
+export function isKnownSwitchMode(
+  _providerName: string,
+  mode: string,
+  advertised?: SessionModeState,
+): boolean {
+  return new Set(availableSwitchModes(_providerName, advertised)).has(mode);
 }
 
-export function availableSwitchModes(_providerName: string): string[] {
+export function availableSwitchModes(_providerName: string, advertised?: SessionModeState): string[] {
+  if (advertised?.availableModes?.length) return advertised.availableModes.map((m) => m.id);
   return [...ACP_MODES];
 }
 

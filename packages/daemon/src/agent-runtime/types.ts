@@ -15,6 +15,8 @@ export interface AgentSessionConfig {
   agentType: string;
   executable?: string;
   model?: string | null;
+  /** Reasoning effort for this turn (agent `thinking_level`); undefined = leave the agent's default. */
+  effort?: string | null;
   cwd: string;
   env?: Record<string, string>;
   mcpServers: AcpMcpServer[];

@@ -16,13 +16,17 @@ export const mcpBlock: CapabilityBlock = {
   },
 };
 
+/**
+ * remi.toml keeps the ergonomic Record env; the ACP wire form is
+ * `EnvVariable[]` with `args`/`env` both required — see {@link AcpMcpServer}.
+ */
 function configMcpToAcp(entries: McpServerEntry[], agentType: string): AcpMcpServer[] {
   return entries
     .filter((e) => !e.agents || e.agents.includes(agentType))
-    .map((e) => {
-      const server: AcpMcpServer = { name: e.name, command: e.command };
-      if (e.args) server.args = e.args;
-      if (e.env) server.env = e.env;
-      return server;
-    });
+    .map((e) => ({
+      name: e.name,
+      command: e.command,
+      args: e.args ?? [],
+      env: Object.entries(e.env ?? {}).map(([name, value]) => ({ name, value })),
+    }));
 }

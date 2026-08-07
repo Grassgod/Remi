@@ -38,7 +38,6 @@ export type {
   NewSessionMeta,
   NewSessionResult,
   SessionModeState,
-  SessionModelState,
   SessionConfigOption,
   McpServerConfig,
   PromptParams,
