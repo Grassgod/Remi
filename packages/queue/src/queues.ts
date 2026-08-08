@@ -23,7 +23,7 @@ export interface CronJobData {
  */
 export interface QueueHost {
   _providers: Map<string, Provider>;
-  _connectors: Connector[];
+  getConnector(name: string): Connector | undefined;
   authStore: { checkAndRefreshAll(): Promise<void> } | null;
   metrics: { fetchUsageFromAPI(): Promise<void> };
   _getProvider(name?: string | null): Provider;

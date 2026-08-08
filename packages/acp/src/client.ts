@@ -33,7 +33,7 @@ import type {
   CloseSessionParams,
   McpServerConfig,
   PromptContent,
-} from "./protocol.js";
+} from "@shared/contracts/acp-protocol.js";
 
 export interface AcpClientOptions {
   /** Path to ACP agent executable (default: searches for claude-agent-acp binary). */

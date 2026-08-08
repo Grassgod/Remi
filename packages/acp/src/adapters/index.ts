@@ -1,8 +1,8 @@
-export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "./base.js";
+export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/contracts/acp-protocol.js";
 export { ClaudeAdapter } from "./claude-code/index.js";
 export { CodexAdapter } from "./codex/index.js";
 
-import type { AgentAdapter } from "./base.js";
+import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import { ClaudeAdapter } from "./claude-code/index.js";
 import { CodexAdapter } from "./codex/index.js";
 

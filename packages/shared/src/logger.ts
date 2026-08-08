@@ -81,10 +81,6 @@ function ts(): string {
   );
 }
 
-function dateStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function flushBuffer(): void {
   if (!_logsDir || _buffer.length === 0) return;
   // Group by date (almost always same date, but handle midnight edge case)

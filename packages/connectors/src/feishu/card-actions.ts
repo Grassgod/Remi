@@ -5,7 +5,7 @@
  * (AskUserQuestion / ExitPlanMode).
  */
 
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("card-actions");
 

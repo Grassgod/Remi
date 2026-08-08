@@ -7,7 +7,6 @@
 
 import type { Job } from "bunqueue/client";
 import type { CronJobData, QueueHost } from "../queues.js";
-import type { Connector } from "@connectors/base.js";
 import { createLogger } from "@shared/logger.js";
 import {
   existsSync,
@@ -108,8 +107,7 @@ handlers.set("builtin:pulse", async (remi, config) => {
     log.info(`[${tag}] briefing ready but no pushTargets configured — not delivered`);
     return;
   }
-  const connectors = remi["_connectors"] as Connector[];
-  const connector = connectors.find((c) => c.name === connectorName);
+  const connector = remi.getConnector(connectorName);
   if (!connector) {
     log.warn(`[${tag}] connector "${connectorName}" not found, skipping`);
     return;
@@ -180,8 +178,7 @@ handlers.set("skill:run", async (remi, config) => {
 
   const pushStart = Date.now();
   const connectorName = (delivery.connectorName as string) ?? "feishu";
-  const connectors = remi["_connectors"] as Connector[];
-  const connector = connectors.find((c) => c.name === connectorName);
+  const connector = remi.getConnector(connectorName);
   if (!connector) {
     const pushMs = Date.now() - pushStart;
     appendRunLog(jobId, "skill:run", "error", pushMs, `Connector "${connectorName}" not found`, runId, "push");
@@ -256,8 +253,7 @@ handlers.set("skill:push", async (remi, config) => {
   }
 
   const connectorName = (config?.connectorName as string) ?? "feishu";
-  const connectors = remi["_connectors"] as Connector[];
-  const connector = connectors.find((c) => c.name === connectorName);
+  const connector = remi.getConnector(connectorName);
   if (!connector) throw new Error(`Connector "${connectorName}" not found`);
 
   const maxLen = (config?.maxPushLength as number) ?? 4000;

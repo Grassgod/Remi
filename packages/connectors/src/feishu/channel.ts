@@ -6,7 +6,7 @@
  */
 
 import type { FeishuChannelConfig, GroupPolicy } from "./config.js";
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 import { createFeishuClient } from "./client.js";
 import { startWebSocketListener, setGroupPolicy, flushDedupCacheSync, type FeishuWSHandle, type ParsedFeishuMessage } from "./receive.js";
 import { sendMarkdownCardFeishu, sendCardFeishu } from "./send.js";

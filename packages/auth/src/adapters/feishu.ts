@@ -8,6 +8,7 @@
 
 import type { AuthAdapter, TokenEntry, TokenStatus } from "../types.js";
 import { createLogger } from "@shared/logger.js";
+import { resolveApiBase } from "@shared/feishu-domain.js";
 
 const log = createLogger("1passport");
 
@@ -259,13 +260,4 @@ export class FeishuAuthAdapter implements AuthAdapter {
     this._refreshTimers.set(type, timer);
     log.debug(`feishu/${type} refresh scheduled in ${Math.round(delay / 1000)}s`);
   }
-}
-
-/** Resolve Feishu API base URL from domain. */
-function resolveApiBase(domain?: string): string {
-  if (domain === "lark") return "https://open.larksuite.com/open-apis";
-  if (domain && domain !== "feishu" && domain.startsWith("http")) {
-    return `${domain.replace(/\/+$/, "")}/open-apis`;
-  }
-  return "https://open.feishu.cn/open-apis";
 }

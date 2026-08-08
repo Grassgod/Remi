@@ -8,19 +8,12 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { loadConfig } from "@shared/config.js";
+import { resolveApiBase } from "@shared/feishu-domain.js";
 import { TokenPersistence, type PersistedTokens } from "./persistence.js";
 import type { TokenEntry } from "./types.js";
 
 const REDIRECT_URI = "http://localhost:9000/auth/callback";
 const AUTH_DIR = join(homedir(), ".remi", "auth");
-
-function resolveApiBase(domain?: string): string {
-  if (domain === "lark") return "https://open.larksuite.com/open-apis";
-  if (domain && domain !== "feishu" && domain.startsWith("http")) {
-    return `${domain.replace(/\/+$/, "")}/open-apis`;
-  }
-  return "https://open.feishu.cn/open-apis";
-}
 
 async function exchangeCode(
   apiBase: string,

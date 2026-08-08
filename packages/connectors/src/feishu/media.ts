@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { resolveReceiveIdType } from "./client.js";
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("feishu-media");
 

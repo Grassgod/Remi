@@ -2,8 +2,10 @@
 // families: model list, directory scan, update, local-skill list, local-skill import), extracted
 // verbatim from MultiremiStore (the facade delegates every public method here).
 //
-// The five async-request families are deliberate copy-paste at this point in the split; they move
-// as-is here and are de-duplicated by a later behaviour-preserving refactor.
+// The five async-request families share one lifecycle, described once by `RuntimeRequestQueue`
+// (./runtime-request-queue.ts) and configured five times by the specs below. Each family keeps its
+// own `create` (distinct INSERT columns) and `report` (distinct completed-branch payload); `get`,
+// `claim` and the timeout sweep are the shared template.
 import { createId, nowIso } from "@multiremi/ids.js";
 import {
   cleanOptionalString,
@@ -20,6 +22,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
 import type {
   CreateRuntimeLocalSkillImportInput,
   CreateRuntimeUpdateInput,
@@ -62,8 +65,73 @@ const RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS = 3 * 60 * 1000;
 const RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS = 60 * 1000;
 
+// ── async-request family specs ────────────────────────────────────────────────
+// The five knobs the shared queue template needs. Row mappers are hoisted function declarations
+// defined at the bottom of this file.
+const MODEL_LIST_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeModelListRequest> = {
+  table: "multiremi_runtime_model_list_requests",
+  idPrefix: "rml",
+  pendingTimeoutMs: RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 30 seconds",
+  runningTimeoutError: "daemon did not finish within 60 seconds",
+  hydrate: toRuntimeModelListRequest,
+};
+
+const DIRECTORY_SCAN_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeDirectoryScanRequest> = {
+  table: "multiremi_runtime_directory_scan_requests",
+  idPrefix: "rds",
+  pendingTimeoutMs: RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 3 minutes; the runtime daemon may need updating",
+  runningTimeoutError: "daemon did not finish within 60 seconds",
+  hydrate: toRuntimeDirectoryScanRequest,
+};
+
+const UPDATE_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeUpdateRequest> = {
+  table: "multiremi_runtime_update_requests",
+  idPrefix: "rup",
+  pendingTimeoutMs: RUNTIME_UPDATE_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_UPDATE_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 120 seconds",
+  runningTimeoutError: "update did not complete within 150 seconds",
+  hydrate: toRuntimeUpdateRequest,
+};
+
+const LOCAL_SKILL_LIST_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeLocalSkillListRequest> = {
+  table: "multiremi_runtime_local_skill_list_requests",
+  idPrefix: "rls",
+  pendingTimeoutMs: RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 3 minutes",
+  runningTimeoutError: "daemon did not finish within 60 seconds",
+  hydrate: toRuntimeLocalSkillListRequest,
+};
+
+const LOCAL_SKILL_IMPORT_REQUESTS: RuntimeRequestSpec<MultiremiRuntimeLocalSkillImportRequest> = {
+  table: "multiremi_runtime_local_skill_import_requests",
+  idPrefix: "rli",
+  pendingTimeoutMs: RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS,
+  runningTimeoutMs: RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS,
+  pendingTimeoutError: "daemon did not respond within 3 minutes",
+  runningTimeoutError: "daemon did not finish within 60 seconds",
+  hydrate: toRuntimeLocalSkillImportRequest,
+};
+
 export class RuntimesRepo {
-  constructor(private ctx: StoreContext) {}
+  private readonly modelListQueue: RuntimeRequestQueue<MultiremiRuntimeModelListRequest>;
+  private readonly directoryScanQueue: RuntimeRequestQueue<MultiremiRuntimeDirectoryScanRequest>;
+  private readonly updateQueue: RuntimeRequestQueue<MultiremiRuntimeUpdateRequest>;
+  private readonly localSkillListQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillListRequest>;
+  private readonly localSkillImportQueue: RuntimeRequestQueue<MultiremiRuntimeLocalSkillImportRequest>;
+
+  constructor(private ctx: StoreContext) {
+    this.modelListQueue = new RuntimeRequestQueue(ctx.db, MODEL_LIST_REQUESTS);
+    this.directoryScanQueue = new RuntimeRequestQueue(ctx.db, DIRECTORY_SCAN_REQUESTS);
+    this.updateQueue = new RuntimeRequestQueue(ctx.db, UPDATE_REQUESTS);
+    this.localSkillListQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_LIST_REQUESTS);
+    this.localSkillImportQueue = new RuntimeRequestQueue(ctx.db, LOCAL_SKILL_IMPORT_REQUESTS);
+  }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
     const id = input.id ?? createId("rt");
@@ -480,10 +548,8 @@ export class RuntimesRepo {
   }
 
   createRuntimeModelListRequest(runtimeId: string): MultiremiRuntimeModelListRequest {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-    if (runtime.status !== "online") throw new Error("runtime is offline");
-    const id = createId("rml");
+    this.requireOnlineRuntime(runtimeId);
+    const id = this.modelListQueue.nextId();
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_runtime_model_list_requests (
@@ -495,46 +561,11 @@ export class RuntimesRepo {
   }
 
   getRuntimeModelListRequest(runtimeId: string, requestId: string): MultiremiRuntimeModelListRequest | null {
-    this.expireRuntimeModelListRequests(runtimeId);
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtime_model_list_requests WHERE id = ? AND runtime_id = ?",
-    ).get(requestId, runtimeId) as Row | null;
-    return row ? toRuntimeModelListRequest(row) : null;
+    return this.modelListQueue.get(runtimeId, requestId);
   }
 
   claimRuntimeModelListRequest(runtimeId: string): MultiremiRuntimeModelListRequest | null {
-    this.expireRuntimeModelListRequests(runtimeId);
-    const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_runtime_model_list_requests
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (!row) return null;
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_runtime_model_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-      [now, now, String(row.id)],
-    );
-    return this.getRuntimeModelListRequest(runtimeId, String(row.id));
-  }
-
-  private expireRuntimeModelListRequests(runtimeId: string): void {
-    const now = nowIso();
-    const pendingCutoff = new Date(Date.now() - RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS).toISOString();
-    const runningCutoff = new Date(Date.now() - RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS).toISOString();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_model_list_requests
-       SET status = 'timeout', error = 'daemon did not respond within 30 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_model_list_requests
-       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
-    );
+    return this.modelListQueue.claim(runtimeId);
   }
 
   reportRuntimeModelListResult(runtimeId: string, requestId: string, input: ReportRuntimeModelListInput): MultiremiRuntimeModelListRequest {
@@ -568,11 +599,9 @@ export class RuntimesRepo {
   }
 
   createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number; mode?: "scan" | "browse" } = {}): MultiremiRuntimeDirectoryScanRequest {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-    if (runtime.status !== "online") throw new Error("runtime is offline");
+    this.requireOnlineRuntime(runtimeId);
     const normalizedParams = normalizeRuntimeDirectoryScanParams(params);
-    const id = createId("rds");
+    const id = this.directoryScanQueue.nextId();
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_runtime_directory_scan_requests (
@@ -584,46 +613,11 @@ export class RuntimesRepo {
   }
 
   getRuntimeDirectoryScanRequest(runtimeId: string, requestId: string): MultiremiRuntimeDirectoryScanRequest | null {
-    this.expireRuntimeDirectoryScanRequests(runtimeId);
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtime_directory_scan_requests WHERE id = ? AND runtime_id = ?",
-    ).get(requestId, runtimeId) as Row | null;
-    return row ? toRuntimeDirectoryScanRequest(row) : null;
+    return this.directoryScanQueue.get(runtimeId, requestId);
   }
 
   claimRuntimeDirectoryScanRequest(runtimeId: string): MultiremiRuntimeDirectoryScanRequest | null {
-    this.expireRuntimeDirectoryScanRequests(runtimeId);
-    const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_runtime_directory_scan_requests
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (!row) return null;
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_runtime_directory_scan_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-      [now, now, String(row.id)],
-    );
-    return this.getRuntimeDirectoryScanRequest(runtimeId, String(row.id));
-  }
-
-  private expireRuntimeDirectoryScanRequests(runtimeId: string): void {
-    const now = nowIso();
-    const pendingCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_PENDING_TIMEOUT_MS).toISOString();
-    const runningCutoff = new Date(Date.now() - RUNTIME_DIRECTORY_SCAN_RUNNING_TIMEOUT_MS).toISOString();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_directory_scan_requests
-       SET status = 'timeout', error = 'daemon did not respond within 3 minutes; the runtime daemon may need updating', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_directory_scan_requests
-       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
-    );
+    return this.directoryScanQueue.claim(runtimeId);
   }
 
   reportRuntimeDirectoryScanResult(runtimeId: string, requestId: string, input: ReportRuntimeDirectoryScanInput): MultiremiRuntimeDirectoryScanRequest {
@@ -655,9 +649,7 @@ export class RuntimesRepo {
   }
 
   createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-    if (runtime.status !== "online") throw new Error("runtime is offline");
+    this.requireOnlineRuntime(runtimeId);
     const scope = input.scope === "acp" || input.scope === "agent" ? input.scope : "cli";
     // ACP/agent updates always pull @latest, so no target version is required.
     const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim() || (scope !== "cli" ? "latest" : "");
@@ -668,7 +660,7 @@ export class RuntimesRepo {
        LIMIT 1`,
     ).get(runtimeId) as Row | null;
     if (active) throw new Error("an update is already in progress for this runtime");
-    const id = createId("rup");
+    const id = this.updateQueue.nextId();
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_runtime_update_requests (
@@ -680,46 +672,11 @@ export class RuntimesRepo {
   }
 
   getRuntimeUpdateRequest(runtimeId: string, requestId: string): MultiremiRuntimeUpdateRequest | null {
-    this.expireRuntimeUpdateRequests(runtimeId);
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtime_update_requests WHERE id = ? AND runtime_id = ?",
-    ).get(requestId, runtimeId) as Row | null;
-    return row ? toRuntimeUpdateRequest(row) : null;
+    return this.updateQueue.get(runtimeId, requestId);
   }
 
   claimRuntimeUpdateRequest(runtimeId: string): MultiremiRuntimeUpdateRequest | null {
-    this.expireRuntimeUpdateRequests(runtimeId);
-    const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_runtime_update_requests
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (!row) return null;
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_runtime_update_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-      [now, now, String(row.id)],
-    );
-    return this.getRuntimeUpdateRequest(runtimeId, String(row.id));
-  }
-
-  private expireRuntimeUpdateRequests(runtimeId: string): void {
-    const now = nowIso();
-    const pendingCutoff = new Date(Date.now() - RUNTIME_UPDATE_PENDING_TIMEOUT_MS).toISOString();
-    const runningCutoff = new Date(Date.now() - RUNTIME_UPDATE_RUNNING_TIMEOUT_MS).toISOString();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_update_requests
-       SET status = 'timeout', error = 'daemon did not respond within 120 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_update_requests
-       SET status = 'timeout', error = 'update did not complete within 150 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
-    );
+    return this.updateQueue.claim(runtimeId);
   }
 
   reportRuntimeUpdateResult(runtimeId: string, requestId: string, input: ReportRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
@@ -748,10 +705,8 @@ export class RuntimesRepo {
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-    if (runtime.status !== "online") throw new Error("runtime is offline");
-    const id = createId("rls");
+    this.requireOnlineRuntime(runtimeId);
+    const id = this.localSkillListQueue.nextId();
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_runtime_local_skill_list_requests (
@@ -763,46 +718,11 @@ export class RuntimesRepo {
   }
 
   getRuntimeLocalSkillListRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillListRequest | null {
-    this.expireRuntimeLocalSkillListRequests(runtimeId);
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtime_local_skill_list_requests WHERE id = ? AND runtime_id = ?",
-    ).get(requestId, runtimeId) as Row | null;
-    return row ? toRuntimeLocalSkillListRequest(row) : null;
+    return this.localSkillListQueue.get(runtimeId, requestId);
   }
 
   claimRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest | null {
-    this.expireRuntimeLocalSkillListRequests(runtimeId);
-    const row = this.ctx.db.query(
-      `SELECT * FROM multiremi_runtime_local_skill_list_requests
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (!row) return null;
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_runtime_local_skill_list_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-      [now, now, String(row.id)],
-    );
-    return this.getRuntimeLocalSkillListRequest(runtimeId, String(row.id));
-  }
-
-  private expireRuntimeLocalSkillListRequests(runtimeId: string): void {
-    const now = nowIso();
-    const pendingCutoff = new Date(Date.now() - RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS).toISOString();
-    const runningCutoff = new Date(Date.now() - RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS).toISOString();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_local_skill_list_requests
-       SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_local_skill_list_requests
-       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
-    );
+    return this.localSkillListQueue.claim(runtimeId);
   }
 
   reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillListInput): MultiremiRuntimeLocalSkillListRequest {
@@ -830,12 +750,10 @@ export class RuntimesRepo {
   }
 
   createRuntimeLocalSkillImportRequest(runtimeId: string, input: CreateRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-    if (runtime.status !== "online") throw new Error("runtime is offline");
+    this.requireOnlineRuntime(runtimeId);
     const skillKey = String(input.skillKey ?? input.skill_key ?? "").trim();
     if (!skillKey) throw new Error("skill_key is required");
-    const id = createId("rli");
+    const id = this.localSkillImportQueue.nextId();
     const now = nowIso();
     this.ctx.db.run(
       `INSERT INTO multiremi_runtime_local_skill_import_requests (
@@ -856,48 +774,14 @@ export class RuntimesRepo {
   }
 
   getRuntimeLocalSkillImportRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillImportRequest | null {
-    this.expireRuntimeLocalSkillImportRequests(runtimeId);
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_runtime_local_skill_import_requests WHERE id = ? AND runtime_id = ?",
-    ).get(requestId, runtimeId) as Row | null;
-    return row ? this.hydrateRuntimeLocalSkillImportRequest(toRuntimeLocalSkillImportRequest(row)) : null;
+    // The only family with a second hydration pass — the imported skill is stored in another table.
+    const request = this.localSkillImportQueue.get(runtimeId, requestId);
+    return request ? this.hydrateRuntimeLocalSkillImportRequest(request) : null;
   }
 
   claimRuntimeLocalSkillImportRequests(runtimeId: string, limit = 10): MultiremiRuntimeLocalSkillImportRequest[] {
-    this.expireRuntimeLocalSkillImportRequests(runtimeId);
-    const rows = this.ctx.db.query(
-      `SELECT * FROM multiremi_runtime_local_skill_import_requests
-       WHERE runtime_id = ? AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    ).all(runtimeId, Math.max(1, Math.floor(limit))) as Row[];
-    if (!rows.length) return [];
-    const now = nowIso();
-    for (const row of rows) {
-      this.ctx.db.run(
-        "UPDATE multiremi_runtime_local_skill_import_requests SET status = 'running', run_started_at = ?, updated_at = ? WHERE id = ?",
-        [now, now, String(row.id)],
-      );
-    }
-    return rows.map((row) => this.getRuntimeLocalSkillImportRequest(runtimeId, String(row.id))!).filter(Boolean);
-  }
-
-  private expireRuntimeLocalSkillImportRequests(runtimeId: string): void {
-    const now = nowIso();
-    const pendingCutoff = new Date(Date.now() - RUNTIME_LOCAL_SKILL_PENDING_TIMEOUT_MS).toISOString();
-    const runningCutoff = new Date(Date.now() - RUNTIME_LOCAL_SKILL_RUNNING_TIMEOUT_MS).toISOString();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_local_skill_import_requests
-       SET status = 'timeout', error = 'daemon did not respond within 3 minutes', updated_at = ?
-       WHERE runtime_id = ? AND status = 'pending' AND created_at < ?`,
-      [now, runtimeId, pendingCutoff],
-    );
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_local_skill_import_requests
-       SET status = 'timeout', error = 'daemon did not finish within 60 seconds', updated_at = ?
-       WHERE runtime_id = ? AND status = 'running' AND run_started_at IS NOT NULL AND run_started_at < ?`,
-      [now, runtimeId, runningCutoff],
-    );
+    const ids = this.localSkillImportQueue.claimBatchIds(runtimeId, limit);
+    return ids.map((id) => this.getRuntimeLocalSkillImportRequest(runtimeId, id)!).filter(Boolean);
   }
 
   reportRuntimeLocalSkillImportResult(runtimeId: string, requestId: string, input: ReportRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
@@ -1041,6 +925,14 @@ export class RuntimesRepo {
       ...stats,
       models: this.listRuntimeModelsForExistingRuntime(runtime.id),
     };
+  }
+
+  /** Create-time guard shared by all five async-request families: the daemon must be reachable. */
+  private requireOnlineRuntime(runtimeId: string): MultiremiRuntime {
+    const runtime = this.getRuntime(runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+    if (runtime.status !== "online") throw new Error("runtime is offline");
+    return runtime;
   }
 
   private hydrateRuntimeLocalSkillImportRequest(request: MultiremiRuntimeLocalSkillImportRequest): MultiremiRuntimeLocalSkillImportRequest {

@@ -280,12 +280,31 @@ export class StoreContext {
     return this.resolveHost();
   }
 
+  /**
+   * Wire the analytics recorders onto this context. `MultiremiStore`'s constructor does this for
+   * every context it owns; anything that builds a StoreContext by hand (tests, tools) must call it
+   * too, or the first {@link analytics} call throws.
+   */
   registerAnalytics(repo: AnalyticsSurface): void {
     this.analyticsRepo = repo;
   }
 
+  /**
+   * The analytics recorders, used by the runtimes, autopilots and tasks repos.
+   *
+   * Unlike the other cross-domain accessors this one is not resolved through `resolveHost` — the
+   * recorders are not on the MultiremiStore public surface — so it can only fail at call time, long
+   * after the context was built. {@link registerAnalytics} is the wiring that prevents that.
+   *
+   * @throws if `registerAnalytics` was never called on this context.
+   */
   analytics(): AnalyticsSurface {
-    if (!this.analyticsRepo) throw new Error("analytics repo is not registered on the store context");
+    if (!this.analyticsRepo) {
+      throw new Error(
+        "analytics repo is not registered on this StoreContext — call ctx.registerAnalytics(new AnalyticsRepo(ctx)) " +
+          "after constructing it, the way the MultiremiStore constructor does",
+      );
+    }
     return this.analyticsRepo;
   }
 

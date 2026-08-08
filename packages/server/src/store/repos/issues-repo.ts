@@ -71,6 +71,38 @@ const ISSUE_METADATA_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/;
 const COMMENT_HARD_CAP = 2000;
 const COMMENT_SUMMARY_RUNES = 200;
 
+// ── reactions ─────────────────────────────────────────────────────────────────
+// Issue reactions and comment reactions are the same table shape hung off two different parents,
+// so the list/add/remove bodies live once on the repo and are configured by these two specs. Only
+// the parent existence check and the workspace lookup stay with the public methods.
+interface ReactionInput {
+  actorType?: string;
+  actorId?: string | null;
+  emoji: string;
+}
+
+/**
+ * `table` and `parentColumn` are interpolated into SQL text. Both instances are module-level
+ * constants that never see request input — do not widen them to accept caller-supplied strings.
+ */
+interface ReactionSpec<T> {
+  table: string;
+  parentColumn: string;
+  hydrate: (row: Row) => T;
+}
+
+const ISSUE_REACTIONS: ReactionSpec<MultiremiIssueReaction> = {
+  table: "multiremi_issue_reactions",
+  parentColumn: "issue_id",
+  hydrate: toIssueReaction,
+};
+
+const COMMENT_REACTIONS: ReactionSpec<MultiremiCommentReaction> = {
+  table: "multiremi_comment_reactions",
+  parentColumn: "comment_id",
+  hydrate: toCommentReaction,
+};
+
 export class IssuesRepo {
   constructor(private ctx: StoreContext) {}
 
@@ -1596,78 +1628,68 @@ export class IssuesRepo {
 
   listIssueReactions(issueId: string): MultiremiIssueReaction[] {
     if (!this.getIssue(issueId)) throw new Error(`Issue not found: ${issueId}`);
-    const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_reactions WHERE issue_id = ? ORDER BY created_at ASC",
-    ).all(issueId) as Row[];
-    return rows.map(toIssueReaction);
+    return this.listReactions(ISSUE_REACTIONS, issueId);
   }
 
-  addIssueReaction(issueId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MultiremiIssueReaction {
+  addIssueReaction(issueId: string, input: ReactionInput): MultiremiIssueReaction {
     const issue = this.getIssue(issueId);
     if (!issue) throw new Error(`Issue not found: ${issueId}`);
-    const actorType = input.actorType ?? "member";
-    const actorId = input.actorId ?? "local";
-    const emoji = input.emoji?.trim();
-    if (!emoji) throw new Error("emoji is required");
-    this.ctx.db.run(
-      `INSERT INTO multiremi_issue_reactions (id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(issue_id, actor_type, actor_id, emoji) DO NOTHING`,
-      [createId("rxn"), issueId, issue.workspaceId, actorType, actorId, emoji, nowIso()],
-    );
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_issue_reactions WHERE issue_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
-    ).get(issueId, actorType, actorId, emoji) as Row | null;
-    return toIssueReaction(row!);
+    return this.insertReaction(ISSUE_REACTIONS, issueId, issue.workspaceId, input);
   }
 
-  removeIssueReaction(issueId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): void {
-    const actorType = input.actorType ?? "member";
-    const actorId = input.actorId ?? "local";
-    const emoji = input.emoji?.trim();
-    if (!emoji) throw new Error("emoji is required");
-    this.ctx.db.run(
-      "DELETE FROM multiremi_issue_reactions WHERE issue_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
-      [issueId, actorType, actorId, emoji],
-    );
+  removeIssueReaction(issueId: string, input: ReactionInput): void {
+    this.deleteReaction(ISSUE_REACTIONS, issueId, input);
   }
 
   listCommentReactions(commentId: string): MultiremiCommentReaction[] {
     if (!this.ctx.getRawIssueComment(commentId)) throw new Error(`Comment not found: ${commentId}`);
-    const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_comment_reactions WHERE comment_id = ? ORDER BY created_at ASC",
-    ).all(commentId) as Row[];
-    return rows.map(toCommentReaction);
+    return this.listReactions(COMMENT_REACTIONS, commentId);
   }
 
-  addCommentReaction(commentId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): MultiremiCommentReaction {
+  addCommentReaction(commentId: string, input: ReactionInput): MultiremiCommentReaction {
     const comment = this.ctx.getRawIssueComment(commentId);
     if (!comment) throw new Error(`Comment not found: ${commentId}`);
+    // Comments carry no workspace of their own, so it is resolved through the parent issue.
     const issue = this.getIssue(comment.issueId);
-    const actorType = input.actorType ?? "member";
-    const actorId = input.actorId ?? "local";
-    const emoji = input.emoji?.trim();
-    if (!emoji) throw new Error("emoji is required");
-    this.ctx.db.run(
-      `INSERT INTO multiremi_comment_reactions (id, comment_id, workspace_id, actor_type, actor_id, emoji, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(comment_id, actor_type, actor_id, emoji) DO NOTHING`,
-      [createId("rxn"), commentId, issue?.workspaceId ?? "local", actorType, actorId, emoji, nowIso()],
-    );
-    const row = this.ctx.db.query(
-      "SELECT * FROM multiremi_comment_reactions WHERE comment_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
-    ).get(commentId, actorType, actorId, emoji) as Row | null;
-    return toCommentReaction(row!);
+    return this.insertReaction(COMMENT_REACTIONS, commentId, issue?.workspaceId ?? "local", input);
   }
 
-  removeCommentReaction(commentId: string, input: { actorType?: string; actorId?: string | null; emoji: string }): void {
+  removeCommentReaction(commentId: string, input: ReactionInput): void {
+    this.deleteReaction(COMMENT_REACTIONS, commentId, input);
+  }
+
+  private listReactions<T>(spec: ReactionSpec<T>, parentId: string): T[] {
+    const rows = this.ctx.db.query(
+      `SELECT * FROM ${spec.table} WHERE ${spec.parentColumn} = ? ORDER BY created_at ASC`,
+    ).all(parentId) as Row[];
+    return rows.map(spec.hydrate);
+  }
+
+  private insertReaction<T>(spec: ReactionSpec<T>, parentId: string, workspaceId: string, input: ReactionInput): T {
     const actorType = input.actorType ?? "member";
     const actorId = input.actorId ?? "local";
     const emoji = input.emoji?.trim();
     if (!emoji) throw new Error("emoji is required");
     this.ctx.db.run(
-      "DELETE FROM multiremi_comment_reactions WHERE comment_id = ? AND actor_type = ? AND actor_id = ? AND emoji = ?",
-      [commentId, actorType, actorId, emoji],
+      `INSERT INTO ${spec.table} (id, ${spec.parentColumn}, workspace_id, actor_type, actor_id, emoji, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(${spec.parentColumn}, actor_type, actor_id, emoji) DO NOTHING`,
+      [createId("rxn"), parentId, workspaceId, actorType, actorId, emoji, nowIso()],
+    );
+    const row = this.ctx.db.query(
+      `SELECT * FROM ${spec.table} WHERE ${spec.parentColumn} = ? AND actor_type = ? AND actor_id = ? AND emoji = ?`,
+    ).get(parentId, actorType, actorId, emoji) as Row | null;
+    return spec.hydrate(row!);
+  }
+
+  private deleteReaction<T>(spec: ReactionSpec<T>, parentId: string, input: ReactionInput): void {
+    const actorType = input.actorType ?? "member";
+    const actorId = input.actorId ?? "local";
+    const emoji = input.emoji?.trim();
+    if (!emoji) throw new Error("emoji is required");
+    this.ctx.db.run(
+      `DELETE FROM ${spec.table} WHERE ${spec.parentColumn} = ? AND actor_type = ? AND actor_id = ? AND emoji = ?`,
+      [parentId, actorType, actorId, emoji],
     );
   }
 

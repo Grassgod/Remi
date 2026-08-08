@@ -74,3 +74,75 @@ describe("IssuesRepo", () => {
     expect(repo.deleteIssueMetadataKey(issue.id, "branch")).toEqual({});
   });
 });
+
+// The two reaction triples share one implementation configured by ISSUE_REACTIONS /
+// COMMENT_REACTIONS, so both parents are exercised against the same expectations.
+describe("IssuesRepo reactions", () => {
+  it("adds, de-duplicates and removes issue reactions", () => {
+    const repo = createRepo();
+    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1" });
+
+    expect(repo.listIssueReactions(issue.id)).toEqual([]);
+    const added = repo.addIssueReaction(issue.id, { emoji: "👍" });
+    expect(added.issueId).toBe(issue.id);
+    expect(added.workspaceId).toBe("wsp_1");
+    // Defaults, and the ON CONFLICT DO NOTHING that makes a repeat a no-op.
+    expect(added.actorType).toBe("member");
+    expect(added.actorId).toBe("local");
+    expect(repo.addIssueReaction(issue.id, { emoji: " 👍 " }).id).toBe(added.id);
+    expect(repo.listIssueReactions(issue.id)).toHaveLength(1);
+
+    repo.addIssueReaction(issue.id, { actorType: "agent", actorId: "agt_1", emoji: "🎉" });
+    expect(repo.listIssueReactions(issue.id).map((entry) => entry.emoji)).toEqual(["👍", "🎉"]);
+
+    repo.removeIssueReaction(issue.id, { emoji: "👍" });
+    expect(repo.listIssueReactions(issue.id).map((entry) => entry.emoji)).toEqual(["🎉"]);
+  });
+
+  it("adds, de-duplicates and removes comment reactions", () => {
+    const repo = createRepo();
+    const issue = repo.createIssue({ title: "React", workspaceId: "wsp_1" });
+    const comment = repo.createIssueComment(issue.id, { body: "hi" });
+
+    expect(repo.listCommentReactions(comment.id)).toEqual([]);
+    const added = repo.addCommentReaction(comment.id, { emoji: "👍" });
+    expect(added.commentId).toBe(comment.id);
+    // Comments have no workspace column of their own; it comes from the parent issue.
+    expect(added.workspaceId).toBe("wsp_1");
+    expect(repo.addCommentReaction(comment.id, { emoji: " 👍 " }).id).toBe(added.id);
+    expect(repo.listCommentReactions(comment.id)).toHaveLength(1);
+
+    repo.addCommentReaction(comment.id, { actorType: "agent", actorId: "agt_1", emoji: "🎉" });
+    expect(repo.listCommentReactions(comment.id).map((entry) => entry.emoji)).toEqual(["👍", "🎉"]);
+
+    repo.removeCommentReaction(comment.id, { emoji: "👍" });
+    expect(repo.listCommentReactions(comment.id).map((entry) => entry.emoji)).toEqual(["🎉"]);
+  });
+
+  it("keeps the two parents' rows apart", () => {
+    const repo = createRepo();
+    const issue = repo.createIssue({ title: "React", workspaceId: "local" });
+    const comment = repo.createIssueComment(issue.id, { body: "hi" });
+
+    repo.addIssueReaction(issue.id, { emoji: "👍" });
+    expect(repo.listCommentReactions(comment.id)).toEqual([]);
+    repo.addCommentReaction(comment.id, { emoji: "🎉" });
+    expect(repo.listIssueReactions(issue.id).map((entry) => entry.emoji)).toEqual(["👍"]);
+  });
+
+  it("rejects a blank emoji and an unknown parent on every entry point", () => {
+    const repo = createRepo();
+    const issue = repo.createIssue({ title: "React", workspaceId: "local" });
+    const comment = repo.createIssueComment(issue.id, { body: "hi" });
+
+    expect(() => repo.addIssueReaction(issue.id, { emoji: "  " })).toThrow("emoji is required");
+    expect(() => repo.removeIssueReaction(issue.id, { emoji: "" })).toThrow("emoji is required");
+    expect(() => repo.addCommentReaction(comment.id, { emoji: "  " })).toThrow("emoji is required");
+    expect(() => repo.removeCommentReaction(comment.id, { emoji: "" })).toThrow("emoji is required");
+
+    expect(() => repo.listIssueReactions("iss_nope")).toThrow("Issue not found: iss_nope");
+    expect(() => repo.addIssueReaction("iss_nope", { emoji: "👍" })).toThrow("Issue not found: iss_nope");
+    expect(() => repo.listCommentReactions("cmt_nope")).toThrow("Comment not found: cmt_nope");
+    expect(() => repo.addCommentReaction("cmt_nope", { emoji: "👍" })).toThrow("Comment not found: cmt_nope");
+  });
+});

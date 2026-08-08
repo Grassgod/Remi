@@ -8,10 +8,10 @@
  * Protocol: JSON-RPC 2.0 over stdio (Content-Length framing, like LSP).
  *
  * Usage:
- *   bun run src/mcp/memory-server.ts
+ *   bun run packages/memory/src/mcp-server.ts
  *
  * Register in ~/.claude/.mcp.json:
- *   { "mcpServers": { "remi-memory": { "command": "bun", "args": ["run", "<path>/memory-server.ts"] } } }
+ *   { "mcpServers": { "remi-memory": { "command": "bun", "args": ["run", "<repo>/packages/memory/src/mcp-server.ts"] } } }
  */
 
 import { homedir } from "node:os";

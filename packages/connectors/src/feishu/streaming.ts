@@ -14,7 +14,7 @@
 
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
-import { resolveApiBase } from "./client.js";
+import { resolveApiBase } from "@shared/feishu-domain.js";
 import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, formatToolInputSummary } from "./tool-formatters.js";
 import { buildAskQuestionForm, buildPlanReviewForm, type PermissionFormElements } from "./permission-ui.js";
 

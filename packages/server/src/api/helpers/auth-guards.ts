@@ -1,0 +1,475 @@
+// Request authorization. Resolves the caller identity out of the Hono context, then answers the
+// two questions every route asks: may this token reach this surface at all (task/daemon token
+// scoping), and may this user reach this workspace/agent/attachment. `deny*` helpers return a
+// ready-made Response when access is refused and null when it is allowed.
+import type { Context } from "hono";
+import { MultiremiStore } from "@multiremi/store/store.js";
+import {
+  authenticatedRequestUserId,
+  cleanString,
+  currentAccessToken,
+  currentAuth,
+  currentRequestUserId,
+  currentTaskAccessToken,
+  currentWorkspaceMember,
+  currentWorkspaceRoleStrict,
+  runtimeWorkspaceId,
+} from "../wire/index.js";
+import type { MultiremiRequestAuth } from "../wire/index.js";
+import type {
+  CreateAccessTokenInput,
+  MultiremiAccessToken,
+  MultiremiAgent,
+  MultiremiAttachment,
+  MultiremiChatSession,
+  MultiremiIssueComment,
+  MultiremiRuntime,
+  MultiremiTask,
+  MultiremiWorkspaceMember,
+} from "@multiremi/contracts/types.js";
+
+// Resolve the request identity into a single typed object. Mirrors the historical
+// currentJwtUserId (cleanString) / currentRequestUserId / authenticatedRequestUserId logic.
+export function buildRequestAuth(accessToken: MultiremiAccessToken | null, jwtUserId: string | null): MultiremiRequestAuth {
+  const cleanJwt = cleanString(jwtUserId);
+  const userId = accessToken?.userId ?? cleanJwt ?? null;
+  return { accessToken, jwtUserId: cleanJwt, userId, requestUserId: userId ?? "local" };
+}
+
+export function isDaemonTokenAllowedRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+  if (path === "/health" || path === "/healthz" || path === "/readyz" || path === "/api/multiremi/health") {
+    return true;
+  }
+  if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
+  if (path === "/api/multiremi/runtimes" && method === "POST") return true;
+  if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
+  return false;
+}
+
+export function isTaskTokenForbiddenRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+  if (path === "/api/daemon/ws" || path.startsWith("/api/daemon/")) return true;
+  if (path === "/api/multiremi/runtimes" && method === "POST") return true;
+  if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
+  return false;
+}
+
+export function isTaskTokenCreateInput(input: Pick<CreateAccessTokenInput, "type">): boolean {
+  return String(input.type ?? "pat").trim().toLowerCase() === "task";
+}
+
+export function denyTaskTokenSessionAccess(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  requestedSessionId: string | null,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  if (!task || task.issueId !== issueId) return c.json({ error: "forbidden" }, 403);
+  // Legacy tasks predate product Sessions and retain their issue-wide access.
+  if (!task.issueSessionId) return null;
+  if (requestedSessionId !== task.issueSessionId) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+/**
+ * A task token is scoped to the one project its issue belongs to. Project
+ * knowledge (wiki + memory) of any other project — including one in a workspace
+ * the token's agent can otherwise reach — is not its to read or write. A task
+ * with no issue, or an issue with no project, has no project scope at all.
+ */
+export function denyTaskTokenProjectAccess(
+  c: Context,
+  store: MultiremiStore,
+  projectId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  const issue = task?.issueId ? store.getIssue(task.issueId) : null;
+  if (!issue?.projectId || issue.projectId !== projectId) return c.json({ error: "project not found" }, 404);
+  return null;
+}
+
+export function denyTaskTokenCommentAccess(
+  c: Context,
+  store: MultiremiStore,
+  commentId: string,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const task = store.getTask(token.taskId);
+  const comment = store.getIssueComment(commentId);
+  if (
+    !task
+    || !comment
+    || task.issueId !== comment.issueId
+    || (task.issueSessionId && task.issueSessionId !== comment.issueSessionId)
+  ) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  return null;
+}
+
+export function denyTaskTokenTaskAccess(
+  c: Context,
+  requestedTask: MultiremiTask,
+): Response | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  // Task execution messages contain raw provider/tool transcripts. They are
+  // private to the running task and are deliberately not part of the shared
+  // product Session event log.
+  if (token.taskId !== requestedTask.id) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+export function taskScopedIssueTasks(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  tasks: MultiremiTask[],
+): MultiremiTask[] {
+  const issueSessionId = taskTokenProductSessionId(c, store, issueId);
+  if (!issueSessionId) return tasks;
+  return tasks.filter((task) => task.issueSessionId === issueSessionId);
+}
+
+export function taskScopedIssueComments(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  comments: MultiremiIssueComment[],
+): MultiremiIssueComment[] {
+  const issueSessionId = taskTokenProductSessionId(c, store, issueId);
+  if (!issueSessionId) return comments;
+  return comments.filter((comment) => comment.issueSessionId === issueSessionId);
+}
+
+export function taskTokenProductSessionId(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+): string | null {
+  const token = currentTaskAccessToken(c);
+  if (!token?.taskId) return null;
+  const currentTask = store.getTask(token.taskId);
+  if (!currentTask || currentTask.issueId !== issueId) return null;
+  return currentTask.issueSessionId;
+}
+
+export function currentJwtUserId(c: Context): string | null {
+  return currentAuth(c).jwtUserId;
+}
+
+export function compatibilityWorkspaceId(c: Context): string {
+  return cleanString(c.req.header("X-Workspace-ID")) ??
+    cleanString(c.req.query("workspace_id")) ??
+    currentAccessToken(c)?.workspaceId ??
+    "local";
+}
+
+// The web client tags every request with the slug of the workspace the user is
+// viewing (client.ts authHeaders). Null when absent or not a known workspace.
+export function workspaceIdFromSlugHeader(c: Context, store: MultiremiStore): string | null {
+  const slug = cleanString(c.req.header("X-Workspace-Slug"));
+  if (!slug) return null;
+  return store.listWorkspaces().find((workspace) => workspace.slug === slug)?.id ?? null;
+}
+
+export function compatibilityUserId(c: Context): string {
+  return authenticatedRequestUserId(c) ??
+    cleanString(c.req.query("user_id")) ??
+    "local";
+}
+
+export function compatibilityInboxMemberId(c: Context): string {
+  return authenticatedRequestUserId(c) ??
+    cleanString(c.req.query("member_id")) ??
+    "local";
+}
+
+export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
+  const workspaceId = runtimeWorkspaceId(runtime);
+  const token = currentAccessToken(c);
+  if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
+  const userId = authenticatedRequestUserId(c);
+  // Same rule as denyCurrentUserWorkspaceAccess: a human's login PAT is not
+  // workspace-scoped — membership decides which runtimes they can see.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
+    return c.json({ error: "runtime not found" }, 404);
+  }
+  if (token?.type === "task") return null;
+  // A logged-in human who is not a member of the runtime's workspace can't see it.
+  if (userId && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+    return c.json({ error: "runtime not found" }, 404);
+  }
+  return null;
+}
+
+export function canCurrentUserAccessAgent(c: Context, store: MultiremiStore, agent: MultiremiAgent): boolean {
+  if (agent.visibility !== "private") return true;
+  const userId = currentRequestUserId(c);
+  if (agent.ownerId === userId) return true;
+  const role = currentWorkspaceRole(c, store, agent.workspaceId);
+  return role === "owner" || role === "admin";
+}
+
+// Store-only twin of canCurrentUserAccessAgent — no request Context, so it can
+// gate WS recipients (client.data.userId) as well as HTTP callers.
+export function canUserAccessAgentByUserId(store: MultiremiStore, userId: string | null, agent: MultiremiAgent): boolean {
+  if (agent.visibility !== "private") return true;
+  if (userId && agent.ownerId === userId) return true;
+  // No verified identity (master token / open mode) acts as admin.
+  if (userId == null) return true;
+  const role = store.getUserRoleInWorkspace(userId, agent.workspaceId);
+  return role === "owner" || role === "admin";
+}
+
+// Whether a user may read a task's transcript messages. Transcript rows carry
+// raw tool input/diffs/output, so they inherit the task's visibility: chat
+// tasks are creator-only, and a private agent's task is owner/admin-only.
+// Workspace membership itself is enforced by the caller (registry keying /
+// route guard). userId null = no-identity admin path.
+export function canUserViewTaskMessages(store: MultiremiStore, userId: string | null, task: MultiremiTask): boolean {
+  if (task.chatSessionId) {
+    const session = store.getChatSession(task.chatSessionId);
+    if (!session) return false;
+    if (userId == null) return true;
+    return session.creatorId === userId;
+  }
+  const agent = task.agentId ? store.getAgent(task.agentId) : null;
+  if (!agent) return true;
+  return canUserAccessAgentByUserId(store, userId, agent);
+}
+
+export function currentWorkspaceRole(c: Context, store: MultiremiStore, workspaceId: string): string {
+  const member = currentWorkspaceMember(c, store, workspaceId);
+  if (member) return member.role;
+  // No real member: only the no-identity admin path (master token / open mode)
+  // is treated as local owner. A logged-in non-member is NOT auto-"member".
+  if (workspaceId === "local" && authenticatedRequestUserId(c) === null) return "owner";
+  return "member";
+}
+
+/**
+ * A caller may receive the PLAINTEXT relay token on the daemon register/repos
+ * response only if their token maps to a workspace owner/admin. This covers both
+ * daemon tokens and the owner/admin PAT that real agents authenticate with, while
+ * still withholding the secret from a non-admin member's token.
+ */
+export function callerCanReceiveRelay(c: Context, store: MultiremiStore, workspaceId: string): boolean {
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  return role === "owner" || role === "admin";
+}
+
+/** owner/admin human actor gate for workspace-scoped config (relay config). */
+export function requireWorkspaceAdmin(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
+  if (currentTaskAccessToken(c)) return c.json({ error: "this endpoint is only available to human actors" }, 403);
+  if (currentAccessToken(c)?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  if (role === "owner" || role === "admin") return null;
+  return c.json({ error: "insufficient permissions" }, 403);
+}
+
+export function loadCurrentWorkspaceMember(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+): { member: MultiremiWorkspaceMember } | Response {
+  const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (denied) return denied;
+  const workspace = workspaceId === "local" ? store.ensureLocalWorkspace() : store.getWorkspace(workspaceId);
+  if (!workspace) return c.json({ error: "workspace not found" }, 404);
+  const member = currentWorkspaceMember(c, store, workspaceId);
+  if (!member) return c.json({ error: "workspace not found" }, 404);
+  return { member };
+}
+
+export function loadCurrentWorkspaceRole(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  roles: Array<"owner" | "admin" | "member">,
+): { member: MultiremiWorkspaceMember } | Response {
+  const loaded = loadCurrentWorkspaceMember(c, store, workspaceId);
+  if (loaded instanceof Response) return loaded;
+  if (!roles.includes(loaded.member.role as "owner" | "admin" | "member")) {
+    return c.json({ error: "insufficient permissions" }, 403);
+  }
+  return loaded;
+}
+
+export function denyCurrentUserWorkspaceAccess(c: Context, store: MultiremiStore, workspaceId: string): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type === "daemon") return c.json({ error: "forbidden for daemon token" }, 403);
+  const userId = authenticatedRequestUserId(c);
+  // Tokens bound to one workspace (task tokens, user-less workspace PATs) can't
+  // reach others. A human's login PAT is minted under "local" but is a session
+  // credential, not a scope — the membership check below is the authority for
+  // real users, otherwise they could never open a workspace created after login.
+  const humanPat = token?.type === "pat" && userId && userId !== "local";
+  if (!humanPat && token?.workspaceId && token.workspaceId !== workspaceId) {
+    return c.json({ error: "workspace not found" }, 404);
+  }
+  // Task tokens are scoped by the check above and act on behalf of a task within
+  // their workspace — no separate membership row required.
+  if (token?.type === "task") return null;
+  // Any authenticated human (login PAT or JWT) must be a member of the workspace;
+  // non-members get 404 (existence hidden). No user id (or the synthetic "local"
+  // admin identity carried by user-less workspace access tokens) => master token /
+  // open mode => full admin access.
+  if (userId && userId !== "local" && !store.getUserRoleInWorkspace(userId, workspaceId)) {
+    return c.json({ error: "workspace not found" }, 404);
+  }
+  return null;
+}
+
+// Pins are private to their owner. When the request is authenticated as a real
+// user, the pin's user id must equal that user — nobody can read or mutate
+// another person's pins. Master-token / open mode (no authenticated user id)
+// keeps full access.
+export function denyPinOwnerAccess(c: Context, userId: string): Response | null {
+  const authUser = authenticatedRequestUserId(c);
+  if (authUser && userId !== authUser) return c.json({ error: "forbidden" }, 403);
+  return null;
+}
+
+export function loadChatSessionForCurrentUser(
+  c: Context,
+  store: MultiremiStore,
+  sessionId: string,
+  options: { requireAgentAccess?: boolean } = {},
+): { session: MultiremiChatSession } | Response {
+  const session = store.getChatSession(sessionId);
+  if (!session) return c.json({ error: "chat session not found" }, 404);
+  const denied = denyCurrentUserWorkspaceAccess(c, store, session.workspaceId);
+  if (denied) return denied;
+  if ((session.creatorId ?? "local") !== currentRequestUserId(c)) {
+    return c.json({ error: "not your chat session" }, 403);
+  }
+  if (options.requireAgentAccess !== false && !canCurrentUserAccessChatSessionAgent(c, store, session)) {
+    return c.json({ error: "you do not have access to this agent" }, 403);
+  }
+  return { session };
+}
+
+export function canCurrentUserAccessChatSessionAgent(
+  c: Context,
+  store: MultiremiStore,
+  session: MultiremiChatSession,
+): boolean {
+  const agent = store.getAgent(session.agentId);
+  return Boolean(agent && agent.workspaceId === session.workspaceId && canCurrentUserAccessAgent(c, store, agent));
+}
+
+// Go-style access boundary for reading/serving/deleting an attachment file. Chat
+// attachments are private to the chat creator like the chat session itself; issue,
+// comment, and free-standing attachments are scoped to the attachment workspace.
+// Returns a denial Response when access is forbidden, or null when allowed.
+export function denyAttachmentAccess(c: Context, store: MultiremiStore, attachment: MultiremiAttachment): Response | null {
+  if (attachment.chatSessionId) {
+    const loaded = loadChatSessionForCurrentUser(c, store, attachment.chatSessionId, { requireAgentAccess: false });
+    return loaded instanceof Response ? loaded : null;
+  }
+  if (attachment.commentId) {
+    const denied = denyTaskTokenCommentAccess(c, store, attachment.commentId);
+    if (denied) return denied;
+  }
+  return denyCurrentUserWorkspaceAccess(c, store, attachment.workspaceId);
+}
+
+export function hasJwtWorkspaceAccess(store: MultiremiStore, userId: string, workspaceId: string): boolean {
+  return store.getUserRoleInWorkspace(userId, workspaceId) !== null;
+}
+
+export type DaemonWorkspaceDenyOptions = {
+  hideForbiddenAsNotFound?: boolean;
+};
+
+export function isDaemonGcCheckRequest(c: Context): boolean {
+  return new URL(c.req.url).pathname.endsWith("/gc-check");
+}
+
+export function denyDaemonTokenWorkspace(c: Context, workspaceId?: string | null, options: DaemonWorkspaceDenyOptions = {}): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
+  const targetWorkspaceId = cleanString(workspaceId) ?? "local";
+  if (token.workspaceId === targetWorkspaceId) return null;
+  if (options.hideForbiddenAsNotFound) return c.json({ error: "not found" }, 404);
+  return c.json({ error: "forbidden for daemon token workspace" }, 403);
+}
+
+export function denyDaemonTokenRuntimeWorkspace(
+  c: Context,
+  store: MultiremiStore,
+  runtimeId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime) return c.json({ error: "runtime not found" }, 404);
+  return denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
+}
+
+export function denyDaemonTokenTaskWorkspace(
+  c: Context,
+  store: MultiremiStore,
+  taskId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const task = store.getTask(taskId);
+  if (!task) return c.json({ error: "task not found" }, 404);
+  return denyDaemonTokenWorkspace(c, task.workspaceId, options);
+}
+
+export function denyDaemonTokenIssueWorkspace(
+  c: Context,
+  store: MultiremiStore,
+  issueId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const issue = store.getIssue(issueId);
+  if (!issue) return c.json({ error: "issue not found" }, 404);
+  return denyDaemonTokenWorkspace(c, issue.workspaceId, options);
+}
+
+export function denyDaemonTokenChatSessionWorkspace(
+  c: Context,
+  store: MultiremiStore,
+  sessionId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const session = store.getChatSession(sessionId);
+  if (!session) return c.json({ error: "chat session not found" }, 404);
+  return denyDaemonTokenWorkspace(c, session.workspaceId, options);
+}
+
+export function denyDaemonTokenAutopilotRunWorkspace(
+  c: Context,
+  store: MultiremiStore,
+  runId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const run = store.getAutopilotRun(runId);
+  if (!run) return c.json({ error: "autopilot run not found" }, 404);
+  const task = run.taskId ? store.getTask(run.taskId) : null;
+  if (task) return denyDaemonTokenWorkspace(c, task.workspaceId, options);
+  const issue = run.issueId ? store.getIssue(run.issueId) : null;
+  if (issue) return denyDaemonTokenWorkspace(c, issue.workspaceId, options);
+  const autopilot = store.getAutopilot(run.autopilotId);
+  if (!autopilot) return c.json({ error: "autopilot not found" }, 404);
+  return denyDaemonTokenWorkspace(c, autopilot.workspaceId, options);
+}

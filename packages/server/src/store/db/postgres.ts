@@ -155,7 +155,6 @@ function normalizeParams(args: unknown[]): unknown[] {
 // ────────────────────────────── sync bridge ──────────────────────────────
 
 const STATUS_PENDING = 0;
-const STATUS_DONE = 1;
 const STATUS_ERROR = 2;
 const RESULT_BUFFER_BYTES = 64 * 1024 * 1024;
 const QUERY_TIMEOUT_MS = 60_000;

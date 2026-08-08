@@ -1,4 +1,4 @@
-import type { SessionModeState } from "./protocol.js";
+import type { SessionModeState } from "@shared/contracts/acp-protocol.js";
 
 const ACP_CLAUDE_PROVIDER = "acp:claude";
 const ACP_CODEX_PROVIDER = "acp:codex";

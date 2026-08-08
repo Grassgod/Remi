@@ -5,6 +5,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
+import { StoreContext } from "@multiremi/store/context.js";
+import { AnalyticsRepo } from "@multiremi/store/repos/analytics-repo.js";
 
 let db: Database | null = null;
 
@@ -89,6 +91,17 @@ describe("StoreContext wiring", () => {
 
     expect(store.listIssueActivity(issue.id).some((entry) => entry.type === "issue_updated")).toBe(true);
     expect(broadcasts).toContain("activity:created");
+  });
+
+  it("names the missing wiring when analytics() is reached on a hand-built context", () => {
+    const store = createStore();
+    // The analytics recorders are the one surface `resolveHost` cannot reach, so a context built
+    // outside the MultiremiStore constructor only fails at call time — the message has to say why.
+    const bare = new StoreContext(db!, () => store);
+    expect(() => bare.analytics()).toThrow("registerAnalytics");
+
+    bare.registerAnalytics(new AnalyticsRepo(bare));
+    expect(bare.analytics()).toBeInstanceOf(AnalyticsRepo);
   });
 
   it("resolves the lazy host for cross-domain inbox creation", () => {

@@ -118,15 +118,6 @@ export async function probeFeishu(creds: Credentials): Promise<FeishuProbeResult
   }
 }
 
-/** Resolve API base URL from domain. */
-export function resolveApiBase(domain?: FeishuDomain): string {
-  if (domain === "lark") return "https://open.larksuite.com/open-apis";
-  if (domain && domain !== "feishu" && domain.startsWith("http")) {
-    return `${domain.replace(/\/+$/, "")}/open-apis`;
-  }
-  return "https://open.feishu.cn/open-apis";
-}
-
 /** Resolve receive_id_type from ID prefix. */
 export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();

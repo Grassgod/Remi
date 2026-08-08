@@ -18,7 +18,7 @@ import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { createAdapter } from "@acp/index.js";
 import { formatToolInputSummary } from "@connectors/feishu/tool-formatters.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "@connectors/feishu/permission-ui.js";
-import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "@acp/protocol.js";
+import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "@shared/contracts/acp-protocol.js";
 import { loadConfig as loadFeishuConfig } from "./_load-config.js";
 
 // ── Parse args ──────────────────────────────────────────────

@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { FeishuChannelConfig, GroupPolicy } from "./config.js";
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("feishu");
 import type { FeishuMessageEvent, FeishuMessageContext, FeishuMediaInfo } from "./types.js";

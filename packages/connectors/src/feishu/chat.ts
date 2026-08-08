@@ -3,7 +3,7 @@
  */
 
 import { createFeishuClient } from "./client.js";
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 import type { FeishuChannelConfig } from "./config.js";
 
 const log = createLogger("feishu-chat");

@@ -12,8 +12,8 @@ import type {
   SendOptions,
   AgentResponse,
   ProviderEvent,
-} from "./provider-types.js";
-import { createAgentResponse } from "./provider-types.js";
+} from "@shared/contracts/provider-types.js";
+import { createAgentResponse } from "@shared/contracts/provider-types.js";
 import { AcpClient } from "./client.js";
 import { createAdapter, type AgentAdapter } from "./adapters/index.js";
 import type {
@@ -31,7 +31,7 @@ import type {
   McpServerConfig,
   NewSessionMeta,
   NewSessionResult,
-} from "./protocol.js";
+} from "@shared/contracts/acp-protocol.js";
 
 export interface AcpProviderOptions {
   /** Agent type: "claude" | "codex" (default: "claude"). */

@@ -5,7 +5,7 @@
  */
 
 import type { BotMenuConfig, BotMenuItemConfig, BotMenuBehavior, BotMenuUserConfig } from "./config.js";
-import { createLogger } from "./logger.js";
+import { createLogger } from "@shared/logger.js";
 
 const log = createLogger("menu-sync");
 

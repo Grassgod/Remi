@@ -7,8 +7,11 @@ import type {
   ToolCallProgressUpdate,
   ToolCallMeta,
   NewSessionMeta,
-} from "../../protocol.js";
-import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
+  AgentAdapter,
+  AskUserQuestionData,
+  AgentSessionOptions,
+} from "@shared/contracts/acp-protocol.js";
+import { titleToToolName } from "../tool-name.js";
 
 /** Our mode ids → the closest mode the bridge still advertises when ours is absent. */
 const CLAUDE_PERMISSION_MODE_FALLBACKS: Record<string, string[]> = {
@@ -177,19 +180,4 @@ export class ClaudeAdapter implements AgentAdapter {
     const meta = update._meta as ToolCallMeta | undefined;
     return meta?.claudeCode as Record<string, unknown> | undefined;
   }
-}
-
-function titleToToolName(title: string): string {
-  const lower = title.toLowerCase();
-  if (lower.includes("bash") || lower.includes("terminal")) return "Bash";
-  if (lower === "read" || lower.startsWith("read ")) return "Read";
-  if (lower.includes("write") || lower.includes("create")) return "Write";
-  if (lower.includes("edit")) return "Edit";
-  if (lower.includes("glob")) return "Glob";
-  if (lower.includes("grep") || lower.includes("search file")) return "Grep";
-  if (lower.includes("web search")) return "WebSearch";
-  if (lower.includes("web fetch") || lower.includes("fetch")) return "WebFetch";
-  if (lower.includes("agent")) return "Agent";
-  if (lower.includes("todo")) return "TodoWrite";
-  return title;
 }

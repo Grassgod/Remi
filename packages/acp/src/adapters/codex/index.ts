@@ -8,8 +8,11 @@ import type {
   ToolCallProgressUpdate,
   ToolCallMeta,
   NewSessionMeta,
-} from "../../protocol.js";
-import type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "../base.js";
+  AgentAdapter,
+  AskUserQuestionData,
+  AgentSessionOptions,
+} from "@shared/contracts/acp-protocol.js";
+import { canonicalToolName, titleToToolName } from "../tool-name.js";
 
 /** Claude-flavored mode ids → their closest codex-acp equivalents. */
 const PERMISSION_MODE_ALIASES: Record<string, string[]> = {
@@ -176,23 +179,9 @@ function firstString(obj: Record<string, unknown> | undefined, keys: string[]): 
 }
 
 function normalizeToolName(name: string, kind?: string | null): string {
-  const lower = name.trim().toLowerCase().replace(/[-_\s]+/g, "");
-  if (!lower) return kind ? kindToToolName(kind, undefined) : "unknown";
-  if (["bash", "shell", "exec", "execute", "command", "commandexecution"].includes(lower)) return "Bash";
-  if (["read", "readfile", "fileread"].includes(lower)) return "Read";
-  if (["write", "writefile", "create", "createfile", "filewrite"].includes(lower)) return "Write";
-  if (["edit", "applypatch", "patch", "filechange", "fileedit"].includes(lower)) return "Edit";
-  if (["grep", "search", "filesearch", "rg"].includes(lower)) return "Grep";
-  if (["webfetch", "fetch", "openurl"].includes(lower)) return "WebFetch";
-  if (["websearch", "searchweb"].includes(lower)) return "WebSearch";
-  if (["think", "reasoning"].includes(lower)) return "Think";
-  if (["todo", "todowrite", "plan"].includes(lower)) return "TodoWrite";
-  if (["askuserquestion", "ask", "askuser"].includes(lower)) return "AskUserQuestion";
-  if (["exitplanmode", "planmode", "readytocode"].includes(lower)) return "ExitPlanMode";
-  if (["enterplanmode"].includes(lower)) return "EnterPlanMode";
-  if (["agent", "spawnagent"].includes(lower)) return "Agent";
-  if (["glob"].includes(lower)) return "Glob";
-  return name;
+  const exact = canonicalToolName(name);
+  if (exact === null) return kind ? kindToToolName(kind, undefined) : "unknown";
+  return exact;
 }
 
 function kindToToolName(kind: string, title?: string | null): string {
@@ -213,28 +202,6 @@ function kindToToolName(kind: string, title?: string | null): string {
     default: return titleToToolName(title ?? "unknown");
   }
 }
-
-function titleToToolName(title: string): string {
-  const exact = normalizeToolName(title, null);
-  const lower = title.toLowerCase().replace(/[-_\s]+/g, "");
-  if (exact !== title || KNOWN_TOOL_NAMES.has(exact)) return exact;
-
-  if (lower.includes("bash") || lower.includes("terminal") || lower.includes("shell")) return "Bash";
-  if (lower === "read" || title.toLowerCase().startsWith("read ")) return "Read";
-  if (lower.includes("write") || lower.includes("create")) return "Write";
-  if (lower.includes("edit") || lower.includes("patch") || lower.includes("diff")) return "Edit";
-  if (lower.includes("grep") || lower.includes("searchfile") || title.toLowerCase().startsWith("search ")) return "Grep";
-  if (lower.includes("websearch")) return "WebSearch";
-  if (lower.includes("webfetch") || lower.includes("fetch")) return "WebFetch";
-  if (lower.includes("think") || lower.includes("reason")) return "Think";
-  if (lower.includes("todo") || lower.includes("plan")) return "TodoWrite";
-  return title || "unknown";
-}
-
-const KNOWN_TOOL_NAMES = new Set([
-  "Bash", "Read", "Write", "Edit", "Grep", "WebFetch", "WebSearch", "Think",
-  "TodoWrite", "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "Agent", "Glob",
-]);
 
 function meaningfulTitle(title: string | null | undefined): string | undefined {
   const trimmed = title?.trim();

@@ -116,7 +116,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
   const app = new Hono();
   // What the route handlers used to close over; domain routers take it explicitly.
-  const deps: RouterDeps = { store, scheduler, authToken, realtimeState, webhookRateLimiter, webhookIpRateLimiter };
+  const deps: RouterDeps = { store, scheduler, authToken, webhookRateLimiter, webhookIpRateLimiter };
 
   app.use("*", cors());
   // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.

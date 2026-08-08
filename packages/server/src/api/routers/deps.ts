@@ -1,6 +1,6 @@
 import type { MultiremiScheduler } from "@multiremi/scheduler.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
-import type { MemoryWebhookRateLimiter, MultiremiRealtimeState } from "../helpers.js";
+import type { MemoryWebhookRateLimiter } from "../helpers.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -11,7 +11,6 @@ export interface RouterDeps {
   store: MultiremiStore;
   scheduler: MultiremiScheduler | null;
   authToken: string;
-  realtimeState: MultiremiRealtimeState;
   webhookRateLimiter: MemoryWebhookRateLimiter;
   webhookIpRateLimiter: MemoryWebhookRateLimiter;
 }

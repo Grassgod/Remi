@@ -24,8 +24,8 @@ export type { AcpProviderOptions } from "./provider.js";
 export { ensureAcpBridges, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "./provision.js";
 
 // ── Provider interface & shared types ─────────────────────────
-export type { Provider, AgentResponse, SendOptions, ProviderEvent } from "./provider-types.js";
-export { createAgentResponse } from "./provider-types.js";
+export type { Provider, AgentResponse, SendOptions, ProviderEvent } from "@shared/contracts/provider-types.js";
+export { createAgentResponse } from "@shared/contracts/provider-types.js";
 
 // ── ACP Protocol types ────────────────────────────────────────
 export type {
@@ -69,18 +69,18 @@ export type {
   ConfigOptionUpdate,
   SessionInfoUpdate,
   ContentBlock,
-} from "./protocol.js";
+} from "@shared/contracts/acp-protocol.js";
 
 // ── Elicitation (AskUserQuestion form conversion) ─────────────
-export { elicitationToQuestions, answersToElicitationContent } from "./elicitation.js";
-export type { ElicitationQuestion } from "./elicitation.js";
+export { elicitationToQuestions, answersToElicitationContent } from "@shared/contracts/acp-elicitation.js";
+export type { ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
 
 // ── Adapters ──────────────────────────────────────────────────
 export { ClaudeAdapter, CodexAdapter, createAdapter } from "./adapters/index.js";
-export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "./adapters/base.js";
+export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/contracts/acp-protocol.js";
 
 // ── Streaming meta types (used by connector stream handlers) ──
-export type { StreamMeta, StreamHandlerLog } from "./stream-types.js";
+export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protocol.js";
 
 // ── ACP Client (lower-level) ──────────────────────────────────
 export { AcpClient } from "./client.js";
