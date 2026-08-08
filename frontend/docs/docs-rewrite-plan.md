@@ -224,7 +224,7 @@ Fumadocs 原生支持：`content/docs/[lang]/...`。初期只英文，中文后�
 - OSS 贡献者文档（用 `CONTRIBUTING.md` 顶着）
 - API Reference 独立板块（CLI 覆盖 95% 场景，第一版不做）
 - 版本化文档（`/v0.2/`、`/v0.3/`）
-- Blog / Changelog UI（Changelog 先外链 `CHANGELOG.md`）
+- Blog / Changelog UI（Changelog 先外链 GitHub Releases —— release notes 由 `release.yml` 的 `generate_release_notes` 自动生成，仓库内没有 CHANGELOG 文件）
 - 自动从代码生成 API reference
 - 语义搜索 / 向量搜索（产品本身还没用 pgvector）
 - Webhook autopilot trigger（代码未接路由）

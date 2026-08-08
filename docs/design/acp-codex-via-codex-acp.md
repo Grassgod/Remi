@@ -1,5 +1,10 @@
 # Remi ACP Codex via codex-acp
 
+> **历史文档**:已实现。文中的 `src/core.ts` 现为 `packages/remi/src/core.ts`,
+> `src/providers/acp/` 现为 `packages/acp/src/`,`bun run src/main.ts serve` 现为
+> `bun run apps/remi/main.ts serve`(且勿用 `REMI_DEBUG`,见 `CLAUDE.md`);配置已从 `remi.toml`
+> 迁到 `~/.remi/remi.db` 的 `remi_config` 表,`remi.toml.example` 不再存在。
+
 ## Goal
 
 Reuse an existing ACP-compatible Codex agent such as `codex-acp` instead of

@@ -69,7 +69,7 @@ export type { PermissionFormElements, AskUserQuestionData as PermissionAskData }
 export { approvePlanOption, rejectPermissionOption, isPlanApproval } from "./adapters/stream-handler.js";
 
 // ── Session naming ────────────────────────────────────────────
-export { generateUniqueName, getSessionName } from "./session-name.js";
+export { generateUniqueName, getSessionName } from "@shared/session-name.js";
 
 // ── Group utilities ───────────────────────────────────────────
 export { createProjectChat, getChatName, transferChatOwner, updateChat, REMI_AVATAR_KEY } from "./chat.js";

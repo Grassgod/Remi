@@ -54,13 +54,25 @@ function loadConfig() {
 
 // ── Find fixture file ───────────────────────────────────────
 
+/** Recordings are `<scenario>-notifications-<ts>.json`; the scenario is the name to type. */
+function scenarioLabel(file: string): string {
+  return file.replace(/-notifications(-\d+)?\.json$/, "").replace(/\.json$/, "");
+}
+
 function findFixture(name: string): string {
   const dir = join(process.cwd(), "tests", "fixtures", "acp");
-  const files = readdirSync(dir)
-    .filter((f) => f.startsWith(name) && f.endsWith(".json"))
+  const all = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  const files = all
+    .filter((f) => f.startsWith(name))
     .sort()
     .reverse();
-  if (files.length === 0) throw new Error(`No fixture matching "${name}" in ${dir}`);
+  if (files.length === 0) {
+    const labels = [...new Set(all.map(scenarioLabel))].sort();
+    throw new Error(
+      `No fixture matching "${name}" in ${dir}\n` +
+        `Available scenarios:\n${labels.map((l) => `  ${l}`).join("\n")}`,
+    );
+  }
   console.log(`📂 Fixture: ${files[0]}`);
   return join(dir, files[0]);
 }
@@ -83,8 +95,10 @@ function formatToolStatus(name: string, input?: Record<string, unknown>): string
 // ── Main replay logic ───────────────────────────────────────
 
 async function main() {
-  const config = loadConfig();
+  // Resolve the fixture before touching the DB/credentials, so a typo'd name
+  // reports the available scenarios instead of a "run: remi login" detour.
   const fixturePath = findFixture(fixtureName);
+  const config = loadConfig();
   const notifications = JSON.parse(readFileSync(fixturePath, "utf-8")) as Array<Record<string, unknown>>;
 
   console.log(`📊 ${notifications.length} events, speed: ${speed === Infinity ? "instant" : `${speed}x`}`);

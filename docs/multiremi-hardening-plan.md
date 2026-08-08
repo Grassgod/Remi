@@ -1,5 +1,7 @@
 # Bun Multiremi 服务端 · 技术债 & 安全加固方案 (PRD)
 
+> **历史文档**(2026-07-02):文中的 `src/multiremi` 现为 `packages/server/`。当前布局见 `README.md`。
+
 状态：待实现 · 交接给独立 session/开发者 · 2026-07-02
 依据：一次全量代码评审(后端 `src/` + 前端双树)的结论。
 

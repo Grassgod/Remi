@@ -1,5 +1,10 @@
 # Remi × Multiremi 融合目标
 
+> **历史文档**:融合期(`src/multica` → `src/multiremi`)的目标说明。文中的 `src/multiremi/` 现为
+> `packages/server/`,`src/multiremi/api.ts` / `client.ts` 现为 `packages/server/src/api/` /
+> `packages/server/src/worker/client.ts`,`packages/acp-provider` 已并入 `packages/acp/`。
+> 当前布局以 `README.md` 与 `CLAUDE.md` 为准。
+
 本文件是后续开发的目标说明和验收口径。当前目标不是继续维护一个旁挂的 Multica copy，而是在 Remi 项目内实现一个原生 Bun/TypeScript 版的 Multiremi，并让它具备对标当前 Go 版 Multica server 的能力。
 
 ## 0. 已确认决策

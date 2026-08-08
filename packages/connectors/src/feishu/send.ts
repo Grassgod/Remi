@@ -9,7 +9,7 @@ import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { resolveReceiveIdType } from "./client.js";
 import { parsePostContent } from "./receive.js";
-import { getSessionName, getNewbornName } from "./session-name.js";
+import { getSessionName, getNewbornName } from "@shared/session-name.js";
 
 /** Build Feishu post message payload (rich text with markdown support). */
 function buildFeishuPostMessagePayload(params: { messageText: string }): {

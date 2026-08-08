@@ -1,206 +1,232 @@
 # Contributing to Remi
 
-Thanks for your interest in Remi! This guide covers everything you need to set up a development environment, follow our conventions, and extend the platform with new connectors, providers, or skills.
+This guide covers the development environment, the repository layout, and how to extend the
+platform with a new connector, provider, or plugin.
 
 ## Requirements
 
-- **[Bun](https://bun.sh) 1.0+** — Remi's runtime, package manager, test runner, and bundler.
-- **SQLite** — Used for sessions, conversations, metrics, and vector search. Bun's built-in `bun:sqlite` is sufficient on most systems; macOS users may need a custom SQLite for `sqlite-vec` (handled automatically by `src/db/sqlite-custom.ts`).
-- **Git** — For source control.
-- **Optional**: [Claude Code CLI](https://docs.claude.com/claude-code) signed in if you plan to test the default provider locally.
+- **[Bun](https://bun.sh) 1.3.10+** — runtime, package manager, test runner, and bundler.
+  CI pins 1.3.10 (`.github/workflows/release-build-check.yml`).
+- **Git**.
+- **Optional**: [Claude Code CLI](https://docs.claude.com/claude-code) or Codex signed in, if you
+  want to exercise a real ACP provider locally.
+
+SQLite comes from `bun:sqlite`. macOS ships a proprietary SQLite that disables `loadExtension()`,
+so `packages/shared/src/db/sqlite-custom.ts` swaps in a custom build — it must stay the first
+import in every entry point.
+
+## Repository layout
+
+One bun workspace (`packages/*`, `frontend`, `frontend/apps/*`, `frontend/packages/*`).
+
+```
+apps/remi/            `remi` CLI entry (main.ts + cli/ subcommands)
+apps/server/          `multiremi` server + CLI entry
+packages/
+  shared/             L0 — config (SQLite-backed), db, logger, tracing, metrics
+  contracts/          L0 — pure shared types (API, ACP protocol, provider payloads)
+  acp/                L1 — AcpProvider + adapters/{claude-code,codex}
+  connectors/         L1 — base.ts (Connector interface) + feishu/
+  memory/             L1 — Markdown memory store, link graph, MCP server
+  auth/               L1 — 1Passport: Feishu OAuth, token sync
+  queue/              L1 — BunQueue `remi:cron` queue + handlers
+  daemon/             L2 — agent runtime, orchestrator, autopilot scheduler
+  remi/               L3 — core.ts hub, admin dashboard API, group/project stores
+  server/             L3 — Multiremi: api/ (routers + wire), store/ (repos), worker/, relay/
+  plugin-sdk/         Public plugin contract (@remi/plugin-sdk)
+frontend/             Nested workspace — Next.js dashboard
+  apps/web/           the app
+  packages/{ui,core,views}/
+  e2e/                Playwright specs
+tests/                bun:test — unit/, integration/, manual/, arch/, fixtures/
+```
+
+Imports use the tsconfig path aliases (`@shared/*`, `@acp/*`, `@connectors/*`, `@memory/*`,
+`@queue/*`, `@auth/*`, `@daemon/*`, `@remi/*`, `@multiremi/*`), never deep relative paths across
+packages. A lower layer must never import upward. `tests/arch/package-boundaries.test.ts` is the
+machine-checked part of that rule and fails `bun test` if you break it: `packages/contracts` stays
+free of `bun:`/`node:`/`process.`, no `packages/*` may import the application core
+(`@remi/*`, `@multiremi/*`) except `packages/server` addressing itself, and `packages/server`'s
+used workspace aliases must exactly equal its declared allowlist.
 
 ## Development workflow
 
-### 1. Fork and clone
-
 ```bash
+# 1. Fork, clone, install
 git clone https://github.com/<your-username>/remi.git
 cd remi
 git remote add upstream https://github.com/grasscoder/remi.git
-```
-
-### 2. Install and verify
-
-```bash
 bun install
-bun test
-```
 
-All tests should pass on a fresh clone. If they don't, please open an issue before starting work.
+# 2. Verify a clean baseline
+bun test                                    # backend suite (bunfig root = tests/)
+bunx tsc --noEmit                           # backend typecheck — must be zero errors
+cd frontend && bun run test && bun run typecheck && cd ..
 
-### 3. Create a topic branch
-
-```bash
+# 3. Branch
 git checkout -b feat/your-feature
-# or
-git checkout -b fix/short-description
+
+# 4. Iterate
+bun test tests/unit/memory/memory.test.ts   # single file
+bun test --watch                            # watch mode
+bun run apps/remi/main.ts serve             # Feishu daemon (connectors + cron queue + admin API)
+bun run scripts/snapshot-api-routes.ts --check   # API route surface unchanged?
+bun run build:multiremi                     # release archives (binary + ACP wrapper)
 ```
 
-### 4. Code, test, iterate
+`bun test` compares the Multiremi route surface against `scripts/api-routes.golden.json`
+byte-for-byte, so any drift fails the suite. If you are *moving* code, a diff means the move
+changed behavior — fix the move, never regenerate the baseline. Only when you deliberately add or
+change an endpoint do you rerun `bun run scripts/snapshot-api-routes.ts` (no flag) and include the
+regenerated golden file in the PR.
 
-```bash
-# Run a single test file
-bun test tests/memory.test.ts
-
-# Watch mode (re-run on save)
-bun test --watch
-
-# Run the daemon locally (connectors + scheduler)
-bun run src/main.ts serve
-
-# Develop the Web Dashboard
-cd web/frontend && bun run dev
-```
-
-### 5. Open a Pull Request
-
-- Push your branch to your fork.
-- Open a PR against `main` on `grasscoder/remi`.
-- Describe **what** changed and **why**, link any related issues, and include a short test plan.
-- Keep PRs focused — one logical change per PR. Refactors and feature work should be separate.
+Then open a PR against `main`. Describe **what** changed and **why**, link related issues, and
+include a test plan. Keep PRs focused — refactors and feature work go in separate PRs.
 
 ## Code style
 
 - **TypeScript strict mode.** Do not weaken `tsconfig.json`. Prefer narrow types over `any`.
-- **Async/await throughout.** Never block the event loop in an async path. Use `Bun.spawn()` for subprocesses.
-- **Interfaces over inheritance.** New backends should implement an existing interface (`Provider`, `Connector`, queue handler) rather than extend a base class.
-- **Plain data objects.** Message payloads, configs, and tool definitions are interfaces — no constructors, no classes for data.
-- **Comments are rare.** Names should explain *what*. Comments are reserved for non-obvious *why* — invariants, workarounds, hidden constraints.
-- **No dead code.** If you remove a feature, remove its tests, types, and docs in the same PR.
-- **File layout.** Keep modules under ~500 lines where possible. Split by responsibility, not by file-size limit.
+- **Async/await throughout.** Never block the event loop in an async path. `Bun.spawn()` for
+  subprocesses; `node:fs` sync APIs only inside the memory store.
+- **Interfaces over inheritance.** New backends implement an existing interface (`Provider`,
+  `Connector`, cron handler) rather than extend a base class.
+- **Plain data objects.** Message payloads, configs, and tool definitions are interfaces —
+  no constructors, no classes for data.
+- **Comments are rare.** Names explain *what*; comments are reserved for non-obvious *why*.
+- **No dead code.** Removing a feature removes its tests, types, and docs in the same PR.
+- **File layout.** Keep modules under ~500 lines where possible. Split by responsibility.
 
-Lint and format are enforced through `bun test` and review. There is no separate formatter step; match the surrounding style.
+There is no separate formatter step; match the surrounding style.
 
 ## Commit conventions
 
-We use [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-<type>(<scope>): <subject>
-
-[optional body]
-
-[optional footer]
-```
-
-Common types:
-
-- `feat:` — new user-facing feature
-- `fix:` — bug fix
-- `refactor:` — non-behavioral change
-- `perf:` — performance improvement
-- `docs:` — documentation only
-- `test:` — tests only
-- `chore:` — tooling, deps, build
-- `revert:` — revert a prior commit
-
-Examples:
+[Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <subject>`, with
+`feat` / `fix` / `refactor` / `perf` / `docs` / `test` / `chore` / `revert`. Keep the subject under
+72 characters and use the body for the *why*.
 
 ```
 feat(connectors): add Slack connector with thread support
 fix(memory): handle missing frontmatter in legacy notes
-docs(readme): update Quick Start for Bun 1.2
+refactor(api): split routers by domain
 ```
-
-Keep the subject line under 72 characters. Use the body to explain the *why* when it isn't obvious from the diff.
 
 ## Testing expectations
 
-- New code paths need tests under `tests/`. Use `bun:test`.
-- Unit-test the public surface of new connectors, providers, and queue handlers.
-- For changes that touch the memory store or the message router, exercise the relevant flow end-to-end (see `tests/core.test.ts` and `tests/memory.test.ts` for patterns).
+`TESTING.md` is the full reference. The short version:
+
+- Backend tests are **centralized** under `tests/` — `bunfig.toml` sets `[test] root = "tests"`,
+  so only `tests/**/*.test.ts` is discovered.
+  - `tests/unit/<area>/` — pure logic and interface-level tests, no external services. Areas
+    mirror the packages: `acp/`, `connectors/`, `daemon/`, `memory/`, `multiremi/`, `remi/`,
+    `shared/`.
+  - `tests/integration/` — cross-component and full-stack harnesses. Anything needing a real
+    provider, browser, or Postgres is a plain `*.ts` (not `*.test.ts`) so `bun test` skips it,
+    **and must get a `package.json` script entry** or it becomes an orphan nobody runs.
+  - `tests/manual/` — parameterized debugging scripts against real services, not regression tests.
+  - `tests/arch/` — architecture guards (package boundaries, type mirrors, endpoint wiring).
+  - `tests/fixtures/` — recorded data, e.g. `acp/*.json` for replay.
+- **Multiremi API/store tests** use the shared fixtures in `tests/unit/multiremi/helpers.ts`
+  (`createStore()` on an in-memory DB, `signTestJwt()`, `mockFetch()`/`jsonResponse()`, the
+  WebSocket wait helpers). Import them — do not re-declare a local copy.
+  `tests/unit/multiremi/multiremi-api-issues.test.ts` is the model for an API-level test:
+  `createMultiremiApp()` + `app.request()` in-process, no network.
+- **New store repos ship with a sibling test.** The convention for
+  `packages/server/src/store/repos/<domain>-repo.ts` is a `tests/unit/multiremi/*store-<domain>*.test.ts`
+  driving it against a `:memory:` DB (see `multiremi-store-issues.test.ts`,
+  `store-agents-skills-repo.test.ts`). Coverage is not yet uniform across the existing repos —
+  several are only exercised through the API-level tests — but new work is expected to add one.
+- Frontend tests sit **next to the source** (`foo.test.ts` beside `foo.ts`) and run under Vitest.
 - Tests must run offline. Mock external services; don't hit the network.
 
 ## Extending Remi
 
-### Add a new Connector
+### Add a Connector
 
-A connector is anything that turns external events into `IncomingMessage` and dispatches `AgentResponse` back. Implement `src/connectors/base.ts`:
+A connector turns external events into `IncomingMessage` and dispatches responses back.
+Implement `Connector` from `packages/connectors/src/base.ts`:
 
 ```ts
 export interface Connector {
-  name: string;
-  start(handler: MessageHandler): Promise<void>;
+  readonly name: string;
+  start(handler: MessageHandler, streamHandler?: StreamingHandler): Promise<void>;
   stop(): Promise<void>;
-  reply(message: IncomingMessage, response: AgentResponse): Promise<void>;
+  reply(chatId: string, response: AgentResponse): Promise<void>;
 }
 ```
 
-Steps:
+1. Create `packages/connectors/src/<your-connector>/index.ts` exporting a class that implements it.
+2. Translate inbound events into `IncomingMessage` (`text`, `chatId`, optional `sender`,
+   `connectorName`, `media`, `metadata`).
+3. Prefer the `streamHandler` path: it hands you an `AsyncIterable<ProviderEvent>` plus a
+   `StreamMeta`, so you can render tool calls and thinking live instead of waiting for the final
+   text. `start()` receives both handlers.
+4. Register it in `Remi.boot()` (`packages/remi/src/core.ts`) alongside the Feishu wiring, and add
+   its config section to `RemiConfig` in `packages/shared/src/config.ts` (plus the `SECTIONS` list
+   in `packages/shared/src/db/config-store.ts`, since config is stored in SQLite).
+5. Add a test under `tests/unit/connectors/` that drives the connector with a fake transport.
 
-1. Create `src/connectors/<your-connector>/index.ts` exporting a class that implements `Connector`.
-2. Translate inbound events into `IncomingMessage` (set `chatId`, `userId`, `content`, optional `threadId`, `mentioned`).
-3. Register the connector in `src/core.ts` where other connectors are wired up, and add config under a new section in `src/config.ts`.
-4. Add a unit test under `tests/` that drives the connector with a fake transport and asserts `IncomingMessage` shape.
-5. Document the new TOML section in `README.md` and `src/cli/template.toml`.
+`packages/connectors/src/feishu/` is the reference implementation — cards, streaming, mentions,
+reactions, threading, dynamic menus. Note that it stays at L1: it never imports from
+`packages/remi` or `packages/server`, and takes product-level lookups by injection instead.
 
-The Feishu connector (`src/connectors/feishu/`) is the reference implementation. It covers cards, streaming replies, mentions, reactions, threading, and dynamic menus — copy patterns from there.
+### Add a Provider
 
-### Add a new Provider
+A provider is an AI backend. Implement `Provider` from
+`packages/contracts/src/provider-types.ts` (`name`, `send()`, `healthCheck()`).
 
-A provider is an AI backend. Implement `src/providers/base.ts`:
+In practice there is now exactly one provider class — `AcpProvider`
+(`packages/acp/src/provider.ts`) — which speaks the Agent Client Protocol over stdio. **If your
+backend has an ACP bridge, do not write a provider: write an adapter.**
 
-```ts
-export interface Provider {
-  name: string;
-  send(message: IncomingMessage, ctx: ProviderContext): Promise<AgentResponse>;
-  healthCheck(): Promise<boolean>;
-}
-```
+1. Create `packages/acp/src/adapters/<agent>/index.ts` implementing `AgentAdapter`
+   (`packages/contracts/src/acp-protocol.ts`).
+2. Register it in the `registry` map in `packages/acp/src/adapters/index.ts`.
+3. Teach `Remi._buildProvider()` (`packages/remi/src/core.ts`) the new agent type so
+   `acp:<agent>` resolves, and extend `ProviderConfig` in `packages/shared/src/config.ts`.
+4. Test against a recorded fixture: drop a recording in `tests/fixtures/acp/` and check coverage
+   with `bun run replay:coverage`. `tests/unit/acp/` holds the adapter-level tests.
 
-Steps:
+Write a fresh `Provider` implementation only for a backend that has no ACP bridge at all.
 
-1. Create `src/providers/<your-provider>/index.ts` and `provider.ts`.
-2. Map `IncomingMessage` + context (memory, session, tools) into your backend's request format.
-3. Stream or batch the response back as an `AgentResponse`.
-4. Register the provider in `src/core.ts` and accept it in `RemiConfig.provider.name`.
-5. Test with a recorded protocol fixture (`src/providers/claude-cli/protocol.ts` is a good reference).
+### Add a cron handler
 
-The default `ClaudeCLIProvider` runs Claude Code as a long-running subprocess and exchanges JSONL frames over stdio — useful when your provider also exposes a CLI.
+Scheduled work runs on the `remi:cron` BunQueue. Handlers are registered in
+`packages/queue/src/handlers/cron-bridge.ts` — see `builtin:heartbeat`, `builtin:pulse`, and
+`skill:gen` / `skill:push` / `skill:run`. Add yours to the `handlers` map, then reference it from
+the `cronJobs` config section (`id`, `handler`, one of `cron` / `every` / `at`, `handlerConfig`).
+Run records land in `~/.remi/cron/runs/<jobId>.jsonl`.
 
-### Add a new scheduled Skill
+### Add a plugin
 
-Scheduled skills are recipes for recurring missions (daily briefings, retros, audits). They live under `pipeline/skills/<name>/SKILL.md` and run via the `skill:gen` and `skill:push` cron handlers.
+External drop-in plugins live under `~/.remi/plugins/<id>/` and are loaded through
+`@remi/plugin-sdk` (`packages/plugin-sdk/src/index.ts`). A plugin can contribute CLI commands and
+auth adapters. `tests/arch/package-boundaries.test.ts` includes a type-mirror probe that keeps the
+SDK's public types in sync with `packages/auth` — if you change one, change both.
 
-Steps:
+### Add an MCP tool
 
-1. Create `pipeline/skills/<your-skill>/SKILL.md` describing the prompt, inputs, and output format.
-2. Reference the skill in `remi.toml` under `[[cron.jobs]]`:
-   ```toml
-   [[cron.jobs]]
-   id = "your-skill:gen"
-   handler = "skill:gen"
-   cron = "0 7 * * *"
-   handler_config = { skillName = "your-skill", outputDir = "/path/to/output" }
-
-   [[cron.jobs]]
-   id = "your-skill:push"
-   handler = "skill:push"
-   cron = "0 9 * * *"
-   handler_config = { skillName = "your-skill", outputDir = "/path/to/output", connectorName = "feishu", pushTargets = ["oc_xxx"] }
-   ```
-3. Verify with `bun run src/main.ts doctor` and check the queue.
-
-### Add a new MCP tool
-
-The MCP server lives in `src/memory/mcp-server.ts`. Add a new tool by registering it in the server's tool list and implementing the handler. Tools should be small, composable, and idempotent — the LLM may call them many times in a single turn.
+The memory MCP server is `packages/memory/src/mcp-server.ts` (`recall`, `remember`, `backlinks`).
+Register a new tool in its tool list and implement the handler. Tools should be small,
+composable, and idempotent — the agent may call them many times in a single turn.
 
 ## Filing issues
 
-When reporting a bug, include:
+Include:
 
-- Remi version (`bun run src/main.ts --version` or `package.json`).
-- Bun version (`bun --version`).
+- Remi version (`bun run apps/remi/main.ts --version`) and Bun version (`bun --version`).
 - OS and architecture.
 - Minimal reproduction steps.
 - Relevant logs from `~/.remi/logs/` (redact secrets).
 
-Feature requests are welcome — please describe the *use case* before the *solution*. Prior art from other AI assistants is helpful context.
+Feature requests are welcome — describe the *use case* before the *solution*.
 
 ## Code of Conduct
 
-Be kind, assume good faith, and keep discussions focused on the work. We follow the [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) at minimum.
+Be kind, assume good faith, and keep discussions focused on the work. We follow the
+[Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/) at
+minimum.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the
+[MIT License](LICENSE).

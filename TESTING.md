@@ -46,7 +46,7 @@ bun test tests/unit/memory/memory.test.ts # 单个文件
 
 ## 前端测试(`frontend/`,贴着源码)
 
-前端是 Turbo + pnpm monorepo,测试**故意贴着源码放**(`derive-health.test.ts` 就在 `derive-health.ts` 隔壁)。这是 Vitest/Jest 生态的主流约定,且保证每个 package 自包含、可单独构建/发布。
+`frontend/` 的包(`packages/{ui,core,views}` + `apps/web`)是**根 bun workspace 的成员**,靠 `bun run --filter '@multiremi/*' <script>` 驱动(带 vitest 的是 core / views / web 三个;`ui` 只有 typecheck)(`frontend/package.json` 里还留着 `turbo`/`packageManager: pnpm` 的字段,但仓库里**没有 `turbo.json`**,实际不走 turbo/pnpm)。测试**故意贴着源码放**(`derive-health.test.ts` 就在 `derive-health.ts` 隔壁)。这是 Vitest/Jest 生态的主流约定,且保证每个 package 自包含、可单独构建/发布。
 
 ### 两层
 
@@ -62,10 +62,11 @@ bun test tests/unit/memory/memory.test.ts # 单个文件
 ```bash
 # 单元 / 组件(快,不用起服务)
 bun run test:frontend            # = bun run --filter '@multiremi/*' test(各包 vitest run)
+cd frontend && bun run test      # 同上,从 frontend/ 里跑
 cd frontend && bun run --filter @multiremi/core test   # 单个包
 
 # E2E(需先起好前端:3000 + 后端 + Postgres)
-cd frontend && pnpm exec playwright test
+cd frontend && bunx playwright test
 ```
 
 > 注意:`frontend/e2e/` 默认连 `:8080` + `verification_code` 表,是**上游 Go 后端**的契约。要对**本仓库的 Bun 后端**跑前端真 e2e,用根目录的 `bun run e2e:frontend`(见下)。
@@ -102,9 +103,16 @@ bun run tests/manual/test-permission-ui.ts      # 等
 
 ## CI 现状(诚实记录)
 
-- 根仓库 GitHub Actions 目前只有 `.github/workflows/release.yml`,**只做 build,不跑任何测试**。
-- `frontend/.github/workflows/ci.yml` 是从上游 multica 带来的(指向 Go `server/`),**嵌套目录的 workflow GitHub 不会执行**,等于摆设。
-- 即 `bun test` / 前端 Vitest / e2e **当前都不在 CI 上自动跑**,需本地手动执行。补 CI 时:`bun test` 和 `test:frontend` 可直接进;e2e 需要真实 provider/浏览器/DB,要么配 secrets,要么用 mock provider。
+根仓库 GitHub Actions 有两个 workflow:
+
+| workflow | 触发 | 跑什么 |
+|---|---|---|
+| `.github/workflows/release-build-check.yml` | PR + push to `main`(按 `apps/**`/`packages/**`/`frontend/**`/`scripts/**`/`bin/**` 等路径过滤) | `bun run build:multiremi` + `bun run typecheck:frontend` + `bun run test:frontend` |
+| `.github/workflows/release.yml` | push tag `v*` | `bun run build:multiremi` → 上传 tar.gz + `scripts/install-remi.sh` 到 GitHub Release(release notes 由 `generate_release_notes` 自动生成) |
+
+- **前端 Vitest + typecheck 已经在 CI 上跑**(release-build-check)。
+- **后端 `bun test` 仍不在 CI 上**,需本地手动执行 —— 补 CI 时可以直接加进 release-build-check。
+- **e2e / 冒烟 harness 也不在 CI 上**:需要真实 provider/浏览器/Postgres,要么配 secrets,要么用 mock provider。
 
 ---
 
@@ -114,7 +122,7 @@ bun run tests/manual/test-permission-ui.ts      # 等
 
 1. **工具默认**:Vitest 默认就扫源码旁的 `*.test.ts`,这是整个 JS 生态的约定。
 2. **import 路径**:组件测试 `import { X } from "./comp"` 就在隔壁;搬走后变成 `../../../../...`,源码一挪测试全断。
-3. **包自洽**:`turbo test` 按包跑/构建/发布,package 必须连同自己的测试一起自包含。
+3. **包自洽**:`bun run --filter '@multiremi/*' test` 按包跑/构建,package 必须连同自己的测试一起自包含。
 4. **成本倒挂**:搬 180+ 文件、改一堆 import、重配扫描路径,只为得到一个违背约定的目录。
 
 所以:**后端集中、前端贴源码,各自内部保持一致,就是本仓库的"体系化"。**

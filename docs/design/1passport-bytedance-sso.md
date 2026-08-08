@@ -1,5 +1,9 @@
 # 1Passport 扩展：ByteDance SSO + Token Sync 配置化
 
+> **历史文档**:文中的 `src/auth/*` 现为 `packages/auth/src/*`,`bun run src/main.ts …` 现为
+> `bun run apps/remi/main.ts …`;ByteDance SSO 现以外部插件形式装在 `~/.remi/plugins/` 下;
+> 配置也已从 `remi.toml` 迁到 `~/.remi/remi.db` 的 `remi_config` 表(TOML 片段仅示意结构)。
+
 ## 背景
 
 1Passport 目前只有 Feishu adapter，token 同步到 `~/.lark_auth/tokens.json` 是硬编码。

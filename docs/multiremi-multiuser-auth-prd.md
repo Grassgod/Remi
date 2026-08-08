@@ -1,5 +1,8 @@
 # Bun Multiremi 服务端 · 多用户/多租户鉴权 需求文档 (PRD)
 
+> **历史文档**(2026-07-01):文中的 `src/multiremi/{api,store}` 现为 `packages/server/src/{api,store}`,
+> `bun run src/multiremi-main.ts serve` 现为 `bun run apps/server/main.ts serve`。当前布局见 `README.md`。
+
 状态：待实现 · 交接给独立 session/开发者 · 2026-07-01
 
 ---

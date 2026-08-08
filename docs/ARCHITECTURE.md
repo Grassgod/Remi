@@ -1,5 +1,9 @@
 # Remi × Multiremi —— 分层架构与目录体系
 
+> **历史文档**:记录 2026-06 目录重设计的决策语境,路径写法停留在 `src/` 时代。
+> 当前布局已迁到 `packages/*` + `apps/*`,以 `README.md` 的 Project Structure 与 `CLAUDE.md` 为准;
+> 文中设想的 `scripts/check-layers.ts` 最终落地为 `tests/arch/package-boundaries.test.ts`。
+
 > 目标:一套**人和 AI agent 都能快速定位、安全修改、独立验证**的代码分层。
 > 配套 [`FUSION.md`](./FUSION.md)(品牌/实现统一目标)与 [`MULTIREMI_PARITY_MATRIX.md`](./MULTIREMI_PARITY_MATRIX.md)(后端能力对标)。
 > 本文档由全仓扫描(7 区域测绘 + 架构 + 对抗式评审)综合得出,已并入评审发现的修正。

@@ -34,11 +34,9 @@ class AcpTestClient {
   private requestId = 0;
   private buffer = "";
   private pendingRequests = new Map<number, { method: string; resolve: (r: unknown) => void; reject: (e: unknown) => void }>();
-  private allEvents: Array<{ direction: string; ts: number; data: unknown }> = [];
   private notifications: Array<{ method: string; params: unknown }> = [];
   private agentRequests: Array<{ id: number; method: string; params: unknown }> = [];
   private sessionId: string | null = null;
-  private label = "";
 
   constructor(executable: string = "claude-agent-acp") {
     console.log(`  [spawn] ${executable}`);
@@ -70,7 +68,6 @@ class AcpTestClient {
   private handleLine(line: string): void {
     let msg: any;
     try { msg = JSON.parse(line); } catch { return; }
-    this.allEvents.push({ direction: "recv", ts: Date.now(), data: msg });
 
     // Response to our request
     if ("id" in msg && ("result" in msg || "error" in msg)) {
@@ -130,20 +127,17 @@ class AcpTestClient {
   private send(method: string, params?: unknown): number {
     const id = ++this.requestId;
     const msg = { jsonrpc: "2.0", id, method, params: params ?? {} };
-    this.allEvents.push({ direction: "send", ts: Date.now(), data: msg });
     this.proc.stdin!.write(JSON.stringify(msg) + "\n");
     return id;
   }
 
   private respondToAgent(id: number, result: unknown): void {
     const msg = { jsonrpc: "2.0", id, result };
-    this.allEvents.push({ direction: "send", ts: Date.now(), data: msg });
     this.proc.stdin!.write(JSON.stringify(msg) + "\n");
   }
 
   private respondToAgentError(id: number, code: number, message: string): void {
     const msg = { jsonrpc: "2.0", id, error: { code, message } };
-    this.allEvents.push({ direction: "send", ts: Date.now(), data: msg });
     this.proc.stdin!.write(JSON.stringify(msg) + "\n");
   }
 
@@ -256,14 +250,6 @@ class AcpTestClient {
       .filter(n => n.method === "session/update")
       .map(n => (n.params as any)?.update?.sessionUpdate)
       .reduce((acc: Record<string, number>, t: string) => { acc[t] = (acc[t] || 0) + 1; return acc; }, {});
-  }
-
-  saveFixtures(label: string): string {
-    const path = join(FIXTURE_DIR, `${label}-${Date.now()}.json`);
-    writeFileSync(path, JSON.stringify(this.allEvents, null, 2));
-    console.log(`  📁 Saved: ${path}`);
-    this.label = label;
-    return path;
   }
 
   /** Drop buffered notifications so the next scenario records only its own. */
@@ -463,8 +449,8 @@ async function main() {
     console.log(`  ❌ session-resume failed: ${e}`);
   }
 
-  // Save all events
-  client.saveFixtures(`${prefix}full-suite`);
+  // No full-suite dump: the raw send/recv wire log it wrote was in a shape no
+  // loader here reads, and the per-scenario recordings above already cover it.
 
   // Cleanup
   await client.shutdown();

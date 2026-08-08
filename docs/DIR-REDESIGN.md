@@ -1,5 +1,10 @@
 # 目录结构重设计 v4（最终版）
 
+> **历史文档**:记录 2026-06 目录重设计的决策语境,目录树写法停留在 `src/` 时代。
+> 当前布局已迁到 `packages/*` + `apps/*`,以 `README.md` 的 Project Structure 与 `CLAUDE.md` 为准;
+> 文中的 `apps/console/`、`imaging/`、`scripts/check-layers.ts` 都未存活(分层守卫落地为
+> `tests/arch/package-boundaries.test.ts`)。
+
 > 核心理念：**像搭积木**——每个模块是松耦合的独立块,逐层向上,上层复用底层能力。
 > 目录树 = 架构图的投影。拿着图,每个框直接指到一个目录。
 

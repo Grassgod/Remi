@@ -1,5 +1,13 @@
 # 后端上帝文件拆分方案(store.ts / api.ts / types / tests)
 
+> **状态:已于 2026-08-08 执行完毕**(store 拆分 `0d007603`、api 拆分 `b0dc8a5c`)。
+> 本文档保留为执行记录 —— 下面的行号/文件名是拆分**前**的形态,不要当作当前布局阅读。
+> 实际落地与计划的两处出入:
+> 1. **schema 没有单独抽 `store/schema.ts`** —— DDL 与三个遗留迁移仍留在
+>    `packages/server/src/store/migrations.ts`(§1 步骤 2 未执行)。
+> 2. **wire / routers 是目录而非单文件** —— `packages/server/src/api/wire/*.ts`(按域)
+>    与 `packages/server/src/api/routers/*.ts`(30 个域),而非计划里的单个 `api/wire.ts`。
+>
 > 配套 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 的具体执行版。基于对 `store.ts`(10704)、`api.ts`(9139)、`types.ts`(1868)、`tests/multiremi-core.test.ts`(11466)的方法/路由级测绘。
 > 由 workflow(store/api/aux 三路精测 + 综合 + 修正)产出。
 
@@ -66,7 +74,7 @@
 | **T1** | `contracts/types/*` + barrel(纯搬)| 全绿 + `tsc --noEmit` |
 | **T2–Tn** | 逐域 carve 测试到 `tests/multiremi/*` + `helpers.ts` | 用例总数不降 + 单文件独立过 |
 | **D1(可选/待决策)** | dashboard.ts 去留:若删,先迁 8 处测试断言、再替换 `GET /` 路由 | 全绿 |
-| **末尾** | `scripts/check-layers.ts`(真实 import 图,先 WARN)→ 收尾转 ERROR | lint 通过 |
+| **末尾** | 分层守卫(计划里的 `scripts/check-layers.ts`;**落地形态是 `tests/arch/package-boundaries.test.ts`**,直接在 `bun test` 里 ERROR) | 守卫测试绿 |
 
 ## 5. 验证机制
 

@@ -1,5 +1,7 @@
 # 记忆系统 v2 设计文档
 
+> **历史文档**:文中的 `src/memory/*` 现为 `packages/memory/src/*`。当前实现见 `CLAUDE.md` 的 Memory 段。
+
 > 状态：草稿 v2.2（评审修订版）
 > 作者：Jack Ho + Claude
 > 日期：2026-02-19
