@@ -9,6 +9,7 @@ import {
   Brain,
   FileQuestion,
   FileText,
+  Files,
   Pin,
   Search,
 } from "lucide-react";
@@ -45,23 +46,21 @@ function SidebarRow({
   count,
   active,
   href,
+  nested = false,
+  disabledTitle,
+  markCurrent = true,
 }: {
   icon: ReactNode;
   label: string;
   count?: number;
   active: boolean;
-  href: string;
+  href?: string;
+  nested?: boolean;
+  disabledTitle?: string;
+  markCurrent?: boolean;
 }) {
-  return (
-    <AppLink
-      href={href}
-      className={cn(
-        "flex w-auto max-w-64 shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors xl:w-full xl:max-w-none",
-        active
-          ? "bg-accent text-foreground"
-          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-      )}
-    >
+  const content = (
+    <>
       {icon}
       {/* The right pane only shows the title of the page you already opened,
           so a truncated row here would be the only copy of a long agent-written
@@ -70,8 +69,39 @@ function SidebarRow({
         {label}
       </span>
       {count !== undefined && (
-        <span className="shrink-0 text-xs text-muted-foreground">{count}</span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {count || "--"}
+        </span>
       )}
+    </>
+  );
+  const className = cn(
+    "flex w-auto max-w-64 shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors xl:w-full xl:max-w-none",
+    nested && "xl:pl-6",
+    active
+      ? nested
+        ? "bg-accent/40 font-medium text-foreground"
+        : "bg-accent text-foreground"
+      : href
+        ? "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+        : "cursor-default text-muted-foreground",
+  );
+
+  if (!href) {
+    return (
+      <div className={className} aria-disabled="true" title={disabledTitle}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <AppLink
+      href={href}
+      className={className}
+      aria-current={active && markCurrent ? "page" : undefined}
+    >
+      {content}
     </AppLink>
   );
 }
@@ -739,25 +769,32 @@ export function ProjectWikiSection({
           active={!selectedRef}
           href={paths.projectWiki(projectId)}
         />
-        <p className="hidden px-2 pb-1 pt-3 text-[11px] font-medium text-muted-foreground xl:block">
-          {t(($) => $.wiki.pages_label)}
-        </p>
-        {visibleWikiDocs.length > 0 ? (
-          visibleWikiDocs.map((doc) => (
-            <SidebarRow
-              key={doc.id}
-              icon={<FileText className="h-4 w-4 shrink-0" />}
-              label={doc.title}
-              active={selectedDoc?.id === doc.id}
-              href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
-            />
-          ))
-        ) : (
-          <div className="hidden items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground/70 xl:flex">
-            <FileText className="size-4 shrink-0" />
-            <span>{t(($) => $.wiki.pages_empty)}</span>
-          </div>
-        )}
+        <SidebarRow
+          icon={<Files className="h-4 w-4 shrink-0" />}
+          label={t(($) => $.wiki.pages_label)}
+          count={visibleWikiDocs.length}
+          active={Boolean(selectedRef)}
+          href={
+            visibleWikiDocs[0]
+              ? paths.projectWikiPage(
+                  projectId,
+                  visibleWikiDocs[0].slug || visibleWikiDocs[0].id,
+                )
+              : undefined
+          }
+          disabledTitle={t(($) => $.wiki.pages_empty)}
+          markCurrent={false}
+        />
+        {visibleWikiDocs.map((doc) => (
+          <SidebarRow
+            key={doc.id}
+            icon={<FileText className="h-4 w-4 shrink-0" />}
+            label={doc.title}
+            active={selectedDoc?.id === doc.id}
+            href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
+            nested
+          />
+        ))}
       </div>
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedDoc ? (

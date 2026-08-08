@@ -8,7 +8,7 @@ import {
   BookText,
   Brain,
   ChevronRight,
-  FileText,
+  Files,
   FolderKanban,
   Library,
   Search,
@@ -108,9 +108,20 @@ function ProjectMaintainer({ project }: { project: Project }) {
   );
 }
 
-function Metric({ icon, value }: { icon: ReactNode; value: number }) {
+function Metric({
+  icon,
+  value,
+  label,
+}: {
+  icon: ReactNode;
+  value: number;
+  label: string;
+}) {
   return (
-    <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+    <span
+      className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground"
+      aria-label={`${label}: ${value}`}
+    >
       {icon}
       {value || "--"}
     </span>
@@ -145,12 +156,14 @@ function ProjectRow({ row }: { row: ProjectKnowledgeRow }) {
           </span>
           <span className="mt-1 flex items-center gap-3 sm:hidden">
             <Metric
-              icon={<FileText className="size-3.5" />}
+              icon={<Files className="size-3.5" />}
               value={row.wikiCount}
+              label={t(($) => $.knowledge.column_wiki)}
             />
             <Metric
               icon={<Brain className="size-3.5" />}
               value={row.memoryCount}
+              label={t(($) => $.knowledge.column_memory)}
             />
           </span>
         </span>
@@ -158,14 +171,16 @@ function ProjectRow({ row }: { row: ProjectKnowledgeRow }) {
 
       <span className="hidden sm:block">
         <Metric
-          icon={<FileText className="size-3.5" />}
+          icon={<Files className="size-3.5" />}
           value={row.wikiCount}
+          label={t(($) => $.knowledge.column_wiki)}
         />
       </span>
       <span className="hidden sm:block">
         <Metric
           icon={<Brain className="size-3.5" />}
           value={row.memoryCount}
+          label={t(($) => $.knowledge.column_memory)}
         />
       </span>
       <span className="hidden text-xs tabular-nums text-muted-foreground sm:block">
@@ -197,6 +212,7 @@ export function KnowledgePage() {
   const rows = useMemo(() => {
     const docsByProject = new Map<string, WorkspaceDoc[]>();
     for (const doc of docs) {
+      if (doc.kind === "wiki" && doc.slug === "_schema") continue;
       const projectDocs = docsByProject.get(doc.project_id);
       if (projectDocs) projectDocs.push(doc);
       else docsByProject.set(doc.project_id, [doc]);

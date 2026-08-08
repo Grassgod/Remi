@@ -207,12 +207,17 @@ describe("ProjectWikiSection", () => {
     renderSection();
 
     const rows = screen.getAllByRole("link");
-    expect(rows.map((el) => el.textContent)).toEqual(["Agent Memory1", "Runbook"]);
-    expect(screen.getByText("Wiki pages")).toBeInTheDocument();
+    expect(rows.map((el) => el.textContent)).toEqual([
+      "Agent Memory1",
+      "Wiki pages1",
+      "Runbook",
+    ]);
     expect(screen.queryByText("Wiki Schema")).not.toBeInTheDocument();
-    // Every row is a real link, so a page can be shared and cmd-clicked.
+    // The Wiki root opens the newest page; its nested row remains directly
+    // shareable and cmd-clickable.
     expect(rows.map((el) => el.getAttribute("href"))).toEqual([
       "/ws/projects/proj-1/wiki",
+      "/ws/projects/proj-1/wiki/runbook",
       "/ws/projects/proj-1/wiki/runbook",
     ]);
   });
@@ -225,7 +230,10 @@ describe("ProjectWikiSection", () => {
 
     renderSection();
 
-    expect(screen.getByText("No pages yet")).toBeInTheDocument();
+    const wikiRoot = screen.getByText("Wiki pages").parentElement;
+    expect(wikiRoot).toHaveAttribute("aria-disabled", "true");
+    expect(wikiRoot).toHaveAttribute("title", "No pages yet");
+    expect(wikiRoot).toHaveTextContent("Wiki pages--");
     expect(screen.queryByText("Wiki Schema")).not.toBeInTheDocument();
   });
 

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { Project, WorkspaceDoc } from "@multiremi/core/types";
@@ -206,8 +206,8 @@ describe("KnowledgePage", () => {
     expect(apollo).toHaveAttribute("href", "/ws/projects/proj-1/wiki");
     expect(apollo).toHaveTextContent("Apollo");
     expect(apollo).toHaveTextContent("member:member-7");
-    expect(apollo).toHaveTextContent("1");
-    expect(apollo).toHaveTextContent("2");
+    expect(within(apollo).getAllByLabelText("Wiki: 0")).toHaveLength(2);
+    expect(within(apollo).getAllByLabelText("Agent memory: 2")).toHaveLength(2);
     expect(screen.getByTestId("knowledge-project-proj-2")).toHaveTextContent(
       "Borealis",
     );
