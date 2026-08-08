@@ -1,0 +1,888 @@
+// Projects domain (projects, pinned items, project resources and project docs/wiki), extracted
+// verbatim from MultiremiStore (the facade delegates every public method here).
+import { createId, nowIso } from "@multiremi/ids.js";
+import {
+  cleanOptionalString,
+  clampSearchLimit,
+  extractSearchSnippet,
+  hasAnyField,
+  nullableString,
+  searchMatch,
+  normalizeSearchQuery,
+  searchRank,
+  parseJson,
+  toJson,
+} from "@multiremi/store/helpers.js";
+import { type StoreContext } from "@multiremi/store/context.js";
+import type {
+  CreatePinnedItemInput,
+  CreateProjectDocInput,
+  CreateProjectInput,
+  CreateProjectResourceInput,
+  MultiremiPinnedItem,
+  MultiremiPinnedItemType,
+  MultiremiProject,
+  MultiremiProjectDoc,
+  MultiremiProjectDocIndexEntry,
+  MultiremiProjectDocKind,
+  MultiremiProjectDocRef,
+  MultiremiProjectDocRevision,
+  MultiremiProjectDocsIndex,
+  MultiremiProjectResource,
+  MultiremiProjectSearchResult,
+  MultiremiWorkspaceProjectDoc,
+  ReorderPinnedItemInput,
+  UpdateProjectDocInput,
+  UpdateProjectInput,
+  UpdateProjectResourceInput,
+} from "@multiremi/contracts/types.js";
+
+type Row = Record<string, unknown>;
+
+export const PROJECT_REF_MAX_DEPTH = 5;
+const PROJECT_DOC_MEMORY_INDEX_LIMIT = 50;
+const PROJECT_DOC_WIKI_INDEX_LIMIT = 100;
+const PROJECT_DOC_INDEX_BODY_MAX = 500;
+const PROJECT_DOC_INDEX_SUMMARY_MAX = 160;
+const PROJECT_DOC_INDEX_SCHEMA_MAX = 1500;
+const PROJECT_DOC_REFS_MAX = 20;
+/** Reserved slug: the per-project doc that tells agents how to maintain the wiki. */
+const PROJECT_DOC_SCHEMA_SLUG = "_schema";
+const PROJECT_DOC_SCHEMA_TITLE = "Wiki Schema";
+const PROJECT_DOC_SCHEMA_TEMPLATE = `# Wiki Schema（本项目知识库维护规则）
+
+本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。
+
+## 分层
+- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。
+- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。
+
+## 维护纪律
+- 写入前先 \`doc search\` / \`doc get\` 查已有条目；能 update 就不要 create。
+- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。
+- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。
+- 一次性细节、只对当前 issue 有效的信息不要入库。
+`;
+
+export class ProjectsRepo {
+  constructor(private ctx: StoreContext) {}
+
+  createProject(input: CreateProjectInput): MultiremiProject {
+    if (!input.title?.trim()) throw new Error("Project title is required");
+    const id = input.id ?? createId("prj");
+    const now = nowIso();
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_projects (
+          id, title, description, icon, status, priority, workspace_id,
+          lead_type, lead_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          input.title.trim(),
+          input.description ?? null,
+          input.icon ?? null,
+          input.status ?? "planned",
+          input.priority ?? "none",
+          input.workspaceId ?? input.workspace_id ?? "local",
+          input.leadType === undefined ? input.lead_type ?? null : input.leadType,
+          input.leadId === undefined ? input.lead_id ?? null : input.leadId,
+          now,
+          now,
+        ],
+      );
+      for (const resource of input.resources ?? []) {
+        this.createProjectResource(id, resource);
+      }
+      return this.getProject(id)!;
+    });
+    return tx();
+  }
+
+  getProject(id: string): MultiremiProject | null {
+    const row = this.ctx.db.query(projectSelect("WHERE p.id = ?")).get(id) as Row | null;
+    return row ? toProject(row) : null;
+  }
+
+  listProjects(workspaceId?: string | null): MultiremiProject[] {
+    const rows = workspaceId
+      ? this.ctx.db.query(projectSelect("WHERE p.workspace_id = ? ORDER BY p.updated_at DESC")).all(workspaceId) as Row[]
+      : this.ctx.db.query(projectSelect("ORDER BY p.updated_at DESC")).all() as Row[];
+    return rows.map(toProject);
+  }
+
+  searchProjects(input: { q: string; workspaceId?: string | null; includeClosed?: boolean; limit?: number; offset?: number }): { projects: MultiremiProjectSearchResult[]; total: number } {
+    const query = normalizeSearchQuery(input.q);
+    if (!query) throw new Error("q parameter is required");
+    const workspaceId = input.workspaceId ?? "local";
+    const includeClosed = Boolean(input.includeClosed);
+    const limit = clampSearchLimit(input.limit);
+    const offset = Math.max(0, Number(input.offset ?? 0));
+    const rows = this.listProjects(workspaceId).filter((project) => {
+      if (!includeClosed && ["completed", "cancelled"].includes(project.status)) return false;
+      return searchMatch(project.title, query) || searchMatch(project.description ?? "", query);
+    }).map((project) => {
+      const matchSource = searchMatch(project.title, query) ? "title" : "description";
+      const result: MultiremiProjectSearchResult = {
+        ...project,
+        matchSource,
+      };
+      if (matchSource === "description" && project.description) result.matchedSnippet = extractSearchSnippet(project.description, query);
+      return result;
+    }).sort((left, right) => searchRank(left.matchSource) - searchRank(right.matchSource) || Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    return { projects: rows.slice(offset, offset + limit), total: rows.length };
+  }
+
+  updateProject(id: string, input: UpdateProjectInput): MultiremiProject {
+    const current = this.getProject(id);
+    if (!current) throw new Error(`Project not found: ${id}`);
+    const now = nowIso();
+    this.ctx.db.run(
+      `UPDATE multiremi_projects SET
+        title = ?,
+        description = ?,
+        icon = ?,
+        status = ?,
+        priority = ?,
+        lead_type = ?,
+        lead_id = ?,
+        updated_at = ?
+       WHERE id = ?`,
+      [
+        input.title ?? current.title,
+        input.description === undefined ? current.description : input.description,
+        input.icon === undefined ? current.icon : input.icon,
+        input.status ?? current.status,
+        input.priority ?? current.priority,
+        input.leadType === undefined ? input.lead_type === undefined ? current.leadType : input.lead_type : input.leadType,
+        input.leadId === undefined ? input.lead_id === undefined ? current.leadId : input.lead_id : input.leadId,
+        now,
+        id,
+      ],
+    );
+    return this.getProject(id)!;
+  }
+
+  archiveProject(id: string): MultiremiProject {
+    return this.updateProject(id, { status: "cancelled" });
+  }
+
+  listPinnedItems(workspaceId?: string | null, userId?: string | null): MultiremiPinnedItem[] {
+    const resolvedWorkspaceId = workspaceId ?? "local";
+    const resolvedUserId = userId ?? "local";
+    const rows = this.ctx.db.query(
+      `SELECT * FROM multiremi_pinned_items
+       WHERE workspace_id = ? AND user_id = ?
+       ORDER BY position ASC, created_at ASC`,
+    ).all(resolvedWorkspaceId, resolvedUserId) as Row[];
+    return rows.map(toPinnedItem);
+  }
+
+  createPinnedItem(input: CreatePinnedItemInput): MultiremiPinnedItem {
+    const itemType = normalizePinnedItemType(input.itemType ?? input.item_type);
+    const itemId = String(input.itemId ?? input.item_id ?? "").trim();
+    if (!itemId) throw new Error("item_id is required");
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const userId = input.userId ?? input.user_id ?? "local";
+    this.validatePinnedItemTarget(workspaceId, itemType, itemId);
+    const existing = this.ctx.db.query(
+      "SELECT id FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
+    ).get(workspaceId, userId, itemType, itemId) as Row | null;
+    if (existing) throw new Error("Item already pinned");
+    const maxRow = this.ctx.db.query(
+      "SELECT COALESCE(MAX(position), 0) AS max_position FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ?",
+    ).get(workspaceId, userId) as Row | null;
+    const id = input.id ?? createId("pin");
+    const position = Number(maxRow?.max_position ?? 0) + 1;
+    this.ctx.db.run(
+      `INSERT INTO multiremi_pinned_items (id, workspace_id, user_id, item_type, item_id, position, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, workspaceId, userId, itemType, itemId, position, nowIso()],
+    );
+    return this.getPinnedItem(id)!;
+  }
+
+  getPinnedItem(id: string): MultiremiPinnedItem | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_pinned_items WHERE id = ?").get(id) as Row | null;
+    return row ? toPinnedItem(row) : null;
+  }
+
+  deletePinnedItem(workspaceId: string | null | undefined, userId: string | null | undefined, itemType: string, itemId: string): void {
+    const normalizedType = normalizePinnedItemType(itemType);
+    this.ctx.db.run(
+      "DELETE FROM multiremi_pinned_items WHERE workspace_id = ? AND user_id = ? AND item_type = ? AND item_id = ?",
+      [workspaceId ?? "local", userId ?? "local", normalizedType, itemId],
+    );
+  }
+
+  reorderPinnedItems(workspaceId: string | null | undefined, userId: string | null | undefined, items: ReorderPinnedItemInput[]): MultiremiPinnedItem[] {
+    const resolvedWorkspaceId = workspaceId ?? "local";
+    const resolvedUserId = userId ?? "local";
+    const tx = this.ctx.db.transaction(() => {
+      for (const item of items) {
+        if (!item.id) throw new Error("items[].id is required");
+        const position = Number(item.position);
+        if (!Number.isFinite(position)) throw new Error("items[].position must be a finite number");
+        this.ctx.db.run(
+          "UPDATE multiremi_pinned_items SET position = ? WHERE id = ? AND workspace_id = ? AND user_id = ?",
+          [position, item.id, resolvedWorkspaceId, resolvedUserId],
+        );
+      }
+      return this.listPinnedItems(resolvedWorkspaceId, resolvedUserId);
+    });
+    return tx();
+  }
+
+  listProjectResources(projectId: string): MultiremiProjectResource[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_project_resources WHERE project_id = ? ORDER BY position ASC, created_at ASC",
+    ).all(projectId) as Row[];
+    return rows.map(toProjectResource);
+  }
+
+  createProjectResource(projectId: string, input: CreateProjectResourceInput): MultiremiProjectResource {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const resourceType = String(input.resourceType ?? input.resource_type ?? "").trim();
+    const rawRef = input.resourceRef ?? input.resource_ref ?? {};
+    const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
+    this.assertNoLocalDirectoryDaemonConflict(projectId, resourceType, resourceRef, null, "create");
+    if (resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, project.workspaceId);
+    const id = input.id ?? createId("res");
+    const now = nowIso();
+    const position = normalizeProjectResourcePosition(input.position, this.countProjectResources(projectId));
+    this.ctx.db.run(
+      `INSERT INTO multiremi_project_resources (
+        id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        projectId,
+        project.workspaceId,
+        resourceType,
+        toJson(resourceRef),
+        cleanProjectResourceLabel(input.label),
+        position,
+        now,
+        input.createdBy ?? null,
+      ],
+    );
+    this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+    return this.getProjectResource(id)!;
+  }
+
+  getProjectResource(id: string): MultiremiProjectResource | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_project_resources WHERE id = ?").get(id) as Row | null;
+    return row ? toProjectResource(row) : null;
+  }
+
+  updateProjectResource(projectId: string, resourceId: string, input: UpdateProjectResourceInput): MultiremiProjectResource {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectResource(resourceId);
+    if (!existing || existing.projectId !== projectId) throw new Error(`Project resource not found: ${resourceId}`);
+    const hasRef = hasAnyField(input, "resourceRef", "resource_ref");
+    const rawRef = hasRef ? input.resourceRef ?? input.resource_ref ?? {} : existing.resourceRef;
+    const resourceRef = normalizeProjectResourceRef(existing.resourceType, rawRef);
+    this.assertNoLocalDirectoryDaemonConflict(projectId, existing.resourceType, resourceRef, resourceId, "update");
+    if (existing.resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, existing.workspaceId);
+    const label = hasAnyField(input, "label") ? cleanProjectResourceLabel(input.label) : existing.label;
+    const position = hasAnyField(input, "position")
+      ? normalizeProjectResourcePosition(input.position, existing.position)
+      : existing.position;
+    const now = nowIso();
+    const result = this.ctx.db.run(
+      `UPDATE multiremi_project_resources
+       SET resource_ref = ?, label = ?, position = ?
+       WHERE project_id = ? AND id = ?`,
+      [toJson(resourceRef), label, position, projectId, resourceId],
+    );
+    if (result.changes === 0) throw new Error(`Project resource not found: ${resourceId}`);
+    this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+    return this.getProjectResource(resourceId)!;
+  }
+
+  deleteProjectResource(projectId: string, resourceId: string): void {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const now = nowIso();
+    const result = this.ctx.db.run(
+      "DELETE FROM multiremi_project_resources WHERE project_id = ? AND id = ?",
+      [projectId, resourceId],
+    );
+    if (result.changes === 0) throw new Error(`Project resource not found: ${resourceId}`);
+    this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+  }
+
+  listProjectDocs(projectId: string, input: { kind?: string | null } = {}): MultiremiProjectDoc[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const kind = cleanOptionalString(input.kind);
+    const rows = kind
+      ? this.ctx.db.query(
+        "SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = ? ORDER BY pinned DESC, updated_at DESC",
+      ).all(projectId, normalizeProjectDocKind(kind)) as Row[]
+      : this.ctx.db.query(
+        "SELECT * FROM multiremi_project_docs WHERE project_id = ? ORDER BY pinned DESC, updated_at DESC",
+      ).all(projectId) as Row[];
+    return rows.map(toProjectDoc);
+  }
+
+  getProjectDoc(id: string): MultiremiProjectDoc | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_project_docs WHERE id = ?").get(id) as Row | null;
+    return row ? toProjectDoc(row) : null;
+  }
+
+  /** Resolves a doc within a project by id first, then by slug (both are user-facing refs). */
+  getProjectDocByRef(projectId: string, ref: string): MultiremiProjectDoc | null {
+    const value = ref.trim();
+    if (!value) return null;
+    const byId = this.getProjectDoc(value);
+    if (byId && byId.projectId === projectId) return byId;
+    const row = this.ctx.db.query(
+      "SELECT * FROM multiremi_project_docs WHERE project_id = ? AND slug = ?",
+    ).get(projectId, value) as Row | null;
+    return row ? toProjectDoc(row) : null;
+  }
+
+  createProjectDoc(projectId: string, input: CreateProjectDocInput): MultiremiProjectDoc {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const kind = normalizeProjectDocKind(input.kind ?? "wiki");
+    const title = String(input.title ?? "").trim();
+    if (!title) throw new Error("title is required");
+    const id = input.id ?? createId("pdoc");
+    const slug = projectDocSlug(input.slug, title, id);
+    const summary = cleanOptionalString(input.summary);
+    const body = String(input.body ?? "");
+    const pinned = input.pinned === undefined || input.pinned === null ? kind === "memory" : Boolean(input.pinned);
+    const authorType = cleanOptionalString(input.authorType ?? input.author_type);
+    const authorId = cleanOptionalString(input.authorId ?? input.author_id);
+    // The maintenance rules land before the project's first real doc does, so an
+    // agent writing its first entry already has something to follow. Seeding a
+    // `_schema` doc itself must not recurse — hence the slug guard.
+    if (slug !== PROJECT_DOC_SCHEMA_SLUG) this.ensureProjectDocSchema(projectId);
+    const now = nowIso();
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_project_docs (
+          id, project_id, workspace_id, kind, slug, title, summary, body, tags, pinned, refs,
+          source_task_id, source_issue_id, author_type, author_id,
+          updated_by_type, updated_by_id, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          projectId,
+          project.workspaceId,
+          kind,
+          slug,
+          title,
+          summary,
+          body,
+          toJson(normalizeProjectDocTags(input.tags)),
+          pinned ? 1 : 0,
+          toJson(normalizeProjectDocRefs(input.refs)),
+          cleanOptionalString(input.sourceTaskId ?? input.source_task_id),
+          cleanOptionalString(input.sourceIssueId ?? input.source_issue_id),
+          authorType,
+          authorId,
+          authorType,
+          authorId,
+          1,
+          now,
+          now,
+        ],
+      );
+      this.insertProjectDocRevision(id, 1, title, summary, body, authorType, authorId, now);
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.getProjectDoc(id)!;
+    });
+    return tx();
+  }
+
+  updateProjectDoc(projectId: string, ref: string, input: UpdateProjectDocInput): MultiremiProjectDoc {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectDocByRef(projectId, ref);
+    if (!existing) throw new Error(`Project doc not found: ${ref}`);
+    const expectedVersion = input.expectedVersion ?? input.expected_version;
+    if (expectedVersion !== undefined && expectedVersion !== null && Number(expectedVersion) !== existing.version) {
+      throw new Error("project doc version conflict");
+    }
+    const title = hasAnyField(input, "title") ? String(input.title ?? "").trim() : existing.title;
+    if (!title) throw new Error("title is required");
+    const slug = hasAnyField(input, "slug") ? projectDocSlug(input.slug, title, existing.id) : existing.slug;
+    const summary = hasAnyField(input, "summary") ? cleanOptionalString(input.summary) : existing.summary;
+    const body = hasAnyField(input, "body") ? String(input.body ?? "") : existing.body;
+    const tags = hasAnyField(input, "tags") ? normalizeProjectDocTags(input.tags) : existing.tags;
+    const pinned = hasAnyField(input, "pinned") ? Boolean(input.pinned) : existing.pinned;
+    // refs are replaced wholesale (the CLI/API always send the full list), never merged.
+    const refs = hasAnyField(input, "refs") ? normalizeProjectDocRefs(input.refs) : existing.refs;
+    const updatedByType = cleanOptionalString(input.updatedByType ?? input.updated_by_type);
+    const updatedById = cleanOptionalString(input.updatedById ?? input.updated_by_id);
+    const version = existing.version + 1;
+    const now = nowIso();
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `UPDATE multiremi_project_docs
+         SET slug = ?, title = ?, summary = ?, body = ?, tags = ?, pinned = ?, refs = ?,
+             updated_by_type = ?, updated_by_id = ?, version = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          slug,
+          title,
+          summary,
+          body,
+          toJson(tags),
+          pinned ? 1 : 0,
+          toJson(refs),
+          updatedByType,
+          updatedById,
+          version,
+          now,
+          existing.id,
+        ],
+      );
+      this.insertProjectDocRevision(existing.id, version, title, summary, body, updatedByType, updatedById, now);
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+      return this.getProjectDoc(existing.id)!;
+    });
+    return tx();
+  }
+
+  deleteProjectDoc(projectId: string, ref: string): void {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectDocByRef(projectId, ref);
+    if (!existing) throw new Error(`Project doc not found: ${ref}`);
+    const now = nowIso();
+    this.ctx.db.transaction(() => {
+      // Foreign keys are decorative here (sqlite runs with them off, the Postgres
+      // bridge strips them), so the revisions go with the doc explicitly.
+      this.ctx.db.run("DELETE FROM multiremi_project_doc_revisions WHERE doc_id = ?", [existing.id]);
+      this.ctx.db.run("DELETE FROM multiremi_project_docs WHERE id = ?", [existing.id]);
+      this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [now, projectId]);
+    })();
+  }
+
+  listProjectDocRevisions(docId: string): MultiremiProjectDocRevision[] {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_project_doc_revisions WHERE doc_id = ? ORDER BY version DESC",
+    ).all(docId) as Row[];
+    return rows.map(toProjectDocRevision);
+  }
+
+  searchProjectDocs(projectId: string, query: string, input: { kind?: string | null; limit?: number } = {}): MultiremiProjectDoc[] {
+    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const term = query.trim();
+    if (!term) return [];
+    const kind = cleanOptionalString(input.kind);
+    // The term is a literal substring, not a pattern: `%` and `_` in a user's
+    // query must match themselves. Escaping them (and the escape char itself)
+    // requires naming the escape char explicitly — sqlite's LIKE has none by
+    // default while Postgres already treats backslash as one, so without the
+    // clause the two dialects disagree on a term containing a backslash.
+    const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+    // LOWER() on both sides keeps the match case-insensitive in sqlite and Postgres
+    // alike; the columns stay separate (no concatenation) so a NULL summary cannot
+    // swallow the whole predicate.
+    const where = "project_id = ? AND (LOWER(title) LIKE LOWER(?) ESCAPE '\\' OR LOWER(summary) LIKE LOWER(?) ESCAPE '\\' OR LOWER(body) LIKE LOWER(?) ESCAPE '\\' OR LOWER(tags) LIKE LOWER(?) ESCAPE '\\')";
+    const limit = clampSearchLimit(input.limit);
+    const rows = kind
+      ? this.ctx.db.query(
+        `SELECT * FROM multiremi_project_docs WHERE ${where} AND kind = ? ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+      ).all(projectId, pattern, pattern, pattern, pattern, normalizeProjectDocKind(kind), limit) as Row[]
+      : this.ctx.db.query(
+        `SELECT * FROM multiremi_project_docs WHERE ${where} ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+      ).all(projectId, pattern, pattern, pattern, pattern, limit) as Row[];
+    return rows.map(toProjectDoc);
+  }
+
+  /**
+   * Workspace-wide doc listing for the Knowledge view: every project's docs in
+   * one query, joined with the project title so the client can group without a
+   * second fetch. Ordered by recency (a browse view, unlike the pinned-first
+   * per-project listing).
+   */
+  listWorkspaceDocs(workspaceId: string, input: { kind?: string | null; q?: string | null; limit?: number } = {}): MultiremiWorkspaceProjectDoc[] {
+    const kind = cleanOptionalString(input.kind);
+    const conditions = ["d.workspace_id = ?"];
+    const params: unknown[] = [workspaceId];
+    if (kind) {
+      conditions.push("d.kind = ?");
+      params.push(normalizeProjectDocKind(kind));
+    }
+    const term = String(input.q ?? "").trim();
+    if (term) {
+      // Same literal-substring LIKE as searchProjectDocs: escape %, _ and the
+      // escape char itself, LOWER() both sides, columns kept separate so a NULL
+      // summary cannot swallow the predicate.
+      const pattern = `%${term.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+      conditions.push("(LOWER(d.title) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.summary) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.body) LIKE LOWER(?) ESCAPE '\\' OR LOWER(d.tags) LIKE LOWER(?) ESCAPE '\\')");
+      params.push(pattern, pattern, pattern, pattern);
+    }
+    params.push(clampWorkspaceDocLimit(input.limit));
+    const rows = this.ctx.db.query(
+      `SELECT d.*, p.title AS project_title FROM multiremi_project_docs d
+       JOIN multiremi_projects p ON p.id = d.project_id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY d.updated_at DESC LIMIT ?`,
+    ).all(...params) as Row[];
+    return rows.map((row) => ({ ...toProjectDoc(row), projectTitle: String(row.project_title ?? "") }));
+  }
+
+  /**
+   * Seeds the project's `_schema` doc (the wiki maintenance rules) when it is
+   * missing. Otherwise `_schema` is an ordinary doc: readable, editable,
+   * revisioned — only the slug is reserved.
+   */
+  ensureProjectDocSchema(projectId: string): MultiremiProjectDoc {
+    const existing = this.getProjectDocByRef(projectId, PROJECT_DOC_SCHEMA_SLUG);
+    if (existing) return existing;
+    return this.createProjectDoc(projectId, {
+      kind: "wiki",
+      slug: PROJECT_DOC_SCHEMA_SLUG,
+      title: PROJECT_DOC_SCHEMA_TITLE,
+      body: PROJECT_DOC_SCHEMA_TEMPLATE,
+      pinned: false,
+    });
+  }
+
+  /** Compact knowledge index injected into a task's prompt (see getTaskWithAgent). */
+  getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex {
+    const memory = this.ctx.db.query(
+      `SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = 'memory'
+       ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+    ).all(projectId, PROJECT_DOC_MEMORY_INDEX_LIMIT) as Row[];
+    // `_schema` rides its own field, so it never eats a slot in the wiki listing.
+    const wiki = this.ctx.db.query(
+      `SELECT * FROM multiremi_project_docs WHERE project_id = ? AND kind = 'wiki' AND slug <> ?
+       ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+    ).all(projectId, PROJECT_DOC_SCHEMA_SLUG, PROJECT_DOC_WIKI_INDEX_LIMIT) as Row[];
+    const schema = this.ctx.db.query(
+      "SELECT body FROM multiremi_project_docs WHERE project_id = ? AND slug = ?",
+    ).get(projectId, PROJECT_DOC_SCHEMA_SLUG) as Row | null;
+    return {
+      memory: memory.map((row) => toProjectDocIndexEntry(toProjectDoc(row))),
+      wiki: wiki.map((row) => toProjectDocIndexEntry(toProjectDoc(row))),
+      schema: schema ? trimProjectDocText(String(schema.body ?? ""), PROJECT_DOC_INDEX_SCHEMA_MAX) : null,
+    };
+  }
+
+  private insertProjectDocRevision(
+    docId: string,
+    version: number,
+    title: string,
+    summary: string | null,
+    body: string,
+    authorType: string | null,
+    authorId: string | null,
+    createdAt: string,
+  ): void {
+    this.ctx.db.run(
+      `INSERT INTO multiremi_project_doc_revisions (
+        id, doc_id, version, title, summary, body, author_type, author_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [createId("pdrev"), docId, version, title, summary, body, authorType, authorId, createdAt],
+    );
+  }
+
+  private validatePinnedItemTarget(workspaceId: string, itemType: MultiremiPinnedItemType, itemId: string): void {
+    if (itemType === "issue") {
+      const row = this.ctx.db.query("SELECT id FROM multiremi_issues WHERE id = ? AND workspace_id = ?").get(itemId, workspaceId) as Row | null;
+      if (!row) throw new Error(`Issue not found: ${itemId}`);
+      return;
+    }
+    const project = this.getProject(itemId);
+    if (!project || project.workspaceId !== workspaceId) throw new Error(`Project not found: ${itemId}`);
+  }
+
+  private countProjectResources(projectId: string): number {
+    const row = this.ctx.db.query("SELECT COUNT(*) AS count FROM multiremi_project_resources WHERE project_id = ?")
+      .get(projectId) as { count: number } | null;
+    return Number(row?.count ?? 0);
+  }
+
+  private assertNoLocalDirectoryDaemonConflict(
+    projectId: string,
+    resourceType: string,
+    resourceRef: Record<string, unknown>,
+    excludeId: string | null,
+    mode: "create" | "update",
+  ): void {
+    if (resourceType !== "local_directory") return;
+    const daemonId = String(resourceRef.daemonId ?? resourceRef.daemon_id ?? "").trim();
+    if (!daemonId) return;
+    for (const resource of this.listProjectResources(projectId)) {
+      if (resource.id === excludeId || resource.resourceType !== "local_directory") continue;
+      const existingDaemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
+      if (existingDaemonId !== daemonId) continue;
+      if (mode === "create") {
+        throw new Error("this daemon already has a local_directory attached to the project; remove it before adding another");
+      }
+      throw new Error("another local_directory on this daemon is already attached to the project");
+    }
+  }
+
+  private assertValidProjectRef(owningProjectId: string, resourceRef: Record<string, unknown>, workspaceId: string): void {
+    const targetId = String(resourceRef.projectId ?? resourceRef.project_id ?? "").trim();
+    if (!targetId) throw new Error("project_ref project_id is required");
+    if (targetId === owningProjectId) throw new Error("project_ref cannot reference its own project");
+    const target = this.getProject(targetId);
+    if (!target) throw new Error(`project_ref target project not found: ${targetId}`);
+    if (target.workspaceId !== workspaceId) throw new Error("project_ref target belongs to another workspace");
+    // Walk the target's project_ref graph; reaching the owning project again
+    // means this edge would close a cycle. The visited set prunes shared
+    // subtrees so a DAG diamond is not mistaken for a cycle. Write-time
+    // rejection has a TOCTOU gap, so runtime resolution guards with its own
+    // visited set — this keeps the graph acyclic under normal use.
+    const visited = new Set<string>();
+    const walk = (projectId: string, depth: number): void => {
+      if (projectId === owningProjectId) throw new Error("project_ref would introduce a reference cycle");
+      if (depth > PROJECT_REF_MAX_DEPTH || visited.has(projectId)) return;
+      visited.add(projectId);
+      for (const resource of this.listProjectResources(projectId)) {
+        if (resource.resourceType !== "project_ref") continue;
+        const nextId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+        // Dangling targets are silently skipped (like resolveTaskRepos) so a
+        // hard-deleted referenced project can't break a valid new edge.
+        if (!nextId || !this.getProject(nextId)) continue;
+        walk(nextId, depth + 1);
+      }
+    };
+    walk(targetId, 1);
+  }
+}
+
+function normalizeProjectResourcePosition(value: number | null | undefined, fallback: number): number {
+  if (value == null) return fallback;
+  const position = Number(value);
+  if (!Number.isInteger(position)) throw new Error("position must be an integer");
+  return position;
+}
+
+function cleanProjectResourceLabel(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const label = String(value).trim();
+  return label ? label : null;
+}
+
+function normalizePinnedItemType(value: string | undefined): MultiremiPinnedItemType {
+  if (value === "issue" || value === "project") return value;
+  throw new Error("item_type must be 'issue' or 'project'");
+}
+
+// Wider than clampSearchLimit: the Knowledge view browses a whole workspace,
+// not a single result page.
+function clampWorkspaceDocLimit(value: number | undefined): number {
+  const limit = Number(value ?? 200);
+  if (!Number.isFinite(limit) || limit <= 0) return 200;
+  return Math.min(500, Math.floor(limit));
+}
+
+function normalizeProjectResourceRef(resourceType: string, rawRef: Record<string, unknown>): Record<string, unknown> {
+  if (!resourceType) throw new Error("resource_type is required");
+  if (resourceType === "local_directory") return normalizeLocalDirectoryResourceRef(rawRef);
+  if (resourceType === "project_ref") return normalizeProjectRefResourceRef(rawRef);
+  if (resourceType !== "github_repo") throw new Error(`unknown resource_type "${resourceType}"`);
+  const url = String(rawRef.url ?? "").trim();
+  if (!url) throw new Error("github_repo url is required");
+  if (!isValidGitRepoUrl(url)) throw new Error("github_repo url must be a valid http(s), ssh, git, or scp-like URL");
+  const defaultBranchHint = String(rawRef.defaultBranchHint ?? rawRef.default_branch_hint ?? "").trim();
+  return defaultBranchHint
+    ? { url, defaultBranchHint, default_branch_hint: defaultBranchHint }
+    : { url };
+}
+
+function normalizeProjectRefResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
+  const projectId = String(rawRef.projectId ?? rawRef.project_id ?? "").trim();
+  if (!projectId) throw new Error("project_ref project_id is required");
+  // Fixed key order keeps toJson deterministic so the UNIQUE(project_id,
+  // resource_type, resource_ref) index catches duplicate references.
+  return { projectId, project_id: projectId };
+}
+
+function normalizeLocalDirectoryResourceRef(rawRef: Record<string, unknown>): Record<string, unknown> {
+  const localPath = String(rawRef.localPath ?? rawRef.local_path ?? "").trim();
+  if (!localPath) throw new Error("local_directory local_path is required");
+  if (!isAbsolutePath(localPath)) throw new Error("local_directory local_path must be absolute");
+  const daemonId = String(rawRef.daemonId ?? rawRef.daemon_id ?? "").trim();
+  if (!daemonId) throw new Error("local_directory daemon_id is required");
+  const label = String(rawRef.label ?? "").trim();
+  return label
+    ? { localPath, local_path: localPath, daemonId, daemon_id: daemonId, label }
+    : { localPath, local_path: localPath, daemonId, daemon_id: daemonId };
+}
+
+function isAbsolutePath(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+function isValidGitRepoUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return Boolean(url.host) && ["http", "https", "ssh", "git"].includes(url.protocol.replace(":", ""));
+  } catch {
+    if (value.includes(" ") || value.includes("://")) return false;
+    const colon = value.indexOf(":");
+    if (colon <= 0 || colon === value.length - 1) return false;
+    const at = value.indexOf("@");
+    if (at >= colon) return false;
+    const host = value.slice(at >= 0 ? at + 1 : 0, colon);
+    const path = value.slice(colon + 1);
+    return Boolean(host && path);
+  }
+}
+
+function projectSelect(suffix: string): string {
+  return `
+    SELECT p.*,
+      COUNT(i.id) AS issue_count,
+      COALESCE(SUM(CASE WHEN i.status IN ('done', 'completed', 'closed') THEN 1 ELSE 0 END), 0) AS done_count,
+      (
+        SELECT COUNT(*)
+        FROM multiremi_project_resources pr
+        WHERE pr.project_id = p.id
+      ) AS resource_count
+    FROM multiremi_projects p
+    LEFT JOIN multiremi_issues i ON i.project_id = p.id
+    ${suffix.includes("ORDER BY") ? suffix.replace("ORDER BY", "GROUP BY p.id ORDER BY") : `${suffix} GROUP BY p.id`}
+  `;
+}
+
+function toProject(row: Row): MultiremiProject {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    title: String(row.title),
+    description: nullableString(row.description),
+    icon: nullableString(row.icon),
+    status: String(row.status ?? "planned") as MultiremiProject["status"],
+    priority: String(row.priority ?? "none") as MultiremiProject["priority"],
+    leadType: nullableString(row.lead_type) as MultiremiProject["leadType"],
+    leadId: nullableString(row.lead_id),
+    issueCount: Number(row.issue_count ?? 0),
+    doneCount: Number(row.done_count ?? 0),
+    resourceCount: Number(row.resource_count ?? 0),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toProjectResource(row: Row): MultiremiProjectResource {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    resourceType: String(row.resource_type),
+    resourceRef: parseJson(row.resource_ref, {}),
+    label: nullableString(row.label),
+    position: Number(row.position ?? 0),
+    createdAt: String(row.created_at),
+    createdBy: nullableString(row.created_by),
+  };
+}
+
+function toProjectDoc(row: Row): MultiremiProjectDoc {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    kind: row.kind === "memory" ? "memory" : "wiki",
+    slug: String(row.slug),
+    title: String(row.title),
+    summary: nullableString(row.summary),
+    body: String(row.body ?? ""),
+    tags: normalizeProjectDocTags(parseJson(row.tags, [])),
+    // The Postgres bridge may hand back a boolean where sqlite stores 0/1.
+    pinned: row.pinned === true || Number(row.pinned) === 1,
+    refs: normalizeProjectDocRefs(parseJson(row.refs, [])),
+    sourceTaskId: nullableString(row.source_task_id),
+    sourceIssueId: nullableString(row.source_issue_id),
+    authorType: nullableString(row.author_type) as MultiremiProjectDoc["authorType"],
+    authorId: nullableString(row.author_id),
+    updatedByType: nullableString(row.updated_by_type) as MultiremiProjectDoc["updatedByType"],
+    updatedById: nullableString(row.updated_by_id),
+    version: Number(row.version ?? 1),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function toProjectDocRevision(row: Row): MultiremiProjectDocRevision {
+  return {
+    id: String(row.id),
+    docId: String(row.doc_id),
+    version: Number(row.version ?? 1),
+    title: String(row.title),
+    summary: nullableString(row.summary),
+    body: String(row.body ?? ""),
+    authorType: nullableString(row.author_type) as MultiremiProjectDocRevision["authorType"],
+    authorId: nullableString(row.author_id),
+    createdAt: String(row.created_at),
+  };
+}
+
+function toProjectDocIndexEntry(doc: MultiremiProjectDoc): MultiremiProjectDocIndexEntry {
+  return {
+    id: doc.id,
+    slug: doc.slug,
+    title: doc.title,
+    summary: doc.summary === null ? null : trimProjectDocText(doc.summary, PROJECT_DOC_INDEX_SUMMARY_MAX),
+    body: doc.kind === "memory" ? trimProjectDocText(doc.body, PROJECT_DOC_INDEX_BODY_MAX) : null,
+    kind: doc.kind,
+    pinned: doc.pinned,
+    sourceIssueId: doc.sourceIssueId,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+function trimProjectDocText(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function normalizeProjectDocKind(value: unknown): MultiremiProjectDocKind {
+  const kind = String(value ?? "").trim().toLowerCase();
+  if (kind !== "wiki" && kind !== "memory") throw new Error(`unknown kind: ${value}`);
+  return kind;
+}
+
+function normalizeProjectDocTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((tag) => String(tag).trim()).filter((tag) => tag.length > 0);
+}
+
+/**
+ * Lenient by design: an unknown ref type is kept as written (the taxonomy is a
+ * convention, not a constraint) — only a ref without a value is worthless.
+ */
+function normalizeProjectDocRefs(value: unknown): MultiremiProjectDocRef[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((ref): ref is Record<string, unknown> => typeof ref === "object" && ref !== null)
+    .map((ref) => ({ type: String(ref.type ?? "").trim(), value: String(ref.value ?? "").trim() }))
+    .filter((ref) => ref.value.length > 0)
+    .slice(0, PROJECT_DOC_REFS_MAX);
+}
+
+/**
+ * Explicit slug wins; otherwise slugify the title. A title with no ASCII
+ * alphanumerics (a pure CJK one, say) slugifies to nothing — fall back to the
+ * doc id so the URL-ish ref always exists and stays unique.
+ */
+function projectDocSlug(explicit: string | null | undefined, title: string, docId: string): string {
+  const source = String(explicit ?? "").trim() || title;
+  // The reserved slug is the one ref that survives slugification verbatim —
+  // otherwise its leading underscore would be shaved off into "schema".
+  if (source === PROJECT_DOC_SCHEMA_SLUG) return PROJECT_DOC_SCHEMA_SLUG;
+  const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || docId;
+}
+
+function toPinnedItem(row: Row): MultiremiPinnedItem {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id ?? "local"),
+    userId: String(row.user_id ?? "local"),
+    itemType: String(row.item_type ?? "issue") as MultiremiPinnedItemType,
+    itemId: String(row.item_id ?? ""),
+    position: Number(row.position ?? 0),
+    createdAt: String(row.created_at),
+  };
+}
