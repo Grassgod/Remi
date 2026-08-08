@@ -85,7 +85,7 @@ vi.mock("../../../navigation", () => ({
   ),
 }));
 
-import { ProjectWikiSection } from "./project-wiki-section";
+import { MemoryCard, ProjectWikiSection } from "./project-wiki-section";
 
 function doc(partial: Partial<ProjectDoc> & { id: string }): ProjectDoc {
   return {
@@ -116,6 +116,14 @@ function renderSection(selectedRef?: string) {
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <ProjectWikiSection projectId="proj-1" selectedRef={selectedRef} />
+    </I18nProvider>,
+  );
+}
+
+function renderMemoryCard(memoryDoc: ProjectDoc, pages: ProjectDoc[] = []) {
+  render(
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <MemoryCard doc={memoryDoc} pages={pages} />
     </I18nProvider>,
   );
 }
@@ -179,7 +187,7 @@ describe("ProjectWikiSection", () => {
     expect(screen.queryByText("Agent Memory")).not.toBeInTheDocument();
   });
 
-  it("lists wiki pages newest-first below the Agent Memory node, _schema included", () => {
+  it("lists wiki pages newest-first and hides the internal _schema page", () => {
     state.docs = [
       doc({
         id: "d1",
@@ -199,17 +207,26 @@ describe("ProjectWikiSection", () => {
     renderSection();
 
     const rows = screen.getAllByRole("link");
-    expect(rows.map((el) => el.textContent)).toEqual([
-      "Agent Memory1",
-      "Runbook",
-      "Wiki Schema",
-    ]);
+    expect(rows.map((el) => el.textContent)).toEqual(["Agent Memory1", "Runbook"]);
+    expect(screen.getByText("Wiki pages")).toBeInTheDocument();
+    expect(screen.queryByText("Wiki Schema")).not.toBeInTheDocument();
     // Every row is a real link, so a page can be shared and cmd-clicked.
     expect(rows.map((el) => el.getAttribute("href"))).toEqual([
       "/ws/projects/proj-1/wiki",
       "/ws/projects/proj-1/wiki/runbook",
-      "/ws/projects/proj-1/wiki/_schema",
     ]);
+  });
+
+  it("shows an empty Wiki page group when _schema is the only page", () => {
+    state.docs = [
+      doc({ id: "schema", slug: "_schema", title: "Wiki Schema" }),
+      doc({ id: "memory", kind: "memory", title: "One fact" }),
+    ];
+
+    renderSection();
+
+    expect(screen.getByText("No pages yet")).toBeInTheDocument();
+    expect(screen.queryByText("Wiki Schema")).not.toBeInTheDocument();
   });
 
   it("falls back to the doc id in the row href when the doc has no slug", () => {
@@ -297,14 +314,15 @@ describe("ProjectWikiSection", () => {
 
     renderSection();
 
-    expect(screen.getByText("Build takes 4 minutes")).toBeInTheDocument();
-    expect(screen.getByText("Cold cache doubles it.")).toBeInTheDocument();
+    expect(screen.getAllByText("Build takes 4 minutes")).toHaveLength(2);
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "Cold cache doubles it.",
+    );
     expect(screen.getByText("Pinned")).toBeInTheDocument();
     expect(screen.getByText("agent:agent-7")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Source issue" })).toHaveAttribute(
-      "href",
-      "/ws/issues/MUL-42",
-    );
+    expect(
+      screen.getByRole("link", { name: "Source issue MUL-42" }),
+    ).toHaveAttribute("href", "/ws/issues/MUL-42");
   });
 
   it("falls back to the summary for a memory entry stored without a body", () => {
@@ -327,9 +345,93 @@ describe("ProjectWikiSection", () => {
 
     renderSection();
 
-    expect(screen.getByText("The CI box is arm64.")).toBeInTheDocument();
-    expect(screen.getByText("The body is authoritative.")).toBeInTheDocument();
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "The CI box is arm64.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Body wins" }));
+
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent(
+      "The body is authoritative.",
+    );
     expect(screen.queryByText("Never shown.")).not.toBeInTheDocument();
+  });
+
+  it("searches memory, filters pinned entries, and clears empty filters", () => {
+    state.docs = [
+      doc({
+        id: "d1",
+        kind: "memory",
+        title: "Pinned deploy fact",
+        body: "Use the release job.",
+        pinned: true,
+      }),
+      doc({
+        id: "d2",
+        kind: "memory",
+        title: "Local database",
+        body: "Runs on port 5432.",
+      }),
+    ];
+
+    renderSection();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search memory..." }), {
+      target: { value: "database" },
+    });
+    expect(screen.getByRole("button", { name: "Local database" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Pinned deploy fact" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Pinned only" }));
+    expect(screen.getByText("No memory matches these filters.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("button", { name: "Pinned deploy fact" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Local database" })).toBeInTheDocument();
+  });
+
+  it("keeps pinned memory first, sorts by time, and preserves selection", () => {
+    state.docs = [
+      doc({
+        id: "pinned",
+        kind: "memory",
+        title: "Pinned fact",
+        body: "Important detail",
+        pinned: true,
+        updated_at: "2026-06-01T00:00:00Z",
+      }),
+      doc({
+        id: "new",
+        kind: "memory",
+        title: "Newest fact",
+        body: "New detail",
+        updated_at: "2026-07-09T00:00:00Z",
+      }),
+      doc({
+        id: "old",
+        kind: "memory",
+        title: "Oldest fact",
+        body: "Old detail",
+        updated_at: "2026-07-01T00:00:00Z",
+      }),
+    ];
+
+    renderSection();
+
+    expect(screen.getByRole("button", { name: "Pinned fact" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Oldest fact" }));
+    expect(screen.getByTestId("wiki-body")).toHaveTextContent("Old detail");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show oldest first" }));
+    expect(screen.getByRole("button", { name: "Oldest fact" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("renders a selected wiki page with its body and last-updated footer", () => {
@@ -516,16 +618,14 @@ describe("ProjectWikiSection", () => {
   });
 
   it("clamps a long memory body behind a toggle and expands it on demand", () => {
-    state.docs = [
+    renderMemoryCard(
       doc({
         id: "d1",
         kind: "memory",
         title: "Long note",
         body: Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n"),
       }),
-    ];
-
-    renderSection();
+    );
 
     expect(screen.getByTestId("wiki-body").parentElement).toHaveClass(
       "max-h-40",
@@ -540,11 +640,9 @@ describe("ProjectWikiSection", () => {
   });
 
   it("leaves a short memory body unclamped and toggle-free", () => {
-    state.docs = [
+    renderMemoryCard(
       doc({ id: "d1", kind: "memory", title: "Short", body: "one line" }),
-    ];
-
-    renderSection();
+    );
 
     expect(screen.getByTestId("wiki-body").parentElement).not.toHaveClass(
       "max-h-40",

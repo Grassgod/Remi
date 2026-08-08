@@ -1,18 +1,21 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
+  ArrowDownUp,
   BookText,
   Brain,
   FileQuestion,
   FileText,
   Pin,
+  Search,
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { projectDocListOptions } from "@multiremi/core/project-docs";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -53,7 +56,7 @@ function SidebarRow({
     <AppLink
       href={href}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+        "flex w-auto max-w-64 shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors xl:w-full xl:max-w-none",
         active
           ? "bg-accent text-foreground"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -203,6 +206,26 @@ function isLongMemoryBody(body: string): boolean {
   );
 }
 
+function memoryDetail(doc: ProjectDoc): string {
+  return doc.body || doc.summary || "";
+}
+
+function memoryPreview(doc: ProjectDoc): string {
+  return memoryDetail(doc).replace(/\s+/g, " ").trim();
+}
+
+function matchesMemoryQuery(doc: ProjectDoc, query: string): boolean {
+  if (!query) return true;
+  return [
+    doc.title,
+    doc.summary ?? "",
+    doc.body,
+    ...doc.tags,
+    ...(doc.refs ?? []).map((ref) => ref.value),
+    doc.source_issue_id ?? "",
+  ].some((value) => value.toLowerCase().includes(query));
+}
+
 // Exported for the workspace-wide Knowledge page, which renders the same
 // memory entries grouped by project.
 export function MemoryCard({
@@ -219,7 +242,7 @@ export function MemoryCard({
   // `memory add --summary` writes a summary with no body. A memory card has no
   // second surface to show it on, so it stands in for the missing body rather
   // than being stored and never read.
-  const detail = doc.body || doc.summary;
+  const detail = memoryDetail(doc);
   // Memory entries come out of the same agent prompt as wiki pages: markdown
   // with `[[slug]]` cross-links. They go through the same pipeline WikiPagePane
   // uses, otherwise headings, bullets, fences and raw link markers leak.
@@ -302,6 +325,146 @@ export function MemoryCard({
   );
 }
 
+function MemoryListItem({
+  doc,
+  selected,
+  onSelect,
+}: {
+  doc: ProjectDoc;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useT("projects");
+  const formatRelativeDate = useFormatRelativeDate();
+  const preview = memoryPreview(doc);
+
+  return (
+    <button
+      type="button"
+      aria-label={doc.title}
+      aria-pressed={selected}
+      onClick={onSelect}
+      className={cn(
+        "relative flex w-full flex-col gap-1.5 border-b px-4 py-3 text-left transition-colors",
+        "hover:bg-accent/50 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/40",
+        selected && "bg-accent",
+      )}
+    >
+      {selected && <span className="absolute inset-y-0 left-0 w-0.5 bg-brand" />}
+      <span className="flex w-full items-start gap-2">
+        <span className="min-w-0 flex-1 break-words text-sm font-medium leading-5">
+          {doc.title}
+        </span>
+        {doc.pinned && (
+          <Pin
+            className="mt-0.5 size-3.5 shrink-0 text-amber-600"
+            aria-label={t(($) => $.wiki.pinned_badge)}
+          />
+        )}
+      </span>
+      {preview && (
+        <span className="line-clamp-2 break-words text-xs leading-5 text-muted-foreground">
+          {preview}
+        </span>
+      )}
+      <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground/80">
+        {doc.source_issue_id && (
+          <>
+            <span>{doc.source_issue_id}</span>
+            <span>·</span>
+          </>
+        )}
+        <span>{formatRelativeDate(doc.updated_at)}</span>
+      </span>
+    </button>
+  );
+}
+
+function MemoryDetailPane({
+  doc,
+  pages,
+}: {
+  doc: ProjectDoc;
+  pages: ProjectDoc[];
+}) {
+  const { t } = useT("projects");
+  const paths = useWorkspacePaths();
+  const formatRelativeDate = useFormatRelativeDate();
+  const detail = memoryDetail(doc);
+  const body = detail
+    ? replaceWikiLinkMarkers(detail, (slug) => {
+        const target = pages.find((page) => page.slug === slug);
+        return target
+          ? {
+              title: target.title,
+              href: paths.projectWikiPage(
+                doc.project_id,
+                target.slug || target.id,
+              ),
+            }
+          : null;
+      })
+    : "";
+
+  return (
+    <article className="mx-auto w-full max-w-3xl px-5 py-5">
+      <div className="flex items-start gap-3 border-b pb-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            <Brain className="size-3.5" />
+            <span>{t(($) => $.wiki.memory_node)}</span>
+            {doc.author_type && doc.author_id && (
+              <>
+                <span>·</span>
+                <ActorAvatar
+                  actorType={doc.author_type}
+                  actorId={doc.author_id}
+                  size={16}
+                />
+                <ActorName actorType={doc.author_type} actorId={doc.author_id} />
+              </>
+            )}
+            <span>·</span>
+            <span>{formatRelativeDate(doc.updated_at)}</span>
+          </div>
+          <h2 className="mt-2 break-words text-lg font-semibold leading-6">
+            {doc.title}
+          </h2>
+        </div>
+        {doc.pinned && (
+          <Badge variant="secondary" className="shrink-0 gap-1">
+            <Pin className="size-3" />
+            {t(($) => $.wiki.pinned_badge)}
+          </Badge>
+        )}
+      </div>
+
+      {body && (
+        <div className="py-5">
+          <ReadonlyContent content={body} />
+        </div>
+      )}
+
+      <DocRefs refs={doc.refs ?? []} className="border-t pt-4" />
+
+      {doc.source_issue_id && (
+        <div className="mt-4 flex items-center justify-between gap-3 border-y py-3 text-xs">
+          <span className="text-muted-foreground">
+            {t(($) => $.wiki.source_issue)}
+          </span>
+          <AppLink
+            href={paths.issueDetail(doc.source_issue_id)}
+            className="min-w-0 truncate font-medium hover:underline"
+            aria-label={`${t(($) => $.wiki.source_issue)} ${doc.source_issue_id}`}
+          >
+            {doc.source_issue_id}
+          </AppLink>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function MemoryPane({
   docs,
   pages,
@@ -310,22 +473,124 @@ function MemoryPane({
   pages: ProjectDoc[];
 }) {
   const { t } = useT("projects");
+  const [search, setSearch] = useState("");
+  const [onlyPinned, setOnlyPinned] = useState(false);
+  const [newestFirst, setNewestFirst] = useState(true);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string>();
+  const filteredDocs = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return docs
+      .filter((doc) => !onlyPinned || doc.pinned)
+      .filter((doc) => matchesMemoryQuery(doc, query))
+      .toSorted((a, b) => {
+        const pinnedOrder = Number(b.pinned) - Number(a.pinned);
+        if (pinnedOrder !== 0) return pinnedOrder;
+        return newestFirst
+          ? b.updated_at.localeCompare(a.updated_at)
+          : a.updated_at.localeCompare(b.updated_at);
+      });
+  }, [docs, newestFirst, onlyPinned, search]);
+  const selectedDoc =
+    filteredDocs.find((doc) => doc.id === selectedMemoryId) ?? filteredDocs[0];
+  const hasFilters = search.trim().length > 0 || onlyPinned;
+
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-5">
-      <h2 className="text-lg font-semibold">{t(($) => $.wiki.memory_node)}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {t(($) => $.wiki.memory_description)}
-      </p>
-      {docs.length === 0 ? (
-        <p className="mt-4 text-sm text-muted-foreground">
-          {t(($) => $.wiki.memory_empty)}
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b px-5 py-4">
+        <h2 className="text-lg font-semibold">{t(($) => $.wiki.memory_node)}</h2>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          {t(($) => $.wiki.memory_description)}
         </p>
-      ) : (
-        <div className="mt-4 space-y-2">
-          {docs.map((doc) => (
-            <MemoryCard key={doc.id} doc={doc} pages={pages} />
-          ))}
+      </div>
+
+      {docs.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted-foreground">
+          {t(($) => $.wiki.memory_empty)}
         </div>
+      ) : (
+        <>
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={t(($) => $.wiki.memory_search_placeholder)}
+                aria-label={t(($) => $.wiki.memory_search_placeholder)}
+                className="h-8 pl-8 text-sm"
+              />
+            </div>
+            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
+              {filteredDocs.length}/{docs.length}
+            </span>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant={onlyPinned ? "secondary" : "outline"}
+              aria-label={t(($) => $.wiki.memory_filter_pinned)}
+              aria-pressed={onlyPinned}
+              title={t(($) => $.wiki.memory_filter_pinned)}
+              onClick={() => setOnlyPinned((value) => !value)}
+            >
+              <Pin className="size-3.5" />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label={t(($) =>
+                newestFirst
+                  ? $.wiki.memory_sort_oldest
+                  : $.wiki.memory_sort_newest,
+              )}
+              title={t(($) =>
+                newestFirst
+                  ? $.wiki.memory_sort_oldest
+                  : $.wiki.memory_sort_newest,
+              )}
+              onClick={() => setNewestFirst((value) => !value)}
+            >
+              <ArrowDownUp className="size-3.5" />
+            </Button>
+          </div>
+
+          {filteredDocs.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                {t(($) => $.wiki.memory_no_results)}
+              </p>
+              {hasFilters && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setSearch("");
+                    setOnlyPinned(false);
+                  }}
+                >
+                  {t(($) => $.wiki.memory_clear_filters)}
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(12rem,40%)_minmax(0,1fr)] xl:grid-cols-[minmax(13rem,42%)_minmax(0,1fr)] xl:grid-rows-1">
+              <div className="min-w-0 overflow-y-auto border-b xl:border-b-0 xl:border-r">
+                {filteredDocs.map((doc) => (
+                  <MemoryListItem
+                    key={doc.id}
+                    doc={doc}
+                    selected={selectedDoc?.id === doc.id}
+                    onSelect={() => setSelectedMemoryId(doc.id)}
+                  />
+                ))}
+              </div>
+              <div className="min-w-0 overflow-y-auto">
+                {selectedDoc && <MemoryDetailPane doc={selectedDoc} pages={pages} />}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -394,6 +659,7 @@ export function ProjectWikiSection({
   const wikiDocs = docs
     .filter((doc) => doc.kind === "wiki")
     .sort(byUpdatedAtDesc);
+  const visibleWikiDocs = wikiDocs.filter((doc) => doc.slug !== "_schema");
 
   // Nothing prefetches this key, so the first open of every Wiki tab starts
   // here. Falling through to the empty state instead would claim the project
@@ -464,8 +730,8 @@ export function ProjectWikiSection({
     : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <div className="w-56 shrink-0 space-y-0.5 overflow-y-auto border-r p-2">
+    <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+      <div className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b px-2 xl:block xl:h-auto xl:w-56 xl:space-y-0.5 xl:overflow-y-auto xl:border-b-0 xl:border-r xl:p-2">
         <SidebarRow
           icon={<Brain className="h-4 w-4 shrink-0" />}
           label={t(($) => $.wiki.memory_node)}
@@ -473,19 +739,31 @@ export function ProjectWikiSection({
           active={!selectedRef}
           href={paths.projectWiki(projectId)}
         />
-        {wikiDocs.map((doc) => (
-          <SidebarRow
-            key={doc.id}
-            icon={<FileText className="h-4 w-4 shrink-0" />}
-            label={doc.title}
-            active={selectedDoc?.id === doc.id}
-            href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
-          />
-        ))}
+        <p className="hidden px-2 pb-1 pt-3 text-[11px] font-medium text-muted-foreground xl:block">
+          {t(($) => $.wiki.pages_label)}
+        </p>
+        {visibleWikiDocs.length > 0 ? (
+          visibleWikiDocs.map((doc) => (
+            <SidebarRow
+              key={doc.id}
+              icon={<FileText className="h-4 w-4 shrink-0" />}
+              label={doc.title}
+              active={selectedDoc?.id === doc.id}
+              href={paths.projectWikiPage(projectId, doc.slug || doc.id)}
+            />
+          ))
+        ) : (
+          <div className="hidden items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground/70 xl:flex">
+            <FileText className="size-4 shrink-0" />
+            <span>{t(($) => $.wiki.pages_empty)}</span>
+          </div>
+        )}
       </div>
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {selectedDoc ? (
-          <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
+          <div className="h-full overflow-y-auto">
+            <WikiPagePane doc={selectedDoc} pages={wikiDocs} />
+          </div>
         ) : selectedRef ? (
           <WikiNotFoundPane projectId={projectId} />
         ) : (
