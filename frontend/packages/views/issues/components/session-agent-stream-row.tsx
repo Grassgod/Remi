@@ -11,6 +11,7 @@ import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import { cn } from "@multiremi/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
 import { AgentTranscriptDialog, buildTimeline } from "../../common/task-transcript";
 import { formatToolInputSummary, toolIcon } from "../../common/task-transcript/tool-summaries";
 import { useT } from "../../i18n";
@@ -96,7 +97,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
     if (ended) return;
     const startRef = task.started_at ?? task.dispatched_at ?? task.created_at;
     if (!startRef) return;
-    const tick = () => setElapsed(formatElapsed(startRef));
+    const tick = () => setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER));
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
@@ -151,11 +152,4 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
       />
     </>
   );
-}
-
-function formatElapsed(startedAt: string): string {
-  const elapsed = Date.now() - new Date(startedAt).getTime();
-  const seconds = Math.floor(elapsed / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }

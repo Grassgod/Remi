@@ -9,8 +9,19 @@ import { runtimeListOptions } from "@multiremi/core/runtimes/queries";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
 import { deriveAgentAvailability, resolveAgentRuntimes } from "@multiremi/core/agents";
 import type { AgentTask } from "@multiremi/core/types";
+import { formatElapsedSince } from "../../common/format";
 import { workloadConfig } from "../presence";
 import { useT } from "../../i18n";
+
+// Compact `2m 14s` / `45s` / `1h 03m`. Capped at hours — anything over a day
+// for a running task is a sign of a stuck runtime, but the hover card is not
+// the place to relitigate that; the row reads as `26h 12m` and the user can
+// act. Padded because the rows stack into a column.
+const HOVER_DURATION = {
+  collapseZeroSeconds: false,
+  pad: true,
+  hours: true,
+} as const;
 
 interface AgentActivityHoverContentProps {
   // Active tasks (running / queued / dispatched) to render — caller filters
@@ -113,7 +124,7 @@ export function AgentActivityHoverContent({
                     : t(($) => $.agent_activity.status_queued)}
                 </span>
                 <span className="tabular-nums text-muted-foreground">
-                  {formatDuration(startedFrom, now)}
+                  {formatElapsedSince(startedFrom, now, HOVER_DURATION)}
                 </span>
               </span>
             </div>
@@ -124,24 +135,3 @@ export function AgentActivityHoverContent({
   );
 }
 
-
-// Compact `2m 14s` / `45s` / `1h 03m` duration since the given ISO string.
-// Capped at hours — anything over a day for a running task is a sign of a
-// stuck runtime, but the hover card is not the place to relitigate that;
-// the row will read as `26h 12m` and the user can act.
-function formatDuration(fromIso: string, nowMs: number): string {
-  const start = new Date(fromIso).getTime();
-  if (!Number.isFinite(start)) return "";
-  const sec = Math.max(0, Math.round((nowMs - start) / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 60) return `${min}m ${pad2(remSec)}s`;
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return `${hr}h ${pad2(remMin)}m`;
-}
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}

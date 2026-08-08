@@ -1,29 +1,22 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { Camera, Loader2, Pencil } from "lucide-react";
-import { toast } from "sonner";
+import { useEffect, useState, type ReactNode } from "react";
+import { Loader2, Pencil } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, MemberWithUser } from "@multiremi/core/types";
 import {
   AGENT_DESCRIPTION_MAX_LENGTH,
   type AgentPresenceDetail,
 } from "@multiremi/core/agents";
-import { api } from "@multiremi/core/api";
 import { useAuthStore } from "@multiremi/core/auth";
 import { larkInstallationsOptions } from "@multiremi/core/lark";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
   Dialog,
@@ -315,8 +308,6 @@ function AvatarEditor({
   onUpdate: (data: Record<string, unknown>) => Promise<void>;
 }) {
   const { t } = useT("agents");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { upload, uploading } = useFileUpload(api);
 
   if (!canEdit) {
     return (
@@ -331,53 +322,23 @@ function AvatarEditor({
     );
   }
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    try {
-      const result = await upload(file);
-      if (!result) return;
-      await onUpdate({ avatar_url: result.link });
-      toast.success(t(($) => $.inspector.avatar_updated_toast));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.inspector.avatar_upload_failed_toast));
-    }
-  };
-
   return (
-    <>
-      <button
-        type="button"
-        // rounded-lg matches the standard agent avatar treatment used in
-        // list rows. Avoid rounded-full — circles are reserved for humans.
-        className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={uploading}
-        aria-label={t(($) => $.inspector.change_avatar_aria)}
-      >
-        <ActorAvatar
-          actorType="agent"
-          actorId={agent.id}
-          size={56}
-          className="rounded-none"
-        />
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-          {uploading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-white" />
-          ) : (
-            <Camera className="h-4 w-4 text-white" />
-          )}
-        </div>
-      </button>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFile}
+    <AvatarUploadButton
+      // rounded-lg matches the standard agent avatar treatment used in
+      // list rows. Avoid rounded-full — circles are reserved for humans.
+      className="h-14 w-14 rounded-lg"
+      ariaLabel={t(($) => $.inspector.change_avatar_aria)}
+      successMessage={t(($) => $.inspector.avatar_updated_toast)}
+      errorMessage={t(($) => $.inspector.avatar_upload_failed_toast)}
+      onUploaded={(url) => onUpdate({ avatar_url: url })}
+    >
+      <ActorAvatar
+        actorType="agent"
+        actorId={agent.id}
+        size={56}
+        className="rounded-none"
       />
-    </>
+    </AvatarUploadButton>
   );
 }
 

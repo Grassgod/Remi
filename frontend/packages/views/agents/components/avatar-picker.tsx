@@ -1,12 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Camera, ImagePlus, Loader2, X } from "lucide-react";
-import { toast } from "sonner";
-import { api } from "@multiremi/core/api";
-import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
+import { useState } from "react";
+import { ImagePlus, Loader2, X } from "lucide-react";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { cn } from "@multiremi/ui/lib/utils";
+import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { useT } from "../../i18n";
 
 interface AvatarPickerProps {
@@ -35,110 +33,74 @@ interface AvatarPickerProps {
  */
 export function AvatarPicker({ value, onChange, size = 56 }: AvatarPickerProps) {
   const { t } = useT("agents");
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const { upload, uploading } = useFileUpload(api);
   const [previewError, setPreviewError] = useState(false);
-
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = ""; // allow re-selecting the same file
-    if (!file.type.startsWith("image/")) {
-      toast.error(t(($) => $.create_dialog.avatar.select_image_toast));
-      return;
-    }
-    try {
-      const result = await upload(file);
-      if (!result) return;
-      setPreviewError(false);
-      onChange(result.link);
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : t(($) => $.create_dialog.avatar.upload_failed_toast),
-      );
-    }
-  };
 
   const hasValue = !!value && !previewError;
   const dimensionStyle = { width: size, height: size };
 
   return (
     <div className="relative shrink-0" style={dimensionStyle}>
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        disabled={uploading}
+      <AvatarUploadButton
         className={cn(
-          "group relative h-full w-full overflow-hidden rounded-lg outline-none transition-colors",
-          "focus-visible:ring-2 focus-visible:ring-ring",
+          "h-full w-full rounded-lg outline-none transition-colors",
           hasValue
             ? "border"
             : "border border-dashed bg-muted/40 hover:bg-muted",
         )}
-        aria-label={
+        style={dimensionStyle}
+        ariaLabel={
           hasValue
             ? t(($) => $.create_dialog.avatar.change_aria)
             : t(($) => $.create_dialog.avatar.upload_aria)
         }
-        style={dimensionStyle}
+        invalidTypeMessage={t(($) => $.create_dialog.avatar.select_image_toast)}
+        errorMessage={t(($) => $.create_dialog.avatar.upload_failed_toast)}
+        onUploaded={(url) => {
+          setPreviewError(false);
+          onChange(url);
+        }}
+        // Hover overlay only when there's already an image — otherwise the
+        // placeholder icon already invites the click.
+        showOverlay={hasValue}
+        renderAfter={(uploading) =>
+          // Tiny X to clear, only shown when there's a value. Positioned just
+          // outside the avatar's top-right corner so it doesn't cover the
+          // image.
+          hasValue && !uploading ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange(null);
+                setPreviewError(false);
+              }}
+              className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={t(($) => $.create_dialog.avatar.remove_aria)}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          ) : null
+        }
       >
-        {hasValue ? (
-          <img
-            src={resolvePublicFileUrl(value) ?? undefined}
-            alt=""
-            className="h-full w-full object-cover"
-            onError={() => setPreviewError(true)}
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-            {uploading ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <ImagePlus className="h-5 w-5" />
-            )}
-          </div>
-        )}
-
-        {/* Hover overlay only when there's already an image — otherwise the
-            placeholder icon already invites the click. */}
-        {hasValue && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-            {uploading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-white" />
-            ) : (
-              <Camera className="h-4 w-4 text-white" />
-            )}
-          </div>
-        )}
-      </button>
-
-      {/* Tiny X to clear, only shown when there's a value. Positioned just
-          outside the avatar's top-right corner so it doesn't cover the
-          image. */}
-      {hasValue && !uploading && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onChange(null);
-            setPreviewError(false);
-          }}
-          className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground"
-          aria-label={t(($) => $.create_dialog.avatar.remove_aria)}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      )}
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFile}
-      />
+        {(uploading) =>
+          hasValue ? (
+            <img
+              src={resolvePublicFileUrl(value) ?? undefined}
+              alt=""
+              className="h-full w-full object-cover"
+              onError={() => setPreviewError(true)}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+              {uploading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <ImagePlus className="h-5 w-5" />
+              )}
+            </div>
+          )
+        }
+      </AvatarUploadButton>
     </div>
   );
 }

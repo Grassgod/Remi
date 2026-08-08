@@ -38,6 +38,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { ActorAvatar } from "../../common/actor-avatar";
 import {
   addDaysIso,
+  aggregateByDate,
   aggregateByWeek,
   formatTokens,
   todayIso,
@@ -45,10 +46,8 @@ import {
 import { useT } from "../../i18n";
 import {
   aggregateAgentTokens,
-  aggregateDailyCost,
   aggregateDailyTasks,
   aggregateDailyTime,
-  aggregateDailyTokens,
   aggregateWeeklyTasks,
   aggregateWeeklyTime,
   computeDailyTotals,
@@ -250,12 +249,10 @@ export function DashboardPage() {
     () => computeDailyTotals(dailyUsageInWindow),
     [dailyUsageInWindow],
   );
-  const dailyCost = useMemo(
-    () => aggregateDailyCost(dailyUsageInWindow),
-    [dailyUsageInWindow],
-  );
-  const dailyTokens = useMemo(
-    () => aggregateDailyTokens(dailyUsageInWindow),
+  // Same daily rollup the runtime-detail page runs; the dashboard only reads
+  // the two series its charts render.
+  const { dailyCostStack: dailyCost, dailyTokens } = useMemo(
+    () => aggregateByDate(dailyUsageInWindow),
     [dailyUsageInWindow],
   );
   const dailyTime = useMemo(
@@ -495,8 +492,8 @@ function TrendBlock({
   lessThanMinuteLabel,
 }: {
   dim: Dim;
-  dailyCost: ReturnType<typeof aggregateDailyCost>;
-  dailyTokens: ReturnType<typeof aggregateDailyTokens>;
+  dailyCost: ReturnType<typeof aggregateByDate>["dailyCostStack"];
+  dailyTokens: ReturnType<typeof aggregateByDate>["dailyTokens"];
   dailyTime: ReturnType<typeof aggregateDailyTime>;
   dailyTasks: ReturnType<typeof aggregateDailyTasks>;
   weeklyCost: ReturnType<typeof aggregateByWeek>["weeklyCostStack"];

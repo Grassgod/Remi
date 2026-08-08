@@ -5,7 +5,7 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { UnicodeSpinner } from "@multiremi/ui/components/common/unicode-spinner";
 import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask, TaskMessagePayload } from "@multiremi/core/types";
-import { formatElapsedSecs } from "../lib/format";
+import { formatElapsedSecs } from "../../common/format";
 import { useT } from "../../i18n";
 
 interface Props {

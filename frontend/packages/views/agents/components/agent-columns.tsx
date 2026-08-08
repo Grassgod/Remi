@@ -14,7 +14,11 @@ import {
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { availabilityConfig, workloadConfig } from "../presence";
+import {
+  AvailabilityChip,
+  WorkloadChip,
+  workloadTone,
+} from "./agent-presence-indicator";
 import { AgentRowActions } from "./agent-row-actions";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { Sparkline } from "./sparkline";
@@ -240,19 +244,12 @@ function AvailabilityCell({
 }: {
   presence: AgentPresenceDetail | null | undefined;
 }) {
-  const { t } = useT("agents");
   if (!presence) {
     return (
       <span className="inline-flex h-3 w-16 animate-pulse rounded bg-muted/60" />
     );
   }
-  const av = availabilityConfig[presence.availability];
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${av.dotClass}`} />
-      <span className={`text-xs ${av.textClass}`}>{t(($) => $.availability[presence.availability])}</span>
-    </span>
-  );
+  return <AvailabilityChip availability={presence.availability} />;
 }
 
 function WorkloadCell({
@@ -260,7 +257,6 @@ function WorkloadCell({
 }: {
   presence: AgentPresenceDetail | null | undefined;
 }) {
-  const { t } = useT("agents");
   if (!presence) {
     return (
       <span className="inline-flex h-3 w-20 animate-pulse rounded bg-muted/60" />
@@ -271,16 +267,8 @@ function WorkloadCell({
   // — that hyphen used to mean both "no presence data" and "agent is
   // idle", which conflated two distinct things. Em-dash is now reserved
   // for archived rows / undefined presence (handled at the column level).
-  const wl = workloadConfig[presence.workload];
   const isWorking = presence.workload === "working";
   const isQueued = presence.workload === "queued";
-  // Queued's amber from workloadConfig is the severe tone for "stuck on
-  // offline runtime". On an online runtime queued is just a brief race
-  // between enqueue and daemon claim, where amber misreads as a warning.
-  // Compose with availability so the colour matches the actual signal.
-  const queuedTone =
-    presence.availability === "online" ? "text-muted-foreground" : wl.textClass;
-  const labelTone = isQueued ? queuedTone : wl.textClass;
   // Working: show running/capacity, optionally with +Nq when overflow.
   // Queued (= nothing running, things waiting — typically a stuck-on-
   // offline-runtime signal): show the queued count directly so the user
@@ -294,20 +282,11 @@ function WorkloadCell({
       ? `${presence.queuedCount}`
       : null;
   return (
-    <span className="inline-flex items-center gap-1 text-xs">
-      {/* Icon only renders for working/queued — those carry visual meaning
-          (spinner = in motion, clock = waiting). Idle adding an icon read
-          as a warning marker, which is the wrong signal. */}
-      {presence.workload !== "idle" && (
-        <wl.icon
-          className={`h-3 w-3 shrink-0 ${labelTone} ${isWorking ? "animate-spin" : ""}`}
-        />
-      )}
-      <span className={`shrink-0 ${labelTone}`}>{t(($) => $.workload[presence.workload])}</span>
-      {counts && (
-        <span className="truncate text-muted-foreground">{counts}</span>
-      )}
-    </span>
+    <WorkloadChip
+      workload={presence.workload}
+      tone={workloadTone(presence.workload, presence.availability)}
+      counts={counts}
+    />
   );
 }
 

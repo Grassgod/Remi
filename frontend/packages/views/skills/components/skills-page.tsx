@@ -36,6 +36,7 @@ import {
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
 import { useNavigation } from "../../navigation";
+import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
 import { canEditSkill } from "../hooks/use-can-edit-skill";
 import { readOrigin } from "../lib/origin";
@@ -142,22 +143,20 @@ function CardToolbar({
 // Empty state
 // ---------------------------------------------------------------------------
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function SkillsEmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("skills");
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <BookOpen className="h-6 w-6 text-muted-foreground" />
-      </div>
-      <h2 className="mt-4 text-base font-semibold">{t(($) => $.page.empty.title)}</h2>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">
-        {t(($) => $.page.empty.description)}
-      </p>
-      <Button type="button" onClick={onCreate} size="sm" className="mt-5">
-        <Plus className="h-3 w-3" />
-        {t(($) => $.page.new_skill)}
-      </Button>
-    </div>
+    <EmptyState
+      icon={BookOpen}
+      title={t(($) => $.page.empty.title)}
+      description={t(($) => $.page.empty.description)}
+      action={
+        <Button type="button" onClick={onCreate} size="sm" className="mt-5">
+          <Plus className="h-3 w-3" />
+          {t(($) => $.page.new_skill)}
+        </Button>
+      }
+    />
   );
 }
 
@@ -307,27 +306,27 @@ export default function SkillsPage() {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
         <PageHeaderBar totalCount={0} onCreate={() => setCreateOpen(true)} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-          <div>
-            <p className="text-sm font-medium">
-              {t(($) => $.page.list_error.title)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {listError instanceof Error
-                ? listError.message
-                : t(($) => $.page.list_error.fallback)}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => refetchList()}
-          >
-            {t(($) => $.page.list_error.retry)}
-          </Button>
-        </div>
+        <EmptyState
+          variant="status"
+          tone="destructive"
+          icon={AlertCircle}
+          title={t(($) => $.page.list_error.title)}
+          description={
+            listError instanceof Error
+              ? listError.message
+              : t(($) => $.page.list_error.fallback)
+          }
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => refetchList()}
+            >
+              {t(($) => $.page.list_error.retry)}
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -368,7 +367,7 @@ export default function SkillsPage() {
         )}
         {showEmpty ? (
           <div className="flex flex-1 items-center justify-center">
-            <EmptyState onCreate={() => setCreateOpen(true)} />
+            <SkillsEmptyState onCreate={() => setCreateOpen(true)} />
           </div>
         ) : (
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">

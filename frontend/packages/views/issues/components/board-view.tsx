@@ -1,18 +1,8 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
-import {
-  DndContext,
-  DragOverlay,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragStartEvent,
-  type DragEndEvent,
-  type DragOverEvent,
-} from "@dnd-kit/core";
+import { useMemo, memo } from "react";
+import { DndContext, DragOverlay } from "@dnd-kit/core";
 import type { QueryKey } from "@tanstack/react-query";
-import { arrayMove } from "@dnd-kit/sortable";
 import type { Issue, IssueAssigneeGroup, IssueStatus } from "@multiremi/core/types";
 import { useLoadMoreByAssigneeGroup, useLoadMoreByStatus } from "@multiremi/core/issues/mutations";
 import type { AssigneeGroupedIssuesFilter, IssueSortParam, MyIssuesFilter } from "@multiremi/core/issues/queries";
@@ -27,15 +17,10 @@ import type { ChildProgress } from "./list-row";
 import { useT } from "../../i18n";
 import {
   type DragMoveUpdates,
-  makeKanbanCollision,
   statusGroupId,
   assigneeGroupId,
-  buildColumns,
-  computePosition,
-  findColumn,
-  issueMatchesGroup,
-  getMoveUpdates,
 } from "../utils/drag-utils";
+import { useKanbanDrag } from "../hooks/use-kanban-drag";
 
 function isStatusGroup(
   group: BoardColumnGroup,
@@ -198,194 +183,22 @@ export function BoardView({
       ),
     [hydratedAssigneeGroups, issues, visibleStatuses, grouping, getActorName, t],
   );
-  const groupIds = useMemo(
-    () => new Set(groups.map((group) => group.id)),
-    [groups],
-  );
-  const groupMap = useMemo(
-    () => new Map(groups.map((group) => [group.id, group])),
-    [groups],
-  );
-  const collisionDetection = useMemo(
-    () => makeKanbanCollision(groupIds),
-    [groupIds],
-  );
-
-  // --- Drag state ---
-  const [activeIssue, setActiveIssue] = useState<Issue | null>(null);
-  const isDraggingRef = useRef(false);
-  const isSettlingRef = useRef(false);
-  const [settleVersion, setSettleVersion] = useState(0);
-
-  // --- Local columns state ---
-  // Between drags: follows TQ via useEffect.
-  // During drag: local-only, driven by onDragOver/onDragEnd.
-  const [columns, setColumns] = useState<Record<string, string[]>>(() =>
-    buildColumns(groupedIssues, groups, grouping),
-  );
-  const columnsRef = useRef(columns);
-  columnsRef.current = columns;
-
-  useEffect(() => {
-    if (!isDraggingRef.current && !isSettlingRef.current) {
-      setColumns(buildColumns(groupedIssues, groups, grouping));
-    }
-  }, [groupedIssues, groups, grouping, settleVersion]);
-
-  // After a cross-column move, lock for one animation frame so dnd-kit's
-  // collision detection can stabilize before processing the next move.
-  // Without this, collision oscillates: A→B→A→B… until React bails out.
-  const recentlyMovedRef = useRef(false);
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      recentlyMovedRef.current = false;
-    });
-    return () => cancelAnimationFrame(id);
-  }, [columns]);
-
-  // --- Issue map ---
-  // Frozen during drag so BoardColumn/DraggableBoardCard props stay
-  // referentially stable even if a TQ refetch lands mid-drag.
-  const issueMap = useMemo(() => {
-    const map = new Map<string, Issue>();
-    for (const issue of groupedIssues) map.set(issue.id, issue);
-    return map;
-  }, [groupedIssues]);
-
-  const issueMapRef = useRef(issueMap);
-  if (!isDraggingRef.current && !isSettlingRef.current) {
-    issueMapRef.current = issueMap;
-  }
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 },
-    })
-  );
-
-  const handleDragStart = useCallback(
-    (event: DragStartEvent) => {
-      isDraggingRef.current = true;
-      const issue = issueMapRef.current.get(event.active.id as string) ?? null;
-      setActiveIssue(issue);
-    },
-    [],
-  );
-
-  const handleDragOver = useCallback(
-    (event: DragOverEvent) => {
-      const { active, over } = event;
-      if (!over || recentlyMovedRef.current) return;
-
-      const activeId = active.id as string;
-      const overId = over.id as string;
-
-      setColumns((prev) => {
-        const activeCol = findColumn(prev, activeId, groupIds);
-        const overCol = findColumn(prev, overId, groupIds);
-        if (!activeCol || !overCol || activeCol === overCol) return prev;
-
-        if (sortBy !== "position") return prev;
-
-        recentlyMovedRef.current = true;
-        const oldIds = prev[activeCol]!.filter((id) => id !== activeId);
-        const newIds = [...prev[overCol]!];
-        const overIndex = newIds.indexOf(overId);
-        const insertIndex = overIndex >= 0 ? overIndex : newIds.length;
-        newIds.splice(insertIndex, 0, activeId);
-        return { ...prev, [activeCol]: oldIds, [overCol]: newIds };
-      });
-    },
-    [groupIds, sortBy],
-  );
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      isDraggingRef.current = false;
-      setActiveIssue(null);
-
-      const resetColumns = () =>
-        setColumns(buildColumns(groupedIssues, groups, grouping));
-
-      if (!over) {
-        resetColumns();
-        return;
-      }
-
-      const activeId = active.id as string;
-      const overId = over.id as string;
-
-      const cols = columnsRef.current;
-      const activeCol = findColumn(cols, activeId, groupIds);
-      const overCol = findColumn(cols, overId, groupIds);
-      if (!activeCol || !overCol) {
-        resetColumns();
-        return;
-      }
-
-      // Same-column reorder (manual sort only)
-      let finalColumns = cols;
-      if (activeCol === overCol && sortBy === "position") {
-        const ids = cols[activeCol]!;
-        const oldIndex = ids.indexOf(activeId);
-        const newIndex = ids.indexOf(overId);
-        if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-          const reordered = arrayMove(ids, oldIndex, newIndex);
-          finalColumns = { ...cols, [activeCol]: reordered };
-          setColumns(finalColumns);
-        }
-      }
-
-      const finalCol = sortBy === "position"
-        ? findColumn(finalColumns, activeId, groupIds)
-        : overCol;
-      if (!finalCol) {
-        resetColumns();
-        return;
-      }
-      const finalGroup = groupMap.get(finalCol);
-      if (!finalGroup) {
-        resetColumns();
-        return;
-      }
-
-      const map = issueMapRef.current;
-
-      if (sortBy !== "position") {
-        // Cross-column: only update group (status/assignee), keep original position.
-        const currentIssue = map.get(activeId);
-        if (!currentIssue || issueMatchesGroup(currentIssue, finalGroup)) {
-          resetColumns();
-          return;
-        }
-        isSettlingRef.current = true;
-        onMoveIssue(activeId, getMoveUpdates(finalGroup, currentIssue.position), () => {
-          isSettlingRef.current = false;
-          setSettleVersion((v) => v + 1);
-        });
-        return;
-      }
-
-      const finalIds = finalColumns[finalCol]!;
-      const newPosition = computePosition(finalIds, activeId, map);
-      const currentIssue = map.get(activeId);
-
-      if (
-        currentIssue &&
-        issueMatchesGroup(currentIssue, finalGroup) &&
-        currentIssue.position === newPosition
-      ) {
-        return;
-      }
-
-      isSettlingRef.current = true;
-      onMoveIssue(activeId, getMoveUpdates(finalGroup, newPosition), () => {
-        isSettlingRef.current = false;
-      });
-    },
-    [groupedIssues, groups, grouping, onMoveIssue, groupIds, groupMap, sortBy],
-  );
+  const {
+    columns,
+    issueMap,
+    activeIssue,
+    sensors,
+    collisionDetection,
+    handleDragStart,
+    handleDragOver,
+    handleDragEnd,
+  } = useKanbanDrag({
+    issues: groupedIssues,
+    groups,
+    grouping,
+    sortBy,
+    onMoveIssue,
+  });
 
   return (
     <DndContext
@@ -407,7 +220,7 @@ export function BoardView({
                 key={group.id}
                 group={group}
                 issueIds={columns[group.id] ?? EMPTY_IDS}
-                issueMap={issueMapRef.current}
+                issueMap={issueMap}
                 childProgressMap={childProgressMap}
                 myIssuesOpts={myIssuesOpts}
                 sort={sort}
@@ -420,7 +233,7 @@ export function BoardView({
                   key={group.id}
                   group={group}
                   issueIds={columns[group.id] ?? EMPTY_IDS}
-                  issueMap={issueMapRef.current}
+                  issueMap={issueMap}
                   childProgressMap={childProgressMap}
                   queryKey={assigneeGroupQueryKey}
                   filter={assigneeGroupFilter}
@@ -433,7 +246,7 @@ export function BoardView({
                   key={group.id}
                   group={group}
                   issueIds={columns[group.id] ?? EMPTY_IDS}
-                  issueMap={issueMapRef.current}
+                  issueMap={issueMap}
                   childProgressMap={childProgressMap}
                   projectId={projectId}
                   totalCount={group.totalCount}

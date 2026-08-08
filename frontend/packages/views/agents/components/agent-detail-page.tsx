@@ -45,6 +45,7 @@ import {
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { AppLink, useNavigation } from "../../navigation";
+import { EmptyState } from "../../common/empty-state";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig } from "../presence";
@@ -181,22 +182,21 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
         <BackHeader paths={paths.agents()} title={t(($) => $.detail.back_to_agents)} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-          <Lock className="h-8 w-8 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">{t(($) => $.detail.no_access_title)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t(($) => $.detail.no_access_hint)}
-            </p>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => navigation.push(paths.agents())}
-          >
-            {t(($) => $.detail.back_to_agents_full)}
-          </Button>
-        </div>
+        <EmptyState
+          variant="status"
+          icon={Lock}
+          title={t(($) => $.detail.no_access_title)}
+          description={t(($) => $.detail.no_access_hint)}
+          action={
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => navigation.push(paths.agents())}
+            >
+              {t(($) => $.detail.back_to_agents_full)}
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -206,34 +206,36 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
         <BackHeader paths={paths.agents()} title={t(($) => $.detail.back_to_agents)} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-          <div>
-            <p className="text-sm font-medium">{t(($) => $.detail.not_found_title)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {agentsError instanceof Error
-                ? agentsError.message
-                : t(($) => $.detail.not_found_default)}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => refetchAgents()}
-            >
-              {t(($) => $.detail.try_again)}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => navigation.push(paths.agents())}
-            >
-              {t(($) => $.detail.back_to_agents_full)}
-            </Button>
-          </div>
-        </div>
+        <EmptyState
+          variant="status"
+          tone="destructive"
+          icon={AlertCircle}
+          title={t(($) => $.detail.not_found_title)}
+          description={
+            agentsError instanceof Error
+              ? agentsError.message
+              : t(($) => $.detail.not_found_default)
+          }
+          action={
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => refetchAgents()}
+              >
+                {t(($) => $.detail.try_again)}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => navigation.push(paths.agents())}
+              >
+                {t(($) => $.detail.back_to_agents_full)}
+              </Button>
+            </div>
+          }
+        />
       </div>
     );
   }

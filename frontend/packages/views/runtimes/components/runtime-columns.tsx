@@ -30,7 +30,7 @@ import {
 } from "@multiremi/ui/components/ui/tooltip";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
-import { workloadConfig } from "../../agents/presence";
+import { WorkloadChip } from "../../agents/components/agent-presence-indicator";
 import { ProviderLogo } from "./provider-logo";
 import { HealthIcon, useHealthLabel } from "./shared";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
@@ -282,11 +282,11 @@ function HealthCell({
   );
 }
 
-// Mirrors AgentPresenceIndicator's workload chip — same workloadConfig
-// vocabulary applied to runtime-level aggregated counts. Offline runtime
-// rows still render `—` (the runtime's Health column already says it
-// all; redundant Idle here would just be noise). Online idle runtimes
-// show "Idle" explicitly to match the agent-side three-state symmetry.
+// The shared WorkloadChip, fed runtime-level aggregated counts instead of
+// per-agent ones. Offline runtime rows still render `—` (the runtime's
+// Health column already says it all; redundant Idle here would just be
+// noise). Online idle runtimes show "Idle" explicitly to match the
+// agent-side three-state symmetry.
 function WorkloadCell({
   running,
   queued,
@@ -296,7 +296,6 @@ function WorkloadCell({
   queued: number;
   offline: boolean;
 }) {
-  const { t: tAgents } = useT("agents");
   if (offline) {
     return <span className="text-xs text-muted-foreground/50">—</span>;
   }
@@ -304,7 +303,6 @@ function WorkloadCell({
     runningCount: running,
     queuedCount: queued,
   });
-  const wl = workloadConfig[workload];
   const counts =
     workload === "working"
       ? queued > 0
@@ -314,19 +312,11 @@ function WorkloadCell({
         ? `${queued}`
         : null;
   return (
-    <span className="inline-flex items-center gap-1 text-xs">
-      {workload !== "idle" && (
-        <wl.icon
-          className={`h-3 w-3 shrink-0 ${wl.textClass} ${workload === "working" ? "animate-spin" : ""}`}
-        />
-      )}
-      <span className={`shrink-0 ${wl.textClass}`}>{tAgents(($) => $.workload[workload])}</span>
-      {counts && (
-        <span className="truncate font-mono tabular-nums text-muted-foreground">
-          {counts}
-        </span>
-      )}
-    </span>
+    <WorkloadChip
+      workload={workload}
+      counts={counts}
+      countsClassName="font-mono tabular-nums"
+    />
   );
 }
 

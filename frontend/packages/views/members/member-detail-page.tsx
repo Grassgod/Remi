@@ -12,6 +12,7 @@ import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { PageHeader } from "../layout/page-header";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorIssuesPanel } from "../common/actor-issues-panel";
+import { EmptyState } from "../common/empty-state";
 import { useT } from "../i18n";
 
 export function MemberDetailPage({ userId }: { userId: string }) {
@@ -29,15 +30,12 @@ export function MemberDetailPage({ userId }: { userId: string }) {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
         <MemberBreadcrumb workspaceName={workspace?.name} workspaceAvatarUrl={workspace?.avatar_url} title={t(($) => $.detail.breadcrumb_fallback)} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-          <UserRound className="h-8 w-8 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">{t(($) => $.detail.not_found_title)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t(($) => $.detail.not_found_description)}
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          variant="status"
+          icon={UserRound}
+          title={t(($) => $.detail.not_found_title)}
+          description={t(($) => $.detail.not_found_description)}
+        />
       </div>
     );
   }

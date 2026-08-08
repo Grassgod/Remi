@@ -22,15 +22,14 @@ import {
 } from "@multiremi/ui/components/ui/dialog";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
-import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { useT } from "../../i18n";
 import { AvatarPicker } from "./avatar-picker";
 import { CharCounter } from "./char-counter";
+import { EngineSelect } from "./engine-select";
 import { InstructionsEditor } from "./instructions-editor";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingPicker } from "./inspector/thinking-picker";
 
-const ENGINES = ["claude", "codex"] as const;
 const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 50;
 
@@ -49,7 +48,6 @@ export function EditAgentDialog({
   const nameId = `${fieldId}-name`;
   const descriptionId = `${fieldId}-description`;
   const visibilityLabelId = `${fieldId}-visibility-label`;
-  const engineLabelId = `${fieldId}-engine-label`;
   const concurrencyId = `${fieldId}-concurrency`;
   const thinkingLabelId = `${fieldId}-thinking-label`;
   const [name, setName] = useState(agent.name);
@@ -90,7 +88,6 @@ export function EditAgentDialog({
     validConcurrency;
 
   const switchEngine = (next: string) => {
-    if (next === provider) return;
     setProvider(next);
     setModel("");
     setThinkingLevel("");
@@ -209,43 +206,11 @@ export function EditAgentDialog({
               </div>
             </div>
 
-            <div>
-              <Label
-                id={engineLabelId}
-                className="text-xs text-muted-foreground"
-              >
-                {t(($) => $.create_dialog.engine_label)}
-              </Label>
-              <div
-                role="group"
-                aria-labelledby={engineLabelId}
-                className="mt-1.5 flex gap-2"
-              >
-                {ENGINES.map((engine) => (
-                  <button
-                    key={engine}
-                    type="button"
-                    onClick={() => switchEngine(engine)}
-                    className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                      provider === engine
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:bg-muted"
-                    }`}
-                  >
-                    <ProviderLogo
-                      provider={engine}
-                      className="h-4 w-4 shrink-0"
-                    />
-                    <span className="font-medium capitalize">{engine}</span>
-                  </button>
-                ))}
-              </div>
-              {!fleet.isLoading && fleet.onlineRuntimeCount === 0 && (
-                <p className="mt-1.5 text-xs text-warning">
-                  {t(($) => $.create_dialog.engine_no_capacity)}
-                </p>
-              )}
-            </div>
+            <EngineSelect
+              wsId={wsId ?? ""}
+              value={provider}
+              onChange={switchEngine}
+            />
 
             <ModelDropdown
               wsId={wsId ?? ""}

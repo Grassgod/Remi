@@ -48,6 +48,7 @@ import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { DataTable } from "@multiremi/ui/components/ui/data-table";
 import { useNavigation } from "../../navigation";
+import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig, availabilityOrder } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
@@ -487,7 +488,7 @@ export function AgentsPage() {
       <div className="flex flex-1 min-h-0 flex-col gap-4 p-6">
         {showEmpty ? (
           <div className="flex flex-1 items-center justify-center">
-            <EmptyState onCreate={() => setShowCreate(true)} />
+            <AgentsEmptyState onCreate={() => setShowCreate(true)} />
           </div>
         ) : (
           <div className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-lg border bg-background">
@@ -614,25 +615,27 @@ function ListError({
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <PageHeaderBar totalCount={0} onCreate={onCreate} />
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-        <AlertCircle className="h-8 w-8 text-destructive" />
-        <div>
-          <p className="text-sm font-medium">{t(($) => $.page.list_load_failed)}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {listError instanceof Error
-              ? listError.message
-              : t(($) => $.page.list_load_failed_default)}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onRetry}
-        >
-          {t(($) => $.page.try_again)}
-        </Button>
-      </div>
+      <EmptyState
+        variant="status"
+        tone="destructive"
+        icon={AlertCircle}
+        title={t(($) => $.page.list_load_failed)}
+        description={
+          listError instanceof Error
+            ? listError.message
+            : t(($) => $.page.list_load_failed_default)
+        }
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+          >
+            {t(($) => $.page.try_again)}
+          </Button>
+        }
+      />
     </div>
   );
 }
@@ -926,22 +929,20 @@ function ArchivedToolbarRow({
 // Empty / no-matches states
 // ---------------------------------------------------------------------------
 
-function EmptyState({ onCreate }: { onCreate: () => void }) {
+function AgentsEmptyState({ onCreate }: { onCreate: () => void }) {
   const { t } = useT("agents");
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <Bot className="h-6 w-6 text-muted-foreground" />
-      </div>
-      <h2 className="mt-4 text-base font-semibold">{t(($) => $.empty.title)}</h2>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">
-        {t(($) => $.empty.description)}
-      </p>
-      <Button type="button" onClick={onCreate} size="sm" className="mt-5">
-        <Plus className="h-3 w-3" />
-        {t(($) => $.page.new_agent)}
-      </Button>
-    </div>
+    <EmptyState
+      icon={Bot}
+      title={t(($) => $.empty.title)}
+      description={t(($) => $.empty.description)}
+      action={
+        <Button type="button" onClick={onCreate} size="sm" className="mt-5">
+          <Plus className="h-3 w-3" />
+          {t(($) => $.page.new_agent)}
+        </Button>
+      }
+    />
   );
 }
 

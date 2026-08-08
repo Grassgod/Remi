@@ -8,6 +8,7 @@ import type { TaskMessagePayload } from "@multiremi/core/types/events";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { toast } from "sonner";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { LIVE_TIMER, formatElapsedSince } from "../../common/format";
 import { useActorName } from "@multiremi/core/workspace/hooks";
 import {
   TranscriptButton,
@@ -33,14 +34,6 @@ import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 // arrive). The right-panel rows use the lazy mode of TranscriptButton
 // instead — a one-shot fetch when opened. Both modes coexist.
 
-function formatElapsed(startedAt: string): string {
-  const elapsed = Date.now() - new Date(startedAt).getTime();
-  const seconds = Math.floor(elapsed / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${minutes}m ${secs}s`;
-}
 
 interface TaskState {
   task: AgentTask;
@@ -399,8 +392,8 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
   useEffect(() => {
     const startRef = task.started_at ?? task.dispatched_at ?? task.created_at;
     if (!startRef) return;
-    setElapsed(formatElapsed(startRef));
-    const interval = setInterval(() => setElapsed(formatElapsed(startRef)), 1000);
+    setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER));
+    const interval = setInterval(() => setElapsed(formatElapsedSince(startRef, Date.now(), LIVE_TIMER)), 1000);
     return () => clearInterval(interval);
   }, [task.started_at, task.dispatched_at, task.created_at]);
 

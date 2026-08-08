@@ -21,6 +21,7 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import type { ProjectDoc } from "@multiremi/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import { DocRefs } from "../../../common/doc-refs";
+import { EmptyState } from "../../../common/empty-state";
 import { ReadonlyContent } from "../../../editor";
 import { AppLink } from "../../../navigation";
 import { useT } from "../../../i18n";
@@ -342,23 +343,19 @@ function WikiNotFoundPane({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const paths = useWorkspacePaths();
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <FileQuestion className="h-6 w-6 text-muted-foreground" />
-      </div>
-      <h2 className="mt-4 text-base font-semibold">
-        {t(($) => $.wiki.not_found_title)}
-      </h2>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">
-        {t(($) => $.wiki.not_found_hint)}
-      </p>
-      <AppLink
-        href={paths.projectWiki(projectId)}
-        className="mt-4 text-sm text-muted-foreground hover:text-foreground hover:underline"
-      >
-        {t(($) => $.wiki.not_found_back)}
-      </AppLink>
-    </div>
+    <EmptyState
+      icon={FileQuestion}
+      title={t(($) => $.wiki.not_found_title)}
+      description={t(($) => $.wiki.not_found_hint)}
+      action={
+        <AppLink
+          href={paths.projectWiki(projectId)}
+          className="mt-4 text-sm text-muted-foreground hover:text-foreground hover:underline"
+        >
+          {t(($) => $.wiki.not_found_back)}
+        </AppLink>
+      }
+    />
   );
 }
 
@@ -424,43 +421,37 @@ export function ProjectWikiSection({
 
   if (docsQuery.isError) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-        <AlertCircle className="h-8 w-8 text-destructive" />
-        <div>
-          <p className="text-sm font-medium">
-            {t(($) => $.wiki.load_error_title)}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {docsQuery.error instanceof Error
-              ? docsQuery.error.message
-              : t(($) => $.wiki.load_error_hint)}
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => void docsQuery.refetch()}
-        >
-          {t(($) => $.wiki.load_error_retry)}
-        </Button>
-      </div>
+      <EmptyState
+        variant="status"
+        tone="destructive"
+        icon={AlertCircle}
+        title={t(($) => $.wiki.load_error_title)}
+        description={
+          docsQuery.error instanceof Error
+            ? docsQuery.error.message
+            : t(($) => $.wiki.load_error_hint)
+        }
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void docsQuery.refetch()}
+          >
+            {t(($) => $.wiki.load_error_retry)}
+          </Button>
+        }
+      />
     );
   }
 
   if (docs.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-          <BookText className="h-6 w-6 text-muted-foreground" />
-        </div>
-        <h2 className="mt-4 text-base font-semibold">
-          {t(($) => $.wiki.empty_title)}
-        </h2>
-        <p className="mt-1 max-w-md text-sm text-muted-foreground">
-          {t(($) => $.wiki.empty_hint)}
-        </p>
-      </div>
+      <EmptyState
+        icon={BookText}
+        title={t(($) => $.wiki.empty_title)}
+        description={t(($) => $.wiki.empty_hint)}
+      />
     );
   }
 

@@ -47,3 +47,12 @@ jobs:
 
       - name: Build Multiremi daemon CLI release archives
         run: MULTIREMI_VERSION=v0.0.0-ci bun run build:multiremi
+
+      # This workflow path-filters on `frontend/**` but used to build only the
+      # server/CLI, so a broken web app went green. These two steps are the
+      # gate for everything under frontend/.
+      - name: Typecheck frontend packages and apps
+        run: bun run typecheck:frontend
+
+      - name: Test frontend packages and apps
+        run: bun run test:frontend

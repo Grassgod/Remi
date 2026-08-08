@@ -11,6 +11,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import type { WorkspaceDoc } from "@multiremi/core/types";
 import { AppLink } from "../navigation";
+import { EmptyState } from "../common/empty-state";
 import { PageHeader } from "../layout/page-header";
 import { MemoryCard } from "../projects/components/wiki/project-wiki-section";
 import { useT } from "../i18n";
@@ -180,27 +181,27 @@ export function KnowledgePage() {
   if (docsQuery.isError) {
     return (
       <KnowledgeShell>
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-          <div>
-            <p className="text-sm font-medium">
-              {t(($) => $.knowledge.load_error_title)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {docsQuery.error instanceof Error
-                ? docsQuery.error.message
-                : t(($) => $.knowledge.load_error_hint)}
-            </p>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void docsQuery.refetch()}
-          >
-            {t(($) => $.knowledge.load_error_retry)}
-          </Button>
-        </div>
+        <EmptyState
+          variant="status"
+          tone="destructive"
+          icon={AlertCircle}
+          title={t(($) => $.knowledge.load_error_title)}
+          description={
+            docsQuery.error instanceof Error
+              ? docsQuery.error.message
+              : t(($) => $.knowledge.load_error_hint)
+          }
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void docsQuery.refetch()}
+            >
+              {t(($) => $.knowledge.load_error_retry)}
+            </Button>
+          }
+        />
       </KnowledgeShell>
     );
   }
@@ -208,17 +209,11 @@ export function KnowledgePage() {
   if (docs.length === 0) {
     return (
       <KnowledgeShell>
-        <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-            <BookText className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <h2 className="mt-4 text-base font-semibold">
-            {t(($) => $.knowledge.empty_title)}
-          </h2>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            {t(($) => $.knowledge.empty_hint)}
-          </p>
-        </div>
+        <EmptyState
+          icon={BookText}
+          title={t(($) => $.knowledge.empty_title)}
+          description={t(($) => $.knowledge.empty_hint)}
+        />
       </KnowledgeShell>
     );
   }

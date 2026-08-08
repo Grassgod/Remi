@@ -32,7 +32,7 @@ import {
   useResolveComment,
   useToggleCommentReaction,
   type ToggleCommentReactionVars,
-} from "@multiremi/core/issues/mutations";
+} from "@multiremi/core/issues/comment-mutations";
 import { sortTimelineEntriesAsc } from "@multiremi/core/issues/timeline-sort";
 import { useWSEvent, useWSReconnect } from "@multiremi/core/realtime";
 import { toast } from "sonner";

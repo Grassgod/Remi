@@ -41,6 +41,7 @@ import {
   DropdownMenuItem,
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { sortIssues } from "../utils/sort";
+import { computePosition } from "../utils/drag-utils";
 import { BOARD_STATUSES, STATUS_CONFIG } from "@multiremi/core/issues/config";
 import { useModalStore } from "@multiremi/core/modals";
 import { DraggableBoardCard, BoardCardContent } from "./board-card";
@@ -168,16 +169,6 @@ function parseLaneId(id: string): { grouping: string; rawId: string } | null {
     grouping: rest.slice(0, firstColon),
     rawId: rest.slice(firstColon + 1),
   };
-}
-
-function computePosition(ids: string[], activeId: string, issueMap: Map<string, Issue>): number {
-  const idx = ids.indexOf(activeId);
-  if (idx === -1) return 0;
-  const getPos = (id: string) => issueMap.get(id)?.position ?? 0;
-  if (ids.length === 1) return issueMap.get(activeId)?.position ?? 0;
-  if (idx === 0) return getPos(ids[1]!) - 1;
-  if (idx === ids.length - 1) return getPos(ids[idx - 1]!) + 1;
-  return (getPos(ids[idx - 1]!) + getPos(ids[idx + 1]!)) / 2;
 }
 
 /**

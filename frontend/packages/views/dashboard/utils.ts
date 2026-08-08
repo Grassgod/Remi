@@ -7,11 +7,10 @@ import type {
 import {
   addDaysIso,
   estimateCost,
-  estimateCostBreakdown,
+  formatDateLabel,
   formatShortDate,
   todayIso,
   weekStartIso,
-  type DailyTokenData,
 } from "../runtimes/utils";
 import type {
   DailyTimeData,
@@ -24,98 +23,12 @@ import type {
 // Dashboard data aggregations
 //
 // The workspace dashboard returns the same per-(date, model) and
-// per-(agent, model) shapes the runtime page does, so cost math reuses
-// `estimateCost` / `estimateCostBreakdown` from the runtimes utils. What
-// the runtimes view does with `aggregateByDate` (works on RuntimeUsage,
-// which carries a `provider` field) we replicate here with a tighter
-// type — fewer optional fields, less conditional logic on the consumer
-// side.
+// per-(agent, model) shapes the runtime page does, so the daily cost / token
+// aggregation and every piece of cost math come straight from the runtimes
+// utils (`aggregateByDate`, `estimateCost`, `estimateCostBreakdown`). Only
+// the run-time and task rollups below are dashboard-specific — the runtime
+// page has no equivalent of those endpoints.
 // ---------------------------------------------------------------------------
-
-export interface DailyCostStack {
-  date: string;
-  label: string;
-  input: number;
-  output: number;
-  cacheWrite: number;
-  total: number;
-}
-
-function formatDateLabel(d: string): string {
-  // Anchor to local midnight so the formatted label matches the bucket the
-  // server picked (which is already in workspace time). Pasting the raw
-  // date as the body of `new Date()` would interpret it as UTC and shift
-  // by the user's offset.
-  const date = new Date(d + "T00:00:00");
-  return `${date.getMonth() + 1}/${date.getDate()}`;
-}
-
-// Per-(date, model) rows → 1 row per date with cost broken into the three
-// segments the stacked bar chart consumes. Stable sort by date asc so the
-// chart x-axis is left-to-right oldest-to-newest.
-export function aggregateDailyCost(usage: DashboardUsageDaily[]): DailyCostStack[] {
-  const map = new Map<string, { input: number; output: number; cacheWrite: number }>();
-  for (const u of usage) {
-    const b = estimateCostBreakdown(u);
-    const entry = map.get(u.date) ?? { input: 0, output: 0, cacheWrite: 0 };
-    entry.input += b.input;
-    entry.output += b.output;
-    entry.cacheWrite += b.cacheWrite;
-    map.set(u.date, entry);
-  }
-  const round = (n: number) => Math.round(n * 100) / 100;
-  return Array.from(map.entries())
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([date, s]) => {
-      const input = round(s.input);
-      const output = round(s.output);
-      const cacheWrite = round(s.cacheWrite);
-      return {
-        date,
-        label: formatDateLabel(date),
-        input,
-        output,
-        cacheWrite,
-        total: round(input + output + cacheWrite),
-      };
-    });
-}
-
-// Per-(date, model) rows → 1 row per date with raw token counts split
-// across the four chart segments. Independent of pricing — unmapped
-// models still contribute here, even if they're excluded from cost.
-// Mirrors `aggregateByDate(...).dailyTokens` from the runtimes utils so
-// the Tokens chart on the Usage page consumes the same shape as the one
-// on the runtime-detail page.
-export function aggregateDailyTokens(usage: DashboardUsageDaily[]): DailyTokenData[] {
-  const map = new Map<
-    string,
-    { input: number; output: number; cacheRead: number; cacheWrite: number }
-  >();
-  for (const u of usage) {
-    const entry = map.get(u.date) ?? {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    };
-    entry.input += u.input_tokens;
-    entry.output += u.output_tokens;
-    entry.cacheRead += u.cache_read_tokens;
-    entry.cacheWrite += u.cache_write_tokens;
-    map.set(u.date, entry);
-  }
-  return Array.from(map.entries())
-    .toSorted(([a], [b]) => a.localeCompare(b))
-    .map(([date, t]) => ({
-      date,
-      label: formatDateLabel(date),
-      input: t.input,
-      output: t.output,
-      cacheRead: t.cacheRead,
-      cacheWrite: t.cacheWrite,
-    }));
-}
 
 export interface DashboardTokenTotals {
   input: number;

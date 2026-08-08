@@ -19,7 +19,7 @@ const stableHandles = vi.hoisted(() => ({
 // server pushes by invoking them directly.
 const wsHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
 
-vi.mock("@multiremi/core/issues/mutations", () => ({
+vi.mock("@multiremi/core/issues/comment-mutations", () => ({
   useCreateComment: () => ({
     mutateAsync: stableHandles.createMutateAsync,
     mutate: vi.fn(),

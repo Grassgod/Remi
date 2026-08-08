@@ -7,6 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@multiremi/ui/components/ui/dropdown-menu";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
+import { ENGINES } from "./engine-select";
 import { useT } from "../../i18n";
 
 // ---------------------------------------------------------------------------
@@ -14,8 +15,6 @@ import { useT } from "../../i18n";
 // per-machine filter: agents are pool workers now, so the only placement
 // dimension they carry is the engine (provider) they run on.
 // ---------------------------------------------------------------------------
-
-const ENGINES = ["claude", "codex"] as const;
 
 export function EngineFilterDropdown({
   value,

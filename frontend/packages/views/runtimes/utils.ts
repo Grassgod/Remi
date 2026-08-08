@@ -5,6 +5,11 @@ import type {
 } from "@multiremi/core/types";
 import { getCustomPricing } from "@multiremi/core/runtimes/custom-pricing-store";
 
+// The compact token formatter lives with the other cross-view formatters.
+// Re-exported here because every usage table in this directory reaches for it
+// through `../utils` alongside the aggregation helpers it renders.
+export { formatTokens } from "../common/format";
+
 // A live local daemon re-registers itself within seconds of a server-side
 // delete (daemon self-heal, #2404), so deleting an online local runtime from
 // the UI has no lasting effect. Both the detail page and the list row menu
@@ -107,17 +112,6 @@ export function isVersionNewer(latest: string, current: string): boolean {
   return false;
 }
 
-export function formatTokens(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return m % 1 < 0.05 ? `${Math.round(m)}M` : `${m.toFixed(1)}M`;
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    return k % 1 < 0.05 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
-  }
-  return n.toLocaleString();
-}
 
 // ---------------------------------------------------------------------------
 // Cost estimation
@@ -446,7 +440,31 @@ export interface WeeklyCostStackData {
   total: number;
 }
 
-export function aggregateByDate(usage: RuntimeUsage[]): {
+// Accepts any row carrying `date` + token counts + the model needed for
+// pricing — the same widening `aggregateByWeek` already does one screen down.
+// `RuntimeUsage` (runtime detail) carries `provider` as the model-name
+// fallback; `DashboardUsageDaily` (workspace dashboard) does not, and rows
+// there always name a model, so it is optional.
+export type DailyAggregable = Pick<
+  RuntimeUsage,
+  | "date"
+  | "model"
+  | "input_tokens"
+  | "output_tokens"
+  | "cache_read_tokens"
+  | "cache_write_tokens"
+> & { provider?: string };
+
+// Anchor to local midnight so the formatted label matches the bucket the
+// server picked (which is already in workspace time). Pasting the raw date as
+// the body of `new Date()` would interpret it as UTC and shift by the user's
+// offset.
+export function formatDateLabel(d: string): string {
+  const date = new Date(d + "T00:00:00");
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+export function aggregateByDate(usage: readonly DailyAggregable[]): {
   dailyTokens: DailyTokenData[];
   dailyCost: DailyCostData[];
   dailyCostStack: DailyCostStackData[];
@@ -488,7 +506,7 @@ export function aggregateByDate(usage: RuntimeUsage[]): {
     stack.cacheWrite += breakdown.cacheWrite;
     stackMap.set(u.date, stack);
 
-    const modelName = u.model || u.provider;
+    const modelName = u.model || u.provider || "";
     const m = modelMap.get(modelName) ?? { tokens: 0, cost: 0 };
     m.tokens +=
       u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens;
@@ -496,20 +514,15 @@ export function aggregateByDate(usage: RuntimeUsage[]): {
     modelMap.set(modelName, m);
   }
 
-  const formatLabel = (d: string) => {
-    const date = new Date(d + "T00:00:00");
-    return `${date.getMonth() + 1}/${date.getDate()}`;
-  };
-
   const dailyTokens = Array.from(dateMap.values())
     .toSorted((a, b) => a.date.localeCompare(b.date))
-    .map((d) => ({ ...d, label: formatLabel(d.date) }));
+    .map((d) => ({ ...d, label: formatDateLabel(d.date) }));
 
   const dailyCost = Array.from(costMap.entries())
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([date, cost]) => ({
       date,
-      label: formatLabel(date),
+      label: formatDateLabel(date),
       cost: Math.round(cost * 100) / 100,
     }));
 
@@ -522,7 +535,7 @@ export function aggregateByDate(usage: RuntimeUsage[]): {
       const cacheWrite = round(s.cacheWrite);
       return {
         date,
-        label: formatLabel(date),
+        label: formatDateLabel(date),
         input,
         output,
         cacheWrite,

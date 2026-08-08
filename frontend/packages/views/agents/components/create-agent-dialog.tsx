@@ -7,10 +7,8 @@ import { ModelDropdown } from "./model-dropdown";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
-import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
@@ -31,12 +29,8 @@ import { Label } from "@multiremi/ui/components/ui/label";
 import { toast } from "sonner";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { CharCounter } from "./char-counter";
+import { ENGINES, EngineSelect } from "./engine-select";
 import { useT } from "../../i18n";
-
-// The two engines a pool agent can run on. Static by design: these are the
-// providers the daemon fleet ships bridges for; the fleet catalog only
-// refines each engine's models + capacity.
-const ENGINES = ["claude", "codex"] as const;
 
 export function CreateAgentDialog({
   template,
@@ -95,13 +89,7 @@ export function CreateAgentDialog({
       ? template.provider
       : "claude",
   );
-  // Capacity signal for the selected engine — 0 online machines means new
-  // tasks would queue until one comes up. Purely informational; creation
-  // stays allowed.
-  const fleet = useFleetProviderModels(wsId ?? "", provider);
-
   const switchEngine = (next: string) => {
-    if (next === provider) return;
     setProvider(next);
     // The model catalog is per-engine; a claude model id makes no sense on
     // codex. Reset to "engine default" on switch.
@@ -322,31 +310,11 @@ export function CreateAgentDialog({
             {/* Engine: the only "where does it run"-adjacent choice left.
                 Machines are gone from this flow — the pool schedules work
                 onto any online runtime of the chosen engine. */}
-            <div>
-              <Label className="text-xs text-muted-foreground">{t(($) => $.create_dialog.engine_label)}</Label>
-              <div className="mt-1.5 flex gap-2">
-                {ENGINES.map((engine) => (
-                  <button
-                    type="button"
-                    key={engine}
-                    onClick={() => switchEngine(engine)}
-                    className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
-                      provider === engine
-                        ? "border-primary bg-primary/5"
-                        : "border-border hover:bg-muted"
-                    }`}
-                  >
-                    <ProviderLogo provider={engine} className="h-4 w-4 shrink-0" />
-                    <span className="font-medium capitalize">{engine}</span>
-                  </button>
-                ))}
-              </div>
-              {!fleet.isLoading && fleet.onlineRuntimeCount === 0 && (
-                <p className="mt-1.5 text-xs text-warning">
-                  {t(($) => $.create_dialog.engine_no_capacity)}
-                </p>
-              )}
-            </div>
+            <EngineSelect
+              wsId={wsId ?? ""}
+              value={provider}
+              onChange={switchEngine}
+            />
 
             <ModelDropdown
               wsId={wsId ?? ""}

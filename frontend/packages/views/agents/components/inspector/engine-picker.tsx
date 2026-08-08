@@ -7,10 +7,8 @@ import {
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
 import { CHIP_CLASS } from "./chip";
+import { ENGINES } from "../engine-select";
 import { useT } from "../../../i18n";
-
-// The engines a pool agent can run on. Mirrors the create dialog's toggle.
-const ENGINES = ["claude", "codex"] as const;
 
 /**
  * Inline engine (provider) picker for the agent inspector. Replaces the old

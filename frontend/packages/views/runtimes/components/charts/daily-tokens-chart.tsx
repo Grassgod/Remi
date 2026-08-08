@@ -1,18 +1,7 @@
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-} from "recharts";
-import {
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-  type ChartConfig,
-} from "@multiremi/ui/components/ui/chart";
+import type { ChartConfig } from "@multiremi/ui/components/ui/chart";
 import { formatTokens, type DailyTokenData } from "../../utils";
 import { useT } from "../../../i18n";
+import { StackedBarChart } from "./stacked-bar-chart";
 
 // Four-segment stack — input / output / cache read / cache write. Unlike the
 // cost chart, cache reads ARE visible here: a typical day on Claude shows
@@ -32,81 +21,28 @@ export const tokenStackConfig = {
   cacheWrite: { label: "Cache write", color: "var(--chart-3)" },
 } satisfies ChartConfig;
 
+export const TOKEN_SERIES = [
+  "input",
+  "output",
+  "cacheRead",
+  "cacheWrite",
+] as const;
+
+const localeTotal = (total: number) => total.toLocaleString();
+
 export function DailyTokensChart({ data }: { data: DailyTokenData[] }) {
   const { t } = useT("runtimes");
-  // No internal empty-state — same convention as DailyCostChart: the parent
-  // decides what to render when there's nothing to show.
   return (
-    <ChartContainer config={tokenStackConfig} className="aspect-[3/1] w-full">
-      <BarChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
-        <CartesianGrid vertical={false} />
-        <XAxis
-          dataKey="label"
-          tickLine={false}
-          axisLine={false}
-          tickMargin={8}
-          interval="preserveStartEnd"
-        />
-        <YAxis
-          tickLine={false}
-          axisLine={false}
-          tickMargin={8}
-          tickFormatter={(v: number) => formatTokens(v)}
-          width={50}
-        />
-        <ChartTooltip
-          content={
-            <ChartTooltipContent
-              formatter={(value, name) =>
-                typeof value === "number"
-                  ? `${formatTokens(value)} ${name}`
-                  : `${value} ${name}`
-              }
-              footer={(payload) => {
-                const total = payload.reduce(
-                  (sum, item) =>
-                    sum +
-                    (typeof item.value === "number" ? item.value : 0),
-                  0,
-                );
-                return (
-                  <div className="flex items-center justify-between gap-2 font-medium">
-                    <span>{t(($) => $.charts.tooltip_total)}</span>
-                    <span className="font-mono tabular-nums">
-                      {total.toLocaleString()}
-                    </span>
-                  </div>
-                );
-              }}
-            />
-          }
-        />
-        {/* Legend is rendered by the parent in the chart card header. */}
-        <Bar
-          dataKey="input"
-          stackId="tokens"
-          fill="var(--color-input)"
-          radius={[0, 0, 0, 0]}
-        />
-        <Bar
-          dataKey="output"
-          stackId="tokens"
-          fill="var(--color-output)"
-          radius={[0, 0, 0, 0]}
-        />
-        <Bar
-          dataKey="cacheRead"
-          stackId="tokens"
-          fill="var(--color-cacheRead)"
-          radius={[0, 0, 0, 0]}
-        />
-        <Bar
-          dataKey="cacheWrite"
-          stackId="tokens"
-          fill="var(--color-cacheWrite)"
-          radius={[3, 3, 0, 0]}
-        />
-      </BarChart>
-    </ChartContainer>
+    <StackedBarChart
+      data={data}
+      config={tokenStackConfig}
+      series={TOKEN_SERIES}
+      stackId="tokens"
+      yAxisWidth={50}
+      yAxisTickFormatter={formatTokens}
+      formatValue={formatTokens}
+      totalLabel={t(($) => $.charts.tooltip_total)}
+      formatTotal={localeTotal}
+    />
   );
 }

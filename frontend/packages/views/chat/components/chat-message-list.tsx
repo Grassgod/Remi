@@ -29,7 +29,7 @@ import type { ChatTimelineItem } from "@multiremi/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
 import { TaskStatusPill } from "./task-status-pill";
-import { formatElapsedMs } from "../lib/format";
+import { formatElapsedMs } from "../../common/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
 

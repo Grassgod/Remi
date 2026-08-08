@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DashboardUsageDaily } from "@multiremi/core/types";
+import { aggregateByDate } from "../runtimes/utils";
 import {
   aggregateAgentTokens,
-  aggregateDailyCost,
   aggregateWeeklyTasks,
   aggregateWeeklyTime,
   computeDailyTotals,
@@ -9,9 +10,12 @@ import {
   mergeAgentDashboardRows,
 } from "./utils";
 
-describe("aggregateDailyCost", () => {
+// The dashboard shares the runtimes page's daily rollup — these cases pin the
+// cost stack it reads out of it against the dashboard's own row shape (which
+// carries no `provider`).
+describe("aggregateByDate on dashboard rows", () => {
   it("collapses multiple rows per day into one stack and sorts by date asc", () => {
-    const result = aggregateDailyCost([
+    const rows: DashboardUsageDaily[] = [
       {
         date: "2026-05-10",
         model: "claude-sonnet-4-6",
@@ -30,7 +34,8 @@ describe("aggregateDailyCost", () => {
         cache_write_tokens: 0,
         task_count: 1,
       },
-    ]);
+    ];
+    const { dailyCostStack: result } = aggregateByDate(rows);
 
     // Sort: oldest day first.
     expect(result.map((r) => r.date)).toEqual(["2026-05-09", "2026-05-10"]);
@@ -42,7 +47,7 @@ describe("aggregateDailyCost", () => {
   });
 
   it("treats unmapped models as zero-cost", () => {
-    const result = aggregateDailyCost([
+    const rows: DashboardUsageDaily[] = [
       {
         date: "2026-05-10",
         model: "made-up-model",
@@ -52,7 +57,8 @@ describe("aggregateDailyCost", () => {
         cache_write_tokens: 0,
         task_count: 0,
       },
-    ]);
+    ];
+    const { dailyCostStack: result } = aggregateByDate(rows);
     expect(result[0]?.total).toBe(0);
   });
 });

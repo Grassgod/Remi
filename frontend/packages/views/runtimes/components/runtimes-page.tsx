@@ -27,6 +27,7 @@ import {
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { useIsMobile } from "@multiremi/ui/hooks/use-mobile";
 import { cn } from "@multiremi/ui/lib/utils";
+import { EmptyState } from "../../common/empty-state";
 import { PageHeader } from "../../layout/page-header";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
@@ -211,7 +212,7 @@ export function RuntimesPage({
         <div className="min-h-0 flex-1 border-t bg-background" />
       ) : showEmpty ? (
         <div className="flex flex-1 items-center justify-center p-6">
-          <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
+          <RuntimesEmptyState onConnectRemote={() => setShowConnectDialog(true)} />
         </div>
       ) : isMobile ? (
         <div className="flex min-h-0 flex-1 flex-col border-t bg-background">
@@ -708,27 +709,25 @@ function MachineDetail({
 // workspace.
 // ---------------------------------------------------------------------------
 
-function EmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
+function RuntimesEmptyState({ onConnectRemote }: { onConnectRemote: () => void }) {
   const { t } = useT("runtimes");
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-        <Server className="h-6 w-6 text-muted-foreground" />
-      </div>
-      <h2 className="mt-4 text-base font-semibold">{t(($) => $.page.empty.title)}</h2>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">
-        {t(($) => $.page.empty.hint)}
-      </p>
-      <Button
-        type="button"
-        size="sm"
-        onClick={onConnectRemote}
-        className="mt-5"
-      >
-        <Plus className="h-3 w-3" />
-        {t(($) => $.page.connect_remote)}
-      </Button>
-    </div>
+    <EmptyState
+      icon={Server}
+      title={t(($) => $.page.empty.title)}
+      description={t(($) => $.page.empty.hint)}
+      action={
+        <Button
+          type="button"
+          size="sm"
+          onClick={onConnectRemote}
+          className="mt-5"
+        >
+          <Plus className="h-3 w-3" />
+          {t(($) => $.page.connect_remote)}
+        </Button>
+      }
+    />
   );
 }
 

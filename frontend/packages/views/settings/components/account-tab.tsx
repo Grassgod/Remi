@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Camera, Loader2, Save } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Save } from "lucide-react";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { useAuthStore } from "@multiremi/core/auth";
 import { api } from "@multiremi/core/api";
 import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
-import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
+import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { useT } from "../../i18n";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
@@ -30,8 +30,6 @@ export function AccountTab() {
     user?.profile_description ?? "",
   );
   const [profileSaving, setProfileSaving] = useState(false);
-  const { upload, uploading } = useFileUpload(api);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setProfileName(user?.name ?? "");
@@ -47,20 +45,9 @@ export function AccountTab() {
     .toUpperCase()
     .slice(0, 2);
 
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // Reset input so the same file can be re-selected
-    e.target.value = "";
-    try {
-      const result = await upload(file);
-      if (!result) return;
-      const updated = await api.updateMe({ avatar_url: result.link });
-      setUser(updated);
-      toast.success(t(($) => $.account.toast_avatar_updated));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.account.toast_avatar_failed));
-    }
+  const handleAvatarUpload = async (url: string) => {
+    const updated = await api.updateMe({ avatar_url: url });
+    setUser(updated);
   };
 
   const handleProfileSave = async () => {
@@ -89,11 +76,12 @@ export function AccountTab() {
           <CardContent className="space-y-4">
             {/* Avatar upload */}
             <div className="flex items-center gap-4">
-              <button
-                type="button"
-                className="group relative h-16 w-16 shrink-0 rounded-full bg-muted overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
+              <AvatarUploadButton
+                className="h-16 w-16 rounded-full bg-muted"
+                overlayIconClassName="h-5 w-5"
+                successMessage={t(($) => $.account.toast_avatar_updated)}
+                errorMessage={t(($) => $.account.toast_avatar_failed)}
+                onUploaded={handleAvatarUpload}
               >
                 {user?.avatar_url ? (
                   <img
@@ -106,21 +94,7 @@ export function AccountTab() {
                     {initials}
                   </span>
                 )}
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-                  {uploading ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-white" />
-                  ) : (
-                    <Camera className="h-5 w-5 text-white" />
-                  )}
-                </div>
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleAvatarUpload}
-              />
+              </AvatarUploadButton>
               <div className="text-xs text-muted-foreground">
                 {t(($) => $.account.click_avatar_hint)}
               </div>

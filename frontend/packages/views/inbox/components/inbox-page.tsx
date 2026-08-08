@@ -23,6 +23,7 @@ import {
 
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multiremi/ui/components/common/error-boundary";
+import { EmptyState } from "../../common/empty-state";
 import { useNavigation } from "../../navigation";
 import { toast } from "sonner";
 import {
@@ -63,18 +64,21 @@ import { useT } from "../../i18n";
 function InboxLoadError({ onRetry }: { onRetry: () => void }) {
   const { t } = useT("common");
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-      <AlertCircle className="h-8 w-8 text-destructive" />
-      <div>
-        <p className="text-sm font-medium">{t(($) => $.load_error.title)}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t(($) => $.load_error.description)}
-        </p>
-      </div>
-      <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-        {t(($) => $.load_error.retry)}
-      </Button>
-    </div>
+    <EmptyState
+      // The inbox list column is a scroll container, not a flex parent, so
+      // this state sizes to its content instead of stretching.
+      className="flex-initial"
+      variant="status"
+      tone="destructive"
+      icon={AlertCircle}
+      title={t(($) => $.load_error.title)}
+      description={t(($) => $.load_error.description)}
+      action={
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          {t(($) => $.load_error.retry)}
+        </Button>
+      }
+    />
   );
 }
 
