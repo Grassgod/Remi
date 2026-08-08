@@ -1,0 +1,339 @@
+import type { Hono } from "hono";
+import {
+  MAX_TASK_MESSAGES_PER_REQUEST,
+  buildDaemonInstallInstructions,
+  callerCanReceiveRelay,
+  compareDaemonPendingTasks,
+  daemonRegisterOwnerContext,
+  daemonTaskMessageInput,
+  daemonTaskUsageEntries,
+  denyCurrentUserWorkspaceAccess,
+  denyDaemonTokenRuntimeWorkspace,
+  denyDaemonTokenWorkspace,
+  deregisterDaemonRuntimes,
+  isDaemonPendingTaskForRuntime,
+  isJsonApiError,
+  isTerminalTaskStatus,
+  issueFromParam,
+  normalizeRuntimeIds,
+  parseOptionalTaskMessageSince,
+  readJson,
+  readJsonStrict,
+  readJsonStrictAllowEmpty,
+  registerDaemonRuntimes,
+} from "../helpers.js";
+import {
+  cleanString,
+  currentRequestUserId,
+  daemonHeartbeatHttpResponse,
+  daemonTaskClaimResponse,
+  daemonTaskMessageWireResponse,
+  daemonTaskWireResponse,
+  workspaceReposResponse,
+} from "../wire/index.js";
+import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import type { DaemonRegisterRequestBody } from "../helpers.js";
+import type { RouterDeps } from "./deps.js";
+
+export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
+  const { store } = deps;
+
+  app.get("/api/multiremi/install/daemon", (c) => {
+    return c.json(buildDaemonInstallInstructions({
+      requestUrl: c.req.url,
+      serverUrl: c.req.query("serverUrl") ?? c.req.query("server_url"),
+      workspaceId: c.req.query("workspaceId") ?? c.req.query("workspace_id"),
+      token: c.req.query("token"),
+      provider: c.req.query("provider"),
+      version: c.req.query("version"),
+    }));
+  });
+  app.post("/api/multiremi/install/daemon", async (c) => {
+    const body = await readJson<{
+      serverUrl?: string;
+      server_url?: string;
+      workspaceId?: string;
+      workspace_id?: string;
+      token?: string;
+      provider?: string;
+      version?: string;
+      tokenName?: string;
+      token_name?: string;
+      expiresInDays?: number | null;
+      expires_in_days?: number | null;
+      createToken?: boolean;
+      create_token?: boolean;
+      daemonId?: string | null;
+      daemon_id?: string | null;
+    }>(c);
+    const workspaceId = body.workspaceId ?? body.workspace_id ?? c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    let token = body.token ?? c.req.query("token");
+    let tokenId: string | null = null;
+    const shouldCreateToken = (body.createToken ?? body.create_token ?? true) !== false;
+    if (!token && shouldCreateToken) {
+      const created = await store.createAccessToken({
+        workspaceId,
+        // Own the daemon token by the user provisioning it, so runtimes it later
+        // registers are attributed to that person (FR6/FR8).
+        userId: currentRequestUserId(c),
+        daemonId: body.daemonId ?? body.daemon_id ?? c.req.query("daemonId") ?? c.req.query("daemon_id") ?? null,
+        name: body.tokenName ?? body.token_name ?? "Multiremi daemon",
+        type: "daemon",
+        expiresInDays: body.expiresInDays ?? body.expires_in_days ?? 90,
+      });
+      token = created.token;
+      tokenId = created.id;
+    }
+    const instructions = buildDaemonInstallInstructions({
+      requestUrl: c.req.url,
+      serverUrl: body.serverUrl ?? body.server_url ?? c.req.query("serverUrl") ?? c.req.query("server_url"),
+      workspaceId,
+      token,
+      tokenId,
+      provider: body.provider ?? c.req.query("provider"),
+      version: body.version ?? c.req.query("version"),
+    });
+    return tokenId ? c.json(instructions, 201) : c.json(instructions);
+  });
+  app.post("/api/daemon/register", async (c) => {
+    const body = await readJsonStrict<DaemonRegisterRequestBody>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
+    if (denied) return denied;
+    const owner = daemonRegisterOwnerContext(c, store, body.workspace_id);
+    if ("error" in owner) return c.json({ error: owner.error }, owner.status);
+    const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";
+    const includeRelay = callerCanReceiveRelay(c, store, registerWorkspace);
+    const result = registerDaemonRuntimes(store, body, owner, includeRelay);
+    if ("error" in result) return c.json({ error: result.error }, result.status);
+    return c.json(result);
+  });
+  app.post("/api/daemon/deregister", async (c) => {
+    const body = await readJsonStrict<{ runtime_ids?: string[] }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const runtimeIds = normalizeRuntimeIds(body.runtime_ids);
+    if ("error" in runtimeIds) return c.json({ error: runtimeIds.error }, runtimeIds.status);
+    deregisterDaemonRuntimes(c, store, runtimeIds.runtimeIds);
+    return c.json({ status: "ok" });
+  });
+  app.post("/api/daemon/heartbeat", async (c) => {
+    const body = await readJsonStrict<{ runtime_id?: string; supports_batch_import?: boolean; supports_directory_scan?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const runtimeId = body.runtime_id ?? "";
+    if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    const denied = denyDaemonTokenRuntimeWorkspace(c, store, runtimeId);
+    if (denied) return denied;
+    const ack = store.heartbeatRuntime(runtimeId, {
+      supportsBatchImport: body.supports_batch_import ?? false,
+      supportsDirectoryScan: body.supports_directory_scan ?? false,
+    });
+    if (ack.status === "runtime_gone") return c.json({ error: "runtime not found" }, 404);
+    return c.json(daemonHeartbeatHttpResponse(ack));
+  });
+  app.get("/api/daemon/workspaces/:workspaceId/repos", (c) => {
+    const denied = denyDaemonTokenWorkspace(c, c.req.param("workspaceId"));
+    if (denied) return denied;
+    const includeRelay = callerCanReceiveRelay(c, store, c.req.param("workspaceId"));
+    const response = workspaceReposResponse(store, c.req.param("workspaceId"), includeRelay);
+    if (!response) return c.json({ error: "workspace not found" }, 404);
+    return c.json(response);
+  });
+  // Multiremi daemon-compatible endpoints.
+  app.post("/api/daemon/runtimes/:runtimeId/tasks/claim", async (c) => {
+    const task = store.claimTask(c.req.param("runtimeId"));
+    if (!task) return c.json({ task: null });
+    const response = daemonTaskClaimResponse(store, task, store.getTaskTriggerMetadata(task));
+    const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
+    const ownerId = cleanString(runtime?.ownerId);
+    if (ownerId) {
+      const token = await store.createTaskAccessToken(task, ownerId);
+      response.auth_token = token.token;
+    }
+    return c.json({ task: response });
+  });
+  app.get("/api/daemon/runtimes/:runtimeId/tasks/pending", (c) => {
+    const runtime = store.getRuntime(c.req.param("runtimeId"));
+    if (!runtime) return c.json({ error: "runtime not found" }, 404);
+    const tasks = store.listTasks()
+      .filter((task) => isDaemonPendingTaskForRuntime(task, runtime.id))
+      .sort(compareDaemonPendingTasks)
+      .map((task) => daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+    return c.json(tasks);
+  });
+  app.post("/api/daemon/runtimes/:runtimeId/recover-orphans", (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    if (!store.getRuntime(runtimeId)) return c.json({ error: "runtime not found" }, 404);
+    return c.json(store.recoverOrphans(runtimeId));
+  });
+  app.post("/api/daemon/tasks/:taskId/start", (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    if (existing.status !== "dispatched" && existing.status !== "waiting_local_directory") {
+      return c.json({ error: "start task: no rows in result set" }, 400);
+    }
+    const task = store.startTask(taskId);
+    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/wait-local-directory", async (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    const body = await readJsonStrictAllowEmpty<{ reason?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    if (existing.status !== "dispatched") {
+      return c.json({ error: "mark task waiting_local_directory: no rows in result set" }, 400);
+    }
+    let task: MultiremiTask;
+    try {
+      task = store.markTaskWaitingLocalDirectory(taskId, body.reason);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/human-requests", async (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    if (isTerminalTaskStatus(existing.status)) return c.json({ error: "task is terminal" }, 400);
+    const body = await readJsonStrict<{ kind?: string; payload?: Record<string, unknown> }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const kind = body.kind === "question" ? "question" : "permission";
+    const request = store.createTaskHumanRequest({ taskId, kind, payload: body.payload ?? {} });
+    return c.json({ request }, 201);
+  });
+  app.get("/api/daemon/tasks/:taskId/human-requests/:requestId", (c) => {
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
+    return c.json({ request });
+  });
+  app.post("/api/daemon/tasks/:taskId/human-requests/:requestId/expire", async (c) => {
+    const request = store.getTaskHumanRequest(c.req.param("requestId"));
+    if (!request || request.taskId !== c.req.param("taskId")) return c.json({ error: "request not found" }, 404);
+    const body = await readJsonStrict<{ status?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const status = body.status === "cancelled" ? "cancelled" : "timeout";
+    const expired = store.expireTaskHumanRequest(request.id, status);
+    // Lost the race to a human response: return the current row so the worker honors it.
+    return c.json({ request: expired ?? store.getTaskHumanRequest(request.id) });
+  });
+  app.post("/api/daemon/tasks/:taskId/progress", async (c) => {
+    const body = await readJsonStrict<{ summary?: string; step?: number; total?: number }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    if (!isTerminalTaskStatus(existing.status)) store.reportProgress(taskId, body.summary ?? "", body.step, body.total);
+    return c.json({ status: "ok" });
+  });
+  app.post("/api/daemon/tasks/:taskId/messages", async (c) => {
+    const body = await readJsonStrict<{ messages?: any[] }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const rawMessages = Array.isArray(body.messages) ? body.messages : [];
+    if (!rawMessages.length) return c.json({ status: "ok" });
+    if (rawMessages.length > MAX_TASK_MESSAGES_PER_REQUEST) {
+      return c.json({ error: "too many messages" }, 413);
+    }
+    const taskId = c.req.param("taskId");
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    // Whitelist each message to the known TaskMessageInput fields (accepting
+    // both camel and snake casing) so a compromised/buggy daemon can't smuggle
+    // arbitrary JSON into the row; the store layer additionally byte-caps every
+    // field.
+    store.appendTaskMessages(taskId, rawMessages.map(daemonTaskMessageInput));
+    return c.json({ status: "ok" });
+  });
+  app.get("/api/daemon/tasks/:taskId/messages", (c) => {
+    const taskId = c.req.param("taskId");
+    const task = store.getTask(taskId);
+    if (!task) return c.json({ error: "task not found" }, 404);
+    const since = parseOptionalTaskMessageSince(c.req.query("since_seq") ?? c.req.query("sinceSeq") ?? c.req.query("since"));
+    if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
+    return c.json(store.listTaskMessages(taskId, since).map((message) => daemonTaskMessageWireResponse(message, task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/session", async (c) => {
+    const taskId = c.req.param("taskId");
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    const body = await readJsonStrict<{ session_id?: string; work_dir?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const sessionId = body.session_id ?? null;
+    const workDir = body.work_dir ?? null;
+    if (!sessionId && !workDir) return c.json({ error: "session_id or work_dir required" }, 400);
+    store.pinTaskSession(
+      taskId,
+      sessionId,
+      workDir,
+    );
+    return c.body(null, 204);
+  });
+  app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    const body = await readJsonStrict<{ output?: string; pr_url?: string; session_id?: string; work_dir?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    if (existing.status !== "running") {
+      return c.json(daemonTaskWireResponse(existing, store.getTaskTriggerMetadata(existing)));
+    }
+    const task = store.completeTask(taskId, {
+      output: body.output ?? "",
+      branchName: body.pr_url ?? null,
+      sessionId: body.session_id ?? null,
+      workDir: body.work_dir ?? null,
+    });
+    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/fail", async (c) => {
+    const taskId = c.req.param("taskId");
+    const existing = store.getTask(taskId);
+    if (!existing) return c.json({ error: "task not found" }, 404);
+    const body = await readJsonStrict<{ error?: string; session_id?: string; work_dir?: string; failure_reason?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    if (existing.status !== "dispatched" && existing.status !== "running" && existing.status !== "waiting_local_directory") {
+      return c.json(daemonTaskWireResponse(existing, store.getTaskTriggerMetadata(existing)));
+    }
+    const task = store.failTask(taskId, {
+      error: body.error ?? "Task failed",
+      sessionId: body.session_id ?? null,
+      workDir: body.work_dir ?? null,
+      failureReason: body.failure_reason ?? null,
+    });
+    return c.json(daemonTaskWireResponse(task, store.getTaskTriggerMetadata(task)));
+  });
+  app.post("/api/daemon/tasks/:taskId/usage", async (c) => {
+    const taskId = c.req.param("taskId");
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    const body = await readJsonStrict<{ usage?: any[] }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    store.reportTaskUsage(taskId, daemonTaskUsageEntries(body.usage));
+    return c.json({ status: "ok" });
+  });
+  app.get("/api/daemon/tasks/:taskId/status", (c) => {
+    const task = store.getTask(c.req.param("taskId"));
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ status: task.status });
+  });
+  app.get("/api/daemon/issues/:issueId/gc-check", (c) => {
+    const issue = issueFromParam(store, c, "issueId");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    return c.json({ status: issue.status, updated_at: issue.updatedAt });
+  });
+  app.get("/api/daemon/chat-sessions/:sessionId/gc-check", (c) => {
+    const session = store.getChatSession(c.req.param("sessionId"));
+    if (!session) return c.json({ error: "chat session not found" }, 404);
+    return c.json({ status: session.status, updated_at: session.updatedAt });
+  });
+  app.get("/api/daemon/autopilot-runs/:runId/gc-check", (c) => {
+    const run = store.getAutopilotRun(c.req.param("runId"));
+    if (!run) return c.json({ error: "autopilot run not found" }, 404);
+    return c.json({ status: run.status, completed_at: run.completedAt });
+  });
+  app.get("/api/daemon/tasks/:taskId/gc-check", (c) => {
+    const task = store.getTask(c.req.param("taskId"));
+    if (!task) return c.json({ error: "task not found" }, 404);
+    return c.json({ status: task.status, completed_at: task.completedAt });
+  });
+}
