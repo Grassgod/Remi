@@ -383,6 +383,29 @@ describe("Issue sessions and per-agent projection lanes", () => {
     ]);
   });
 
+  it("records the writing run's task_id on a comment posted with a task token", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const agent = store.createAgent({ name: "Reply agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Reply linkage", workspaceId: "local" });
+    const main = store.getOrCreateDefaultIssueSession(issue.id);
+    const task = store.createSessionTask(main.id, { agentId: agent.id, prompt: "Reply in thread" });
+    const token = await store.createTaskAccessToken(task, "local");
+
+    const res = await app.request(`/api/issues/${issue.id}/comments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "In-run reply" }),
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { author_type: string; task_id: string | null };
+    expect(created.author_type).toBe("agent");
+    // The linkage the per-reply transcript button depends on: the comment
+    // carries the run that wrote it even when the agent posts via its tool
+    // (the auto-reply path already recorded it; this is the task-token path).
+    expect(created.task_id).toBe(task.id);
+  });
+
   it("allows a task token to read its Session but not sibling raw transcripts", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });

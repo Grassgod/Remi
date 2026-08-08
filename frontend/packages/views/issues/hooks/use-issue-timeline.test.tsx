@@ -177,6 +177,33 @@ describe("useIssueTimeline", () => {
     expect(updated.map((e) => e.id)).toEqual(["new-c"]);
   });
 
+  it("preserves task_id on agent replies so the per-reply transcript entry survives", () => {
+    queryState.data = [];
+    renderHook(() => useIssueTimeline("issue-1", "user-1"));
+    const handler = wsHandlers.get("comment:created");
+    act(() => {
+      handler!({
+        comment: {
+          id: "agent-reply",
+          issue_id: "issue-1",
+          author_type: "agent",
+          author_id: "agt_1",
+          task_id: "tsk_run_1",
+          content: "done",
+          parent_id: null,
+          created_at: "2026-05-06T05:00:00Z",
+          updated_at: "2026-05-06T05:00:00Z",
+          type: "comment",
+          reactions: [],
+          attachments: [],
+        },
+      });
+    });
+    const updated = cacheUpdates.last as Array<{ id: string; actor_type?: string; task_id?: string | null }>;
+    expect(updated[0]?.actor_type).toBe("agent");
+    expect(updated[0]?.task_id).toBe("tsk_run_1");
+  });
+
   it("comment:created inserts at the correct sorted position by created_at", () => {
     queryState.data = [
       { type: "comment", id: "c1", actor_type: "member", actor_id: "u", created_at: "2026-05-06T01:00:00Z" },

@@ -47,6 +47,10 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     issue_session_id: c.issue_session_id ?? null,
     actor_type: c.author_type,
     actor_id: c.author_id,
+    // Links an agent reply to the run that wrote it, so CommentTranscriptButton
+    // can offer the per-reply execution transcript after a plain refetch (the
+    // WS-pushed entry carries it; the REST refetch must too).
+    task_id: c.task_id ?? null,
     content: c.content,
     parent_id: c.parent_id,
     created_at: c.created_at,

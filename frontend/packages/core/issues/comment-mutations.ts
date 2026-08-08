@@ -40,6 +40,7 @@ export function useCreateComment(issueId: string, issueSessionId?: string) {
         id: comment.id,
         actor_type: comment.author_type,
         actor_id: comment.author_id,
+        task_id: comment.task_id ?? null,
         content: comment.content,
         parent_id: comment.parent_id,
         comment_type: comment.type,
