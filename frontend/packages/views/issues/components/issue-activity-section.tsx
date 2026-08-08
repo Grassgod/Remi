@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { ArrowDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Agent, IssueSession, MemberWithUser } from "@multiremi/core/types";
@@ -146,6 +147,29 @@ export function IssueActivitySection({
     () => flattenGroups(timelineView.groups, expandedResolved),
     [timelineView.groups, expandedResolved],
   );
+
+  // ── Open at latest ────────────────────────────────────────────────
+  // The timeline reads oldest→newest, so a long conversation used to open
+  // with its newest activity below the fold. Land the first render of each
+  // (issue, session) on the last entry instead. One-shot by design:
+  // followOutput stays off (see the Virtuoso props), so after landing the
+  // scroll position belongs to the user — the sticky "jump to latest" chip
+  // (visible whenever the viewport is away from the bottom) is the way back.
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  const landedKeyRef = useRef<string | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const landKey = `${wsId}:${issueId}:${activeIssueSessionId}`;
+  useEffect(() => {
+    if (highlightCommentId) return; // the deep-link path owns positioning
+    if (landedKeyRef.current === landKey) return;
+    if (timelineLoading || items.length === 0 || !virtuosoRef.current) return;
+    landedKeyRef.current = landKey;
+    virtuosoRef.current.scrollToIndex({ index: items.length - 1, align: "end" });
+  }, [highlightCommentId, landKey, timelineLoading, items.length, scrollContainerEl]);
+
+  const jumpToLatest = useCallback(() => {
+    virtuosoRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
+  }, []);
 
   const lastActivityId = useMemo(
     () => lastActivityGroupId(timelineView.groups),
@@ -368,18 +392,34 @@ export function IssueActivitySection({
           ) : (
             <div className="mt-4">
               <Virtuoso
+                ref={virtuosoRef}
                 key={`${wsId}:${issueId}:${activeIssueSessionId}`}
                 customScrollParent={scrollContainerEl}
                 data={items}
                 increaseViewportBy={{ top: 800, bottom: 800 }}
                 computeItemKey={(_i, item) => `${item.kind}:${item.id}`}
                 skipAnimationFrameInResizeObserver
+                atBottomThreshold={120}
+                atBottomStateChange={setAtBottom}
                 // followOutput intentionally NOT set. Virtuoso treats
                 // it as a sticky "is at bottom" flag and resets
                 // scrollTop to maxScrollTop on every height-change
                 // tick — issue-detail is document-shaped, not chat.
+                // The open-at-latest effect + jump chip above replace it.
                 itemContent={renderItem}
               />
+              {!atBottom && (
+                <div className="pointer-events-none sticky bottom-4 z-10 flex h-0 items-end justify-center">
+                  <button
+                    type="button"
+                    onClick={jumpToLatest}
+                    className="pointer-events-auto flex -translate-y-2 items-center gap-1 rounded-full border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-md transition-colors hover:text-foreground"
+                  >
+                    <ArrowDown className="h-3.5 w-3.5" />
+                    {t(($) => $.activity.jump_to_latest)}
+                  </button>
+                </div>
+              )}
             </div>
           )
         ) : (

@@ -321,17 +321,24 @@ vi.mock("@multiremi/core/issues/stores", () => ({
 // it by default) so tests can assert the deep-link effect dispatched a
 // native scroll on the target node.
 const scrollIntoViewSpy = vi.hoisted(() => vi.fn());
+// Observed by the open-at-latest tests: the section's initial-land effect and
+// the jump chip both go through the Virtuoso ref's scrollToIndex.
+const virtuosoScrollToIndexSpy = vi.hoisted(() => vi.fn());
+// Latest props handed to the mock, so tests can drive atBottomStateChange.
+const virtuosoLatestProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: forwardRef(function MockVirtuoso(
-    { data, itemContent }: { data: unknown[]; itemContent: (i: number, item: unknown) => unknown },
+    props: { data: unknown[]; itemContent: (i: number, item: unknown) => unknown },
     ref: any,
   ) {
+    const { data, itemContent } = props;
+    virtuosoLatestProps.current = props as Record<string, unknown>;
     useImperativeHandle(ref, () => ({
-      // Real Virtuoso ref methods are not exercised by tests in this file
-      // since the cold-path uses native scrollIntoView on the DOM node.
+      // scrollIntoView is unexercised here — the deep-link cold-path uses
+      // native scrollIntoView on the DOM node instead of the ref.
       scrollIntoView: vi.fn(),
-      scrollToIndex: vi.fn(),
+      scrollToIndex: virtuosoScrollToIndexSpy,
     }));
     return (
       <div data-testid="virtuoso-mock">
@@ -347,6 +354,8 @@ vi.mock("react-virtuoso", () => ({
 // with a spy so the deep-link effect's call can be observed.
 beforeEach(() => {
   scrollIntoViewSpy.mockClear();
+  virtuosoScrollToIndexSpy.mockClear();
+  virtuosoLatestProps.current = null;
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
     writable: true,
@@ -558,6 +567,43 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("opens the conversation landed on its newest entry", async () => {
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(virtuosoScrollToIndexSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ index: expect.any(Number), align: "end" }),
+      );
+    });
+    // One-shot: the landing effect must not re-fire on subsequent renders.
+    expect(virtuosoScrollToIndexSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers a jump-to-latest chip when scrolled away from the newest entry", async () => {
+    renderIssueDetail();
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-mock")).toBeInTheDocument();
+    });
+
+    // No chip while the viewport sits at the bottom (initial state).
+    expect(screen.queryByRole("button", { name: /jump to latest/i })).not.toBeInTheDocument();
+
+    const atBottomStateChange = virtuosoLatestProps.current?.atBottomStateChange as
+      | ((atBottom: boolean) => void)
+      | undefined;
+    expect(atBottomStateChange).toBeTypeOf("function");
+    await waitFor(() => {
+      atBottomStateChange!(false);
+      expect(screen.getByRole("button", { name: /jump to latest/i })).toBeInTheDocument();
+    });
+
+    virtuosoScrollToIndexSpy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /jump to latest/i }));
+    expect(virtuosoScrollToIndexSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ index: "LAST", align: "end" }),
+    );
   });
 
   it("switches the visible conversation by product Session", async () => {

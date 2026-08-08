@@ -310,7 +310,8 @@
     "activity_count_one": "활동 {{count}}개",
     "activity_count_other": "활동 {{count}}개",
     "show_more_activities_one": "활동 {{count}}개 더 보기",
-    "show_more_activities_other": "활동 {{count}}개 더 보기"
+    "show_more_activities_other": "활동 {{count}}개 더 보기",
+    "jump_to_latest": "최신으로 이동"
   },
   "comment": {
     "delete_title": "댓글 삭제",

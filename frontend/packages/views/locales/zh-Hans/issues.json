@@ -308,7 +308,8 @@
     "activity_count_one": "{{count}} 条动态",
     "activity_count_other": "{{count}} 条动态",
     "show_more_activities_one": "展开更早 {{count}} 条动态",
-    "show_more_activities_other": "展开更早 {{count}} 条动态"
+    "show_more_activities_other": "展开更早 {{count}} 条动态",
+    "jump_to_latest": "回到最新"
   },
   "comment": {
     "delete_title": "删除评论",
