@@ -15,14 +15,38 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain } from "./types.js";
 import { resolveApiBase } from "@shared/feishu-domain.js";
-import { type ToolEntry, buildToolDiv, buildStepDiv, buildThinkingDiv, formatToolInputSummary } from "./tool-formatters.js";
-import { buildAskQuestionForm, buildPlanReviewForm, type PermissionFormElements } from "./permission-ui.js";
+import { type ToolEntry, buildStepDiv, formatToolInputSummary } from "./tool-formatters.js";
+import type { PermissionFormElements } from "./permission-ui.js";
+import {
+  MAX_VISIBLE_STEPS,
+  type RetainedPermissionPanel,
+  type StepInfo,
+  buildDegradedCard,
+  buildFinalCard,
+  buildLegacyPlanReviewCard,
+  buildStreamingCardJson,
+  buildSummary,
+} from "./streaming/card-elements.js";
+import {
+  DEGRADED_FLUSH_MS,
+  ElementThrottler,
+  HEARTBEAT_INTERVAL_MS,
+  PERMISSION_FLUSH_MS,
+  SAFETY_TIMEOUT_MS,
+  STREAMING_RENEW_MS,
+  TimerSlot,
+} from "./streaming/throttle.js";
+import {
+  PermissionFormStore,
+  insertPermissionFormElements,
+  permissionElementIds,
+} from "./streaming/permission-form.js";
+import { CardKitElements, type CardRef } from "./streaming/cardkit-elements.js";
+
+export { buildFinalCard };
+export type { StepInfo };
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
-type RetainedPermissionPanel = {
-  hr: Record<string, unknown>;
-  panel: Record<string, unknown>;
-};
 type CardState = {
   cardId: string;
   messageId: string;
@@ -60,24 +84,6 @@ export interface StreamingCloseOptions {
   retainedPermissionPanels?: RetainedPermissionPanel[];
 }
 
-/** Step data for process panel rendering. */
-export interface StepInfo {
-  tool: string;
-  desc: string;
-  /** Thinking text offset when this step was added (for timeline interleaving). */
-  thinkingOffset?: number;
-  durationMs?: number;
-}
-
-function appendPermissionElements(
-  elements: Record<string, unknown>[],
-  form: PermissionFormElements,
-): void {
-  elements.push(form.hr);
-  if (form.panel) elements.push(form.panel);
-  elements.push(form.form);
-}
-
 // ── Token cache (shared across sessions) ────────────────────
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -113,187 +119,6 @@ async function getToken(creds: Credentials): Promise<string> {
   return data.tenant_access_token;
 }
 
-/**
- * Build plain-text summary for Feishu card detail page.
- * Strips markdown syntax, preserves full content so the detail page isn't blank.
- */
-function buildSummary(text: string): string {
-  if (!text) return "";
-  return text
-    .replace(/[*_~`>#\-|]/g, "")    // strip markdown formatting
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // [link](url) → link
-    .replace(/\n{2,}/g, "\n")       // collapse blank lines
-    .trim();
-}
-
-import { buildCardHeader, buildContentElements } from "./send.js";
-
-/**
- * Build the final static card JSON.
- *
- * Process panel uses two layers:
- * 1. Outer: icon step divs (grey, notation size) — quick overview
- * 2. Inner: each step is a collapsible_panel with input/output details on click
- */
-export function buildFinalCard(opts: {
-  text: string;
-  thinking?: string | null;
-  toolEntries?: ToolEntry[];
-  /** Step descriptions collected during streaming (tool + desc pairs). */
-  steps?: Array<{ tool: string; desc: string }>;
-  trailingThinking?: string | null;
-  toolCount?: number;
-  stats?: string | null;
-  mentionOpenId?: string;
-  sessionId?: string | null;
-  /** Display name from DB registry — takes precedence over sessionId-derived name. */
-  displayName?: string | null;
-  /** AskUserQuestion questions from permission_denials — rendered as form in final card. */
-  askQuestions?: { actionId: string; questions: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }> };
-  /** ExitPlanMode from permission_denials — rendered as approve/reject buttons. */
-  planReview?: { actionId: string; planContent?: string };
-  /** Permission panels retained after their interactive form was submitted. */
-  retainedPermissionPanels?: RetainedPermissionPanel[];
-  /** Suffix appended to card header name (e.g. " · msn_xxx"). */
-  nameSuffix?: string;
-  /** Subtitle shown below the header title (e.g. "Claude Plan"). */
-  subtitle?: string | null;
-}): Record<string, unknown> {
-  const elements: Record<string, unknown>[] = [];
-
-  const hasTools = opts.toolEntries && opts.toolEntries.length > 0;
-  const hasSteps = opts.steps && opts.steps.length > 0;
-  const hasThinking = opts.thinking || hasTools || hasSteps;
-
-  // Feishu cards have a 200-element limit. Each div step = ~4 elements.
-  // Keep at most 40 steps as divs to stay under the limit.
-  const MAX_VISIBLE_STEPS = 40;
-
-  if (hasThinking) {
-    const panelElements: Record<string, unknown>[] = [];
-    let stepCount = 0;
-
-    if (hasTools) {
-      const entries = opts.toolEntries!;
-      stepCount = entries.length;
-      const omitted = Math.max(0, entries.length - MAX_VISIBLE_STEPS);
-      const visibleEntries = omitted > 0 ? entries.slice(-MAX_VISIBLE_STEPS) : entries;
-      if (omitted > 0) {
-        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
-      }
-      for (const entry of visibleEntries) {
-        if (entry.thinkingBefore?.trim()) panelElements.push(buildThinkingDiv(entry.thinkingBefore));
-        panelElements.push(buildToolDiv(entry));
-      }
-      if (opts.trailingThinking?.trim()) panelElements.push(buildThinkingDiv(opts.trailingThinking));
-    } else if (hasSteps) {
-      const steps = opts.steps!;
-      stepCount = steps.length;
-      const omitted = Math.max(0, steps.length - MAX_VISIBLE_STEPS);
-      const visibleSteps = omitted > 0 ? steps.slice(-MAX_VISIBLE_STEPS) : steps;
-      if (omitted > 0) {
-        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
-      }
-      for (const step of visibleSteps) panelElements.push(buildStepDiv(step.tool, step.desc));
-    } else if (opts.thinking) {
-      panelElements.push(buildThinkingDiv(opts.thinking));
-    }
-
-    if (panelElements.length > 0) {
-      const displayCount = opts.toolCount ?? (stepCount || panelElements.length);
-      if (displayCount > 0 || hasTools || hasSteps) {
-        elements.push({
-          tag: "collapsible_panel",
-          expanded: false,
-          border: { color: "grey-300", corner_radius: "6px" },
-          header: {
-            title: {
-              tag: "plain_text",
-              content: `Show ${displayCount} steps`,
-              text_color: "grey",
-              text_size: "notation",
-            },
-            icon_position: "right",
-          },
-          elements: panelElements,
-        });
-      }
-    }
-  }
-
-  elements.push(...buildContentElements(opts.text || ""));
-
-  if (opts.retainedPermissionPanels?.length) {
-    for (const retained of opts.retainedPermissionPanels) {
-      elements.push(retained.hr);
-      elements.push(retained.panel);
-    }
-  }
-
-  // AskUserQuestion form — between content and stats bar
-  if (opts.askQuestions) {
-    appendPermissionElements(
-      elements,
-      buildAskQuestionForm(opts.askQuestions.actionId, { questions: opts.askQuestions.questions }),
-    );
-  }
-
-  // ExitPlanMode — between content and stats bar (matches Claude Code CLI wording)
-  if (opts.planReview) {
-    appendPermissionElements(
-      elements,
-      buildPlanReviewForm(opts.planReview.actionId, opts.planReview.planContent),
-    );
-  }
-
-  // Stats bar with optional @mention (always last)
-  if (opts.mentionOpenId) {
-    elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<at id=${opts.mentionOpenId}></at>` });
-  }
-
-  if (opts.stats) {
-    if (!opts.mentionOpenId) elements.push({ tag: "hr" });
-    // Parse stats string "21.3s · 5→569 · 2 tools" into column_set
-    const statsParts = opts.stats.split(" · ");
-    if (statsParts.length >= 1) {
-      const iconMap = ["time_outlined", "translate_outlined", "setting-inter_outlined"];
-      elements.push({
-        tag: "column_set",
-        flex_mode: "flow",
-        horizontal_spacing: "small",
-        columns: statsParts.map((part, i) => ({
-          tag: "column",
-          width: "auto",
-          elements: [{
-            tag: "div",
-            icon: { tag: "standard_icon", token: iconMap[i] ?? "setting-inter_outlined", color: "grey" },
-            text: { tag: "plain_text", content: part.trim(), text_color: "grey", text_size: "notation" },
-          }],
-        })),
-      });
-    } else {
-      // Fallback: single markdown line
-      elements.push({ tag: "markdown", content: opts.stats });
-    }
-  }
-
-  return {
-    schema: "2.0",
-    header: buildCardHeader(opts.sessionId, opts.displayName, opts.nameSuffix, opts.subtitle),
-    config: { width_mode: "fill", summary: { content: buildSummary(opts.text) } },
-    body: { elements },
-  };
-}
-
-// ── Per-element throttle state ──────────────────────────────
-
-interface ElementThrottle {
-  lastSendTime: number;
-  pending: string | null;
-  timer: ReturnType<typeof setTimeout> | null;
-}
-
 export type TokenProvider = () => Promise<string>;
 
 export class FeishuStreamingSession {
@@ -304,34 +129,31 @@ export class FeishuStreamingSession {
   private closed = false;
   private log: (msg: string) => void;
   private _tokenProvider: TokenProvider | null;
+  private cardkit: CardKitElements;
 
   // Independent throttle per element — thinking and content don't interfere
-  private throttles = new Map<string, ElementThrottle>();
-  private throttleMs = 300;
+  private throttler = new ElementThrottler();
 
-  // Safety timeout: auto-close if no updates for 10 minutes
-  private safetyTimer: ReturnType<typeof setTimeout> | null = null;
-  private static SAFETY_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-
-  // Heartbeat: periodic status update when no events arrive
-  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
-  private static HEARTBEAT_INTERVAL_MS = 10_000;
+  // Timer subsystems (intervals live in streaming/throttle.ts):
+  // - safety: auto-close abandoned cards
+  // - heartbeat: periodic status update when no events arrive
+  // - renew: Feishu auto-closes streaming after 10 minutes → switch to degraded
+  // - degradedFlush: coalesced im.message.patch rebuilds
+  private _timers = {
+    safety: new TimerSlot(),
+    heartbeat: new TimerSlot(),
+    renew: new TimerSlot(),
+    degradedFlush: new TimerSlot(),
+  };
   private _startTime = 0;
   private _lastStatusText = "";
   private _heartbeatRenderer: ((elapsed: number) => string) | null = null;
-
-  // Streaming → degraded transition: Feishu auto-closes streaming after 10 minutes
-  private _renewTimer: ReturnType<typeof setTimeout> | null = null;
-  private static STREAMING_RENEW_MS = 9.5 * 60 * 1000; // switch to degraded at 9.5 min, before 10 min hard limit
 
   // Degraded mode: when CardKit element updates fail (e.g. streaming expired),
   // fall back to im.message.patch full-card rebuilds
   private _degraded = false;
   private _consecutiveFailures = 0;
   private static DEGRADED_FAILURE_THRESHOLD = 2;
-  private _degradedFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  private static DEGRADED_FLUSH_MS = 3000;
-  private static PERMISSION_FLUSH_MS = 100;
 
   // (PROCESS_BUDGET removed — steps are now individual div elements, no markdown accumulation)
 
@@ -344,9 +166,8 @@ export class FeishuStreamingSession {
   private _nameSuffix: string | undefined;
   private _subtitle: string | null = null;
 
-  // Active permission form (for degraded mode card rebuild)
-  private _pendingPermission: PermissionFormElements | null = null;
-  private _retainedPermissionPanels = new Map<string, RetainedPermissionPanel>();
+  // Active + retained permission forms (for degraded mode card rebuild)
+  private permissions = new PermissionFormStore();
 
   constructor(
     client: Client,
@@ -360,6 +181,13 @@ export class FeishuStreamingSession {
     this.creds = creds;
     this.log = options?.log ?? ((msg) => console.log(`[streaming] ${msg}`));
     this._tokenProvider = options?.tokenProvider ?? null;
+    this.cardkit = new CardKitElements({
+      domain: creds.domain,
+      getToken: () => this._getToken(),
+      log: (msg) => this.log(msg),
+      onSuccess: () => { this._consecutiveFailures = 0; },
+      onFailure: () => this._onElementApiFailed(),
+    });
   }
 
   /** Get token via 1Passport provider or fall back to direct fetch. */
@@ -378,43 +206,7 @@ export class FeishuStreamingSession {
     this._subtitle = options?.subtitle ?? null;
 
     const apiBase = resolveApiBase(this.creds.domain);
-    const cardJson = {
-      schema: "2.0",
-      header: buildCardHeader(options?.sessionId, options?.displayName, options?.nameSuffix, options?.subtitle),
-      config: {
-        width_mode: "fill",
-        streaming_mode: true,
-        summary: { content: "[Generating...]" },
-        streaming_config: {
-          print_frequency_ms: { default: 50 },
-          print_step: { default: 2 },
-        },
-      },
-      body: {
-        elements: [
-          { tag: "markdown", content: "", element_id: "status_bar" },
-          {
-            tag: "collapsible_panel",
-            expanded: false,
-            border: { color: "grey-300", corner_radius: "6px" },
-            header: {
-              title: {
-                tag: "plain_text",
-                content: "steps",
-                text_color: "grey",
-                text_size: "notation",
-              },
-              icon_position: "right",
-            },
-            element_id: "process_panel",
-            elements: [],
-          },
-          { tag: "markdown", content: "", element_id: "content" },
-          { tag: "hr", element_id: "stats_hr" },
-          { tag: "markdown", content: "", element_id: "stats_text" },
-        ],
-      },
-    };
+    const cardJson = buildStreamingCardJson(options);
 
     const createRes = await fetch(`${apiBase}/cardkit/v1/cards`, {
       method: "POST",
@@ -479,60 +271,25 @@ export class FeishuStreamingSession {
     );
   }
 
-  // ── Element update (raw API call with retry on 5xx) ────────
+  // ── Element CRUD (sequence owned here, wire format in streaming/cardkit-elements.ts) ──
+
+  /** Reserve the next CardKit sequence number, or null if there is no live card. */
+  private _nextCardRef(): CardRef | null {
+    if (!this.state || this.closed) return null;
+    this.state.sequence += 1;
+    return { cardId: this.state.cardId, seq: this.state.sequence };
+  }
 
   private async _updateElementRaw(
     elementId: string,
     content: string,
   ): Promise<void> {
-    if (!this.state || this.closed) {
+    const ref = this._nextCardRef();
+    if (!ref) {
       this.log(`Update ${elementId} skipped (closed=${this.closed})`);
       return;
     }
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await fetch(
-          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}/content`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${await this._getToken()}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              content,
-              sequence: seq,
-              uuid: `s_${this.state.cardId}_${seq}`,
-            }),
-          },
-        );
-        if (res.ok) {
-          this._consecutiveFailures = 0;
-          return;
-        }
-        const body = await res.text().catch(() => "");
-        if (attempt === 0 && res.status >= 500) {
-          this.log(`Update ${elementId} HTTP ${res.status}, retrying...`);
-          continue;
-        }
-        this.log(
-          `Update ${elementId} HTTP ${res.status}: ${body.slice(0, 300)}`,
-        );
-        this._onElementApiFailed();
-        return;
-      } catch (e) {
-        if (attempt === 0) {
-          this.log(`Update ${elementId} failed, retrying: ${String(e)}`);
-          continue;
-        }
-        this.log(`Update ${elementId} failed: ${String(e)}`);
-        this._onElementApiFailed();
-      }
-    }
+    await this.cardkit.update(ref, elementId, content);
   }
 
   /**
@@ -542,80 +299,15 @@ export class FeishuStreamingSession {
     targetElementId: string,
     element: Record<string, unknown>,
   ): Promise<void> {
-    if (!this.state || this.closed) return;
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await fetch(
-          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${await this._getToken()}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: "append",
-              target_element_id: targetElementId,
-              sequence: seq,
-              elements: JSON.stringify([element]),
-            }),
-          },
-        );
-        if (res.ok) {
-          this._consecutiveFailures = 0;
-          return;
-        }
-        const body = await res.text().catch(() => "");
-        if (attempt === 0 && res.status >= 500) {
-          this.log(`Append to ${targetElementId} HTTP ${res.status}, retrying...`);
-          continue;
-        }
-        this.log(`Append to ${targetElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
-        this._onElementApiFailed();
-        return;
-      } catch (e) {
-        if (attempt === 0) {
-          this.log(`Append to ${targetElementId} failed, retrying: ${String(e)}`);
-          continue;
-        }
-        this.log(`Append to ${targetElementId} failed: ${String(e)}`);
-        this._onElementApiFailed();
-      }
-    }
+    const ref = this._nextCardRef();
+    if (!ref) return;
+    await this.cardkit.append(ref, targetElementId, element);
   }
 
   private async _deleteElement(elementId: string): Promise<void> {
-    if (!this.state || this.closed) return;
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/${elementId}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ sequence: seq, uuid: `d_${this.state.cardId}_${seq}` }),
-        },
-      );
-      if (res.ok) {
-        this._consecutiveFailures = 0;
-      } else {
-        const body = await res.text().catch(() => "");
-        this.log(`Delete ${elementId} HTTP ${res.status}: ${body.slice(0, 200)}`);
-        this._onElementApiFailed();
-      }
-    } catch (e) {
-      this.log(`Delete ${elementId} failed: ${String(e)}`);
-      this._onElementApiFailed();
-    }
+    const ref = this._nextCardRef();
+    if (!ref) return;
+    await this.cardkit.remove(ref, elementId);
   }
 
   // ── Degraded mode: fall back to im.message.patch ──────────
@@ -624,7 +316,7 @@ export class FeishuStreamingSession {
     this._consecutiveFailures++;
     if (!this._degraded && this._consecutiveFailures >= FeishuStreamingSession.DEGRADED_FAILURE_THRESHOLD) {
       this._degraded = true;
-      this._clearRenewTimer();
+      this._timers.renew.clear();
       this.log(`Entering degraded mode after ${this._consecutiveFailures} consecutive failures — switching to im.message.patch`);
     }
   }
@@ -634,78 +326,29 @@ export class FeishuStreamingSession {
   }
 
   private _buildCurrentCard(): Record<string, unknown> {
-    const elements: Record<string, unknown>[] = [];
-
-    if (this.state?.currentStatus) {
-      elements.push({ tag: "markdown", content: this.state.currentStatus });
-    }
-
-    if (this._steps.length > 0) {
-      const MAX_VISIBLE = FeishuStreamingSession.MAX_VISIBLE_STEPS;
-      const omitted = Math.max(0, this._steps.length - MAX_VISIBLE);
-      const visible = omitted > 0 ? this._steps.slice(-MAX_VISIBLE) : this._steps;
-      const panelElements: Record<string, unknown>[] = [];
-      if (omitted > 0) {
-        panelElements.push(buildStepDiv("_default", `+${omitted} earlier steps`));
-      }
-      for (const step of visible) {
-        panelElements.push(buildStepDiv(step.tool, step.desc));
-      }
-      elements.push({
-        tag: "collapsible_panel",
-        expanded: false,
-        border: { color: "grey-300", corner_radius: "6px" },
-        header: {
-          title: { tag: "plain_text", content: `steps (${this._steps.length})`, text_color: "grey", text_size: "notation" },
-          icon_position: "right",
-        },
-        elements: panelElements,
-      });
-    }
-
-    if (this.state?.currentText?.trim()) {
-      elements.push(...buildContentElements(this.state.currentText));
-    }
-
-    for (const retained of this._retainedPermissionPanels.values()) {
-      elements.push(retained.hr);
-      elements.push(retained.panel);
-    }
-
-    if (this._pendingPermission) {
-      const pf = this._pendingPermission;
-      elements.push(pf.hr);
-      if (pf.panel) elements.push(pf.panel);
-      elements.push(pf.form);
-    }
-
-    return {
-      schema: "2.0",
-      header: buildCardHeader(undefined, undefined, this._nameSuffix, this._subtitle),
-      config: { width_mode: "fill" },
-      body: { elements },
-    };
+    return buildDegradedCard({
+      status: this.state?.currentStatus,
+      steps: this._steps,
+      text: this.state?.currentText,
+      retainedPanels: this.permissions.retained(),
+      pendingPermission: this.permissions.pending,
+      nameSuffix: this._nameSuffix,
+      subtitle: this._subtitle,
+    });
   }
 
-  private _scheduleDegradedFlush(delayMs = FeishuStreamingSession.DEGRADED_FLUSH_MS): void {
-    if (this._degradedFlushTimer || this.closed || !this.state) return;
-    this._degradedFlushTimer = setTimeout(async () => {
-      this._degradedFlushTimer = null;
+  private _scheduleDegradedFlush(delayMs = DEGRADED_FLUSH_MS): void {
+    if (this.closed || !this.state) return;
+    this._timers.degradedFlush.armIfIdle(delayMs, async () => {
+      this._timers.degradedFlush.clear();
       if (this.closed || !this.state) return;
       await this._flushDegradedNow();
-    }, delayMs);
-  }
-
-  private _clearDegradedFlushTimer(): void {
-    if (this._degradedFlushTimer) {
-      clearTimeout(this._degradedFlushTimer);
-      this._degradedFlushTimer = null;
-    }
+    });
   }
 
   private async _flushDegradedNow(): Promise<boolean> {
     if (!this.state || this.closed) return false;
-    this._clearDegradedFlushTimer();
+    this._timers.degradedFlush.clear();
     try {
       const card = this._buildCurrentCard();
       await this.client.im.message.patch({
@@ -723,7 +366,7 @@ export class FeishuStreamingSession {
   // ── Permission form in streaming card ──────────────────────
 
   async appendPermissionForm(form: PermissionFormElements): Promise<void> {
-    this._pendingPermission = form;
+    this.permissions.pending = form;
     if (this._degraded) {
       if (!(await this._flushDegradedNow())) {
         throw new Error("Failed to render permission form");
@@ -734,20 +377,14 @@ export class FeishuStreamingSession {
     // im.message.patch fails on cards with streaming_mode=true, so we
     // must stay within the CardKit element API while streaming is active.
     try {
-      const hrId = (form.hr as Record<string, unknown>).element_id as string;
-      await this._insertElementOrThrow("content", form.hr);
-      if (form.panel) {
-        const panelId = (form.panel as Record<string, unknown>).element_id as string;
-        await this._insertElementOrThrow(hrId, form.panel);
-        await this._insertElementOrThrow(panelId, form.form);
-      } else {
-        await this._insertElementOrThrow(hrId, form.form);
-      }
+      await insertPermissionFormElements(form, (afterElementId, element) =>
+        this._insertElementOrThrow(afterElementId, element),
+      );
     } catch (e) {
       this.log(`Permission form element insert failed: ${e}, falling back to degraded`);
       await this._closeStreamingMode();
       this._degraded = true;
-      this._clearRenewTimer();
+      this._timers.renew.clear();
       if (!(await this._flushDegradedNow())) {
         throw new Error("Failed to render permission form");
       }
@@ -759,46 +396,19 @@ export class FeishuStreamingSession {
     afterElementId: string,
     element: Record<string, unknown>,
   ): Promise<void> {
-    if (!this.state || this.closed) throw new Error("Session not active");
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-    const res = await fetch(
-      `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await this._getToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "insert_after",
-          target_element_id: afterElementId,
-          sequence: seq,
-          elements: JSON.stringify([element]),
-        }),
-      },
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`CardKit insert_after ${afterElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
-    }
+    const ref = this._nextCardRef();
+    if (!ref) throw new Error("Session not active");
+    await this.cardkit.insertAfterOrThrow(ref, afterElementId, element);
   }
 
   async removePermissionForm(actionId: string, options?: { preservePanel?: boolean }): Promise<void> {
     const preservePanel = options?.preservePanel === true;
-    if (preservePanel && this._pendingPermission?.panel) {
-      this._retainedPermissionPanels.set(actionId, {
-        hr: this._pendingPermission.hr,
-        panel: this._pendingPermission.panel,
-      });
-    }
-    this._pendingPermission = null;
+    this.permissions.settle(actionId, preservePanel);
     if (this._degraded) {
-      this._scheduleDegradedFlush(FeishuStreamingSession.PERMISSION_FLUSH_MS);
+      this._scheduleDegradedFlush(PERMISSION_FLUSH_MS);
       return;
     }
-    const ids = preservePanel ? [`perm_${actionId}`] : [`perm_hr_${actionId}`, `perm_plan_${actionId}`, `perm_${actionId}`];
+    const ids = permissionElementIds(actionId, preservePanel);
     for (const id of ids) {
       this.queue = this.queue.then(() => this._deleteElement(id).catch(() => {}));
     }
@@ -808,52 +418,12 @@ export class FeishuStreamingSession {
     afterElementId: string,
     element: Record<string, unknown>,
   ): Promise<void> {
-    if (!this.state || this.closed) return;
-    this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "insert_after",
-            target_element_id: afterElementId,
-            sequence: seq,
-            elements: JSON.stringify([element]),
-          }),
-        },
-      );
-      if (res.ok) {
-        this._consecutiveFailures = 0;
-      } else {
-        const body = await res.text().catch(() => "");
-        this.log(`InsertAfter ${afterElementId} HTTP ${res.status}: ${body.slice(0, 300)}`);
-        this._onElementApiFailed();
-      }
-    } catch (e) {
-      this.log(`InsertAfter ${afterElementId} failed: ${String(e)}`);
-      this._onElementApiFailed();
-    }
+    const ref = this._nextCardRef();
+    if (!ref) return;
+    await this.cardkit.insertAfter(ref, afterElementId, element);
   }
 
   // ── Per-element throttle helpers ───────────────────────────
-
-  private _getThrottle(elementId: string): ElementThrottle {
-    if (!this.throttles.has(elementId)) {
-      this.throttles.set(elementId, {
-        lastSendTime: 0,
-        pending: null,
-        timer: null,
-      });
-    }
-    return this.throttles.get(elementId)!;
-  }
 
   /**
    * Fire-and-forget throttled update for a specific element.
@@ -879,39 +449,21 @@ export class FeishuStreamingSession {
       return;
     }
 
-    const throttle = this._getThrottle(elementId);
-    const now = Date.now();
-
-    if (now - throttle.lastSendTime >= this.throttleMs) {
-      throttle.pending = null;
-      throttle.lastSendTime = now;
-      this.queue = this.queue.then(() =>
-        this._updateElementRaw(elementId, content),
-      );
-    } else {
-      // Within throttle window — store pending and schedule deferred flush
-      throttle.pending = content;
-      if (!throttle.timer) {
-        const delay = this.throttleMs - (now - throttle.lastSendTime);
-        throttle.timer = setTimeout(() => {
-          throttle.timer = null;
-          if (this.closed || !this.state) return;
-
-          const text = throttle.pending;
-          if (text === null) return;
-          throttle.pending = null;
-          throttle.lastSendTime = Date.now();
-          this.state![stateField] = text;
-          if (this._degraded) {
-            this._scheduleDegradedFlush();
-          } else {
-            this.queue = this.queue.then(() =>
-              this._updateElementRaw(elementId, text),
-            );
-          }
-        }, delay);
-      }
-    }
+    this.throttler.schedule(
+      elementId,
+      content,
+      () => this.closed || !this.state,
+      (text) => {
+        this.state![stateField] = text;
+        if (this._degraded) {
+          this._scheduleDegradedFlush();
+        } else {
+          this.queue = this.queue.then(() =>
+            this._updateElementRaw(elementId, text),
+          );
+        }
+      },
+    );
   }
 
   getLastStatus(): string {
@@ -948,8 +500,6 @@ export class FeishuStreamingSession {
   /**
    * Add a step to the process panel by appending a div with standard_icon.
    */
-  private static MAX_VISIBLE_STEPS = 40;
-
   addStep(toolName: string, desc: string): void {
     const stepIndex = this._steps.length;
     this.log(`addStep #${stepIndex}: ${toolName} desc="${desc.slice(0, 80)}"`);
@@ -964,7 +514,7 @@ export class FeishuStreamingSession {
     this._updateProcessHeader();
 
     const visibleCount = stepIndex - (this._oldestVisibleStep ?? 0);
-    if (visibleCount >= FeishuStreamingSession.MAX_VISIBLE_STEPS) {
+    if (visibleCount >= MAX_VISIBLE_STEPS) {
       const deleteId = `step_${this._oldestVisibleStep ?? 0}`;
       this._oldestVisibleStep = (this._oldestVisibleStep ?? 0) + 1;
       this.queue = this.queue.then(() => this._deleteElement(deleteId));
@@ -1025,36 +575,7 @@ export class FeishuStreamingSession {
 
   /** @deprecated — kept only for backwards compat, no longer called. */
   async sendPlanReviewCard(actionId: string, chatId: string): Promise<string | null> {
-    const card = {
-      config: { wide_screen_mode: true },
-      header: {
-        title: { tag: "plain_text", content: "📋 执行计划审批" },
-        template: "green",
-      },
-      elements: [
-        {
-          tag: "markdown",
-          content: "计划已就绪，请选择操作：",
-        },
-        {
-          tag: "action",
-          actions: [
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: "✅ 批准执行" },
-              type: "primary",
-              value: { action: actionId, decision: "approved" },
-            },
-            {
-              tag: "button",
-              text: { tag: "plain_text", content: "❌ 拒绝" },
-              type: "danger",
-              value: { action: actionId, decision: "rejected" },
-            },
-          ],
-        },
-      ],
-    };
+    const card = buildLegacyPlanReviewCard(actionId);
 
     const apiBase = resolveApiBase(this.creds.domain);
     try {
@@ -1089,26 +610,19 @@ export class FeishuStreamingSession {
   // ── Flush all pending throttled updates ────────────────────
 
   private async _flushAll(): Promise<void> {
-    for (const [elementId, throttle] of this.throttles) {
-      // Cancel any scheduled timer
-      if (throttle.timer) {
-        clearTimeout(throttle.timer);
-        throttle.timer = null;
-      }
-      // Send any pending content
-      if (throttle.pending !== null && this.state) {
-        const text = throttle.pending;
-        throttle.pending = null;
+    this.throttler.flush(
+      () => this.state !== null,
+      (elementId, text) => {
         const field =
           elementId === "content" ? "currentText"
           : elementId === "status_bar" ? "currentStatus"
           : "currentThinking";
-        this.state[field] = text;
+        this.state![field] = text;
         this.queue = this.queue.then(() =>
           this._updateElementRaw(elementId, text),
         );
-      }
-    }
+      },
+    );
     // Wait for all queued updates to complete
     await this.queue;
   }
@@ -1142,8 +656,7 @@ export class FeishuStreamingSession {
   }
 
   private _resetSafetyTimer(): void {
-    if (this.safetyTimer) clearTimeout(this.safetyTimer);
-    this.safetyTimer = setTimeout(() => {
+    this._timers.safety.arm(SAFETY_TIMEOUT_MS, () => {
       if (this.state && !this.closed) {
         this.log(
           `Safety timeout: closing abandoned streaming card ${this.state.cardId}`,
@@ -1154,14 +667,7 @@ export class FeishuStreamingSession {
           this.log(`Safety close failed: ${String(e)}`),
         );
       }
-    }, FeishuStreamingSession.SAFETY_TIMEOUT_MS);
-  }
-
-  private _clearSafetyTimer(): void {
-    if (this.safetyTimer) {
-      clearTimeout(this.safetyTimer);
-      this.safetyTimer = null;
-    }
+    });
   }
 
   // ── Heartbeat ───────────────────────────────────────────────
@@ -1172,10 +678,9 @@ export class FeishuStreamingSession {
   }
 
   private _resetHeartbeat(): void {
-    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
-    this.heartbeatTimer = setTimeout(() => {
+    this._timers.heartbeat.arm(HEARTBEAT_INTERVAL_MS, () => {
       this._sendHeartbeat();
-    }, FeishuStreamingSession.HEARTBEAT_INTERVAL_MS);
+    });
   }
 
   private _sendHeartbeat(): void {
@@ -1193,32 +698,17 @@ export class FeishuStreamingSession {
       );
     }
     // Schedule next heartbeat
-    this.heartbeatTimer = setTimeout(() => {
+    this._timers.heartbeat.arm(HEARTBEAT_INTERVAL_MS, () => {
       this._sendHeartbeat();
-    }, FeishuStreamingSession.HEARTBEAT_INTERVAL_MS);
-  }
-
-  private _clearHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      clearTimeout(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
+    });
   }
 
   // ── Streaming mode renewal (Feishu 10-min hard limit) ─────
 
   private _startRenewTimer(): void {
-    this._clearRenewTimer();
-    this._renewTimer = setTimeout(() => {
+    this._timers.renew.arm(STREAMING_RENEW_MS, () => {
       this._renewStreaming();
-    }, FeishuStreamingSession.STREAMING_RENEW_MS);
-  }
-
-  private _clearRenewTimer(): void {
-    if (this._renewTimer) {
-      clearTimeout(this._renewTimer);
-      this._renewTimer = null;
-    }
+    });
   }
 
   private _renewStreaming(): void {
@@ -1234,38 +724,10 @@ export class FeishuStreamingSession {
   private async _closeStreamingMode(summaryText?: string): Promise<void> {
     if (!this.state || this._degraded) return;
     this.state.sequence += 1;
-    const apiBase = resolveApiBase(this.creds.domain);
-    const seq = this.state.sequence;
-    try {
-      const res = await fetch(
-        `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${await this._getToken()}`,
-            "Content-Type": "application/json; charset=utf-8",
-          },
-          body: JSON.stringify({
-            settings: JSON.stringify({
-              config: {
-                streaming_mode: false,
-                summary: { content: buildSummary(summaryText ?? this.state.currentText ?? "") },
-              },
-            }),
-            sequence: seq,
-            uuid: `c_${this.state.cardId}_${seq}`,
-          }),
-        },
-      );
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        this.log(`Close streaming mode HTTP ${res.status}: ${body.slice(0, 300)}`);
-      } else {
-        this.log(`Close streaming mode OK (streaming_mode=false)`);
-      }
-    } catch (e) {
-      this.log(`Close streaming mode failed: ${String(e)}`);
-    }
+    const ref: CardRef = { cardId: this.state.cardId, seq: this.state.sequence };
+    await this.cardkit.closeStreamingMode(ref, () =>
+      buildSummary(summaryText ?? this.state?.currentText ?? ""),
+    );
   }
 
   // ── Close streaming card ───────────────────────────────────
@@ -1273,10 +735,10 @@ export class FeishuStreamingSession {
   async close(finalTextOrOptions?: string | StreamingCloseOptions): Promise<void> {
     if (!this.state || this.closed) return;
 
-    this._clearSafetyTimer();
-    this._clearHeartbeat();
-    this._clearRenewTimer();
-    this._clearDegradedFlushTimer();
+    this._timers.safety.clear();
+    this._timers.heartbeat.clear();
+    this._timers.renew.clear();
+    this._timers.degradedFlush.clear();
 
     // Flush all pending throttled updates first
     if (!this._degraded) {
@@ -1340,8 +802,8 @@ export class FeishuStreamingSession {
     const askQuestions = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { askQuestions?: Parameters<typeof buildFinalCard>[0]["askQuestions"] }).askQuestions : undefined;
     const planReview = typeof finalTextOrOptions === "object" ? (finalTextOrOptions as StreamingCloseOptions & { planReview?: Parameters<typeof buildFinalCard>[0]["planReview"] }).planReview : undefined;
     const retainedPermissionPanels = typeof finalTextOrOptions === "object"
-      ? (finalTextOrOptions.retainedPermissionPanels ?? [...this._retainedPermissionPanels.values()])
-      : [...this._retainedPermissionPanels.values()];
+      ? (finalTextOrOptions.retainedPermissionPanels ?? this.permissions.retained())
+      : this.permissions.retained();
 
     // Replace with static card — process panel collapsed with icon divs
     try {
