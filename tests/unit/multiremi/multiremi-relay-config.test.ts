@@ -1,13 +1,8 @@
-import { describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
-import { MultiremiStore } from "@multiremi/store.js";
+import { afterEach, describe, expect, it } from "bun:test";
 import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
+import { createLocalStore as createStore, resetMultiremiTestEnv } from "./helpers.js";
 
-function createStore(): MultiremiStore {
-  const store = new MultiremiStore(new Database(":memory:"));
-  store.ensureLocalWorkspace();
-  return store;
-}
+afterEach(resetMultiremiTestEnv);
 
 const CLAUDE_FRAGMENT = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://ai.openremi.fun" } });
 const CODEX_FRAGMENT = [

@@ -1,0 +1,753 @@
+// Issues as first-class records plus the compatibility list/grouped/batch,
+// quick-create, hierarchy/planning, dependency, assignment, metadata and label routes.
+import { afterEach, describe, expect, it } from "bun:test";
+import { createMultiremiApp } from "@multiremi/api.js";
+import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+
+afterEach(resetMultiremiTestEnv);
+
+describe("Multiremi API — issue endpoints", () => {
+  it("serves issues as first-class records with linked tasks", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request("/api/multiremi/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "First class issue", agentId: agent.id, prompt: "Do it" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+
+    const listed = await app.request("/api/multiremi/issues");
+    const listBody = await listed.json();
+    expect(listBody.issues[0].taskCount).toBe(1);
+    expect(listBody.issues[0].latestTaskId).toBe(createdBody.task.id);
+
+    const detail = await app.request(`/api/multiremi/issues/${createdBody.issue.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.issue.tasks).toHaveLength(1);
+    expect(detailBody.issue.tasks[0].prompt).toBe("Do it");
+
+    const updated = await app.request(`/api/issues/${createdBody.issue.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priority: "high" }),
+    });
+    expect((await updated.json()).priority).toBe("high");
+  });
+
+  it("serves issue compatibility list, grouped, and batch endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Issue owner" });
+    const project = store.createProject({ title: "Batch project" });
+    const app = createMultiremiApp({ store });
+    const events: Array<{ type: string; workspaceId: string; payload: Record<string, unknown>; actorId?: string | null; actorType?: string }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+
+    const first = store.createIssue({
+      title: "Batch first",
+      workspaceId: "local",
+      projectId: project.id,
+      assigneeType: "agent",
+      assigneeId: agent.id,
+      status: "open",
+      priority: "low",
+      position: 2,
+    });
+    const second = store.createIssue({
+      title: "Batch second",
+      workspaceId: "local",
+      assigneeType: "member",
+      assigneeId: member.id,
+      status: "open",
+      priority: "medium",
+      position: 1,
+    });
+    store.createIssue({ title: "Other workspace", workspaceId: "other", status: "open" });
+    const remoteIssue = store.createIssue({ title: "Remote workspace issue", workspaceId: "remote", status: "open" });
+    const label = store.createLabel({ name: "Batch label", color: "#22c55e" });
+    store.attachLabelToIssue(first.id, label.id);
+    const reaction = store.addIssueReaction(first.id, { actorType: "member", actorId: "local", emoji: "👍" });
+    const attachment = store.createAttachment({
+      issueId: first.id,
+      filename: "batch.txt",
+      url: "/uploads/batch.txt",
+      contentType: "text/plain",
+      sizeBytes: 42,
+    });
+    expect(first.status).toBe("todo");
+    expect(second.status).toBe("todo");
+
+    const listed = await app.request("/api/issues?workspace_id=local&status=open");
+    const listedBody = await listed.json();
+    expect(listedBody.total).toBe(2);
+    expect(listedBody.issues.map((issue: any) => issue.id).sort()).toEqual([first.id, second.id].sort());
+    const firstListed = listedBody.issues.find((issue: any) => issue.id === first.id);
+    expect(firstListed).toMatchObject({
+      id: first.id,
+      workspace_id: "local",
+      identifier: first.key,
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: agent.id,
+      labels: [{ id: label.id, workspace_id: "local", name: "Batch label" }],
+    });
+    expect(firstListed.workspaceId).toBeUndefined();
+    expect(firstListed.assigneeId).toBeUndefined();
+    expect(firstListed.latestTaskStatus).toBeUndefined();
+
+    const camelWorkspaceList = await app.request("/api/issues?workspaceId=remote&status=open");
+    const camelWorkspaceListBody = await camelWorkspaceList.json();
+    expect(camelWorkspaceListBody.issues.map((issue: any) => issue.id)).not.toContain(remoteIssue.id);
+    const snakeWorkspaceList = await app.request("/api/issues?workspace_id=remote&status=open");
+    const snakeWorkspaceListBody = await snakeWorkspaceList.json();
+    expect(snakeWorkspaceListBody.issues.map((issue: any) => issue.id)).toEqual([remoteIssue.id]);
+
+    const camelWorkspaceDetail = await app.request(`/api/issues/${remoteIssue.key}?workspaceId=remote`);
+    const camelWorkspaceDetailBody = await camelWorkspaceDetail.json();
+    expect(camelWorkspaceDetailBody.id).toBe(first.id);
+    const snakeWorkspaceDetail = await app.request(`/api/issues/${remoteIssue.key}?workspace_id=remote`);
+    const snakeWorkspaceDetailBody = await snakeWorkspaceDetail.json();
+    expect(snakeWorkspaceDetailBody.id).toBe(remoteIssue.id);
+
+    const detail = await app.request(`/api/issues/${first.key.toLowerCase()}`);
+    const detailBody = await detail.json();
+    expect(detailBody).toMatchObject({
+      id: first.id,
+      workspace_id: "local",
+      identifier: first.key,
+      labels: [{ id: label.id, workspace_id: "local", name: "Batch label" }],
+      reactions: [{ id: reaction.id, issue_id: first.id, actor_type: "member", actor_id: "local", emoji: "👍" }],
+      attachments: [{
+        id: attachment.id,
+        issue_id: first.id,
+        filename: "batch.txt",
+        content_type: "text/plain",
+        size_bytes: 42,
+      }],
+    });
+    expect(detailBody.tasks).toBeUndefined();
+    expect(detailBody.workspaceId).toBeUndefined();
+    expect(detailBody.reactions[0].issueId).toBeUndefined();
+    expect(detailBody.attachments[0].issueId).toBeUndefined();
+
+    const memberFiltered = await app.request("/api/issues?workspace_id=local&assignee_id=issue%20owner");
+    const memberFilteredBody = await memberFiltered.json();
+    expect(memberFilteredBody.total).toBe(1);
+    expect(memberFilteredBody.issues[0].id).toBe(second.id);
+
+    const agentFiltered = await app.request("/api/issues?workspace_id=local&assignee_id=cod");
+    const agentFilteredBody = await agentFiltered.json();
+    expect(agentFilteredBody.total).toBe(1);
+    expect(agentFilteredBody.issues[0].id).toBe(first.id);
+
+    const camelAssigneeFiltered = await app.request("/api/issues?workspace_id=local&assigneeId=cod");
+    const camelAssigneeFilteredBody = await camelAssigneeFiltered.json();
+    expect(camelAssigneeFilteredBody.issues.map((issue: any) => issue.id).sort()).toEqual([first.id, second.id].sort());
+
+    const camelProjectFiltered = await app.request(`/api/issues?workspace_id=local&projectId=${project.id}`);
+    const camelProjectFilteredBody = await camelProjectFiltered.json();
+    expect(camelProjectFilteredBody.issues.map((issue: any) => issue.id).sort()).toEqual([first.id, second.id].sort());
+
+    const grouped = await app.request("/api/issues/grouped?workspace_id=local&statuses=open&limit=10");
+    const groupedBody = await grouped.json();
+    expect(groupedBody.groups.map((group: any) => group.id)).toEqual([
+      `member:${member.id}`,
+      `agent:${agent.id}`,
+    ]);
+    expect(groupedBody.groups[0].total).toBe(1);
+    expect(groupedBody.groups[1].issues[0].id).toBe(first.id);
+
+    const camelGrouped = await app.request("/api/issues/grouped?workspaceId=remote&statuses=open&limit=10");
+    const camelGroupedBody = await camelGrouped.json();
+    expect(camelGroupedBody.groups.flatMap((group: any) => group.issues.map((issue: any) => issue.id))).not.toContain(remoteIssue.id);
+
+    const camelCreated = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Camel ignored issue",
+        workspaceId: "remote",
+        projectId: project.id,
+        assigneeId: member.id,
+        dueDate: "2026-05-01",
+        acceptanceCriteria: ["ignored"],
+      }),
+    });
+    expect(camelCreated.status).toBe(201);
+    const camelCreatedBody = await camelCreated.json();
+    expect(camelCreatedBody).toMatchObject({
+      workspace_id: "local",
+      project_id: null,
+      assignee_type: null,
+      assignee_id: null,
+      due_date: null,
+    });
+    const camelStored = store.getIssue(camelCreatedBody.id)!;
+    expect(camelStored.workspaceId).toBe("local");
+    expect(camelStored.projectId).toBeNull();
+    expect(camelStored.assigneeId).toBeNull();
+    expect(camelStored.dueDate).toBeNull();
+    expect(camelStored.acceptanceCriteria).toEqual([]);
+
+    const camelUpdated = await app.request(`/api/issues/${camelCreatedBody.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectId: project.id, assigneeId: member.id, dueDate: "2026-05-02", acceptanceCriteria: ["ignored"] }),
+    });
+    expect(camelUpdated.status).toBe(200);
+    const camelUpdatedBody = await camelUpdated.json();
+    expect(camelUpdatedBody).toMatchObject({
+      project_id: null,
+      assignee_type: null,
+      assignee_id: null,
+      due_date: null,
+    });
+    const camelUpdatedStored = store.getIssue(camelCreatedBody.id)!;
+    expect(camelUpdatedStored.projectId).toBeNull();
+    expect(camelUpdatedStored.assigneeId).toBeNull();
+    expect(camelUpdatedStored.dueDate).toBeNull();
+    expect(camelUpdatedStored.acceptanceCriteria).toEqual([]);
+
+    const noMutation = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [first.id], updates: {} }),
+    });
+    expect(await noMutation.json()).toEqual({ updated: 0 });
+
+    const camelBatchIds = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issueIds: [first.id], updates: { priority: "urgent" } }),
+    });
+    expect(camelBatchIds.status).toBe(400);
+    expect(await camelBatchIds.json()).toEqual({ error: "issue_ids is required" });
+
+    const camelBatchUpdates = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [first.id], updates: { projectId: project.id, assigneeId: member.id } }),
+    });
+    expect(await camelBatchUpdates.json()).toEqual({ updated: 0 });
+    expect(store.getIssue(first.id)?.assigneeId).toBe(agent.id);
+
+    const updated = await app.request("/api/issues/batch-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        issue_ids: [first.id, "missing", second.id],
+        updates: { status: "done", priority: "urgent", project_id: project.id },
+      }),
+    });
+    expect(await updated.json()).toEqual({ updated: 2 });
+    expect(store.getIssue(first.id)?.status).toBe("done");
+    expect(store.getIssue(second.id)?.priority).toBe("urgent");
+
+    const camelDeleted = await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issueIds: [first.id] }),
+    });
+    expect(camelDeleted.status).toBe(400);
+    expect(await camelDeleted.json()).toEqual({ error: "issue_ids is required" });
+    expect(store.getIssue(first.id)).not.toBeNull();
+
+    const deleted = await app.request("/api/issues/batch-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: [first.id, second.id, "missing"] }),
+    });
+    expect(await deleted.json()).toEqual({ deleted: 2 });
+    expect(store.getIssue(first.id)).toBeNull();
+    expect(store.getIssue(second.id)).toBeNull();
+
+    const invalidCreate = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(invalidCreate.status).toBe(400);
+    expect(await invalidCreate.json()).toEqual({ error: "invalid request body" });
+
+    const compatCreated = await app.request("/api/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Compat created issue",
+        workspace_id: "local",
+        assignee_type: "member",
+        assignee_id: member.id,
+      }),
+    });
+    expect(compatCreated.status).toBe(201);
+    const compatCreatedBody = await compatCreated.json();
+    const compatCreatedIdentifier = String(compatCreatedBody.identifier);
+    expect(compatCreatedIdentifier).toMatch(/^MUL-\d+$/);
+    expect(compatCreatedBody).toMatchObject({
+      workspace_id: "local",
+      creator_type: "member",
+      creator_id: "local",
+      assignee_type: "member",
+      assignee_id: member.id,
+    });
+    expect(compatCreatedBody.workspaceId).toBeUndefined();
+    expect(events.find((event) => event.type === "issue:created" && (event.payload.issue as any)?.id === compatCreatedBody.id)).toMatchObject({
+      workspaceId: "local",
+      actorId: "local",
+      actorType: "member",
+      payload: {
+        issue: {
+          id: compatCreatedBody.id,
+          workspace_id: "local",
+          assignee_type: "member",
+          assignee_id: member.id,
+        },
+      },
+    });
+
+    const compatUpdated = await app.request(`/api/issues/${compatCreatedIdentifier.toLowerCase()}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "in_progress", priority: "high", assignee_id: null, due_date: "2026-02-03" }),
+    });
+    expect(compatUpdated.status).toBe(200);
+    const compatUpdatedBody = await compatUpdated.json();
+    expect(compatUpdatedBody).toMatchObject({
+      id: compatCreatedBody.id,
+      workspace_id: "local",
+      status: "in_progress",
+      priority: "high",
+      assignee_type: null,
+      assignee_id: null,
+    });
+    expect(compatUpdatedBody.assigneeId).toBeUndefined();
+    expect(events.find((event) => event.type === "issue:updated" && (event.payload.issue as any)?.id === compatCreatedBody.id)).toMatchObject({
+      workspaceId: "local",
+      actorId: "local",
+      actorType: "member",
+      payload: {
+        issue: { id: compatCreatedBody.id, status: "in_progress", priority: "high", assignee_type: null },
+        assignee_changed: true,
+        status_changed: true,
+        priority_changed: true,
+        due_date_changed: true,
+        prev_status: "todo",
+        prev_priority: "none",
+        prev_assignee_type: "member",
+        prev_assignee_id: member.id,
+        creator_type: "member",
+        creator_id: "local",
+      },
+    });
+  });
+
+  it("serves quick-create issue compatibility endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Quick Codex", provider: "codex" });
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    const squad = store.createSquad({ name: "Quick squad", leaderId: leader.id });
+    const project = store.createProject({ title: "Quick project" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: "quick cod",
+        prompt: "Create an issue for improving onboarding screenshots",
+        project_id: project.id,
+        workspace_id: "local",
+      }),
+    });
+    expect(created.status).toBe(202);
+    const createdBody = await created.json();
+    expect(createdBody.task_id).toStartWith("tsk_");
+    const task = store.getTask(createdBody.task_id)!;
+    expect(task.agentId).toBe(agent.id);
+    expect(task.issueId).toBeString();
+    const issue = store.getIssue(task.issueId!)!;
+    expect(issue.title).toBe("Create an issue for improving onboarding screenshots");
+    expect(issue.projectId).toBe(project.id);
+    expect(issue.assigneeType).toBe("agent");
+    expect(issue.contextRefs[0]).toEqual({ type: "quick_create", prompt: "Create an issue for improving onboarding screenshots" });
+
+    const camelAgentQuickCreate = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agentId: agent.id,
+        prompt: "Camel agent should not queue",
+      }),
+    });
+    expect(camelAgentQuickCreate.status).toBe(400);
+    expect(await camelAgentQuickCreate.json()).toEqual({ error: "exactly one of agent_id or squad_id is required" });
+
+    const camelProjectQuickCreate = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent_id: agent.id,
+        prompt: "Camel project should be ignored",
+        projectId: project.id,
+        workspaceId: "remote",
+      }),
+    });
+    expect(camelProjectQuickCreate.status).toBe(202);
+    const camelProjectQuickBody = await camelProjectQuickCreate.json();
+    const camelProjectQuickTask = store.getTask(camelProjectQuickBody.task_id)!;
+    const camelProjectQuickIssue = store.getIssue(camelProjectQuickTask.issueId!)!;
+    expect(camelProjectQuickIssue.workspaceId).toBe("local");
+    expect(camelProjectQuickIssue.projectId).toBeNull();
+
+    const squadCreated = await app.request("/api/multiremi/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ squad_id: squad.id, prompt: "Plan squad handoff" }),
+    });
+    expect(squadCreated.status).toBe(202);
+    const squadBody = await squadCreated.json();
+    expect(squadBody.task.agentId).toBe(leader.id);
+    expect(squadBody.issue.assigneeType).toBe("squad");
+    expect(squadBody.task_id).toBe(squadBody.task.id);
+
+    const badPrompt = await app.request("/api/issues/quick-create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: agent.id, prompt: "   " }),
+    });
+    expect(badPrompt.status).toBe(400);
+    expect((await badPrompt.json()).error).toBe("prompt is required");
+  });
+
+  it("serves issue hierarchy and planning fields through API endpoints", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const project = store.createProject({ title: "API hierarchy" });
+
+    const parentRes = await app.request("/api/multiremi/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "API parent",
+        project_id: project.id,
+        priority: "high",
+        due_date: "2026-06-10T12:00:00+08:00",
+        acceptance_criteria: ["works"],
+        context_refs: [{ type: "repo", url: "git@example.com:repo.git" }],
+      }),
+    });
+    expect(parentRes.status).toBe(201);
+    const parent = (await parentRes.json()).issue;
+
+    const childRes = await app.request("/api/multiremi/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "API child", parent_issue_id: parent.id, position: 3 }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = (await childRes.json()).issue;
+    expect(child.parentIssueId).toBe(parent.id);
+    expect(child.projectId).toBe(project.id);
+
+    const updated = await app.request(`/api/multiremi/issues/${child.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "done", priority: "urgent", start_date: "2026-06-04T09:00:00+08:00" }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).issue.priority).toBe("urgent");
+
+    const detail = await app.request(`/api/multiremi/issues/${parent.id}`);
+    const detailBody = await detail.json();
+    expect(detailBody.issue.dueDate).toBe("2026-06-10T04:00:00.000Z");
+    expect(detailBody.issue.acceptanceCriteria).toEqual(["works"]);
+    expect(detailBody.children.map((item: any) => item.id)).toEqual([child.id]);
+    expect(detailBody.childProgress).toEqual({ parentIssueId: parent.id, total: 1, done: 1 });
+
+    const children = await app.request(`/api/issues/${parent.id}/children`);
+    expect((await children.json()).total).toBe(1);
+
+    const progress = await app.request("/api/issues/child-progress?workspaceId=local");
+    expect((await progress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+
+    const remoteParent = store.createIssue({ title: "Remote API parent", workspaceId: "remote" });
+    const remoteChild = store.createIssue({ title: "Remote API child", workspaceId: "remote", parentIssueId: remoteParent.id });
+
+    const camelProgress = await app.request("/api/issues/child-progress?workspaceId=remote");
+    expect((await camelProgress.json()).progress).toEqual([{ parentIssueId: parent.id, total: 1, done: 1 }]);
+    const snakeProgress = await app.request("/api/issues/child-progress?workspace_id=remote");
+    expect((await snakeProgress.json()).progress).toEqual([{ parentIssueId: remoteParent.id, total: 1, done: 0 }]);
+
+    const camelBatchChildren = await app.request(`/api/issues/children?parentIds=${remoteParent.id}`);
+    expect(await camelBatchChildren.json()).toEqual({ issues: [], total: 0 });
+    const snakeBatchChildren = await app.request(`/api/issues/children?parent_ids=${remoteParent.id}`);
+    const snakeBatchChildrenBody = await snakeBatchChildren.json();
+    expect(snakeBatchChildrenBody.total).toBe(1);
+    expect(snakeBatchChildrenBody.issues[0].id).toBe(remoteChild.id);
+  });
+
+  it("serves issue dependency endpoints", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const blocker = store.createIssue({ title: "API blocker" });
+    const blocked = store.createIssue({ title: "API blocked" });
+
+    const created = await app.request(`/api/issues/${blocked.id}/dependencies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ depends_on_issue_id: blocker.id, type: "blocked_by" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.dependency).toMatchObject({
+      workspace_id: "local",
+      issue_id: blocked.id,
+      depends_on_issue_id: blocker.id,
+      type: "blocked_by",
+      depends_on_issue: {
+        id: blocker.id,
+        workspace_id: "local",
+        title: "API blocker",
+      },
+    });
+    expect(createdBody.dependency.dependsOnIssueId).toBeUndefined();
+    expect(createdBody.dependency.depends_on_issue.workspaceId).toBeUndefined();
+
+    const compatListed = await app.request(`/api/issues/${blocker.id}/dependencies`);
+    const compatListedBody = await compatListed.json();
+    expect(compatListedBody.dependencies[0]).toMatchObject({
+      id: createdBody.dependency.id,
+      issue_id: blocked.id,
+      depends_on_issue_id: blocker.id,
+    });
+    expect(compatListedBody.dependencies[0].issueId).toBeUndefined();
+
+    const listed = await app.request(`/api/multiremi/issues/${blocker.id}/dependencies`);
+    const listedBody = await listed.json();
+    expect(listedBody.total).toBe(1);
+    expect(listedBody.dependencies[0].dependsOnIssueId).toBe(blocker.id);
+
+    const detail = await app.request(`/api/multiremi/issues/${blocked.id}`);
+    expect((await detail.json()).dependencies[0].id).toBe(createdBody.dependency.id);
+
+    const invalid = await app.request(`/api/issues/${blocked.id}/dependencies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "invalid request body" });
+
+    const deleted = await app.request(`/api/issues/${blocked.id}/dependencies/${createdBody.dependency.id}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(200);
+    expect(await deleted.json()).toEqual({ status: "ok" });
+    expect(store.listIssueDependencies(blocked.id)).toEqual([]);
+  });
+
+  it("assigns issues through API endpoints", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Grace Hopper", email: "grace@example.com" });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request("/api/multiremi/issues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Assignable issue", assigneeId: "grace@example.com" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.issue.assigneeType).toBe("member");
+    expect(createdBody.task).toBeNull();
+
+    const assigned = await app.request(`/api/multiremi/issues/${createdBody.issue.id}/assign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigneeId: "cod", prompt: "Please implement" }),
+    });
+    expect(assigned.status).toBe(200);
+    const assignedBody = await assigned.json();
+    expect(assignedBody.issue.assigneeId).toBe(agent.id);
+    expect(assignedBody.task.agentId).toBe(agent.id);
+    expect(assignedBody.task.prompt).toBe("Please implement");
+
+    const camelReassigned = await app.request(`/api/issues/${createdBody.issue.key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assigneeId: "Grace Hopper" }),
+    });
+    expect(camelReassigned.status).toBe(200);
+    const camelReassignedBody = await camelReassigned.json();
+    expect(camelReassignedBody.assignee_type).toBe("agent");
+    expect(camelReassignedBody.assignee_id).toBe(agent.id);
+
+    const reassigned = await app.request(`/api/issues/${createdBody.issue.key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignee_id: "Grace Hopper" }),
+    });
+    const reassignedBody = await reassigned.json();
+    expect(reassignedBody.assignee_type ?? reassignedBody.assigneeType).toBe("member");
+    expect(reassignedBody.assignee_id ?? reassignedBody.assigneeId).toBe(member.id);
+  });
+
+  it("serves issue metadata endpoints", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const issue = store.createIssue({ title: "Metadata API" });
+
+    const set = await app.request(`/api/multiremi/issues/${issue.id}/metadata/pipeline_status`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: "waiting_review" }),
+    });
+    expect(set.status).toBe(200);
+    expect((await set.json()).metadata.pipeline_status).toBe("waiting_review");
+
+    const listed = await app.request(`/api/multiremi/issues/${issue.id}/metadata`);
+    expect((await listed.json()).metadata).toEqual({ pipeline_status: "waiting_review" });
+
+    const other = store.createIssue({ title: "Other Metadata API" });
+    store.setIssueMetadataKey(other.id, "pipeline_status", "done");
+    const filtered = await app.request(`/api/issues?metadata=${encodeURIComponent(JSON.stringify({ pipeline_status: "waiting_review" }))}`);
+    expect((await filtered.json()).issues.map((item: any) => item.id)).toEqual([issue.id]);
+
+    const deleted = await app.request(`/api/multiremi/issues/${issue.id}/metadata/pipeline_status`, { method: "DELETE" });
+    expect((await deleted.json()).metadata).toEqual({});
+  });
+
+  it("serves issue label endpoints", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const issue = store.createIssue({ title: "Label API", workspaceId: "local" });
+
+    const created = await app.request("/api/multiremi/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Review", color: "3399FF", workspace_id: "local" }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.label.color).toBe("#3399ff");
+
+    const listed = await app.request("/api/multiremi/labels?workspaceId=local");
+    expect((await listed.json()).total).toBe(1);
+
+    const updated = await app.request(`/api/labels/${createdBody.label.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Reviewed", color: "#22aa66" }),
+    });
+    const updatedBody = await updated.json();
+    expect(updatedBody.name).toBe("Reviewed");
+    expect(updatedBody.workspace_id).toBe("local");
+    expect(updatedBody.workspaceId).toBeUndefined();
+
+    const compatibilityDetail = await app.request(`/api/labels/${createdBody.label.id}`);
+    const compatibilityDetailBody = await compatibilityDetail.json();
+    expect(compatibilityDetailBody).toMatchObject({ id: createdBody.label.id, name: "Reviewed", workspace_id: "local" });
+    expect(compatibilityDetailBody.label).toBeUndefined();
+
+    const compatibilityList = await app.request("/api/labels?workspace_id=local");
+    const compatibilityListBody = await compatibilityList.json();
+    expect(compatibilityListBody.labels[0].workspace_id).toBe("local");
+    expect(compatibilityListBody.labels[0].workspaceId).toBeUndefined();
+
+    const remoteLabel = store.createLabel({ name: "Remote Label", color: "#112244", workspaceId: "remote" });
+    const camelWorkspaceLabelList = await app.request("/api/labels?workspaceId=remote");
+    const camelWorkspaceLabelListBody = await camelWorkspaceLabelList.json();
+    expect(camelWorkspaceLabelListBody.labels.some((label: any) => label.id === remoteLabel.id)).toBe(false);
+    const snakeWorkspaceLabelList = await app.request("/api/labels?workspace_id=remote");
+    const snakeWorkspaceLabelListBody = await snakeWorkspaceLabelList.json();
+    expect(snakeWorkspaceLabelListBody.labels.map((label: any) => label.id)).toEqual([remoteLabel.id]);
+
+    const camelWorkspaceLabel = await app.request("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Camel Workspace", color: "#445566", workspaceId: "remote" }),
+    });
+    const camelWorkspaceLabelBody = await camelWorkspaceLabel.json();
+    expect(camelWorkspaceLabel.status).toBe(201);
+    expect(camelWorkspaceLabelBody.workspace_id).toBe("local");
+
+    const attached = await app.request(`/api/issues/${issue.id}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label_id: createdBody.label.id }),
+    });
+    expect(attached.status).toBe(200);
+    const attachedBody = await attached.json();
+    expect(attachedBody.labels[0].name).toBe("Reviewed");
+    expect(attachedBody.labels[0].workspace_id).toBe("local");
+    expect(attachedBody.labels[0].workspaceId).toBeUndefined();
+    expect(attachedBody.total).toBeUndefined();
+
+    const detail = await app.request(`/api/multiremi/issues/${issue.id}`);
+    expect((await detail.json()).issue.labels[0].color).toBe("#22aa66");
+
+    const issueLabels = await app.request(`/api/issues/${issue.id}/labels`);
+    const issueLabelsBody = await issueLabels.json();
+    expect(issueLabelsBody.labels[0].workspace_id).toBe("local");
+    expect(issueLabelsBody.total).toBeUndefined();
+
+    const missingLabelId = await app.request(`/api/issues/${issue.id}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(missingLabelId.status).toBe(400);
+    expect(await missingLabelId.json()).toEqual({ error: "label_id is required" });
+
+    const camelLabelId = await app.request(`/api/issues/${issue.id}/labels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ labelId: createdBody.label.id }),
+    });
+    expect(camelLabelId.status).toBe(400);
+    expect(await camelLabelId.json()).toEqual({ error: "label_id is required" });
+
+    const invalidLabelJson = await app.request("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(invalidLabelJson.status).toBe(400);
+    expect(await invalidLabelJson.json()).toEqual({ error: "invalid request body" });
+    const missingName = await app.request("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ color: "#112233" }),
+    });
+    expect(missingName.status).toBe(400);
+    expect(await missingName.json()).toEqual({ error: "name is required" });
+    const invalidColor = await app.request("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Invalid color", color: "blue" }),
+    });
+    expect(invalidColor.status).toBe(400);
+    expect(await invalidColor.json()).toEqual({ error: "color must be a 6-digit hex value like #3b82f6" });
+    const duplicate = await app.request("/api/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Reviewed", color: "#334455" }),
+    });
+    expect(duplicate.status).toBe(409);
+    expect(await duplicate.json()).toEqual({ error: "a label with that name already exists" });
+
+    const detached = await app.request(`/api/issues/${issue.id}/labels/${createdBody.label.id}`, {
+      method: "DELETE",
+    });
+    expect((await detached.json()).labels).toHaveLength(0);
+    const deleted = await app.request(`/api/labels/${createdBody.label.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(204);
+    const missing = await app.request(`/api/labels/${createdBody.label.id}`);
+    expect(missing.status).toBe(404);
+  });
+});

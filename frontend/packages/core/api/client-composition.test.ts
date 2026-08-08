@@ -1,6 +1,13 @@
+/// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, ENDPOINT_FACTORIES } from "./client";
 import { HttpClient } from "./http";
+
+/** Every module file under endpoints/, resolved independently of client.ts.
+ *  Deriving the expectation from the filesystem is the whole point: a module
+ *  dropped from BOTH the wiring and this test's expectation is exactly the
+ *  regression `declaredMethods()` cannot see, because it reads the wiring. */
+const ENDPOINT_MODULES = import.meta.glob<Record<string, unknown>>("./endpoints/*.ts", { eager: true });
 
 /** Every public method declared by every endpoint module, paired with the
  *  module that declares it. This is the set the facade must expose. */
@@ -23,6 +30,22 @@ afterEach(() => {
 });
 
 describe("ApiClient composition", () => {
+  it("wires every module in endpoints/ into ENDPOINT_FACTORIES", () => {
+    const paths = Object.keys(ENDPOINT_MODULES);
+    // Guard the guard: a glob that matches nothing would pass vacuously.
+    expect(paths.length).toBeGreaterThan(0);
+
+    const http = new HttpClient("https://api.example.test");
+    const wired = new Set<unknown>(ENDPOINT_FACTORIES.map((create) => create(http).constructor));
+
+    const unwired = paths.filter(
+      (path) => !Object.values(ENDPOINT_MODULES[path]!).some((exported) => wired.has(exported)),
+    );
+    expect(unwired).toEqual([]);
+    // One factory per file — catches a module wired twice as well.
+    expect(ENDPOINT_FACTORIES.length).toBe(paths.length);
+  });
+
   it("exposes every endpoint module method on the facade", () => {
     const client = new ApiClient("https://api.example.test") as unknown as Record<string, unknown>;
     const missing = declaredMethods().filter(({ method }) => typeof client[method] !== "function");

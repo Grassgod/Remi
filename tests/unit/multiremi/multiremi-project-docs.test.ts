@@ -1,19 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import type { MultiremiProjectDocRef } from "@multiremi/contracts/types.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
-let db: Database | null = null;
-
-function createStore(): MultiremiStore {
-  db = new Database(":memory:");
-  return new MultiremiStore(db);
-}
-
-afterEach(() => {
-  db?.close();
-  db = null;
-});
+afterEach(resetMultiremiTestEnv);
 
 // updated_at has millisecond resolution, so docs created back to back can tie.
 // Ordering assertions pin the timestamps by hand.

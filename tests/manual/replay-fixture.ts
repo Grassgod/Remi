@@ -11,12 +11,12 @@
  *   bun run tests/manual/replay-fixture.ts agent-bash --chat oc_xxx
  */
 
+import { basename, join } from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { createFeishuClient } from "@connectors/feishu/client.js";
 import { FeishuStreamingSession } from "@connectors/feishu/streaming.js";
 import { createAdapter } from "@acp/index.js";
-import { formatToolInputSummary } from "@connectors/feishu/tool-formatters.js";
+import { createToolEntryReducer } from "@connectors/feishu/adapters/tool-entry-reducer.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "@connectors/feishu/permission-ui.js";
 import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate } from "@shared/contracts/acp-protocol.js";
 import { loadConfig as loadFeishuConfig } from "./_load-config.js";
@@ -28,6 +28,7 @@ if (args.length === 0 || args[0] === "--help") {
   console.log(`Usage: bun run tests/manual/replay-fixture.ts <fixture-name> [--speed <multiplier>] [--chat <chat_id>]`);
   console.log(`  --speed: 0.5, 1 (default), 2, 5, instant`);
   console.log(`  --chat: target chat_id (default: from trigger_user_ids in config)`);
+  console.log(`  --agent: claude | codex (default: inferred from the fixture name)`);
   process.exit(0);
 }
 
@@ -38,7 +39,12 @@ const speed = speedArg === "instant" ? Infinity : parseFloat(speedArg) || 1;
 const chatIdx = args.indexOf("--chat");
 const chatIdOverride = chatIdx !== -1 ? args[chatIdx + 1] : undefined;
 const agentIdx = args.indexOf("--agent");
-const agentType = agentIdx !== -1 ? (args[agentIdx + 1] ?? "claude") : "claude";
+const agentOverride = agentIdx !== -1 ? args[agentIdx + 1] : undefined;
+
+/** Fixtures are recorded per agent; decode each one with its own adapter. */
+function agentForFixture(fixtureFile: string): string {
+  return agentOverride ?? (fixtureFile.startsWith("codex-") ? "codex" : "claude");
+}
 
 // ── Load config ─────────────────────────────────────────────
 
@@ -92,7 +98,10 @@ async function main() {
   await session.start(config.chatId, "open_id", { sessionId: `replay-${fixtureName}` });
   console.log(`🎬 Streaming card created`);
 
-  const adapter = createAdapter(agentType);
+  const agentType = agentForFixture(basename(fixturePath));
+  console.log(`🤖 Adapter: ${agentType}`);
+  // Same state machine production renders with — see tool-entry-reducer.ts.
+  const tools = createToolEntryReducer(createAdapter(agentType));
   const baseDelay = speed === Infinity ? 0 : Math.round(200 / speed);
   const startTime = Date.now();
 
@@ -100,18 +109,6 @@ async function main() {
   let contentText = "";
   let currentThinkingSegment = "";
   let trailingThinkingFlushed = false;
-  let toolCount = 0;
-
-  interface ToolEntry {
-    name: string;
-    input?: Record<string, unknown>;
-    status: "pending" | "done";
-    stepAdded?: boolean;
-  }
-  const toolEntries: ToolEntry[] = [];
-  const toolStartTimes = new Map<string, number>();
-  const seenInputs = new Set<string>();
-  const toolNames = new Map<string, string>();
 
   for (const notification of notifications) {
     const update = (notification as any).params?.update as SessionUpdate | undefined;
@@ -145,57 +142,29 @@ async function main() {
         break;
       }
       case "tool_call": {
-        const tc = update as ToolCallUpdate;
-        const name = adapter.resolveToolName(tc);
-        const input = adapter.extractToolInput(tc);
-        toolNames.set(tc.toolCallId, name);
-        toolStartTimes.set(tc.toolCallId, Date.now());
-        toolCount++;
-        toolEntries.push({ name, input, status: "pending" });
+        const { toolName, input } = tools.onToolCall(update as ToolCallUpdate, currentThinkingSegment);
         if (currentThinkingSegment.trim()) {
           session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
         }
         currentThinkingSegment = "";
         trailingThinkingFlushed = false;
-        await session.updateStatus(formatToolStatus(name, input));
-        console.log(`  🔧 tool_call: ${name}`);
+        await session.updateStatus(formatToolStatus(toolName, input));
+        console.log(`  🔧 tool_call: ${toolName}`);
         break;
       }
       case "tool_call_update": {
-        const tc = update as ToolCallProgressUpdate;
-        const name = toolNames.get(tc.toolCallId) ?? adapter.resolveToolName(tc);
-        if (tc.status === "completed" || tc.status === "failed") {
-          const st = toolStartTimes.get(tc.toolCallId);
-          const durationMs = st ? Date.now() - st : undefined;
-          toolStartTimes.delete(tc.toolCallId);
-          const entry = toolEntries.findLast((e) => e.status === "pending");
-          if (entry) {
-            entry.status = "done";
-            const resolvedInput = adapter.extractToolInput(tc);
-            if (resolvedInput) entry.input = resolvedInput;
-            if (!entry.stepAdded) {
-              entry.stepAdded = true;
-              const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
-              session.addStep(entry.name, desc);
-            }
-          }
+        const result = tools.onToolCallUpdate(update as ToolCallProgressUpdate);
+        if (result.kind === "finished") {
+          if (result.step) session.addStep(result.step.name, result.step.description);
           await session.updateStatus("Thinking...");
-          const dur = durationMs ? ` (${(durationMs / 1000).toFixed(1)}s)` : "";
-          console.log(`  ✅ tool_done: ${name}${dur}`);
-        } else if (!seenInputs.has(tc.toolCallId)) {
-          const input = adapter.extractToolInput(tc);
-          if (input && Object.keys(input).length > 0) {
-            seenInputs.add(tc.toolCallId);
-            const entry = toolEntries.findLast((e) => e.status === "pending" && e.name === name);
-            if (entry && !entry.stepAdded) {
-              entry.input = input;
-              entry.stepAdded = true;
-              const stepDesc = `${name} ${formatToolInputSummary(name, input)}`.trim();
-              session.addStep(name, stepDesc);
-              await session.updateStatus(formatToolStatus(name, input));
-            }
-            console.log(`  📥 tool_input: ${name} ${JSON.stringify(input).slice(0, 80)}`);
+          const dur = result.durationMs ? ` (${(result.durationMs / 1000).toFixed(1)}s)` : "";
+          console.log(`  ✅ tool_done: ${result.toolName}${dur}`);
+        } else if (result.kind === "input") {
+          if (result.step) {
+            session.addStep(result.step.name, result.step.description);
+            await session.updateStatus(formatToolStatus(result.toolName, result.input));
           }
+          console.log(`  📥 tool_input: ${result.toolName} ${JSON.stringify(result.input).slice(0, 80)}`);
         }
         break;
       }
@@ -246,6 +215,7 @@ async function main() {
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
+  const toolCount = tools.toolCount;
   console.log(`\n🏁 Replay complete: ${toolCount} tools, ${elapsed}s elapsed`);
   console.log(`   Thinking: ${thinkingText.length} chars, Content: ${contentText.length} chars`);
 

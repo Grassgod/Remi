@@ -9,11 +9,15 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAdapter } from "@acp/index.js";
-import { formatToolInputSummary } from "@connectors/feishu/sdk.js";
+import { createToolEntryReducer } from "@connectors/feishu/adapters/tool-entry-reducer.js";
 import type { SessionUpdate, ToolCallUpdate, ToolCallProgressUpdate, ContentBlock } from "@shared/contracts/acp-protocol.js";
 
 const FIXTURE_DIR = join(import.meta.dir, "..", "fixtures", "acp");
-const adapter = createAdapter("claude");
+
+/** Fixtures are recorded per agent; decode each one with its own adapter. */
+function adapterFor(fixtureFile: string) {
+  return createAdapter(fixtureFile.startsWith("codex-") ? "codex" : "claude");
+}
 
 interface CoverageResult {
   fixture: string;
@@ -25,23 +29,19 @@ interface CoverageResult {
 }
 
 function processFixture(filePath: string): CoverageResult {
+  const fixture = filePath.split("/").pop()!;
   const notifications = JSON.parse(readFileSync(filePath, "utf-8")) as Array<Record<string, unknown>>;
   const handled: Record<string, number> = {};
   const unhandled: Record<string, number> = {};
   const steps: string[] = [];
   const errors: string[] = [];
 
-  const toolNames = new Map<string, string>();
-  const toolStartTimes = new Map<string, number>();
-  const seenInputs = new Set<string>();
+  // Same state machine production renders with — see tool-entry-reducer.ts.
+  const tools = createToolEntryReducer(adapterFor(fixture));
   let thinkingText = "";
   let contentText = "";
   let currentThinkingSegment = "";
   let trailingThinkingFlushed = false;
-  let toolCount = 0;
-
-  interface Entry { name: string; input?: Record<string, unknown>; status: "pending" | "done"; stepAdded?: boolean; }
-  const toolEntries: Entry[] = [];
 
   for (const n of notifications) {
     const update = (n as any).params?.update as SessionUpdate | undefined;
@@ -75,13 +75,7 @@ function processFixture(filePath: string): CoverageResult {
       }
       case "tool_call": {
         handled[su] = (handled[su] ?? 0) + 1;
-        const tc = update as ToolCallUpdate;
-        const toolName = adapter.resolveToolName(tc);
-        const input = adapter.extractToolInput(tc);
-        toolNames.set(tc.toolCallId, toolName);
-        toolStartTimes.set(tc.toolCallId, Date.now());
-        toolCount++;
-        toolEntries.push({ name: toolName, input, status: "pending" });
+        tools.onToolCall(update as ToolCallUpdate, currentThinkingSegment);
         if (currentThinkingSegment.trim()) {
           steps.push(`[thinking] ${currentThinkingSegment.trim().slice(0, 60)}`);
         }
@@ -91,37 +85,15 @@ function processFixture(filePath: string): CoverageResult {
       }
       case "tool_call_update": {
         handled[su] = (handled[su] ?? 0) + 1;
-        const tc = update as ToolCallProgressUpdate;
-        const toolName = toolNames.get(tc.toolCallId) ?? adapter.resolveToolName(tc);
+        const result = tools.onToolCallUpdate(update as ToolCallProgressUpdate);
 
-        if (tc.status === "completed" || tc.status === "failed") {
-          const entry = toolEntries.findLast((e) => e.status === "pending");
-          if (entry) {
-            entry.status = "done";
-            const resolvedInput = adapter.extractToolInput(tc);
-            // Mirrors stream-handler.ts: latest wins, merged over the initial input.
-            if (resolvedInput) entry.input = { ...entry.input, ...resolvedInput };
-            if (!entry.stepAdded) {
-              entry.stepAdded = true;
-              const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
-              steps.push(`[${tc.status}] ${desc}`);
-            }
+        if (result.kind === "finished") {
+          if (result.step) steps.push(`[${result.status}] ${result.step.description}`);
+          if (result.status === "failed") {
+            errors.push(`tool_call_update failed: ${result.toolName} ${result.toolCallId}`);
           }
-          if (tc.status === "failed") {
-            errors.push(`tool_call_update failed: ${toolName} ${tc.toolCallId}`);
-          }
-        } else if (!seenInputs.has(tc.toolCallId)) {
-          const input = adapter.extractToolInput(tc);
-          if (input && Object.keys(input).length > 0) {
-            seenInputs.add(tc.toolCallId);
-            const entry = toolEntries.findLast((e) => e.status === "pending" && e.name === toolName);
-            if (entry && !entry.stepAdded) {
-              entry.input = input;
-              entry.stepAdded = true;
-              const desc = `${toolName} ${formatToolInputSummary(toolName, input)}`.trim();
-              steps.push(`[step] ${desc}`);
-            }
-          }
+        } else if (result.kind === "input" && result.step) {
+          steps.push(`[step] ${result.step.description}`);
         }
         break;
       }
@@ -146,7 +118,7 @@ function processFixture(filePath: string): CoverageResult {
   }
 
   return {
-    fixture: filePath.split("/").pop()!,
+    fixture,
     total: notifications.length,
     handled,
     unhandled,

@@ -266,8 +266,19 @@ class AcpTestClient {
     return path;
   }
 
-  saveScenarioFixtures(label: string): string {
-    // Save only notifications from last prompt
+  /** Drop buffered notifications so the next scenario records only its own. */
+  resetNotifications(): void {
+    this.notifications.length = 0;
+    this.agentRequests.length = 0;
+  }
+
+  saveScenarioFixtures(label: string): string | null {
+    // Save only notifications from last prompt. A scenario that produced none
+    // must not re-serialise its predecessor's buffer as a byte-duplicate.
+    if (this.notifications.length === 0) {
+      console.log(`  ⏭  Scenario ${label}: no notifications recorded, nothing saved`);
+      return null;
+    }
     const path = join(FIXTURE_DIR, `${label}-notifications-${Date.now()}.json`);
     writeFileSync(path, JSON.stringify(this.notifications, null, 2));
     console.log(`  📁 Scenario: ${path}`);
@@ -365,10 +376,14 @@ async function testEnterPlanMode(client: AcpTestClient, label: string) {
   client.saveScenarioFixtures(label);
 }
 
-async function testSessionResume(client: AcpTestClient) {
+async function testSessionResume(client: AcpTestClient, label: string) {
   console.log("\n═══ Test: Session Resume ═══");
   const sid = client.getSessionId();
   if (!sid) { console.log("  skip: no session"); return; }
+
+  // This scenario never calls prompt(), which is what clears the buffer — do it
+  // here, or the fixture is a byte-duplicate of the previous scenario.
+  client.resetNotifications();
 
   // Close and resume
   console.log(`  closing session ${sid}...`);
@@ -399,7 +414,7 @@ async function testSessionResume(client: AcpTestClient) {
   }
 
   console.log(`  events after resume: ${JSON.stringify(client.getUpdateCounts())}`);
-  client.saveScenarioFixtures("session-resume");
+  client.saveScenarioFixtures(label);
 }
 
 // ── Main ─────────────────────────────────────────────────
@@ -443,7 +458,7 @@ async function main() {
 
   // Session resume test (runs last since it closes the session)
   try {
-    await testSessionResume(client);
+    await testSessionResume(client, `${prefix}session-resume`);
   } catch (e) {
     console.log(`  ❌ session-resume failed: ${e}`);
   }

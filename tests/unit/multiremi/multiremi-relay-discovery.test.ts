@@ -1,11 +1,12 @@
-import { describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { discoverGatewayModels, type HttpGet, type HttpResponse } from "@multiremi/relay/discovery.js";
+import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+
+afterEach(resetMultiremiTestEnv);
 
 function createStore(): MultiremiStore {
-  const store = new MultiremiStore(new Database(":memory:"));
-  store.ensureLocalWorkspace();
+  const store = createLocalStore();
   store.setRelayModelDiscovery("local", true);
   return store;
 }

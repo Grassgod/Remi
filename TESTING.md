@@ -30,7 +30,7 @@ tests/
 ### 命名约定 = 是否自动跑
 
 - **`*.test.ts`** → `bun test` **自动发现并运行**。日常单测、接口单测都用这个后缀。
-  - 例:`tests/unit/multiremi/multiremi-core.test.ts`(用 `createMultiremiApp()` + `app.request()` 在进程内打接口,是接口级单测的范式)。
+  - 例:`tests/unit/multiremi/multiremi-api-issues.test.ts`(用 `createMultiremiApp()` + `app.request()` 在进程内打接口,是接口级单测的范式)。共用装置(`createStore`/`mockFetch`/`signTestJwt`/WebSocket 等待)统一从 `tests/unit/multiremi/helpers.ts` 导入,不要在测试文件里重抄一份。
 - **`*.ts`(无 `.test`)** → 是**独立 harness**,`bun test` 不碰,必须通过 `package.json` 里的脚本入口手动跑(见下)。这样做是因为它们依赖真实 provider / 浏览器 / Postgres,不能在普通单测里跑。
 
 > 新增一个后端测试时:能不依赖外部服务就写成 `tests/unit/**/*.test.ts`;需要起真实服务/浏览器的写成 `tests/integration/*.ts` 并**在 `package.json` 加一个入口脚本**(否则会变成没人跑的孤儿)。
@@ -61,8 +61,8 @@ bun test tests/unit/memory/memory.test.ts # 单个文件
 
 ```bash
 # 单元 / 组件(快,不用起服务)
-bun run test:frontend            # = cd frontend && pnpm test (turbo → 各包 vitest run)
-cd frontend && pnpm --filter @multiremi/core test   # 单个包
+bun run test:frontend            # = bun run --filter '@multiremi/*' test(各包 vitest run)
+cd frontend && bun run --filter @multiremi/core test   # 单个包
 
 # E2E(需先起好前端:3000 + 后端 + Postgres)
 cd frontend && pnpm exec playwright test
@@ -79,7 +79,7 @@ cd frontend && pnpm exec playwright test
 | 脚本 | 跑什么 | 前置依赖 |
 |---|---|---|
 | `bun test` | 后端全部 `*.test.ts` | 无 |
-| `bun run test:frontend` | 前端 Vitest 单元/组件 | 已 `pnpm install`(frontend) |
+| `bun run test:frontend` | 前端 Vitest 单元/组件 | 根目录 `bun install`(frontend 在 root workspaces 里) |
 | `bun run smoke:multiremi:acp` | multiremi ACP 冒烟 | 真实 ACP agent |
 | `bun run e2e:multiremi` | 内置 dashboard 全栈 e2e(真 server+daemon+**真 LLM 任务**) | provider CLI + Chromium |
 | `bun run e2e:frontend` | Next 前端 ↔ 本仓库 Bun 后端(Postgres) | 前端:3000 + 后端:6130 + Postgres |

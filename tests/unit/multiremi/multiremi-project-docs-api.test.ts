@@ -1,30 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { createStore, db, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 
-let db: Database | null = null;
-let previousFetch: typeof globalThis.fetch | null = null;
-
-function createStore(): MultiremiStore {
-  db = new Database(":memory:");
-  return new MultiremiStore(db);
-}
-
-afterEach(() => {
-  db?.close();
-  db = null;
-  if (previousFetch) {
-    globalThis.fetch = previousFetch;
-    previousFetch = null;
-  }
-});
-
-function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): void {
-  previousFetch = globalThis.fetch;
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => handler(String(input), init)) as typeof globalThis.fetch;
-}
+afterEach(resetMultiremiTestEnv);
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 

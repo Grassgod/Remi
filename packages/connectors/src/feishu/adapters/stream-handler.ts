@@ -22,6 +22,7 @@ export type { StreamMeta, StreamHandlerLog } from "@shared/contracts/acp-protoco
 import type { FeishuStreamingSession } from "../streaming.js";
 import type { ToolEntry } from "../tool-formatters.js";
 import { formatToolInputSummary, shortPath } from "../tool-formatters.js";
+import { createToolEntryReducer } from "./tool-entry-reducer.js";
 import { buildToolApprovalForm, buildAskQuestionForm, buildPlanReviewForm } from "../permission-ui.js";
 import { registerPendingAction, rejectPendingAction, rejectPendingActionsForChat, hasPendingAction } from "../card-actions.js";
 
@@ -179,8 +180,7 @@ export async function handleAgentStream(
 ): Promise<{ elapsedSec: number; usageTokens: number; contextWindow: number | null; toolCount: number; contentText: string; thinkingText: string; toolEntries: ToolEntry[] }> {
   let thinkingText = "";
   let contentText = "";
-  let toolCount = 0;
-  const toolEntries: ToolEntry[] = [];
+  const toolReducer = createToolEntryReducer(acpAdapter);
   let currentThinkingSegment = "";
   let trailingThinkingFlushed = false;
   let usageTokens = 0;
@@ -340,10 +340,6 @@ export async function handleAgentStream(
     });
   }
 
-  const toolStartTimes = new Map<string, number>();
-  const seenInputs = new Set<string>();
-  const acpToolNames = new Map<string, string>();
-
   try {
     for await (const event of stream) {
       if (session.abortSignal.aborted) {
@@ -383,11 +379,7 @@ export async function handleAgentStream(
           break;
         }
         case "tool_call": {
-          const toolName = acpAdapter.resolveToolName(e);
-          const input = acpAdapter.extractToolInput(e);
-          acpToolNames.set(e.toolCallId, toolName);
-          toolStartTimes.set(e.toolCallId, Date.now());
-          toolCount++;
+          const { toolName, input } = toolReducer.onToolCall(e, currentThinkingSegment);
 
           if (toolName === "TodoWrite" && input?.todos) {
             const todos = input.todos as Array<Record<string, unknown>>;
@@ -424,7 +416,6 @@ export async function handleAgentStream(
             }
           }
 
-          toolEntries.push({ name: toolName, input, status: "pending", thinkingBefore: currentThinkingSegment });
           if (currentThinkingSegment.trim()) {
             session.addStep("_thinking", currentThinkingSegment.trim().replace(/\n{3,}/g, "\n\n"));
           }
@@ -433,19 +424,12 @@ export async function handleAgentStream(
           break;
         }
         case "tool_call_update": {
-          const toolName = acpToolNames.get(e.toolCallId) ?? acpAdapter.resolveToolName(e);
+          const result = toolReducer.onToolCallUpdate(e);
+          const toolName = result.toolName;
 
-          if (e.status === "completed" || e.status === "failed") {
-            const startTime = toolStartTimes.get(e.toolCallId);
-            const durationMs = startTime ? Date.now() - startTime : undefined;
-            toolStartTimes.delete(e.toolCallId);
-            acpToolNames.delete(e.toolCallId);
-            seenInputs.delete(e.toolCallId);
-            const resultPreview = acpAdapter.extractResultPreview(e);
-            const resolvedInput = acpAdapter.extractToolInput(e);
-
-            if (toolName === "TaskCreate" && resultPreview) {
-              const match = resultPreview.match(/Task #(\S+)/);
+          if (result.kind === "finished") {
+            if (toolName === "TaskCreate" && result.resultPreview) {
+              const match = result.resultPreview.match(/Task #(\S+)/);
               if (match) {
                 const task = planTasks.find((t) => t.id === `_pending_${e.toolCallId}`);
                 if (task) task.id = match[1];
@@ -458,52 +442,23 @@ export async function handleAgentStream(
             }
             await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()) || "Thinking...");
 
-            const entry = toolEntries.findLast((en) => en.status === "pending");
-            if (entry) {
-              entry.status = "done";
-              entry.durationMs = durationMs;
-              entry.resultPreview = resultPreview;
-              // Latest wins: the terminal frame refines the args (claude sends
-              // the command after the initial call) and enriches them (codex
-              // collab lands agentsStates + the subagent's answer only here).
-              // Keys the terminal frame omits survive from the initial input.
-              if (resolvedInput) entry.input = { ...entry.input, ...resolvedInput };
-              if (!entry.stepAdded) {
-                entry.stepAdded = true;
-                const desc = `${entry.name} ${formatToolInputSummary(entry.name, entry.input)}`.trim();
-                session.addStep(entry.name, desc);
+            if (result.step) session.addStep(result.step.name, result.step.description);
+            if (result.durationMs) session.updateStepDuration(result.durationMs);
+          } else if (result.kind === "input") {
+            if (toolName === "Agent") {
+              const desc = String(result.input.description ?? result.input.prompt ?? "").slice(0, 60);
+              const agent = activeAgents.find((a) => a.toolUseId === e.toolCallId);
+              if (agent && desc) {
+                agent.description = desc;
+                syncHeartbeatRenderer();
+                await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()));
               }
             }
-            if (durationMs) session.updateStepDuration(durationMs);
-          } else {
-            const alreadySeen = seenInputs.has(e.toolCallId);
-            const input = acpAdapter.extractToolInput(e);
-            const inputKeys = input ? Object.keys(input) : [];
 
-            if (!alreadySeen && (toolName === "AskUserQuestion" || toolName === "ExitPlanMode")) {
-              seenInputs.add(e.toolCallId);
-            } else if (!alreadySeen && input && inputKeys.length > 0) {
-              seenInputs.add(e.toolCallId);
-
-              if (toolName === "Agent") {
-                const desc = String(input.description ?? input.prompt ?? "").slice(0, 60);
-                const agent = activeAgents.find((a) => a.toolUseId === e.toolCallId);
-                if (agent && desc) {
-                  agent.description = desc;
-                  syncHeartbeatRenderer();
-                  await session.updateStatus(renderCombinedStatus(planTasks, activeAgents, session.getElapsed()));
-                }
-              }
-
-              const pendingEntry = toolEntries.findLast((en) => en.status === "pending" && en.name === toolName);
-              if (pendingEntry && !pendingEntry.stepAdded) {
-                pendingEntry.input = input;
-                pendingEntry.stepAdded = true;
-                const inputSummary = formatToolInputSummary(toolName, input);
-                session.addStep(toolName, `${toolName} ${inputSummary}`.trim());
-                if (planTasks.length === 0 && activeAgents.length === 0) {
-                  await session.updateStatus(formatToolStatus(toolName, input));
-                }
+            if (result.step) {
+              session.addStep(result.step.name, result.step.description);
+              if (planTasks.length === 0 && activeAgents.length === 0) {
+                await session.updateStatus(formatToolStatus(toolName, result.input));
               }
             }
           }
@@ -537,9 +492,9 @@ export async function handleAgentStream(
     elapsedSec: session.getElapsed(),
     usageTokens,
     contextWindow: usageContextWindow,
-    toolCount,
+    toolCount: toolReducer.toolCount,
     contentText,
     thinkingText,
-    toolEntries,
+    toolEntries: toolReducer.entries,
   };
 }

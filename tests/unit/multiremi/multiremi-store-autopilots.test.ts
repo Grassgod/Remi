@@ -1,0 +1,494 @@
+// Autopilot run state, cron scheduling and trigger claiming, the failure-rate
+// auto-pause, analytics, and webhook delivery.
+import { afterEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMultiremiApp } from "@multiremi/api.js";
+import { MultiremiScheduler } from "@multiremi/scheduler.js";
+import { MultiremiStore } from "@multiremi/store.js";
+import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.js";
+
+afterEach(resetMultiremiTestEnv);
+
+describe("Multiremi store — autopilots, schedules, and webhooks", () => {
+  it("syncs issue and autopilot run state when tasks finish", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "local-claude", provider: "claude" });
+    const project = store.createProject({ title: "Core" });
+    const autopilot = store.createAutopilot({
+      title: "Regression sweep",
+      projectId: project.id,
+      assigneeId: agent.id,
+      issueTitleTemplate: "Sweep regressions",
+    });
+    const run = store.runAutopilot(autopilot.id);
+    expect(store.getTask(run.taskId!)?.autopilotRunId).toBe(run.id);
+    expect(store.getTaskWithAgent(run.taskId!)?.autopilotRunId).toBe(run.id);
+    expect(store.listTasks().find((task) => task.id === run.taskId)?.autopilotRunId).toBe(run.id);
+
+    const comment = store.createIssueComment(run.issueId!, { body: "Looks important" });
+    expect(comment.body).toBe("Looks important");
+    expect(store.listIssueActivity(run.issueId!)).toHaveLength(2);
+
+    store.updateIssue(run.issueId!, { status: "in_progress" });
+    expect(store.claimTask(runtime.id)?.id).toBe(run.taskId!);
+    store.startTask(run.taskId!);
+    store.completeTask(run.taskId!, { output: "fixed" });
+
+    expect(store.getIssue(run.issueId!)?.status).toBe("done");
+    expect(store.getProject(project.id)?.doneCount).toBe(1);
+    expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
+    // Completion appends task_completed, then the agent-reply comment_created.
+    const activityTypes = store.listIssueActivity(run.issueId!).map((entry) => entry.type);
+    expect(activityTypes).toContain("task_completed");
+    expect(activityTypes.at(-1)).toBe("comment_created");
+  });
+
+  it("includes autopilot run ids in daemon task payloads", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Autopilot Claude", provider: "claude" });
+    const runtime = store.registerRuntime({ name: "autopilot-runtime", provider: "claude" });
+    const autopilot = store.createAutopilot({
+      title: "Autopilot payload",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+    });
+    const run = store.runAutopilot(autopilot.id);
+    const app = createMultiremiApp({ store });
+
+    const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
+    expect(claim.status).toBe(200);
+    const body = await claim.json();
+    expect(body.task.id).toBe(run.taskId);
+    expect(body.task.autopilot_run_id).toBe(run.id);
+    expect(body.task.autopilotRunId).toBeUndefined();
+  });
+
+  it("schedules active cron autopilots and unschedules inactive ones", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Scheduled triage",
+      assigneeId: agent.id,
+      triggerKind: "schedule",
+      cronExpression: "*/5 * * * * *",
+      issueTitleTemplate: "Scheduled prompt",
+    });
+    const scheduler = new MultiremiScheduler({ store, pollIntervalMs: 60_000 });
+
+    scheduler.start();
+    expect(scheduler.scheduledIds()).toContain(autopilot.id);
+
+    const run = scheduler.trigger(autopilot.id);
+    expect(run?.source).toBe("schedule");
+    expect(store.getTask(run!.taskId!)?.prompt).toBe("Scheduled prompt");
+
+    store.updateAutopilot(autopilot.id, { status: "paused" });
+    scheduler.sync();
+    expect(scheduler.scheduledIds()).not.toContain(autopilot.id);
+    expect(scheduler.trigger(autopilot.id)).toBeNull();
+    scheduler.stop();
+  });
+
+  it("claims due schedule triggers and recovers lost next_run_at like Go", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Trigger scheduled triage",
+      assigneeId: agent.id,
+      triggerKind: "manual",
+      issueTitleTemplate: "Trigger scheduled prompt",
+    });
+    const trigger = store.createAutopilotTrigger(autopilot.id, {
+      kind: "schedule",
+      cronExpression: "*/5 * * * * *",
+      timezone: "UTC",
+      label: "Every five seconds",
+    });
+    expect(trigger.nextRunAt).toBeString();
+
+    const scheduler = new MultiremiScheduler({ store, pollIntervalMs: 60_000 });
+    scheduler.sync();
+    expect(scheduler.scheduledIds()).not.toContain(autopilot.id);
+
+    db!.run("UPDATE multiremi_autopilot_triggers SET next_run_at = ? WHERE id = ?", [
+      new Date(Date.now() - 1_000).toISOString(),
+      trigger.id,
+    ]);
+    const runs = scheduler.tickDueTriggers();
+    expect(runs).toHaveLength(1);
+    expect(runs[0].source).toBe("schedule");
+    expect(runs[0].payload).toMatchObject({
+      cronExpression: "*/5 * * * * *",
+      triggerId: trigger.id,
+      trigger_id: trigger.id,
+      timezone: "UTC",
+    });
+    expect(store.getTask(runs[0].taskId!)?.prompt).toBe("Trigger scheduled prompt");
+    const advanced = store.getAutopilotTrigger(trigger.id)!;
+    expect(advanced.nextRunAt).toBeString();
+    expect(advanced.lastFiredAt).toBeString();
+
+    db!.run("UPDATE multiremi_autopilot_triggers SET next_run_at = NULL WHERE id = ?", [trigger.id]);
+    expect(store.recoverLostScheduleTriggers()).toBe(1);
+    expect(store.getAutopilotTrigger(trigger.id)!.nextRunAt).toBeString();
+    scheduler.stop();
+  });
+
+  it("claims due schedule triggers atomically across sqlite connections", () => {
+    const dir = mkdtempSync(join(tmpdir(), "multiremi-schedule-claim-"));
+    const path = join(dir, "multiremi.db");
+    const dbA = new Database(path);
+    const dbB = new Database(path);
+    try {
+      const storeA = new MultiremiStore(dbA);
+      const storeB = new MultiremiStore(dbB);
+      const agent = storeA.createAgent({ name: "Codex", provider: "codex" });
+      const autopilot = storeA.createAutopilot({
+        title: "Atomic trigger claim",
+        assigneeId: agent.id,
+        triggerKind: "manual",
+      });
+      const trigger = storeA.createAutopilotTrigger(autopilot.id, {
+        kind: "schedule",
+        cronExpression: "*/5 * * * * *",
+        timezone: "UTC",
+      });
+      dbA.run("UPDATE multiremi_autopilot_triggers SET next_run_at = ? WHERE id = ?", [
+        new Date(Date.now() - 1_000).toISOString(),
+        trigger.id,
+      ]);
+
+      const first = storeA.claimDueScheduleTriggers();
+      const second = storeB.claimDueScheduleTriggers();
+      const claimedIds = [...first, ...second].map((item) => item.id);
+      expect(claimedIds.filter((id) => id === trigger.id)).toHaveLength(1);
+      expect(storeA.getAutopilotTrigger(trigger.id)?.nextRunAt).toBeNull();
+    } finally {
+      dbA.close();
+      dbB.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("auto-pauses active autopilots exceeding the Go failure-rate threshold", () => {
+    const store = createStore();
+    const creator = store.createWorkspaceMember({ id: "mem_failure_creator", name: "Failure Creator", workspaceId: "local" });
+    const owner = store.createWorkspaceMember({ id: "mem_failure_owner", name: "Failure Owner", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Codex", provider: "codex", ownerId: owner.id });
+    const offender = store.createAutopilot({
+      title: "Failure loop",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "member",
+      createdById: creator.id,
+    });
+    const skippedDiluted = store.createAutopilot({
+      title: "Failure loop with skips",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "agent",
+      createdById: agent.id,
+    });
+    const outsideLookback = store.createAutopilot({
+      title: "Old failures",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "member",
+      createdById: creator.id,
+    });
+    const belowThreshold = store.createAutopilot({
+      title: "Mixed outcomes",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "member",
+      createdById: creator.id,
+    });
+    const now = new Date();
+    let seq = 0;
+    const insertRun = (autopilotId: string, status: "completed" | "failed" | "skipped", createdAt: Date) => {
+      const at = createdAt.toISOString();
+      db!.run(
+        `INSERT INTO multiremi_autopilot_runs (
+          id, autopilot_id, source, status, issue_id, task_id, triggered_at,
+          completed_at, failure_reason, payload, result, created_at
+        ) VALUES (?, ?, 'schedule', ?, NULL, NULL, ?, ?, ?, NULL, NULL, ?)`,
+        [
+          `run_failure_monitor_${++seq}`,
+          autopilotId,
+          status,
+          at,
+          at,
+          status === "failed" ? "agent_error" : status === "skipped" ? "No runnable agent" : null,
+          at,
+        ],
+      );
+    };
+    const recent = new Date(now.getTime() - 60 * 60 * 1000);
+    const old = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    for (let i = 0; i < 11; i++) insertRun(offender.id, "failed", recent);
+    insertRun(offender.id, "completed", recent);
+    for (let i = 0; i < 9; i++) insertRun(skippedDiluted.id, "failed", recent);
+    insertRun(skippedDiluted.id, "completed", recent);
+    for (let i = 0; i < 100; i++) insertRun(skippedDiluted.id, "skipped", recent);
+    for (let i = 0; i < 12; i++) insertRun(outsideLookback.id, "failed", old);
+    for (let i = 0; i < 8; i++) insertRun(belowThreshold.id, "failed", recent);
+    for (let i = 0; i < 4; i++) insertRun(belowThreshold.id, "completed", recent);
+
+    const events: Array<{ type: string; payload: Record<string, unknown>; actorType?: string }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+    const scheduler = new MultiremiScheduler({ store, pollIntervalMs: 60_000, failureMonitorIntervalMs: 0 });
+    const paused = scheduler.runFailureMonitorOnce({
+      since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+      minRuns: 10,
+      failRatioThreshold: 0.9,
+    });
+
+    expect(paused.map((candidate) => candidate.autopilot.id)).toEqual([offender.id, skippedDiluted.id]);
+    expect(paused.map((candidate) => [candidate.failedRuns, candidate.totalRuns])).toEqual([[11, 12], [9, 10]]);
+    expect(store.getAutopilot(offender.id)?.status).toBe("paused");
+    expect(store.getAutopilot(skippedDiluted.id)?.status).toBe("paused");
+    expect(store.getAutopilot(outsideLookback.id)?.status).toBe("active");
+    expect(store.getAutopilot(belowThreshold.id)?.status).toBe("active");
+
+    const updateEvents = events.filter((event) => event.type === "autopilot:updated");
+    expect(updateEvents).toHaveLength(2);
+    expect(updateEvents.map((event) => (event.payload.autopilot as { id: string }).id)).toEqual([offender.id, skippedDiluted.id]);
+    expect(updateEvents.every((event) => event.actorType === "system")).toBe(true);
+    expect(updateEvents.every((event) => event.payload.reason === "auto_paused_high_failure_rate")).toBe(true);
+    const inboxEvents = events.filter((event) => event.type === "inbox:new");
+    expect(inboxEvents).toHaveLength(2);
+    expect(inboxEvents.map((event) => (event.payload.item as { memberId: string }).memberId).sort()).toEqual([creator.id, owner.id].sort());
+
+    const creatorInbox = store.listInboxItems(creator.id).find((item) => item.type === "autopilot_paused")!;
+    expect(creatorInbox.issueId).toBeNull();
+    expect(creatorInbox.severity).toBe("attention");
+    expect(creatorInbox.details).toMatchObject({
+      autopilot_id: offender.id,
+      failed_runs: 11,
+      total_runs: 12,
+      threshold_min_runs: 10,
+      threshold_fail_ratio: 0.9,
+      reason: "auto_paused_high_failure_rate",
+    });
+    const ownerInbox = store.listInboxItems(owner.id).find((item) => item.type === "autopilot_paused")!;
+    expect(ownerInbox.issueId).toBeNull();
+    expect(ownerInbox.details).toMatchObject({ autopilot_id: skippedDiluted.id, failed_runs: 9, total_runs: 10 });
+    expect(scheduler.runFailureMonitorOnce({ since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), minRuns: 10 })).toEqual([]);
+  });
+
+  it("records Go-style autopilot analytics events and metrics", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_autopilot_analytics", name: "Autopilot analytics", provider: "codex" });
+    const agent = store.createAgent({ name: "Analytics Codex", provider: "codex", runtimeId: runtime.id });
+    const autopilot = store.createAutopilot({
+      title: "Analytics autopilot",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "member",
+      createdById: "usr_analytics",
+    });
+
+    const created = store.listAnalyticsEvents({ name: "autopilot_created" })[0]!;
+    expect(created.metricsOnly).toBe(false);
+    expect(created.distinctId).toBe("usr_analytics");
+    expect(created.workspaceId).toBe("local");
+    expect(created.properties).toMatchObject({
+      autopilot_id: autopilot.id,
+      cadence: "manual",
+      trigger_kind: "manual",
+      source: "manual",
+      user_id: "usr_analytics",
+      is_demo: false,
+    });
+    expect(metricValue(store, "multiremi_autopilot_created_total", { cadence: "manual" })).toBe(1);
+
+    const completedRun = store.runAutopilot(autopilot.id, { source: "webhook" });
+    expect(store.claimTask(runtime.id)?.id).toBe(completedRun.taskId!);
+    store.startTask(completedRun.taskId!);
+    store.completeTask(completedRun.taskId!, { output: "done" });
+
+    const started = store.listAnalyticsEvents({ name: "autopilot_run_started" })[0]!;
+    expect(started.metricsOnly).toBe(true);
+    expect(started.properties).toMatchObject({
+      autopilot_id: autopilot.id,
+      autopilot_run_id: completedRun.id,
+      agent_id: agent.id,
+      assignee_type: "agent",
+      trigger_source: "webhook",
+      trigger_kind: "webhook",
+      cadence: "webhook",
+      source: "autopilot",
+      user_id: "usr_analytics",
+      is_demo: false,
+    });
+    const completed = store.listAnalyticsEvents({ name: "autopilot_run_completed" })[0]!;
+    expect(completed.properties).toMatchObject({
+      autopilot_id: autopilot.id,
+      autopilot_run_id: completedRun.id,
+      trigger_kind: "webhook",
+      duration_ms: expect.any(Number),
+    });
+    expect(metricValue(store, "multiremi_autopilot_run_started_total", { cadence: "webhook", trigger_kind: "webhook" })).toBe(1);
+    expect(metricValue(store, "multiremi_autopilot_run_terminal_total", { cadence: "webhook", trigger_kind: "webhook", terminal_status: "completed" })).toBe(1);
+
+    const failingAutopilot = store.createAutopilot({
+      title: "Failing analytics autopilot",
+      assigneeId: agent.id,
+      executionMode: "run_only",
+      createdByType: "agent",
+      createdById: agent.id,
+    });
+    const failedRun = store.runAutopilot(failingAutopilot.id, { source: "schedule" });
+    expect(store.claimTask(runtime.id)?.id).toBe(failedRun.taskId!);
+    store.startTask(failedRun.taskId!);
+    store.failTask(failedRun.taskId!, { error: "task crashed" });
+
+    const failed = store.listAnalyticsEvents({ name: "autopilot_run_failed" })[0]!;
+    expect(failed.distinctId).toBe(`agent:${agent.id}`);
+    expect(failed.properties).toMatchObject({
+      autopilot_id: failingAutopilot.id,
+      autopilot_run_id: failedRun.id,
+      agent_id: agent.id,
+      trigger_source: "schedule",
+      trigger_kind: "schedule",
+      cadence: "schedule",
+      source: "autopilot",
+      failure_reason: "task crashed",
+      error_type: "task_error",
+      will_retry: false,
+    });
+    expect(failed.properties).not.toHaveProperty("user_id");
+    expect(store.listAnalyticsEvents({ includeMetricsOnly: false }).map((event) => event.name)).toEqual([
+      "autopilot_created",
+      "autopilot_created",
+    ]);
+    expect(metricValue(store, "multiremi_autopilot_run_terminal_total", { cadence: "unknown", trigger_kind: "schedule", terminal_status: "failed" })).toBe(1);
+  });
+
+  it("records, deduplicates, ignores, rejects, and replays webhook deliveries", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Codex", provider: "codex" });
+    const autopilot = store.createAutopilot({
+      title: "Webhook delivery",
+      assigneeId: agent.id,
+      triggerKind: "webhook",
+    });
+
+    const first = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Delivery prompt", event: "opened" },
+      prompt: "Delivery prompt",
+      rawBody: JSON.stringify({ prompt: "Delivery prompt", event: "opened" }),
+      headers: { "Idempotency-Key": "delivery-1", "Content-Type": "application/json" },
+    });
+
+    expect(first.status).toBe("accepted");
+    expect(first.delivery.status).toBe("dispatched");
+    expect(first.delivery.dedupeKey).toBe("delivery-1");
+    expect(first.delivery.contentType).toBe("application/json");
+    expect(first.delivery.selectedHeaders).toEqual({ "idempotency-key": "delivery-1" });
+    expect(first.run?.source).toBe("webhook");
+    expect(first.run?.payload).toMatchObject({
+      event: "opened",
+      eventPayload: { prompt: "Delivery prompt", event: "opened" },
+      request: { contentType: "application/json" },
+    });
+    expect(store.getIssue(first.run!.issueId!)?.title).toBe("Delivery prompt");
+
+    const duplicate = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Duplicate prompt" },
+      headers: { "Idempotency-Key": "delivery-1" },
+    });
+    expect(duplicate.status).toBe("duplicate");
+    expect(duplicate.delivery.id).toBe(first.delivery.id);
+    expect(duplicate.delivery.attemptCount).toBe(2);
+    expect(store.listWebhookDeliveries(autopilot.id)).toHaveLength(1);
+
+    const replay = store.replayWebhookDelivery(autopilot.id, first.delivery.id);
+    expect(replay.status).toBe("accepted");
+    expect(replay.delivery.replayedFromDeliveryId).toBe(first.delivery.id);
+    expect(store.listWebhookDeliveries(autopilot.id)).toHaveLength(2);
+
+    const rejected = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Bad signature" },
+      signatureStatus: "invalid",
+      headers: { "Idempotency-Key": "bad-signature" },
+    });
+    expect(rejected.status).toBe("rejected");
+    expect(rejected.delivery.status).toBe("rejected");
+    expect(() => store.replayWebhookDelivery(autopilot.id, rejected.delivery.id)).toThrow("Cannot replay");
+
+    store.updateAutopilot(autopilot.id, { status: "paused" });
+    const ignored = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { prompt: "Paused" },
+      headers: { "Idempotency-Key": "paused-delivery" },
+    });
+    expect(ignored.status).toBe("ignored");
+    expect(ignored.delivery.status).toBe("ignored");
+    expect(ignored.run).toBeNull();
+
+    store.updateAutopilot(autopilot.id, { status: "active" });
+    const filteredTrigger = store.createAutopilotTrigger(autopilot.id, {
+      kind: "webhook",
+      label: "Pull request opened only",
+      eventFilters: [{ event: "pull_request", actions: ["opened"] }],
+    });
+    const filtered = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { action: "closed" },
+      rawBody: JSON.stringify({ action: "closed" }),
+      headers: { "X-GitHub-Event": "pull_request", "Idempotency-Key": "filtered-delivery" },
+      provider: "github",
+      triggerId: filteredTrigger.id,
+    });
+    expect(filtered.status).toBe("ignored");
+    expect(filtered.delivery.error).toBe("event_filtered");
+    expect(filtered.run).toBeNull();
+
+    const allowed = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { action: "opened" },
+      rawBody: JSON.stringify({ action: "opened" }),
+      headers: { "X-GitHub-Event": "pull_request", "Idempotency-Key": "allowed-delivery" },
+      provider: "github",
+      triggerId: filteredTrigger.id,
+    });
+    expect(allowed.status).toBe("accepted");
+    expect(allowed.run?.payload).toMatchObject({
+      event: "github.pull_request.opened",
+      eventPayload: { action: "opened" },
+    });
+
+    const typed = store.handleAutopilotWebhook(autopilot.id, {
+      payload: { action: "published" },
+      rawBody: "\uFEFF" + JSON.stringify({ action: "published" }),
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Idempotency-Key": "typed-delivery",
+        "User-Agent": "WebhookClient/1.0",
+        "X-Event-Type": "deploy.published",
+        "X-Hub-Signature-256": "sha256=redacted",
+      },
+    });
+    expect(typed.status).toBe("accepted");
+    expect(typed.delivery.contentType).toBe("application/json");
+    expect(typed.delivery.selectedHeaders).toEqual({
+      "user-agent": "WebhookClient/1.0",
+      "x-event-type": "deploy.published",
+      "idempotency-key": "typed-delivery",
+      "x-hub-signature-256-present": true,
+    });
+    expect(typed.run?.payload).toMatchObject({
+      event: "deploy.published",
+      eventPayload: { action: "published" },
+      request: { contentType: "application/json" },
+    });
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "dispatched" })).toBe(3);
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "github", status: "dispatched" })).toBe(1);
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "rejected" })).toBe(1);
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "ignored" })).toBe(1);
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "github", status: "ignored" })).toBe(1);
+    expect(metricValue(store, "multiremi_webhook_delivery_total", { provider: "generic", status: "duplicate" })).toBe(0);
+  });
+});

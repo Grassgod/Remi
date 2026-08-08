@@ -1,19 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
-let db: Database | null = null;
-
-afterEach(() => {
-  db?.close();
-  db = null;
-});
-
-function createStore(): MultiremiStore {
-  db = new Database(":memory:");
-  return new MultiremiStore(db);
-}
+afterEach(resetMultiremiTestEnv);
 
 function createRunningTask(store: MultiremiStore): MultiremiTask {
   const agent = store.createAgent({ name: "HR Agent", provider: "claude" });

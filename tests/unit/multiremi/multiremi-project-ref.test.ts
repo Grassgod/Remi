@@ -1,20 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import type { MultiremiRepoData } from "@multiremi/contracts/types.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
-let db: Database | null = null;
-
-function createStore(): MultiremiStore {
-  db = new Database(":memory:");
-  return new MultiremiStore(db);
-}
-
-afterEach(() => {
-  db?.close();
-  db = null;
-});
+afterEach(resetMultiremiTestEnv);
 
 function githubResource(url: string) {
   return { resourceType: "github_repo", resourceRef: { url } } as const;

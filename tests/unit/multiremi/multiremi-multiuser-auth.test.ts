@@ -1,24 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { Database } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
+import { createStore as freshStore, resetMultiremiTestEnv } from "./helpers.js";
 
 // The deployment owner's stable Feishu open_id (see DEFAULT_OWNER_OPEN_ID in the store).
 const OWNER_OPEN_ID = "ou_e6b7ffc662b392317275b817295c0b44";
 
-let db: Database | null = null;
-
 afterEach(() => {
-  db?.close();
-  db = null;
+  resetMultiremiTestEnv();
   delete process.env.MULTIREMI_ALLOW_EMAIL_CODE_LOGIN;
   delete process.env.MULTIREMI_OWNER_OPEN_ID;
 });
-
-function freshStore(): MultiremiStore {
-  db = new Database(":memory:");
-  return new MultiremiStore(db);
-}
 
 // Reproduce the existing single-user deployment: the seed `local` user owns the
 // local workspace, then the multi-user migration tags it with the owner open_id

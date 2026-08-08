@@ -46,9 +46,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("runs one claimed task through the local API lifecycle", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-smoke-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-smoke-");
     const agent = store.createAgent({
       name: "Claude Smoke",
       provider: "claude",
@@ -250,9 +248,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("runs tasks concurrently up to maxConcurrency", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-concurrency-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-concurrency-");
     // Two distinct agents → no shared issue/chat, so the server's per-context
     // serialization does not force these to run one at a time.
     const agentA = store.createAgent({ name: "Concurrent A", provider: "claude", cwd: workDir });
@@ -265,14 +261,15 @@ describe("Bun Multiremi daemon smoke", () => {
     let started = 0;
     const bothStarted = deferred<void>();
     const release = deferred<void>();
-    const providerFactory: MultiremiDaemonProviderFactory = () => ({
-      async *sendStream() {
+    const providerFactory = messageProviderFactory({
+      text: "done",
+      sessionId: "sess-concurrent",
+      requestId: "req-concurrent",
+      onSend: async () => {
         started += 1;
         if (started >= 2) bothStarted.resolve();
         await release.promise; // hold the task open until both are confirmed in flight
-        yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "done" }] } as any;
       },
-      getLastResponse: () => ({ text: "done", sessionId: "sess-concurrent", requestId: "req-concurrent" }),
     });
 
     const daemon = new MultiremiDaemon({
@@ -311,10 +308,8 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("serves repo checkout from the daemon cache to a running provider", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-repo-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-repo-");
     const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
-    const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
       settings: { github_enabled: false, co_authored_by_enabled: true },
@@ -402,10 +397,8 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("auto-checks out issue-task repos and publishes a branch result", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-autorepo-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-autorepo-");
     const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
-    const store = new MultiremiStore(db);
     store.ensureLocalWorkspace();
     store.updateWorkspace("local", {
       settings: { github_enabled: false, co_authored_by_enabled: false },
@@ -430,19 +423,11 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     const prompts: string[] = [];
-    const providerFactory: MultiremiDaemonProviderFactory = () => ({
-      async *sendStream(message) {
-        prompts.push(message);
-        yield {
-          sessionUpdate: "agent_message_chunk",
-          content: [{ type: "text", text: "worked in checked-out repo" }],
-        } as any;
-      },
-      getLastResponse: () => ({
-        text: "worked in checked-out repo",
-        sessionId: "sess-auto-repo",
-        requestId: "req-auto-repo",
-      }),
+    const providerFactory = messageProviderFactory({
+      text: "worked in checked-out repo",
+      sessionId: "sess-auto-repo",
+      requestId: "req-auto-repo",
+      onSend: (message) => { prompts.push(message); },
     });
 
     try {
@@ -481,9 +466,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("resumes chat tasks with the pinned provider session after daemon restart", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-chat-resume-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-chat-resume-");
     const agent = store.createAgent({
       name: "Chat Claude",
       provider: "claude",
@@ -609,12 +592,10 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("runs local_directory project tasks in the user directory", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-local-dir-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-local-dir-");
     const localDir = join(workDir, "local-project");
     mkdirSync(localDir, { recursive: true });
     writeFileSync(join(localDir, "README.md"), "local project\n");
-    const store = new MultiremiStore(db);
     const project = store.createProject({
       title: "Local project",
       resources: [{
@@ -654,19 +635,11 @@ describe("Bun Multiremi daemon smoke", () => {
         once: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
-        providerFactory: (options) => ({
-          async *sendStream() {
-            providerCwd = options.cwd!;
-            yield {
-              sessionUpdate: "agent_message_chunk",
-              content: [{ type: "text", text: `cwd=${options.cwd}` }],
-            } as any;
-          },
-          getLastResponse: () => ({
-            text: `cwd=${providerCwd}`,
-            sessionId: "sess-local-dir",
-            requestId: "req-local-dir",
-          }),
+        providerFactory: messageProviderFactory({
+          text: () => `cwd=${providerCwd}`,
+          sessionId: "sess-local-dir",
+          requestId: "req-local-dir",
+          onSend: (_message, options) => { providerCwd = options.cwd!; },
         }),
       });
 
@@ -695,11 +668,9 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("does not fail a local_directory task cancelled while waiting for the lock", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-local-cancel-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-local-cancel-");
     const localDir = join(workDir, "local-project");
     mkdirSync(localDir, { recursive: true });
-    const store = new MultiremiStore(db);
     const runtime = store.registerRuntime({
       id: "rt_local_cancel",
       name: "Local cancel runtime",
@@ -809,10 +780,8 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("reclaims daemon-owned workspace dirs from gc metadata", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-gc-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-gc-");
     const workspacesRoot = join(workDir, "workspaces");
-    const store = new MultiremiStore(db);
     const agent = store.createAgent({
       name: "GC Claude",
       provider: "claude",
@@ -853,18 +822,10 @@ describe("Bun Multiremi daemon smoke", () => {
         gcEnabled: false,
         gcTtlMs: 0,
         gcOrphanTtlMs: 1,
-        providerFactory: () => ({
-          async *sendStream() {
-            yield {
-              sessionUpdate: "agent_message_chunk",
-              content: [{ type: "text", text: "GC completed" }],
-            } as any;
-          },
-          getLastResponse: () => ({
-            text: "GC completed",
-            sessionId: "sess-gc",
-            requestId: "req-gc",
-          }),
+        providerFactory: messageProviderFactory({
+          text: "GC completed",
+          sessionId: "sess-gc",
+          requestId: "req-gc",
         }),
       });
 
@@ -916,10 +877,8 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("writes autopilot run metadata and reclaims terminal autopilot workdirs", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-autopilot-gc-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-autopilot-gc-");
     const workspacesRoot = join(workDir, "workspaces");
-    const store = new MultiremiStore(db);
     const agent = store.createAgent({
       name: "Autopilot GC Claude",
       provider: "claude",
@@ -956,18 +915,10 @@ describe("Bun Multiremi daemon smoke", () => {
         repoCacheRoot: join(workDir, ".repo-cache"),
         gcEnabled: false,
         gcTtlMs: 0,
-        providerFactory: () => ({
-          async *sendStream() {
-            yield {
-              sessionUpdate: "agent_message_chunk",
-              content: [{ type: "text", text: "Autopilot GC completed" }],
-            } as any;
-          },
-          getLastResponse: () => ({
-            text: "Autopilot GC completed",
-            sessionId: "sess-autopilot-gc",
-            requestId: "req-autopilot-gc",
-          }),
+        providerFactory: messageProviderFactory({
+          text: "Autopilot GC completed",
+          sessionId: "sess-autopilot-gc",
+          requestId: "req-autopilot-gc",
         }),
       });
 
@@ -993,8 +944,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("handles heartbeat maintenance requests for update, models, and local skills", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-maintenance-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-maintenance-");
     const skillsRoot = join(workDir, "skills");
     const skillDir = join(skillsRoot, "review-helper");
     const linkedSkillSource = join(workDir, "shared-skills", "linked-helper");
@@ -1015,7 +965,6 @@ describe("Bun Multiremi daemon smoke", () => {
     symlinkSync(linkedSkillSource, linkedSkillPath, "dir");
 
     const runtimeId = "rt_daemon_maintenance";
-    const store = new MultiremiStore(db);
     store.registerRuntime({ id: runtimeId, name: "maintenance-runtime", provider: "claude", workspaceId: "local" });
     const agent = store.createAgent({
       name: "Maintenance Claude",
@@ -1141,10 +1090,8 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("refuses runtime update requests when the daemon is managed by Desktop", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-desktop-update-"));
+    const { store, workDir } = daemonTestBed("multiremi-daemon-desktop-update-");
     const runtimeId = "rt_daemon_desktop";
-    const store = new MultiremiStore(db);
     store.registerRuntime({ id: runtimeId, name: "desktop-runtime", provider: "claude", workspaceId: "local" });
     const updateRequest = store.createRuntimeUpdateRequest(runtimeId, { target_version: "v9.9.10" });
     const daemonToken = await store.createAccessToken({
@@ -1189,9 +1136,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("serves local daemon health and shutdown for background lifecycle control", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-health-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-health-");
     const daemonToken = await store.createAccessToken({
       name: "Lifecycle daemon",
       type: "daemon",
@@ -1244,9 +1189,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("re-registers and continues when heartbeat reports runtime_gone", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-runtime-gone-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-runtime-gone-");
     const agent = store.createAgent({
       name: "Recovered Claude",
       provider: "claude",
@@ -1285,21 +1228,11 @@ describe("Bun Multiremi daemon smoke", () => {
         once: true,
         daemonPort: 0,
         repoCacheRoot: join(workDir, ".repo-cache"),
-        providerFactory: () => ({
-          async *sendStream() {
-            yield {
-              sessionUpdate: "agent_message_chunk",
-              content: [{ type: "text", text: "Recovered" }],
-            } as any;
-          },
-          getLastResponse: () => ({
-            text: "Recovered",
-            sessionId: "sess-runtime-gone",
-            requestId: "req-runtime-gone",
-            inputTokens: 1,
-            outputTokens: 1,
-            model: "claude-recovered",
-          }),
+        providerFactory: messageProviderFactory({
+          text: "Recovered",
+          sessionId: "sess-runtime-gone",
+          requestId: "req-runtime-gone",
+          response: { inputTokens: 1, outputTokens: 1, model: "claude-recovered" },
         }),
       });
 
@@ -1320,9 +1253,7 @@ describe("Bun Multiremi daemon smoke", () => {
   });
 
   it("fails a claimed task when provider execution times out", async () => {
-    db = new Database(":memory:");
-    workDir = mkdtempSync(join(tmpdir(), "multiremi-daemon-timeout-"));
-    const store = new MultiremiStore(db);
+    const { store, workDir } = daemonTestBed("multiremi-daemon-timeout-");
     const agent = store.createAgent({
       name: "Timeout Claude",
       provider: "claude",
@@ -1375,6 +1306,52 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 });
+
+/**
+ * The opening every daemon test shares: a fresh in-memory store and a temp work
+ * dir, both registered with the module-level `afterEach` teardown. The returned
+ * `workDir` shadows the nullable module-level one so call sites keep a plain
+ * `string`.
+ */
+function daemonTestBed(tmpPrefix: string): { store: MultiremiStore; workDir: string } {
+  db = new Database(":memory:");
+  workDir = mkdtempSync(join(tmpdir(), tmpPrefix));
+  return { store: new MultiremiStore(db), workDir };
+}
+
+/**
+ * The stub most of these tests want from a provider: stream exactly one
+ * agent_message_chunk and report that same text as the final response.
+ *
+ * `onSend` runs before the chunk is streamed, for tests that need to observe the
+ * prompt or hold the turn open; `text` may be a thunk when the answer is only
+ * known once `onSend` has run. Tests whose provider does something structurally
+ * different (multi-turn, tool calls, abort handling) still build their own.
+ */
+function messageProviderFactory(spec: {
+  text: string | (() => string);
+  sessionId: string;
+  requestId: string;
+  response?: Partial<AgentResponse>;
+  onSend?: (message: string, options: AcpProviderOptions) => void | Promise<void>;
+}): MultiremiDaemonProviderFactory {
+  const text = () => (typeof spec.text === "function" ? spec.text() : spec.text);
+  return (options) => ({
+    async *sendStream(message) {
+      await spec.onSend?.(message, options);
+      yield {
+        sessionUpdate: "agent_message_chunk",
+        content: [{ type: "text", text: text() }],
+      } as any;
+    },
+    getLastResponse: () => ({
+      text: text(),
+      sessionId: spec.sessionId,
+      requestId: spec.requestId,
+      ...spec.response,
+    }),
+  });
+}
 
 function daemonRuntimeIdForTest(daemonId: string, provider: string): string {
   const key = `${daemonId}:${provider}`.toLowerCase();
