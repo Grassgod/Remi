@@ -35,6 +35,7 @@
     "start": "bun run apps/remi/main.ts serve",
     "serve": "bun run apps/remi/main.ts serve",
     "build:multiremi": "bun run scripts/build-multiremi.ts",
+    "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun test",
     "test:frontend": "bun run --filter '@multiremi/*' test",
     "typecheck:frontend": "bun run --filter '@multiremi/*' typecheck",

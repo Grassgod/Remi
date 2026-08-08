@@ -56,3 +56,10 @@ jobs:
 
       - name: Test frontend packages and apps
         run: bun run test:frontend
+
+      # Fast structural gates: package boundaries, contracts purity, and the
+      # lockfile-registry guard (a mirror-polluted bun.lock passes the frozen
+      # install above and only fails later at cold-cache download — this test
+      # is the first gate that catches it).
+      - name: Architecture guard tests
+        run: bun test tests/arch/

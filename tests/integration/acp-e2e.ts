@@ -21,6 +21,7 @@ async function main() {
 
   let eventCount = 0;
   let gotResult = false;
+  let streamFailed = !healthy;
   let text = "";
 
   try {
@@ -48,11 +49,13 @@ async function main() {
     }
   } catch (err: any) {
     console.log(`\n  EXCEPTION: ${err.message}`);
+    streamFailed = true;
   }
 
   clearTimeout(timeout);
 
-  gotResult = true; // stream ended naturally = success
+  // Success requires an actually-working session: events flowed and no exception.
+  gotResult = !streamFailed && eventCount > 0;
   const lastResponse = provider.getLastResponse?.();
   if (lastResponse) {
     console.log(`\n  result: session=${lastResponse.sessionId} model=${lastResponse.model} cost=$${lastResponse.costUsd}`);
@@ -61,7 +64,7 @@ async function main() {
   console.log(`Text: "${text.slice(0, 100)}"`);
 
   await provider.close();
-  process.exit(0);
+  process.exit(gotResult ? 0 : 1);
 }
 
 main().catch((err) => { console.error("FATAL:", err); process.exit(1); });

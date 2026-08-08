@@ -1,0 +1,4 @@
+{
+  "//": "The extensionless CommonJS wrapper in this directory must not inherit the repo root's \"type\": \"module\" (Node would parse it as ESM and crash on require). Release tarballs ship the wrapper without any package.json, where CommonJS is already the default.",
+  "type": "commonjs"
+}

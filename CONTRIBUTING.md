@@ -80,6 +80,20 @@ changed behavior — fix the move, never regenerate the baseline. Only when you 
 change an endpoint do you rerun `bun run scripts/snapshot-api-routes.ts` (no flag) and include the
 regenerated golden file in the PR.
 
+### Dependency changes (依赖变更)
+
+Installing through a fast internal npm mirror (a `registry=` line in your `~/.npmrc` or
+`~/.bunfig.toml`) is fine and encouraged — keep it. But bun records an absolute tarball URL in
+`bun.lock` for every package it resolves off a non-default registry, and bun 1.3.10 offers no way
+to fetch from a mirror while writing a registry-neutral lockfile. So whenever `bun.lock` changes
+(`bun add`, a bumped range, `bun install --force`), run `bun run lock:clean` before committing: it
+blanks those URLs back to the default-registry form and leaves integrity hashes untouched. Everyday
+`bun install` with an unchanged lockfile rewrites nothing and needs no cleanup.
+`tests/arch/lockfile-registry.test.ts` fails `bun test` if a mirror URL slips through; if one
+reaches `main` anyway, the release workflows install with
+`--registry https://registry.npmjs.org --frozen-lockfile` and die trying to reach a host that does
+not exist from a GitHub runner.
+
 Then open a PR against `main`. Describe **what** changed and **why**, link related issues, and
 include a test plan. Keep PRs focused — refactors and feature work go in separate PRs.
 

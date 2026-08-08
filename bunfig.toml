@@ -2,4 +2,7 @@
 root = "tests"
 
 [install]
+# Advisory only: a user-level ~/.npmrc registry (e.g. the bnpm mirror) OVERRIDES
+# this in bun 1.3.10 (proven empirically). Lockfile cleanliness is enforced by
+# tests/arch/lockfile-registry.test.ts + `bun run lock:clean`, not by this pin.
 registry = "https://registry.npmjs.org"
