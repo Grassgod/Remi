@@ -17,15 +17,9 @@ import {
 } from "@multiremi/ui/components/ui/dialog";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@multiremi/ui/components/ui/select";
 import { toast } from "sonner";
 import { useT } from "../i18n";
+import { BranchPicker } from "./branch-picker";
 
 interface ImportRepositoryDialogProps {
   workspaceId: string;
@@ -46,6 +40,7 @@ export function ImportRepositoryDialog({
   const [description, setDescription] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [defaultBranch, setDefaultBranch] = useState("");
+  const [remoteDefaultBranch, setRemoteDefaultBranch] = useState("");
   const [inspectedUrl, setInspectedUrl] = useState("");
 
   const reset = () => {
@@ -54,6 +49,7 @@ export function ImportRepositoryDialog({
     setDescription("");
     setBranches([]);
     setDefaultBranch("");
+    setRemoteDefaultBranch("");
     setInspectedUrl("");
     inspectRepository.reset();
   };
@@ -68,6 +64,7 @@ export function ImportRepositoryDialog({
     urlRef.current = nextUrl;
     setBranches([]);
     setDefaultBranch("");
+    setRemoteDefaultBranch("");
     setInspectedUrl("");
   };
 
@@ -80,6 +77,7 @@ export function ImportRepositoryDialog({
       if (urlRef.current.trim() !== normalizedUrl) return;
       setBranches(response.metadata.branches);
       setDefaultBranch(response.metadata.default_branch);
+      setRemoteDefaultBranch(response.metadata.default_branch);
       setInspectedUrl(normalizedUrl);
     } catch (error) {
       toast.error(
@@ -165,30 +163,19 @@ export function ImportRepositoryDialog({
               <Label htmlFor="repository-default-branch">
                 {t(($) => $.import_dialog.default_branch_label)}
               </Label>
-              <Select
-                value={defaultBranch || null}
-                onValueChange={(value) => value && setDefaultBranch(value)}
+              <BranchPicker
+                id="repository-default-branch"
+                value={defaultBranch}
+                branches={branches}
+                remoteDefaultBranch={remoteDefaultBranch}
+                onValueChange={setDefaultBranch}
                 disabled={branches.length === 0 || inspectRepository.isPending}
-              >
-                <SelectTrigger
-                  id="repository-default-branch"
-                  className="w-full font-mono"
-                  aria-label={t(($) => $.import_dialog.default_branch_label)}
-                >
-                  <SelectValue
-                    placeholder={t(($) => $.import_dialog.default_branch_placeholder)}
-                  >
-                    {defaultBranch || null}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent align="start" className="max-h-64">
-                  {branches.map((branch) => (
-                    <SelectItem key={branch} value={branch} className="font-mono text-xs">
-                      {branch}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                loading={inspectRepository.isPending}
+                ariaLabel={t(($) => $.import_dialog.default_branch_label)}
+                placeholder={t(($) => $.import_dialog.default_branch_placeholder)}
+                triggerClassName="w-full"
+                contentClassName="w-[var(--anchor-width)]"
+              />
             </div>
 
             <div className="space-y-2">

@@ -23,7 +23,7 @@
     "description": "将 Git 仓库添加到当前工作区，创建项目时即可选择。",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "填写 HTTPS 或 SSH clone URL。拉取时自动使用远端默认分支。",
+    "url_hint": "填写 HTTPS 或 SSH clone URL。读取分支后会自动选择远端默认分支。",
     "inspect": "读取分支",
     "inspecting": "读取中...",
     "default_branch_label": "默认分支",
@@ -34,6 +34,13 @@
     "cancel": "取消",
     "submit": "导入仓库",
     "importing": "导入中..."
+  },
+  "branch_picker": {
+    "search_placeholder": "搜索分支...",
+    "empty": "没有匹配的分支。",
+    "loading": "正在读取分支...",
+    "remote_default": "远端默认",
+    "other_branches": "其他分支"
   },
   "remove": {
     "action": "移除仓库",
