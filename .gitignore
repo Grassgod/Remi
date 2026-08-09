@@ -85,5 +85,6 @@ web/frontend/dist/
 # Local operational artifacts
 .turbo/
 /web/
+frontend/apps/web/.source/
 .run-multiremi-server.sh
 .audit-result.json
