@@ -18,10 +18,8 @@ export interface WorkspaceRepositoryListResponse {
 
 export interface ImportWorkspaceRepositoryRequest {
   url: string;
-  source: WorkspaceRepositorySource;
   name?: string;
   description?: string;
-  default_branch?: string;
 }
 
 export interface RepositoryMutationResponse {

@@ -109,14 +109,16 @@ describe("RepositoriesPage", () => {
     expect(screen.queryByText("agent-platform")).not.toBeInTheDocument();
   });
 
-  it("imports a Codebase repository from its clone URL", async () => {
+  it("imports a Git repository from its clone URL", async () => {
     const user = userEvent.setup();
     mockImport.mockResolvedValue({ repository: repositories[1] });
     renderWithI18n(<RepositoriesPage />);
 
     await user.click(screen.getByRole("button", { name: "Import repository" }));
     const dialog = screen.getByRole("dialog", { name: "Import repository" });
-    await user.click(within(dialog).getByRole("button", { name: "Codebase" }));
+    expect(within(dialog).queryByRole("button", { name: "GitHub" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Codebase" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Default branch")).not.toBeInTheDocument();
     await user.type(
       within(dialog).getByLabelText("Clone URL", { selector: "input" }),
       codebaseUrl,
@@ -126,7 +128,6 @@ describe("RepositoriesPage", () => {
     await waitFor(() => expect(mockImport).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("dialog", { name: "Import repository" })).not.toBeInTheDocument();
     expect(mockImport).toHaveBeenCalledWith({
-      source: "codebase",
       url: codebaseUrl,
     });
   });

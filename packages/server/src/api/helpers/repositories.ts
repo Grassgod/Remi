@@ -6,7 +6,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 
-export type WorkspaceRepositorySource = "github" | "codebase";
+export type WorkspaceRepositorySource = "github" | "codebase" | "unknown";
 
 export interface WorkspaceRepositoryData {
   id: string;
@@ -21,10 +21,8 @@ export interface WorkspaceRepositoryData {
 
 export interface ImportWorkspaceRepositoryInput {
   url?: string;
-  source?: string;
   name?: string;
   description?: string | null;
-  default_branch?: string | null;
 }
 
 export class WorkspaceRepositoryError extends Error {
@@ -59,7 +57,7 @@ export function importWorkspaceRepository(
 
   const url = normalizeGitRemoteUrl(input.url);
   if (!url) throw new WorkspaceRepositoryError("invalid git repository URL", 400);
-  const source = normalizeRepositorySource(input.source);
+  const source = normalizeRepositorySource(undefined, url);
   const repositories = normalizeWorkspaceRepositories(workspace.repos);
   const key = canonicalGitRemoteKey(url);
   if (repositories.some((repo) => canonicalGitRemoteKey(repo.url) === key)) {
@@ -73,7 +71,7 @@ export function importWorkspaceRepository(
     url,
     source,
     description: cleanOptionalString(input.description),
-    default_branch: cleanOptionalString(input.default_branch),
+    default_branch: null,
     imported_at: now,
     updated_at: now,
   };
@@ -207,8 +205,21 @@ function normalizeRepositorySource(
   url = "",
 ): WorkspaceRepositorySource {
   const source = String(value ?? "").trim().toLowerCase();
-  if (source === "github" || source === "codebase") return source;
-  return /(^|[.@/:])github\.com(?:[/:]|$)/i.test(url) ? "github" : "codebase";
+  if (source === "github" || source === "codebase" || source === "unknown") return source;
+  const host = repositoryHostFromUrl(url);
+  if (host === "github.com") return "github";
+  if (host === "code.byted.org") return "codebase";
+  return "unknown";
+}
+
+function repositoryHostFromUrl(url: string): string {
+  const scpHost = url.match(/^[^@\s]+@([^:\s]+):/)?.[1];
+  if (scpHost) return scpHost.toLowerCase();
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 function repositoryNameFromUrl(url: string): string {
