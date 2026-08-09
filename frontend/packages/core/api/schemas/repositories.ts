@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  RepositoryInspectionResponse,
   RepositoryMutationResponse,
   WorkspaceRepositoryListResponse,
 } from "../../types";
@@ -26,6 +27,15 @@ export const repositoryMutationResponseSchema = z.object({
   repository: workspaceRepositorySchema,
 }).loose();
 
+export const repositoryInspectionResponseSchema = z.object({
+  metadata: z.object({
+    url: z.string(),
+    name: z.string(),
+    default_branch: z.string(),
+    branches: z.array(z.string()),
+  }).loose(),
+}).loose();
+
 export const EMPTY_REPOSITORY_LIST_RESPONSE: WorkspaceRepositoryListResponse = {
   repositories: [],
   total: 0,
@@ -33,4 +43,8 @@ export const EMPTY_REPOSITORY_LIST_RESPONSE: WorkspaceRepositoryListResponse = {
 
 export const EMPTY_REPOSITORY_MUTATION_RESPONSE: RepositoryMutationResponse = {
   repository: null,
+};
+
+export const EMPTY_REPOSITORY_INSPECTION_RESPONSE: RepositoryInspectionResponse = {
+  metadata: null,
 };

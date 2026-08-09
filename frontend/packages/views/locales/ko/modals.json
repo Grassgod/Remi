@@ -109,9 +109,6 @@
     "repository_empty": "아직 가져온 저장소가 없습니다.",
     "manage_repositories": "저장소 관리",
     "repository_required": "저장소를 하나 이상 선택하세요",
-    "source_github": "GitHub",
-    "source_codebase": "Codebase",
-    "source_git": "Git",
     "toast_created": "프로젝트를 만들었습니다",
     "toast_failed": "프로젝트를 만들지 못했습니다"
   },

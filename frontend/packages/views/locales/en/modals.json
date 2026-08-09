@@ -109,9 +109,6 @@
     "repository_empty": "No repositories have been imported yet.",
     "manage_repositories": "Manage repositories",
     "repository_required": "Select at least one repository",
-    "source_github": "GitHub",
-    "source_codebase": "Codebase",
-    "source_git": "Git",
     "toast_created": "Project created",
     "toast_failed": "Failed to create project"
   },

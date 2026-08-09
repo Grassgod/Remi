@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
   ImportWorkspaceRepositoryRequest,
+  UpdateWorkspaceRepositoryRequest,
   WorkspaceRepositoryListResponse,
 } from "../types";
 import { workspaceKeys } from "../workspace/queries";
@@ -21,6 +22,39 @@ export function useImportWorkspaceRepository(workspaceId: string) {
           repositories: [...(current?.repositories ?? []), repository],
           total: (current?.repositories.length ?? 0) + 1,
         }),
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.all(workspaceId) });
+      queryClient.invalidateQueries({ queryKey: workspaceKeys.list() });
+    },
+  });
+}
+
+export function useInspectWorkspaceRepository(workspaceId: string) {
+  return useMutation({
+    mutationFn: (url: string) => api.inspectWorkspaceRepository(workspaceId, url),
+  });
+}
+
+export function useUpdateWorkspaceRepository(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repositoryId, input }: {
+      repositoryId: string;
+      input: UpdateWorkspaceRepositoryRequest;
+    }) => api.updateWorkspaceRepository(workspaceId, repositoryId, input),
+    onSuccess: (response) => {
+      const repository = response.repository;
+      if (!repository) return;
+      queryClient.setQueryData<WorkspaceRepositoryListResponse>(
+        repositoryKeys.list(workspaceId),
+        (current) => {
+          const repositories = (current?.repositories ?? []).map((candidate) =>
+            candidate.id === repository.id ? repository : candidate
+          );
+          return { repositories, total: repositories.length };
+        },
       );
     },
     onSettled: () => {

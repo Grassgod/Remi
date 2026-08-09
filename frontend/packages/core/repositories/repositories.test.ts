@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { parseWithFallback } from "../api/schema";
 import {
+  repositoryInspectionResponseSchema,
   repositoryListResponseSchema,
   repositoryMutationResponseSchema,
 } from "../api/schemas/repositories";
 import type {
+  RepositoryInspectionResponse,
   RepositoryMutationResponse,
   WorkspaceRepositoryListResponse,
 } from "../types";
@@ -85,6 +87,30 @@ describe("repository API schemas", () => {
       repositoryMutationResponseSchema,
       fallback,
       { endpoint: "test repository mutation" },
+    )).toEqual(fallback);
+  });
+
+  it("parses inspected branches and falls back on contract drift", () => {
+    const fallback: RepositoryInspectionResponse = { metadata: null };
+    const parsed = parseWithFallback(
+      {
+        metadata: {
+          url: "git@code.byted.org:team/service.git",
+          name: "service",
+          default_branch: "main",
+          branches: ["main", "release"],
+        },
+      },
+      repositoryInspectionResponseSchema,
+      fallback,
+      { endpoint: "test repository inspection" },
+    );
+    expect(parsed.metadata?.default_branch).toBe("main");
+    expect(parseWithFallback(
+      { metadata: { default_branch: null, branches: "main" } },
+      repositoryInspectionResponseSchema,
+      fallback,
+      { endpoint: "test malformed repository inspection" },
     )).toEqual(fallback);
   });
 });

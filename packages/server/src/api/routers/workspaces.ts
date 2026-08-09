@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import {
+  backfillWorkspaceRepositoryDefaultBranches,
   denyCurrentUserWorkspaceAccess,
   githubConnectResponse,
   importWorkspaceRepository,
+  inspectWorkspaceRepository,
   isGitHubAppConfigured,
   isJsonApiError,
-  listWorkspaceRepositories,
   loadCurrentWorkspaceMember,
   publishWorkspaceEvent,
   readJson,
@@ -14,9 +15,14 @@ import {
   requireWorkspaceAdmin,
   safeCreateWorkspace,
   safeLeaveWorkspace,
+  updateWorkspaceRepository,
   WorkspaceRepositoryError,
 } from "../helpers.js";
-import type { ImportWorkspaceRepositoryInput } from "../helpers.js";
+import type {
+  ImportWorkspaceRepositoryInput,
+  InspectWorkspaceRepositoryInput,
+  UpdateWorkspaceRepositoryInput,
+} from "../helpers.js";
 import {
   authenticatedRequestUserId,
   currentRequestUserId,
@@ -72,13 +78,36 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     return c.json(store.updateWorkspace(c.req.param("id"), body));
   });
-  app.get("/api/workspaces/:id/repos", (c) => {
+  app.get("/api/workspaces/:id/repos", async (c) => {
     const workspaceId = c.req.param("id");
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
     try {
-      const repositories = listWorkspaceRepositories(store, workspaceId);
+      const repositories = await backfillWorkspaceRepositoryDefaultBranches(
+        store,
+        workspaceId,
+        deps.inspectGitRemoteRepository,
+      );
       return c.json({ repositories, total: repositories.length });
+    } catch (error) {
+      if (error instanceof WorkspaceRepositoryError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    }
+  });
+  app.post("/api/workspaces/:id/repos/inspect", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<InspectWorkspaceRepositoryInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      return c.json(await inspectWorkspaceRepository(
+        body,
+        deps.inspectGitRemoteRepository,
+      ));
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
         return c.json({ error: error.message }, error.status);
@@ -94,12 +123,44 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<ImportWorkspaceRepositoryInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const result = importWorkspaceRepository(store, workspaceId, body);
+      const result = await importWorkspaceRepository(
+        store,
+        workspaceId,
+        body,
+        deps.inspectGitRemoteRepository,
+      );
       publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
         workspace: result.workspace,
         repository: result.repository,
       });
       return c.json(result, 201);
+    } catch (error) {
+      if (error instanceof WorkspaceRepositoryError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    }
+  });
+  app.patch("/api/workspaces/:id/repos/:repositoryId", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<UpdateWorkspaceRepositoryInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const result = await updateWorkspaceRepository(
+        store,
+        workspaceId,
+        c.req.param("repositoryId"),
+        body,
+        deps.inspectGitRemoteRepository,
+      );
+      publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
+        workspace: result.workspace,
+        repository: result.repository,
+      });
+      return c.json(result);
     } catch (error) {
       if (error instanceof WorkspaceRepositoryError) {
         return c.json({ error: error.message }, error.status);

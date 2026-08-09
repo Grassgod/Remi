@@ -1,14 +1,43 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
+import { parseGitRemoteMetadata } from "@multiremi/api/helpers/repositories.js";
 import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
+const inspectGitRemoteRepository = async (url: string) => {
+  if (url.includes("github.com")) {
+    return { default_branch: "main", branches: ["main", "release"] };
+  }
+  if (url.includes("personal_automation")) {
+    return { default_branch: "main", branches: ["main"] };
+  }
+  if (url.includes("code.byted.org")) {
+    return { default_branch: "develop", branches: ["develop", "main"] };
+  }
+  return { default_branch: "trunk", branches: ["trunk"] };
+};
+
 describe("Multiremi API - workspace repositories", () => {
-  it("infers, lists, deduplicates, and removes Git repository sources", async () => {
+  it("inspects, imports, updates, lists, and removes Git repositories", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const app = createMultiremiApp({ store });
+    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
+
+    const inspected = await app.request("/api/workspaces/local/repos/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://github.com/multimira-ai/remi.git" }),
+    });
+    expect(inspected.status).toBe(200);
+    expect(await inspected.json()).toEqual({
+      metadata: {
+        url: "https://github.com/multimira-ai/remi.git",
+        name: "remi",
+        default_branch: "main",
+        branches: ["main", "release"],
+      },
+    });
 
     const github = await app.request("/api/workspaces/local/repos", {
       method: "POST",
@@ -17,7 +46,7 @@ describe("Multiremi API - workspace repositories", () => {
         url: "https://github.com/multimira-ai/remi.git",
         source: "codebase",
         description: "Main product repository",
-        default_branch: "not-the-remote-head",
+        default_branch: "release",
       }),
     });
     expect(github.status).toBe(201);
@@ -28,7 +57,7 @@ describe("Multiremi API - workspace repositories", () => {
         url: "https://github.com/multimira-ai/remi.git",
         source: "github",
         description: "Main product repository",
-        default_branch: null,
+        default_branch: "release",
       },
     });
 
@@ -45,7 +74,7 @@ describe("Multiremi API - workspace repositories", () => {
     expect(codebaseBody.repository).toMatchObject({
       name: "agent-platform",
       source: "codebase",
-      default_branch: null,
+      default_branch: "develop",
     });
 
     const generic = await app.request("/api/workspaces/local/repos", {
@@ -60,8 +89,32 @@ describe("Multiremi API - workspace repositories", () => {
       repository: {
         name: "service",
         source: "unknown",
-        default_branch: null,
+        default_branch: "trunk",
       },
+    });
+
+    const updated = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ default_branch: "main" }),
+      },
+    );
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).repository.default_branch).toBe("main");
+
+    const invalidBranch = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ default_branch: "missing" }),
+      },
+    );
+    expect(invalidBranch.status).toBe(400);
+    expect(await invalidBranch.json()).toEqual({
+      error: "default branch does not exist in repository",
     });
 
     const listed = await app.request("/api/workspaces/local/repos");
@@ -103,7 +156,7 @@ describe("Multiremi API - workspace repositories", () => {
   it("only lets project creation attach repositories already imported into the workspace", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const app = createMultiremiApp({ store });
+    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
 
     const imported = await app.request("/api/workspaces/local/repos", {
       method: "POST",
@@ -168,6 +221,39 @@ describe("Multiremi API - workspace repositories", () => {
     expect(inUse.status).toBe(409);
     expect(await inUse.json()).toEqual({
       error: "repository is used by 1 project",
+    });
+  });
+
+  it("backfills default branches for repositories imported before inspection", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.updateWorkspace("local", {
+      repos: [{
+        url: "git@code.byted.org:taoze/personal_automation.git",
+        name: "personal_automation",
+        source: "codebase",
+        default_branch: null,
+      }],
+    });
+    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
+
+    const response = await app.request("/api/workspaces/local/repos");
+    expect(response.status).toBe(200);
+    expect((await response.json()).repositories[0].default_branch).toBe("main");
+    expect(store.ensureLocalWorkspace().repos[0]).toMatchObject({
+      default_branch: "main",
+    });
+  });
+
+  it("parses a symbolic remote HEAD and all branch names", () => {
+    expect(parseGitRemoteMetadata([
+      "ref: refs/heads/main\tHEAD",
+      "63cc7f87bfddd869bbdab0b2079c9f41ad7f36c0\tHEAD",
+      "63cc7f87bfddd869bbdab0b2079c9f41ad7f36c0\trefs/heads/main",
+      "2f0478cf900449dbc03307fd11416785f018228f\trefs/heads/release/v2",
+    ].join("\n"))).toEqual({
+      default_branch: "main",
+      branches: ["main", "release/v2"],
     });
   });
 });
