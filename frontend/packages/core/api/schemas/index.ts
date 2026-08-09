@@ -16,3 +16,4 @@ export * from "./billing";
 export * from "./users";
 export * from "./project-docs";
 export * from "./lark";
+export * from "./repositories";

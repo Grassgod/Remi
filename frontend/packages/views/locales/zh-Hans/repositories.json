@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "代码仓库",
+    "import_repository": "导入仓库",
+    "search_placeholder": "搜索代码仓库..."
+  },
+  "filters": {
+    "all": "全部"
+  },
+  "sources": {
+    "github": "GitHub",
+    "codebase": "Codebase",
+    "git": "Git"
+  },
+  "table": {
+    "repository": "仓库",
+    "source": "来源",
+    "default_branch": "默认分支",
+    "description": "描述",
+    "imported": "导入时间"
+  },
+  "empty": {
+    "title": "还没有代码仓库",
+    "description": "请先导入 GitHub 或 Codebase 仓库，再创建项目。",
+    "action": "导入仓库",
+    "search": "没有匹配的代码仓库。"
+  },
+  "import_dialog": {
+    "title": "导入代码仓库",
+    "description": "将 Git 仓库添加到当前工作区，创建项目时即可选择。",
+    "source_label": "来源",
+    "url_label": "Clone URL",
+    "github_url_placeholder": "https://github.com/owner/repository.git",
+    "codebase_url_placeholder": "git@code.byted.org:team/repository.git",
+    "github_hint": "填写 GitHub 的 HTTPS 或 SSH clone URL。",
+    "codebase_hint": "填写 Codebase 页面展示的 clone URL。",
+    "description_label": "描述",
+    "description_placeholder": "这个仓库包含什么",
+    "default_branch_label": "默认分支",
+    "default_branch_placeholder": "main",
+    "optional": "可选",
+    "cancel": "取消",
+    "submit": "导入仓库",
+    "importing": "导入中..."
+  },
+  "remove": {
+    "action": "移除仓库",
+    "action_aria": "移除 {{name}}",
+    "title": "移除代码仓库？",
+    "description": "确定从当前工作区移除 {{name}}？已被项目使用的仓库无法移除。",
+    "cancel": "取消",
+    "confirm": "移除",
+    "removing": "移除中..."
+  },
+  "toast": {
+    "imported": "仓库已导入",
+    "import_failed": "导入仓库失败",
+    "removed": "仓库已移除",
+    "remove_failed": "移除仓库失败"
+  }
+}

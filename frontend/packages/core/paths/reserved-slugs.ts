@@ -79,6 +79,8 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   // page; `teams` is reserved for future team management.
   "issues",
   "projects",
+  // Hand-added: the generator source is not vendored in this repository.
+  "repos",
   // Hand-added: the generator source (server/internal/handler/reserved_slugs.json)
   // is not vendored in this repo, so this entry cannot be regenerated here.
   "knowledge",

@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 489,
+    "routeCount": 492,
     "routeCountByPrefix": {
       "native": 171,
-      "compat": 305,
+      "compat": 308,
       "root": 13
     },
-    "getRoutes": 218,
-    "getRoutesWithBody": 215,
+    "getRoutes": 219,
+    "getRoutesWithBody": 216,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 271,
+    "mutationRoutes": 273,
     "mutationRoutesCovered": 271,
     "flows": [
       "agents-compat",
@@ -111,6 +111,7 @@
     "DELETE /api/workspaces/:id/invitations/:invitationId",
     "DELETE /api/workspaces/:id/lark/installations/:installationId",
     "DELETE /api/workspaces/:id/members/:memberId",
+    "DELETE /api/workspaces/:id/repos/:repositoryId",
     "GET /",
     "GET /api/agent-activity-30d",
     "GET /api/agent-run-counts",
@@ -322,6 +323,7 @@
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
+    "GET /api/workspaces/:id/repos",
     "GET /auth/lark/url",
     "GET /favicon.ico",
     "GET /health",
@@ -516,6 +518,7 @@
     "POST /api/workspaces/:id/leave",
     "POST /api/workspaces/:id/members",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
+    "POST /api/workspaces/:id/repos",
     "POST /auth/google",
     "POST /auth/lark/callback",
     "POST /auth/logout",
@@ -813,6 +816,7 @@
     "GET /api/workspaces/:id/lark/installations",
     "GET /api/workspaces/:id/members",
     "GET /api/workspaces/:id/relay-config",
+    "GET /api/workspaces/:id/repos",
     "GET /auth/lark/url",
     "GET /favicon.ico",
     "GET /health",
@@ -12800,6 +12804,16 @@
         "claude": null,
         "codex": null,
         "modelDiscovery": false
+      }
+    },
+    {
+      "key": "get-sweep GET /api/workspaces/:id/repos",
+      "route": "GET /api/workspaces/:id/repos",
+      "path": "/api/workspaces/local/repos",
+      "status": 200,
+      "body": {
+        "repositories": [],
+        "total": 0
       }
     },
     {

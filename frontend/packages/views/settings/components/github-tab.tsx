@@ -20,7 +20,7 @@ import {
 } from "@multiremi/ui/components/ui/alert-dialog";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
-import { useCurrentWorkspace } from "@multiremi/core/paths";
+import { useCurrentWorkspace, useWorkspacePaths } from "@multiremi/core/paths";
 import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import {
   deriveGitHubSettings,
@@ -44,6 +44,7 @@ export function GitHubTab() {
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const navigation = useNavigation();
+  const workspacePaths = useWorkspacePaths();
   const user = useAuthStore((s) => s.user);
 
   const { data: members = [] } = useQuery(memberListOptions(wsId));
@@ -121,8 +122,6 @@ export function GitHubTab() {
   }
 
   if (!workspace) return null;
-
-  const repositoriesHref = `${navigation.pathname}?tab=repositories`;
 
   return (
     <div className="space-y-8">
@@ -317,7 +316,7 @@ export function GitHubTab() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => navigation.push(repositoriesHref)}
+                onClick={() => navigation.push(workspacePaths.repositories())}
               >
                 <ExternalLink className="h-3 w-3" />
                 {t(($) => $.github.repositories_shortcut_link)}

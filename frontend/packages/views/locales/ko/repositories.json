@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "저장소",
+    "import_repository": "저장소 가져오기",
+    "search_placeholder": "저장소 검색..."
+  },
+  "filters": {
+    "all": "전체"
+  },
+  "sources": {
+    "github": "GitHub",
+    "codebase": "Codebase",
+    "git": "Git"
+  },
+  "table": {
+    "repository": "저장소",
+    "source": "소스",
+    "default_branch": "기본 브랜치",
+    "description": "설명",
+    "imported": "가져온 날짜"
+  },
+  "empty": {
+    "title": "저장소가 없습니다",
+    "description": "프로젝트를 만들기 전에 GitHub 또는 Codebase 저장소를 가져오세요.",
+    "action": "저장소 가져오기",
+    "search": "검색과 일치하는 저장소가 없습니다."
+  },
+  "import_dialog": {
+    "title": "저장소 가져오기",
+    "description": "프로젝트에서 사용할 수 있도록 Git 저장소를 워크스페이스에 추가합니다.",
+    "source_label": "소스",
+    "url_label": "Clone URL",
+    "github_url_placeholder": "https://github.com/owner/repository.git",
+    "codebase_url_placeholder": "git@code.byted.org:team/repository.git",
+    "github_hint": "GitHub HTTPS 또는 SSH clone URL을 사용하세요.",
+    "codebase_hint": "Codebase에 표시된 clone URL을 사용하세요.",
+    "description_label": "설명",
+    "description_placeholder": "이 저장소의 내용",
+    "default_branch_label": "기본 브랜치",
+    "default_branch_placeholder": "main",
+    "optional": "선택 사항",
+    "cancel": "취소",
+    "submit": "가져오기",
+    "importing": "가져오는 중..."
+  },
+  "remove": {
+    "action": "저장소 제거",
+    "action_aria": "{{name}} 제거",
+    "title": "저장소를 제거할까요?",
+    "description": "{{name}}을(를) 이 워크스페이스에서 제거할까요? 프로젝트에서 사용 중인 저장소는 제거할 수 없습니다.",
+    "cancel": "취소",
+    "confirm": "제거",
+    "removing": "제거 중..."
+  },
+  "toast": {
+    "imported": "저장소를 가져왔습니다",
+    "import_failed": "저장소를 가져오지 못했습니다",
+    "removed": "저장소를 제거했습니다",
+    "remove_failed": "저장소를 제거하지 못했습니다"
+  }
+}

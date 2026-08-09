@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "リポジトリ",
+    "import_repository": "リポジトリをインポート",
+    "search_placeholder": "リポジトリを検索..."
+  },
+  "filters": {
+    "all": "すべて"
+  },
+  "sources": {
+    "github": "GitHub",
+    "codebase": "Codebase",
+    "git": "Git"
+  },
+  "table": {
+    "repository": "リポジトリ",
+    "source": "ソース",
+    "default_branch": "デフォルトブランチ",
+    "description": "説明",
+    "imported": "インポート日"
+  },
+  "empty": {
+    "title": "リポジトリがありません",
+    "description": "プロジェクトを作成する前に、GitHub または Codebase リポジトリをインポートしてください。",
+    "action": "リポジトリをインポート",
+    "search": "検索に一致するリポジトリはありません。"
+  },
+  "import_dialog": {
+    "title": "リポジトリをインポート",
+    "description": "プロジェクトで利用できるよう、Git リポジトリをワークスペースに追加します。",
+    "source_label": "ソース",
+    "url_label": "Clone URL",
+    "github_url_placeholder": "https://github.com/owner/repository.git",
+    "codebase_url_placeholder": "git@code.byted.org:team/repository.git",
+    "github_hint": "GitHub の HTTPS または SSH clone URL を使用してください。",
+    "codebase_hint": "Codebase に表示される clone URL を使用してください。",
+    "description_label": "説明",
+    "description_placeholder": "このリポジトリの内容",
+    "default_branch_label": "デフォルトブランチ",
+    "default_branch_placeholder": "main",
+    "optional": "任意",
+    "cancel": "キャンセル",
+    "submit": "インポート",
+    "importing": "インポート中..."
+  },
+  "remove": {
+    "action": "リポジトリを削除",
+    "action_aria": "{{name}} を削除",
+    "title": "リポジトリを削除しますか？",
+    "description": "{{name}} をこのワークスペースから削除しますか？プロジェクトで使用中のリポジトリは削除できません。",
+    "cancel": "キャンセル",
+    "confirm": "削除",
+    "removing": "削除中..."
+  },
+  "toast": {
+    "imported": "リポジトリをインポートしました",
+    "import_failed": "リポジトリをインポートできませんでした",
+    "removed": "リポジトリを削除しました",
+    "remove_failed": "リポジトリを削除できませんでした"
+  }
+}

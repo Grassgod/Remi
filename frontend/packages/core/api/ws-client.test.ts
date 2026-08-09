@@ -128,6 +128,31 @@ describe("WSClient", () => {
     );
   });
 
+  it("ignores parsed control frames that do not have a string event type", () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const ws = new WSClient("ws://example.test/ws", { logger });
+    const anyHandler = vi.fn();
+    ws.onAny(anyHandler);
+    ws.connect();
+
+    expect(() => {
+      FakeWebSocket.lastInstance!.onmessage?.({
+        data: JSON.stringify({ connected: true }),
+      });
+    }).not.toThrow();
+
+    expect(anyHandler).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "ws: received message without a valid type",
+      JSON.stringify({ connected: true }),
+    );
+  });
+
   it("passes actor_id and actor_type to event handlers", () => {
     const ws = new WSClient("ws://example.test/ws");
     ws.setAuth("tok", "acme");

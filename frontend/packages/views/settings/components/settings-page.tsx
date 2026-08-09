@@ -7,7 +7,6 @@ import {
   Key,
   Settings,
   Users,
-  FolderGit2,
   FlaskConical,
   Bell,
   Plug,
@@ -22,7 +21,6 @@ import { PreferencesTab } from "./preferences-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
-import { RepositoriesTab } from "./repositories-tab";
 import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { ModelGatewayTab } from "./model-gateway-tab";
@@ -40,7 +38,6 @@ const ACCOUNT_TAB_ICONS = {
 
 const WORKSPACE_TAB_KEYS = [
   "general",
-  "repositories",
   "github",
   "integrations",
   "model_gateway",
@@ -49,7 +46,6 @@ const WORKSPACE_TAB_KEYS = [
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
-  repositories: "repositories",
   github: "github",
   integrations: "integrations",
   model_gateway: "model-gateway",
@@ -58,7 +54,6 @@ const WORKSPACE_TAB_VALUES = {
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
-  repositories: FolderGit2,
   github: GitHubMark,
   integrations: Plug,
   model_gateway: Waypoints,
@@ -75,6 +70,7 @@ const TAB_QUERY_KEY = "tab";
 // tab; it now lives inside Integrations.
 const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
+  repositories: "workspace",
 };
 
 export interface ExtraSettingsTab {
@@ -177,7 +173,6 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
-          <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="model-gateway"><ModelGatewayTab /></TabsContent>
