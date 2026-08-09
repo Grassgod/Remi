@@ -5,7 +5,7 @@ import { createStore, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API - workspace repositories", () => {
-  it("imports, lists, deduplicates, and removes GitHub and Codebase repositories", async () => {
+  it("infers, lists, deduplicates, and removes Git repository sources", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store });
@@ -15,9 +15,9 @@ describe("Multiremi API - workspace repositories", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: "https://github.com/multimira-ai/remi.git",
-        source: "github",
+        source: "codebase",
         description: "Main product repository",
-        default_branch: "main",
+        default_branch: "not-the-remote-head",
       }),
     });
     expect(github.status).toBe(201);
@@ -28,7 +28,7 @@ describe("Multiremi API - workspace repositories", () => {
         url: "https://github.com/multimira-ai/remi.git",
         source: "github",
         description: "Main product repository",
-        default_branch: "main",
+        default_branch: null,
       },
     });
 
@@ -37,7 +37,7 @@ describe("Multiremi API - workspace repositories", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: "git@code.byted.org:dev/agent-platform.git",
-        source: "codebase",
+        source: "github",
       }),
     });
     expect(codebase.status).toBe(201);
@@ -48,13 +48,30 @@ describe("Multiremi API - workspace repositories", () => {
       default_branch: null,
     });
 
+    const generic = await app.request("/api/workspaces/local/repos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: "ssh://git@git.example.test/team/service.git",
+      }),
+    });
+    expect(generic.status).toBe(201);
+    expect(await generic.json()).toMatchObject({
+      repository: {
+        name: "service",
+        source: "unknown",
+        default_branch: null,
+      },
+    });
+
     const listed = await app.request("/api/workspaces/local/repos");
     expect(listed.status).toBe(200);
     const listedBody = await listed.json();
-    expect(listedBody.total).toBe(2);
+    expect(listedBody.total).toBe(3);
     expect(listedBody.repositories.map((repo: { source: string }) => repo.source)).toEqual([
       "github",
       "codebase",
+      "unknown",
     ]);
 
     const duplicate = await app.request("/api/workspaces/local/repos", {
@@ -62,7 +79,6 @@ describe("Multiremi API - workspace repositories", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: "https://github.com/multimira-ai/remi/",
-        source: "github",
       }),
     });
     expect(duplicate.status).toBe(409);
@@ -71,7 +87,7 @@ describe("Multiremi API - workspace repositories", () => {
     const invalid = await app.request("/api/workspaces/local/repos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: "not-a-git-remote", source: "codebase" }),
+      body: JSON.stringify({ url: "not-a-git-remote" }),
     });
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toEqual({ error: "invalid git repository URL" });
@@ -81,7 +97,7 @@ describe("Multiremi API - workspace repositories", () => {
       { method: "DELETE" },
     );
     expect(removed.status).toBe(200);
-    expect((await removed.json()).workspace.repos).toHaveLength(1);
+    expect((await removed.json()).workspace.repos).toHaveLength(2);
   });
 
   it("only lets project creation attach repositories already imported into the workspace", async () => {
@@ -94,7 +110,6 @@ describe("Multiremi API - workspace repositories", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: "https://github.com/multimira-ai/remi.git",
-        source: "github",
       }),
     });
     const importedBody = await imported.json();
