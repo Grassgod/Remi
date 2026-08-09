@@ -42,6 +42,14 @@
     "remote_default": "远端默认",
     "other_branches": "其他分支"
   },
+  "description_editor": {
+    "action_aria": "编辑 {{name}} 的描述",
+    "add": "添加描述",
+    "title": "编辑描述",
+    "placeholder": "这个仓库用于什么？",
+    "cancel": "取消",
+    "save": "保存"
+  },
   "remove": {
     "action": "移除仓库",
     "action_aria": "移除 {{name}}",
@@ -57,6 +65,8 @@
     "inspect_failed": "读取仓库分支失败",
     "branch_updated": "默认分支已更新",
     "branch_update_failed": "更新默认分支失败",
+    "description_updated": "描述已更新",
+    "description_update_failed": "更新描述失败",
     "removed": "仓库已移除",
     "remove_failed": "移除仓库失败"
   }

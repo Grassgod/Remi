@@ -35,7 +35,8 @@ export interface RepositoryInspectionResponse {
 }
 
 export interface UpdateWorkspaceRepositoryRequest {
-  default_branch: string;
+  default_branch?: string;
+  description?: string | null;
 }
 
 export interface RepositoryMutationResponse {

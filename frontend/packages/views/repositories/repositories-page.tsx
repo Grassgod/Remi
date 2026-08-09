@@ -33,6 +33,7 @@ import { useT } from "../i18n";
 import { PageHeader } from "../layout/page-header";
 import { BranchPicker } from "./branch-picker";
 import { ImportRepositoryDialog } from "./import-repository-dialog";
+import { RepositoryDescriptionEditor } from "./repository-description-editor";
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 const TABLE_GRID =
@@ -265,9 +266,11 @@ export function RepositoriesPage() {
                   repository={repository}
                   canManage={canManage}
                 />
-                <div className="truncate text-xs text-muted-foreground" title={repository.description ?? undefined}>
-                  {repository.description || "--"}
-                </div>
+                <RepositoryDescriptionEditor
+                  workspaceId={workspaceId}
+                  repository={repository}
+                  canManage={canManage}
+                />
                 <div className="text-xs text-muted-foreground">
                   {formatImportedDate(repository.imported_at)}
                 </div>

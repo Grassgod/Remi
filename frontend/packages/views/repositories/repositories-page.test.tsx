@@ -22,7 +22,7 @@ const repositories = [
     name: "agent-platform",
     url: codebaseUrl,
     source: "codebase",
-    description: "Agent platform",
+    description: null,
     default_branch: null,
     imported_at: "2026-08-09T00:00:00.000Z",
     updated_at: "2026-08-09T00:00:00.000Z",
@@ -33,6 +33,7 @@ const mockImport = vi.hoisted(() => vi.fn());
 const mockInspect = vi.hoisted(() => vi.fn());
 const mockRemove = vi.hoisted(() => vi.fn());
 const mockUpdate = vi.hoisted(() => vi.fn());
+const mockCurrentRole = vi.hoisted(() => ({ value: "owner" }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -47,7 +48,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
       }
       if (options.queryKey?.[0] === "members") {
         return {
-          data: [{ user_id: "user-1", name: "Owner", role: "owner" }],
+          data: [{ user_id: "user-1", name: "Owner", role: mockCurrentRole.value }],
           isLoading: false,
         };
       }
@@ -106,6 +107,7 @@ describe("RepositoriesPage", () => {
     mockInspect.mockReset();
     mockRemove.mockReset();
     mockUpdate.mockReset();
+    mockCurrentRole.value = "owner";
   });
 
   it("searches imported repositories without source controls", async () => {
@@ -197,5 +199,65 @@ describe("RepositoriesPage", () => {
       repositoryId: "repo-codebase",
       input: { default_branch: "develop" },
     }));
+  });
+
+  it("adds and clears repository descriptions from the table", async () => {
+    const user = userEvent.setup();
+    mockUpdate.mockResolvedValue({ repository: repositories[1] });
+    renderWithI18n(<RepositoriesPage />);
+
+    expect(screen.getByText("Add description")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", {
+      name: "Edit description for agent-platform",
+    }));
+    const emptyDescription = screen.getByLabelText("Edit description");
+    await user.type(emptyDescription, "  Internal agent platform  ");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({
+      repositoryId: "repo-codebase",
+      input: { description: "Internal agent platform" },
+    }));
+
+    mockUpdate.mockClear();
+    await user.click(screen.getByRole("button", {
+      name: "Edit description for web",
+    }));
+    const existingDescription = screen.getByLabelText("Edit description");
+    expect(existingDescription).toHaveValue("Web application");
+    await user.clear(existingDescription);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({
+      repositoryId: "repo-github",
+      input: { description: null },
+    }));
+  });
+
+  it("limits repository descriptions to 200 characters", async () => {
+    const user = userEvent.setup();
+    renderWithI18n(<RepositoriesPage />);
+
+    await user.click(screen.getByRole("button", {
+      name: "Edit description for agent-platform",
+    }));
+    const description = screen.getByLabelText("Edit description");
+    expect(description).toHaveAttribute("maxlength", "200");
+    await user.type(description, "x".repeat(201));
+    expect(description).toHaveValue("x".repeat(200));
+    expect(screen.getByText("200/200")).toBeInTheDocument();
+  });
+
+  it("keeps repository descriptions read-only for workspace members", () => {
+    mockCurrentRole.value = "member";
+    renderWithI18n(<RepositoriesPage />);
+
+    expect(screen.getByText("Web application")).toBeInTheDocument();
+    expect(screen.queryByRole("button", {
+      name: "Edit description for web",
+    })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {
+      name: "Edit description for agent-platform",
+    })).not.toBeInTheDocument();
   });
 });

@@ -22,7 +22,14 @@ describe("Multiremi API - workspace repositories", () => {
   it("inspects, imports, updates, lists, and removes Git repositories", async () => {
     const store = createStore();
     store.ensureLocalWorkspace();
-    const app = createMultiremiApp({ store, inspectGitRemoteRepository });
+    let inspectionCount = 0;
+    const app = createMultiremiApp({
+      store,
+      inspectGitRemoteRepository: async (url) => {
+        inspectionCount += 1;
+        return inspectGitRemoteRepository(url);
+      },
+    });
 
     const inspected = await app.request("/api/workspaces/local/repos/inspect", {
       method: "POST",
@@ -92,6 +99,56 @@ describe("Multiremi API - workspace repositories", () => {
         default_branch: "trunk",
       },
     });
+
+    const inspectionCountBeforeDescriptionUpdate = inspectionCount;
+    const described = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "  Internal agent platform  " }),
+      },
+    );
+    expect(described.status).toBe(200);
+    expect((await described.json()).repository.description).toBe("Internal agent platform");
+    expect(inspectionCount).toBe(inspectionCountBeforeDescriptionUpdate);
+
+    const clearedDescription = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "   " }),
+      },
+    );
+    expect(clearedDescription.status).toBe(200);
+    expect((await clearedDescription.json()).repository.description).toBeNull();
+    expect(inspectionCount).toBe(inspectionCountBeforeDescriptionUpdate);
+
+    const longDescription = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "x".repeat(201) }),
+      },
+    );
+    expect(longDescription.status).toBe(400);
+    expect(await longDescription.json()).toEqual({
+      error: "repository description must be 200 characters or fewer",
+    });
+    expect(inspectionCount).toBe(inspectionCountBeforeDescriptionUpdate);
+
+    const emptyUpdate = await app.request(
+      `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      },
+    );
+    expect(emptyUpdate.status).toBe(400);
+    expect(await emptyUpdate.json()).toEqual({ error: "repository update is empty" });
 
     const updated = await app.request(
       `/api/workspaces/local/repos/${encodeURIComponent(codebaseBody.repository.id)}`,

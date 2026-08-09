@@ -42,6 +42,14 @@
     "remote_default": "원격 기본값",
     "other_branches": "기타 브랜치"
   },
+  "description_editor": {
+    "action_aria": "{{name}} 설명 편집",
+    "add": "설명 추가",
+    "title": "설명 편집",
+    "placeholder": "이 저장소의 용도를 입력하세요",
+    "cancel": "취소",
+    "save": "저장"
+  },
   "remove": {
     "action": "저장소 제거",
     "action_aria": "{{name}} 제거",
@@ -57,6 +65,8 @@
     "inspect_failed": "저장소 브랜치를 읽지 못했습니다",
     "branch_updated": "기본 브랜치를 업데이트했습니다",
     "branch_update_failed": "기본 브랜치를 업데이트하지 못했습니다",
+    "description_updated": "설명을 업데이트했습니다",
+    "description_update_failed": "설명을 업데이트하지 못했습니다",
     "removed": "저장소를 제거했습니다",
     "remove_failed": "저장소를 제거하지 못했습니다"
   }

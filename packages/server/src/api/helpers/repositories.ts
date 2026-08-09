@@ -32,6 +32,7 @@ export interface InspectWorkspaceRepositoryInput {
 
 export interface UpdateWorkspaceRepositoryInput {
   default_branch?: string | null;
+  description?: string | null;
 }
 
 export interface GitRemoteMetadata {
@@ -161,19 +162,41 @@ export async function updateWorkspaceRepository(
   const repositories = listWorkspaceRepositories(store, workspaceId);
   const repository = repositories.find((candidate) => candidate.id === repositoryId);
   if (!repository) throw new WorkspaceRepositoryError("repository not found", 404);
-  const defaultBranch = cleanOptionalString(input.default_branch);
-  if (!defaultBranch) throw new WorkspaceRepositoryError("default branch is required", 400);
 
-  const metadata = await inspectRemote(repository.url);
-  if (!metadata.branches.includes(defaultBranch)) {
-    throw new WorkspaceRepositoryError("default branch does not exist in repository", 400);
+  const hasDefaultBranch = Object.prototype.hasOwnProperty.call(input, "default_branch");
+  const hasDescription = Object.prototype.hasOwnProperty.call(input, "description");
+  if (!hasDefaultBranch && !hasDescription) {
+    throw new WorkspaceRepositoryError("repository update is empty", 400);
   }
 
-  const updatedRepository = {
+  const updatedRepository: WorkspaceRepositoryData = {
     ...repository,
-    default_branch: defaultBranch,
     updated_at: nowIso(),
   };
+
+  if (hasDefaultBranch) {
+    const defaultBranch = cleanOptionalString(input.default_branch);
+    if (!defaultBranch) {
+      throw new WorkspaceRepositoryError("default branch is required", 400);
+    }
+    const metadata = await inspectRemote(repository.url);
+    if (!metadata.branches.includes(defaultBranch)) {
+      throw new WorkspaceRepositoryError("default branch does not exist in repository", 400);
+    }
+    updatedRepository.default_branch = defaultBranch;
+  }
+
+  if (hasDescription) {
+    const description = cleanOptionalString(input.description);
+    if (description && description.length > 200) {
+      throw new WorkspaceRepositoryError(
+        "repository description must be 200 characters or fewer",
+        400,
+      );
+    }
+    updatedRepository.description = description;
+  }
+
   const updated = store.updateWorkspace(workspaceId, {
     repos: repositories.map((candidate) =>
       candidate.id === repositoryId ? updatedRepository : candidate

@@ -42,6 +42,14 @@
     "remote_default": "リモート既定",
     "other_branches": "その他のブランチ"
   },
+  "description_editor": {
+    "action_aria": "{{name}} の説明を編集",
+    "add": "説明を追加",
+    "title": "説明を編集",
+    "placeholder": "このリポジトリの用途を入力",
+    "cancel": "キャンセル",
+    "save": "保存"
+  },
   "remove": {
     "action": "リポジトリを削除",
     "action_aria": "{{name}} を削除",
@@ -57,6 +65,8 @@
     "inspect_failed": "リポジトリのブランチを取得できませんでした",
     "branch_updated": "デフォルトブランチを更新しました",
     "branch_update_failed": "デフォルトブランチを更新できませんでした",
+    "description_updated": "説明を更新しました",
+    "description_update_failed": "説明を更新できませんでした",
     "removed": "リポジトリを削除しました",
     "remove_failed": "リポジトリを削除できませんでした"
   }
