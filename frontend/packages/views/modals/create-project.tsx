@@ -1,11 +1,20 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { ChevronRight, FolderGit, Maximize2, Minimize2, X as XIcon, UserMinus } from "lucide-react";
+import {
+  ChevronRight,
+  FolderKanban,
+  GitBranch,
+  Maximize2,
+  Minimize2,
+  Search,
+  X as XIcon,
+  UserMinus,
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multiremi/core/projects/mutations";
 import { useProjectDraftStore } from "@multiremi/core/projects";
-import { projectListOptions } from "@multiremi/core/projects/queries";
+import { repositoryListOptions } from "@multiremi/core/repositories";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -15,7 +24,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multiremi/core/paths";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import type { ProjectStatus, ProjectPriority, CreateProjectResourceRequest } from "@multiremi/core/types";
+import type { ProjectStatus, ProjectPriority, WorkspaceRepository } from "@multiremi/core/types";
 import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -28,6 +37,8 @@ import {
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
 import { Button } from "@multiremi/ui/components/ui/button";
+import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
+import { Input } from "@multiremi/ui/components/ui/input";
 import { EmojiPicker } from "@multiremi/ui/components/common/emoji-picker";
 import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
 import { PriorityIcon } from "../issues/components/priority-icon";
@@ -39,10 +50,8 @@ import {
   useProjectStatusLabels,
   useProjectPriorityLabels,
 } from "../projects/components/labels";
-import {
-  RepoSourcePopover,
-  resourceDisplayName,
-} from "../projects/components/repo-source-popover";
+
+const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 
 function PillButton({
   children,
@@ -66,8 +75,6 @@ function PillButton({
 
 export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const { t } = useT("modals");
-  // The pill's overflow label reuses the shared repo-source copy.
-  const { t: tRepo } = useT("projects");
   const router = useNavigation();
   const workspace = useCurrentWorkspace();
   const workspaceName = workspace?.name;
@@ -75,7 +82,10 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
-  const { data: projects = [] } = useQuery(projectListOptions(wsId));
+  const { data: repositoryResponse, isLoading: repositoriesLoading } = useQuery(
+    repositoryListOptions(wsId),
+  );
+  const repositories = repositoryResponse?.repositories ?? EMPTY_REPOSITORIES;
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -94,26 +104,27 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  // Resources selected to attach when the project is created. Held locally
-  // (not persisted) until handleSubmit passes them inline to createProject,
-  // which attaches them in the same transaction.
-  const [pendingResources, setPendingResources] = useState<
-    CreateProjectResourceRequest[]
-  >([]);
-  const [repoPopoverOpen, setRepoPopoverOpen] = useState(false);
+  const [repositorySearch, setRepositorySearch] = useState("");
+  const [selectedRepositoryIds, setSelectedRepositoryIds] = useState<string[]>([]);
 
-  const addResource = (resource: CreateProjectResourceRequest) => {
-    setPendingResources((prev) => [...prev, resource]);
-  };
-  const removeResource = (resource: CreateProjectResourceRequest) => {
-    setPendingResources((prev) => prev.filter((r) => r !== resource));
-  };
-
-  // Names shown in the pill's hover tooltip (capped, with a "+N more" line).
-  const MAX_PILL_NAMES = 5;
-  const selectedResourceNames = pendingResources.map((r) =>
-    resourceDisplayName(r, projects),
+  const normalizedRepositorySearch = repositorySearch.trim().toLowerCase();
+  const filteredRepositories = repositories.filter((repository) => {
+    if (!normalizedRepositorySearch) return true;
+    return [repository.name, repository.url, repository.description]
+      .filter(Boolean)
+      .some((value) => value!.toLowerCase().includes(normalizedRepositorySearch));
+  });
+  const selectedRepositories = repositories.filter((repository) =>
+    selectedRepositoryIds.includes(repository.id),
   );
+
+  const toggleRepository = (repositoryId: string) => {
+    setSelectedRepositoryIds((current) =>
+      current.includes(repositoryId)
+        ? current.filter((id) => id !== repositoryId)
+        : [...current, repositoryId],
+    );
+  };
 
   // Sync field changes to draft store
   const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
@@ -140,9 +151,16 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const createProject = useCreateProject();
 
   const handleSubmit = async () => {
-    if (!title.trim() || submitting) return;
-    const resources =
-      pendingResources.length > 0 ? pendingResources : undefined;
+    if (!title.trim() || selectedRepositories.length === 0 || submitting) return;
+    const resources = selectedRepositories.map((repository) => ({
+      resource_type: "github_repo" as const,
+      resource_ref: {
+        url: repository.url,
+        ...(repository.default_branch
+          ? { default_branch_hint: repository.default_branch }
+          : {}),
+      },
+    }));
     setSubmitting(true);
     try {
       const project = await createProject.mutateAsync({
@@ -181,7 +199,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           "!transition-all !duration-300 !ease-out",
           isExpanded
             ? "!max-w-4xl !w-full !h-5/6 !-translate-y-1/2"
-            : "!max-w-2xl !w-full !h-96 !-translate-y-1/2",
+            : "!max-w-2xl !w-full !h-[34rem] !-translate-y-1/2",
         )}
       >
         <DialogTitle className="sr-only">{t(($) => $.create_project.title)}</DialogTitle>
@@ -234,10 +252,13 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
               render={
                 <button
                   type="button"
-                  className="text-2xl cursor-pointer rounded-lg p-1 -ml-1 hover:bg-accent/60 transition-colors"
+                  className={cn(
+                    "cursor-pointer rounded-lg p-1 -ml-1 hover:bg-accent/60 transition-colors",
+                    icon ? "text-2xl" : "text-muted-foreground",
+                  )}
                   title={t(($) => $.create_project.icon_tooltip)}
                 >
-                  {icon || "📁"}
+                {icon || <FolderKanban className="size-5" />}
                 </button>
               }
             />
@@ -260,22 +281,121 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           />
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-5">
-          <ContentEditor
-            ref={descEditorRef}
-            defaultValue={draft.description}
-            placeholder={t(($) => $.create_project.description_placeholder)}
-            onUpdate={(md) => setDraft({ description: md })}
-            debounceMs={500}
-          />
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-4">
+          <div className="min-h-16">
+            <ContentEditor
+              ref={descEditorRef}
+              defaultValue={draft.description}
+              placeholder={t(($) => $.create_project.description_placeholder)}
+              onUpdate={(md) => setDraft({ description: md })}
+              debounceMs={500}
+            />
+          </div>
+
+          <section className="mt-3" aria-labelledby="create-project-repositories">
+            <div className="mb-2 flex items-start justify-between gap-4">
+              <div>
+                <h3 id="create-project-repositories" className="text-sm font-medium">
+                  {t(($) => $.create_project.repositories_label)}
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {t(($) => $.create_project.repositories_description)}
+                </p>
+              </div>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {t(($) => $.create_project.repositories_selected, {
+                  count: selectedRepositories.length,
+                })}
+              </span>
+            </div>
+
+            <div className="relative mb-2">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={repositorySearch}
+                onChange={(event) => setRepositorySearch(event.target.value)}
+                aria-label={t(($) => $.create_project.repository_search_placeholder)}
+                placeholder={t(($) => $.create_project.repository_search_placeholder)}
+                className="pl-8"
+              />
+            </div>
+
+            <div className="max-h-48 overflow-y-auto rounded-lg border">
+              {repositoriesLoading ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  {t(($) => $.create_project.repository_loading)}
+                </div>
+              ) : filteredRepositories.length > 0 ? (
+                filteredRepositories.map((repository) => {
+                  const checked = selectedRepositoryIds.includes(repository.id);
+                  const sourceLabel =
+                    repository.source === "github"
+                      ? t(($) => $.create_project.source_github)
+                      : repository.source === "codebase"
+                        ? t(($) => $.create_project.source_codebase)
+                        : t(($) => $.create_project.source_git);
+
+                  return (
+                    <div
+                      key={repository.id}
+                      className="flex items-start gap-3 border-b px-3 py-2.5 last:border-b-0 hover:bg-accent/40"
+                    >
+                      <Checkbox
+                        aria-label={repository.name}
+                        checked={checked}
+                        onCheckedChange={() => toggleRepository(repository.id)}
+                        className="mt-0.5"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm font-medium">{repository.name}</span>
+                          <span className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {sourceLabel}
+                          </span>
+                          {repository.default_branch && (
+                            <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+                              <GitBranch className="size-3 shrink-0" />
+                              <span className="truncate">{repository.default_branch}</span>
+                            </span>
+                          )}
+                        </span>
+                        <span
+                          title={repository.url}
+                          className="mt-0.5 block truncate text-xs text-muted-foreground"
+                        >
+                          {repository.url}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })
+              ) : repositories.length > 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  {t(($) => $.create_project.repository_search_empty)}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center px-3 py-6 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    {t(($) => $.create_project.repository_empty)}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="mt-1 h-auto px-0"
+                    onClick={() => {
+                      onClose();
+                      router.push(wsPaths.repositories());
+                    }}
+                  >
+                    {t(($) => $.create_project.manage_repositories)}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
 
-        {/* Footer: properties (left, wrap) + Create button (right). Single row
-            so the modal stays compact — Linear-style.
-            Repos lives here alongside the property pills for now. Once we
-            support more resource types (Linear / Notion / Figma / Slack), pull
-            them out into a dedicated Resources strip above this footer — a
-            single Repos pill on its own row looked too sparse. */}
         <div className="flex items-center justify-between gap-2 px-4 py-3 border-t shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <DropdownMenu>
@@ -412,62 +532,9 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
             </PopoverContent>
           </Popover>
 
-          <Popover open={repoPopoverOpen} onOpenChange={setRepoPopoverOpen}>
-            {/* The trigger tree must stay structurally identical whether or not
-                resources are selected: swapping the PopoverTrigger element while
-                the popover is open detaches its anchor and the popover jumps to
-                the viewport origin. Only the label text and the (detached)
-                TooltipContent vary with the count. */}
-            <Tooltip>
-              <PopoverTrigger
-                render={
-                  <TooltipTrigger
-                    render={
-                      <PillButton>
-                        <FolderGit className="size-3" />
-                        <span>
-                          {pendingResources.length === 0
-                            ? t(($) => $.create_project.repos_pill)
-                            : t(($) => $.create_project.sources_pill_count, {
-                                count: pendingResources.length,
-                              })}
-                        </span>
-                      </PillButton>
-                    }
-                  />
-                }
-              />
-              {pendingResources.length > 0 && (
-                <TooltipContent side="top" align="start" className="max-w-xs">
-                  <ul className="space-y-0.5 text-xs">
-                    {selectedResourceNames.slice(0, MAX_PILL_NAMES).map((name, i) => (
-                      <li key={i} className="truncate">
-                        {name}
-                      </li>
-                    ))}
-                    {selectedResourceNames.length > MAX_PILL_NAMES && (
-                      <li className="text-muted-foreground">
-                        {tRepo(($) => $.repo_source.more, {
-                          count: selectedResourceNames.length - MAX_PILL_NAMES,
-                        })}
-                      </li>
-                    )}
-                  </ul>
-                </TooltipContent>
-              )}
-            </Tooltip>
-            <PopoverContent side="top" align="start" className="w-auto p-2">
-              <RepoSourcePopover
-                resources={pendingResources}
-                onAdd={addResource}
-                onRemove={removeResource}
-                onClose={() => setRepoPopoverOpen(false)}
-              />
-            </PopoverContent>
-          </Popover>
           </div>
 
-          {!title.trim() ? (
+          {!title.trim() || selectedRepositories.length === 0 ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -482,7 +549,9 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 }
               />
               <TooltipContent side="top">
-                {t(($) => $.create_project.title_required)}
+                {!title.trim()
+                  ? t(($) => $.create_project.title_required)
+                  : t(($) => $.create_project.repository_required)}
               </TooltipContent>
             </Tooltip>
           ) : (

@@ -9,6 +9,7 @@ describe("paths.workspace(slug)", () => {
     expect(ws.issues()).toBe("/acme/issues");
     expect(ws.issueDetail("abc-123")).toBe("/acme/issues/abc-123");
     expect(ws.projects()).toBe("/acme/projects");
+    expect(ws.repositories()).toBe("/acme/repos");
     expect(ws.projectDetail("p1")).toBe("/acme/projects/p1");
     expect(ws.projectWiki("p1")).toBe("/acme/projects/p1/wiki");
     expect(ws.projectWikiPage("p1", "build-notes")).toBe(

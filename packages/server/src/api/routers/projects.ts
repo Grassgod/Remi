@@ -18,6 +18,7 @@ import {
   publishProjectResourceUpdated,
   publishProjectUpdated,
   readJsonStrict,
+  validateImportedProjectResources,
 } from "../helpers.js";
 import {
   cleanString,
@@ -106,6 +107,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     const projectInput = projectCreateCompatibilityInput(c, body);
     const denied = denyCurrentUserWorkspaceAccess(c, store, projectInput.workspaceId ?? "local");
     if (denied) return denied;
+    const repositoryError = validateImportedProjectResources(
+      store,
+      projectInput.workspaceId ?? "local",
+      projectInput.resources,
+    );
+    if (repositoryError) return c.json({ error: repositoryError }, 400);
     try {
       const project = store.createProject(projectInput);
       const response = projectCompatibilityResponse(project);
@@ -122,6 +129,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const denied = denyCurrentUserWorkspaceAccess(c, store, body.workspaceId ?? body.workspace_id ?? "local");
     if (denied) return denied;
+    const repositoryError = validateImportedProjectResources(
+      store,
+      body.workspaceId ?? body.workspace_id ?? "local",
+      body.resources,
+    );
+    if (repositoryError) return c.json({ error: repositoryError }, 400);
     return c.json({ project: store.createProject(body) }, 201);
   });
   app.get("/api/multiremi/projects/:id", (c) => {

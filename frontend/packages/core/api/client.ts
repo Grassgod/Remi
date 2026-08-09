@@ -26,6 +26,7 @@ import { SquadsEndpoints } from "./endpoints/squads";
 import { AutopilotsEndpoints } from "./endpoints/autopilots";
 import { GitHubEndpoints } from "./endpoints/github";
 import { LarkEndpoints } from "./endpoints/lark";
+import { RepositoriesEndpoints } from "./endpoints/repositories";
 
 export { ApiError, PreviewTooLargeError, PreviewUnsupportedError } from "./http";
 export type { ApiClientIdentity, ApiClientOptions } from "./http";
@@ -75,6 +76,7 @@ export const ENDPOINT_FACTORIES: ReadonlyArray<(http: HttpClient) => object> = [
   (http: HttpClient) => new AutopilotsEndpoints(http),
   (http: HttpClient) => new GitHubEndpoints(http),
   (http: HttpClient) => new LarkEndpoints(http),
+  (http: HttpClient) => new RepositoriesEndpoints(http),
 ];
 
 // Declaration merging: the facade's type is the union of every endpoint
@@ -114,7 +116,8 @@ export interface ApiClient extends
     SquadsEndpoints,
     AutopilotsEndpoints,
     GitHubEndpoints,
-    LarkEndpoints {}
+    LarkEndpoints,
+    RepositoriesEndpoints {}
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging -- see the interface above
 export class ApiClient {

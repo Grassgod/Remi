@@ -88,6 +88,7 @@ vi.mock("@multiremi/core/paths", () => ({
     myIssues: () => "/acme/my-issues",
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
+    repositories: () => "/acme/repos",
     knowledge: () => "/acme/knowledge",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",

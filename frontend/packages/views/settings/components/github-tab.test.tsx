@@ -59,6 +59,7 @@ vi.mock("@multiremi/core/hooks", () => ({
 
 vi.mock("@multiremi/core/paths", () => ({
   useCurrentWorkspace: () => workspaceRef.current,
+  useWorkspacePaths: () => ({ repositories: () => "/acme/repos" }),
 }));
 
 vi.mock("@multiremi/core/workspace/queries", () => ({
@@ -271,10 +272,10 @@ describe("GitHubTab", () => {
     expect(screen.getByText(/Connected by Jiayuan/)).toBeTruthy();
   });
 
-  it("repositories shortcut navigates to the repositories tab", async () => {
+  it("repositories shortcut navigates to the Repos page", async () => {
     const user = userEvent.setup();
     render(<GitHubTab />, { wrapper: I18nWrapper });
     await user.click(screen.getByRole("button", { name: /Manage repositories/ }));
-    expect(mockNavPush).toHaveBeenCalledWith("/acme/settings?tab=repositories");
+    expect(mockNavPush).toHaveBeenCalledWith("/acme/repos");
   });
 });

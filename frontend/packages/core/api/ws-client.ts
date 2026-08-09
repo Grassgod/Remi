@@ -97,6 +97,13 @@ export class WSClient {
         );
         return;
       }
+      if (!msg || typeof msg !== "object" || typeof (msg as { type?: unknown }).type !== "string") {
+        this.logger.warn(
+          "ws: received message without a valid type",
+          summarizeUnparseable(event.data),
+        );
+        return;
+      }
       if ((msg as any).type === "auth_ack") {
         this.onAuthenticated();
         return;

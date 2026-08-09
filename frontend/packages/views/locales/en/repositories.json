@@ -1,0 +1,61 @@
+{
+  "page": {
+    "title": "Repos",
+    "import_repository": "Import repository",
+    "search_placeholder": "Search repositories..."
+  },
+  "filters": {
+    "all": "All"
+  },
+  "sources": {
+    "github": "GitHub",
+    "codebase": "Codebase",
+    "git": "Git"
+  },
+  "table": {
+    "repository": "Repository",
+    "source": "Source",
+    "default_branch": "Default branch",
+    "description": "Description",
+    "imported": "Imported"
+  },
+  "empty": {
+    "title": "No repositories yet",
+    "description": "Import a GitHub or Codebase repository before creating a project.",
+    "action": "Import repository",
+    "search": "No repositories match your search."
+  },
+  "import_dialog": {
+    "title": "Import repository",
+    "description": "Add a Git repository to this workspace so projects can use it.",
+    "source_label": "Source",
+    "url_label": "Clone URL",
+    "github_url_placeholder": "https://github.com/owner/repository.git",
+    "codebase_url_placeholder": "git@code.byted.org:team/repository.git",
+    "github_hint": "Use an HTTPS or SSH GitHub clone URL.",
+    "codebase_hint": "Use the clone URL shown in Codebase.",
+    "description_label": "Description",
+    "description_placeholder": "What this repository contains",
+    "default_branch_label": "Default branch",
+    "default_branch_placeholder": "main",
+    "optional": "Optional",
+    "cancel": "Cancel",
+    "submit": "Import repository",
+    "importing": "Importing..."
+  },
+  "remove": {
+    "action": "Remove repository",
+    "action_aria": "Remove {{name}}",
+    "title": "Remove repository?",
+    "description": "Remove {{name}} from this workspace? Repositories used by a project cannot be removed.",
+    "cancel": "Cancel",
+    "confirm": "Remove",
+    "removing": "Removing..."
+  },
+  "toast": {
+    "imported": "Repository imported",
+    "import_failed": "Failed to import repository",
+    "removed": "Repository removed",
+    "remove_failed": "Failed to remove repository"
+  }
+}

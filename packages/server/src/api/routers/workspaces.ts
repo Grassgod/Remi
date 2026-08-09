@@ -2,16 +2,21 @@ import type { Hono } from "hono";
 import {
   denyCurrentUserWorkspaceAccess,
   githubConnectResponse,
+  importWorkspaceRepository,
   isGitHubAppConfigured,
   isJsonApiError,
+  listWorkspaceRepositories,
   loadCurrentWorkspaceMember,
   publishWorkspaceEvent,
   readJson,
   readJsonStrict,
+  removeWorkspaceRepository,
   requireWorkspaceAdmin,
   safeCreateWorkspace,
   safeLeaveWorkspace,
+  WorkspaceRepositoryError,
 } from "../helpers.js";
+import type { ImportWorkspaceRepositoryInput } from "../helpers.js";
 import {
   authenticatedRequestUserId,
   currentRequestUserId,
@@ -66,6 +71,64 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const body = await readJson<Partial<CreateWorkspaceInput>>(c);
     return c.json(store.updateWorkspace(c.req.param("id"), body));
+  });
+  app.get("/api/workspaces/:id/repos", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    if (denied) return denied;
+    try {
+      const repositories = listWorkspaceRepositories(store, workspaceId);
+      return c.json({ repositories, total: repositories.length });
+    } catch (error) {
+      if (error instanceof WorkspaceRepositoryError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    }
+  });
+  app.post("/api/workspaces/:id/repos", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    const body = await readJsonStrict<ImportWorkspaceRepositoryInput>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    try {
+      const result = importWorkspaceRepository(store, workspaceId, body);
+      publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
+        workspace: result.workspace,
+        repository: result.repository,
+      });
+      return c.json(result, 201);
+    } catch (error) {
+      if (error instanceof WorkspaceRepositoryError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    }
+  });
+  app.delete("/api/workspaces/:id/repos/:repositoryId", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId)
+      ?? requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    try {
+      const result = removeWorkspaceRepository(
+        store,
+        workspaceId,
+        c.req.param("repositoryId"),
+      );
+      publishWorkspaceEvent(c, store, "workspace:updated", workspaceId, {
+        workspace: result.workspace,
+        repository_id: result.repository.id,
+      });
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof WorkspaceRepositoryError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      throw error;
+    }
   });
   app.delete("/api/workspaces/:id", (c) => {
     const denied = denyCurrentUserWorkspaceAccess(c, store, c.req.param("id"));

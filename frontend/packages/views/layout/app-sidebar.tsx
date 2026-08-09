@@ -29,6 +29,7 @@ import {
   SquarePen,
   CircleUser,
   FolderKanban,
+  GitFork,
   Library,
   BarChart3,
   X,
@@ -108,6 +109,7 @@ type NavKey =
   | "myIssues"
   | "issues"
   | "projects"
+  | "repositories"
   | "knowledge"
   | "autopilots"
   | "agents"
@@ -123,6 +125,7 @@ type NavLabelKey =
   | "my_issues"
   | "issues"
   | "projects"
+  | "repositories"
   | "knowledge"
   | "autopilots"
   | "agents"
@@ -140,6 +143,7 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
+  { key: "repositories", labelKey: "repositories", icon: GitFork },
   { key: "knowledge", labelKey: "knowledge", icon: Library },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
