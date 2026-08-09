@@ -4,18 +4,11 @@
     "import_repository": "リポジトリをインポート",
     "search_placeholder": "リポジトリを検索..."
   },
-  "filters": {
-    "all": "すべて"
-  },
-  "sources": {
-    "github": "GitHub",
-    "codebase": "Codebase",
-    "git": "Git"
-  },
   "table": {
     "repository": "リポジトリ",
-    "source": "ソース",
     "default_branch": "デフォルトブランチ",
+    "default_branch_aria": "{{name}} のデフォルトブランチ",
+    "default_branch_placeholder": "ブランチを選択",
     "description": "説明",
     "imported": "インポート日"
   },
@@ -30,7 +23,11 @@
     "description": "プロジェクトで利用できるよう、Git リポジトリをワークスペースに追加します。",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "HTTPS または SSH clone URL を入力してください。URL からソースを判別し、clone 時はリモートのデフォルトブランチを使用します。",
+    "url_hint": "HTTPS または SSH clone URL を入力してください。clone 時はリモートのデフォルトブランチを使用します。",
+    "inspect": "ブランチを取得",
+    "inspecting": "取得中...",
+    "default_branch_label": "デフォルトブランチ",
+    "default_branch_placeholder": "先にリポジトリを取得してください",
     "description_label": "説明",
     "description_placeholder": "このリポジトリの内容",
     "optional": "任意",
@@ -50,6 +47,9 @@
   "toast": {
     "imported": "リポジトリをインポートしました",
     "import_failed": "リポジトリをインポートできませんでした",
+    "inspect_failed": "リポジトリのブランチを取得できませんでした",
+    "branch_updated": "デフォルトブランチを更新しました",
+    "branch_update_failed": "デフォルトブランチを更新できませんでした",
     "removed": "リポジトリを削除しました",
     "remove_failed": "リポジトリを削除できませんでした"
   }

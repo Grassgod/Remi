@@ -109,9 +109,6 @@
     "repository_empty": "当前还没有导入代码仓库。",
     "manage_repositories": "管理代码仓库",
     "repository_required": "至少选择一个代码仓库",
-    "source_github": "GitHub",
-    "source_codebase": "Codebase",
-    "source_git": "Git",
     "toast_created": "已创建项目",
     "toast_failed": "创建项目失败"
   },

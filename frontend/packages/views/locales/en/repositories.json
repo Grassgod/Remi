@@ -4,18 +4,11 @@
     "import_repository": "Import repository",
     "search_placeholder": "Search repositories..."
   },
-  "filters": {
-    "all": "All"
-  },
-  "sources": {
-    "github": "GitHub",
-    "codebase": "Codebase",
-    "git": "Git"
-  },
   "table": {
     "repository": "Repository",
-    "source": "Source",
     "default_branch": "Default branch",
+    "default_branch_aria": "Default branch for {{name}}",
+    "default_branch_placeholder": "Select branch",
     "description": "Description",
     "imported": "Imported"
   },
@@ -30,7 +23,11 @@
     "description": "Add a Git repository to this workspace so projects can use it.",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "Paste an HTTPS or SSH clone URL. The source is detected from the URL, and Git uses the remote default branch when cloned.",
+    "url_hint": "Paste an HTTPS or SSH clone URL. Git uses the remote default branch when cloned.",
+    "inspect": "Read branches",
+    "inspecting": "Reading...",
+    "default_branch_label": "Default branch",
+    "default_branch_placeholder": "Read the repository first",
     "description_label": "Description",
     "description_placeholder": "What this repository contains",
     "optional": "Optional",
@@ -50,6 +47,9 @@
   "toast": {
     "imported": "Repository imported",
     "import_failed": "Failed to import repository",
+    "inspect_failed": "Failed to read repository branches",
+    "branch_updated": "Default branch updated",
+    "branch_update_failed": "Failed to update default branch",
     "removed": "Repository removed",
     "remove_failed": "Failed to remove repository"
   }

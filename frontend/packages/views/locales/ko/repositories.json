@@ -4,18 +4,11 @@
     "import_repository": "저장소 가져오기",
     "search_placeholder": "저장소 검색..."
   },
-  "filters": {
-    "all": "전체"
-  },
-  "sources": {
-    "github": "GitHub",
-    "codebase": "Codebase",
-    "git": "Git"
-  },
   "table": {
     "repository": "저장소",
-    "source": "소스",
     "default_branch": "기본 브랜치",
+    "default_branch_aria": "{{name}}의 기본 브랜치",
+    "default_branch_placeholder": "브랜치 선택",
     "description": "설명",
     "imported": "가져온 날짜"
   },
@@ -30,7 +23,11 @@
     "description": "프로젝트에서 사용할 수 있도록 Git 저장소를 워크스페이스에 추가합니다.",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "HTTPS 또는 SSH clone URL을 입력하세요. URL에서 소스를 판별하고 clone할 때 원격 기본 브랜치를 사용합니다.",
+    "url_hint": "HTTPS 또는 SSH clone URL을 입력하세요. clone할 때 원격 기본 브랜치를 사용합니다.",
+    "inspect": "브랜치 읽기",
+    "inspecting": "읽는 중...",
+    "default_branch_label": "기본 브랜치",
+    "default_branch_placeholder": "먼저 저장소를 읽어 주세요",
     "description_label": "설명",
     "description_placeholder": "이 저장소의 내용",
     "optional": "선택 사항",
@@ -50,6 +47,9 @@
   "toast": {
     "imported": "저장소를 가져왔습니다",
     "import_failed": "저장소를 가져오지 못했습니다",
+    "inspect_failed": "저장소 브랜치를 읽지 못했습니다",
+    "branch_updated": "기본 브랜치를 업데이트했습니다",
+    "branch_update_failed": "기본 브랜치를 업데이트하지 못했습니다",
     "removed": "저장소를 제거했습니다",
     "remove_failed": "저장소를 제거하지 못했습니다"
   }

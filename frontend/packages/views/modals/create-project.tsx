@@ -328,12 +328,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
               ) : filteredRepositories.length > 0 ? (
                 filteredRepositories.map((repository) => {
                   const checked = selectedRepositoryIds.includes(repository.id);
-                  const sourceLabel =
-                    repository.source === "github"
-                      ? t(($) => $.create_project.source_github)
-                      : repository.source === "codebase"
-                        ? t(($) => $.create_project.source_codebase)
-                        : t(($) => $.create_project.source_git);
 
                   return (
                     <div
@@ -349,9 +343,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                       <span className="min-w-0 flex-1">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="truncate text-sm font-medium">{repository.name}</span>
-                          <span className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                            {sourceLabel}
-                          </span>
                           {repository.default_branch && (
                             <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
                               <GitBranch className="size-3 shrink-0" />

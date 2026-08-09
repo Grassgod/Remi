@@ -108,9 +108,6 @@
     "repository_empty": "まだリポジトリがインポートされていません。",
     "manage_repositories": "リポジトリを管理",
     "repository_required": "リポジトリを1件以上選択してください",
-    "source_github": "GitHub",
-    "source_codebase": "Codebase",
-    "source_git": "Git",
     "toast_created": "プロジェクトを作成しました",
     "toast_failed": "プロジェクトを作成できませんでした"
   },

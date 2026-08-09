@@ -20,6 +20,22 @@ export interface ImportWorkspaceRepositoryRequest {
   url: string;
   name?: string;
   description?: string;
+  default_branch?: string;
+}
+
+export interface WorkspaceRepositoryMetadata {
+  url: string;
+  name: string;
+  default_branch: string;
+  branches: string[];
+}
+
+export interface RepositoryInspectionResponse {
+  metadata: WorkspaceRepositoryMetadata | null;
+}
+
+export interface UpdateWorkspaceRepositoryRequest {
+  default_branch: string;
 }
 
 export interface RepositoryMutationResponse {

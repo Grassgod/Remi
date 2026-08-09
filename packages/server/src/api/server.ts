@@ -36,6 +36,10 @@ import { registerAttachmentRoutes } from "./routers/attachments.js";
 import { registerChatRoutes } from "./routers/chat.js";
 import { registerTaskRoutes } from "./routers/tasks.js";
 import type { RouterDeps } from "./routers/deps.js";
+import {
+  inspectGitRemoteRepository,
+  type GitRemoteInspector,
+} from "./helpers/repositories.js";
 import type {
   CreateFeedbackInput,
 } from "@multiremi/contracts/types.js";
@@ -105,6 +109,7 @@ export interface MultiremiApiOptions {
   realtimeState?: MultiremiRealtimeState;
   webhookRateLimit?: Partial<WebhookRateLimitConfig> | false;
   webhookIpRateLimit?: Partial<WebhookRateLimitConfig> | false;
+  inspectGitRemoteRepository?: GitRemoteInspector;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -116,7 +121,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
   const app = new Hono();
   // What the route handlers used to close over; domain routers take it explicitly.
-  const deps: RouterDeps = { store, scheduler, authToken, webhookRateLimiter, webhookIpRateLimiter };
+  const deps: RouterDeps = {
+    store,
+    scheduler,
+    authToken,
+    webhookRateLimiter,
+    webhookIpRateLimiter,
+    inspectGitRemoteRepository:
+      options.inspectGitRemoteRepository ?? inspectGitRemoteRepository,
+  };
 
   app.use("*", cors());
   // Server-rendered dashboard removed in D11 — the UI is now the Next.js app in frontend/.

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithI18n } from "../test/i18n";
@@ -30,7 +30,9 @@ const repositories = [
 ];
 
 const mockImport = vi.hoisted(() => vi.fn());
+const mockInspect = vi.hoisted(() => vi.fn());
 const mockRemove = vi.hoisted(() => vi.fn());
+const mockUpdate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -62,8 +64,17 @@ vi.mock("@multiremi/core/repositories", async (importOriginal) => {
       mutateAsync: mockImport,
       isPending: false,
     }),
+    useInspectWorkspaceRepository: () => ({
+      mutateAsync: mockInspect,
+      isPending: false,
+      reset: vi.fn(),
+    }),
     useRemoveWorkspaceRepository: () => ({
       mutateAsync: mockRemove,
+      isPending: false,
+    }),
+    useUpdateWorkspaceRepository: () => ({
+      mutateAsync: mockUpdate,
       isPending: false,
     }),
   };
@@ -89,18 +100,22 @@ vi.mock("sonner", () => ({
 import { RepositoriesPage } from "./repositories-page";
 
 describe("RepositoriesPage", () => {
-  it("searches and filters imported repositories", async () => {
+  beforeEach(() => {
+    mockImport.mockReset();
+    mockInspect.mockReset();
+    mockRemove.mockReset();
+    mockUpdate.mockReset();
+  });
+
+  it("searches imported repositories without source controls", async () => {
     const user = userEvent.setup();
     renderWithI18n(<RepositoriesPage />);
 
     expect(screen.getByText("web")).toBeInTheDocument();
     expect(screen.getByText("agent-platform")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Codebase" }));
-    expect(screen.queryByText("web")).not.toBeInTheDocument();
-    expect(screen.getByText("agent-platform")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.queryByRole("button", { name: "GitHub" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Codebase" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
     await user.type(
       screen.getByRole("textbox", { name: "Search repositories..." }),
       githubUrl,
@@ -112,23 +127,66 @@ describe("RepositoriesPage", () => {
   it("imports a Git repository from its clone URL", async () => {
     const user = userEvent.setup();
     mockImport.mockResolvedValue({ repository: repositories[1] });
+    mockInspect.mockResolvedValue({
+      metadata: {
+        url: codebaseUrl,
+        name: "agent-platform",
+        default_branch: "main",
+        branches: ["main", "release"],
+      },
+    });
     renderWithI18n(<RepositoriesPage />);
 
     await user.click(screen.getByRole("button", { name: "Import repository" }));
     const dialog = screen.getByRole("dialog", { name: "Import repository" });
     expect(within(dialog).queryByRole("button", { name: "GitHub" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Codebase" })).not.toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("Default branch")).not.toBeInTheDocument();
+    const branchSelect = within(dialog).getByRole("combobox", {
+      name: "Default branch",
+    });
+    expect(branchSelect).toBeDisabled();
     await user.type(
       within(dialog).getByLabelText("Clone URL", { selector: "input" }),
       codebaseUrl,
     );
+    await user.click(within(dialog).getByRole("button", { name: "Read branches" }));
+    expect(branchSelect).toBeEnabled();
+    expect(branchSelect).toHaveTextContent("main");
+    await user.click(branchSelect);
+    await user.click(await screen.findByRole("option", { name: "release" }));
     await user.click(within(dialog).getByRole("button", { name: "Import repository" }));
 
     await waitFor(() => expect(mockImport).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole("dialog", { name: "Import repository" })).not.toBeInTheDocument();
     expect(mockImport).toHaveBeenCalledWith({
       url: codebaseUrl,
+      default_branch: "release",
     });
+  });
+
+  it("updates a repository default branch from the table", async () => {
+    const user = userEvent.setup();
+    mockInspect.mockResolvedValue({
+      metadata: {
+        url: codebaseUrl,
+        name: "agent-platform",
+        default_branch: "main",
+        branches: ["develop", "main"],
+      },
+    });
+    mockUpdate.mockResolvedValue({
+      repository: { ...repositories[1], default_branch: "develop" },
+    });
+    renderWithI18n(<RepositoriesPage />);
+
+    await user.click(screen.getByRole("combobox", {
+      name: "Default branch for agent-platform",
+    }));
+    await user.click(await screen.findByRole("option", { name: "develop" }));
+
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({
+      repositoryId: "repo-codebase",
+      input: { default_branch: "develop" },
+    }));
   });
 });

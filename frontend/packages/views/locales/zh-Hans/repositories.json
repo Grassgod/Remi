@@ -4,18 +4,11 @@
     "import_repository": "导入仓库",
     "search_placeholder": "搜索代码仓库..."
   },
-  "filters": {
-    "all": "全部"
-  },
-  "sources": {
-    "github": "GitHub",
-    "codebase": "Codebase",
-    "git": "Git"
-  },
   "table": {
     "repository": "仓库",
-    "source": "来源",
     "default_branch": "默认分支",
+    "default_branch_aria": "{{name}} 的默认分支",
+    "default_branch_placeholder": "选择分支",
     "description": "描述",
     "imported": "导入时间"
   },
@@ -30,7 +23,11 @@
     "description": "将 Git 仓库添加到当前工作区，创建项目时即可选择。",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "填写 HTTPS 或 SSH clone URL。系统根据 URL 识别来源，拉取时自动使用远端默认分支。",
+    "url_hint": "填写 HTTPS 或 SSH clone URL。拉取时自动使用远端默认分支。",
+    "inspect": "读取分支",
+    "inspecting": "读取中...",
+    "default_branch_label": "默认分支",
+    "default_branch_placeholder": "请先读取仓库",
     "description_label": "描述",
     "description_placeholder": "这个仓库包含什么",
     "optional": "可选",
@@ -50,6 +47,9 @@
   "toast": {
     "imported": "仓库已导入",
     "import_failed": "导入仓库失败",
+    "inspect_failed": "读取仓库分支失败",
+    "branch_updated": "默认分支已更新",
+    "branch_update_failed": "更新默认分支失败",
     "removed": "仓库已移除",
     "remove_failed": "移除仓库失败"
   }

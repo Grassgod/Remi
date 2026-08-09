@@ -64,6 +64,9 @@ export type {
   WorkspaceRepositorySource,
   WorkspaceRepositoryListResponse,
   ImportWorkspaceRepositoryRequest,
+  WorkspaceRepositoryMetadata,
+  RepositoryInspectionResponse,
+  UpdateWorkspaceRepositoryRequest,
   RepositoryMutationResponse,
 } from "./repository";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";

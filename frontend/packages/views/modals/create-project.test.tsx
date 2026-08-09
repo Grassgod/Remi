@@ -210,12 +210,13 @@ vi.mock("sonner", () => ({
 import { CreateProjectModal } from "./create-project";
 
 describe("CreateProjectModal", () => {
-  it("lists imported repositories with their full clone URLs", () => {
+  it("lists imported repositories without source badges", () => {
     renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
 
     expect(screen.getByText("api")).toBeInTheDocument();
     expect(screen.getByTitle(longRepoUrl)).toHaveTextContent(longRepoUrl);
-    expect(screen.getByText("Codebase")).toBeInTheDocument();
+    expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codebase")).not.toBeInTheDocument();
   });
 
   it("filters imported repositories by name and URL", async () => {

@@ -7,12 +7,11 @@ import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import {
   repositoryListOptions,
+  useInspectWorkspaceRepository,
   useRemoveWorkspaceRepository,
+  useUpdateWorkspaceRepository,
 } from "@multiremi/core/repositories";
-import type {
-  WorkspaceRepository,
-  WorkspaceRepositorySource,
-} from "@multiremi/core/types";
+import type { WorkspaceRepository } from "@multiremi/core/types";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import {
   AlertDialog,
@@ -27,19 +26,23 @@ import {
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multiremi/ui/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../i18n";
 import { PageHeader } from "../layout/page-header";
-import { GitHubMark } from "../settings/components/github-mark";
 import { ImportRepositoryDialog } from "./import-repository-dialog";
-
-type RepositoryFilter = "all" | WorkspaceRepositorySource;
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 const TABLE_GRID =
-  "grid min-w-[820px] grid-cols-[minmax(220px,1.2fr)_110px_130px_minmax(180px,1fr)_120px_44px]";
+  "grid min-w-[700px] grid-cols-[minmax(240px,1.2fr)_130px_minmax(180px,1fr)_120px_44px]";
 
 function formatImportedDate(value: string | null): string {
   if (!value) return "--";
@@ -50,6 +53,99 @@ function formatImportedDate(value: string | null): string {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+function RepositoryDefaultBranchSelect({
+  workspaceId,
+  repository,
+  canManage,
+}: {
+  workspaceId: string;
+  repository: WorkspaceRepository;
+  canManage: boolean;
+}) {
+  const { t } = useT("repositories");
+  const inspectRepository = useInspectWorkspaceRepository(workspaceId);
+  const updateRepository = useUpdateWorkspaceRepository(workspaceId);
+  const [branches, setBranches] = useState<string[]>(
+    repository.default_branch ? [repository.default_branch] : [],
+  );
+
+  const loadBranches = async () => {
+    if (inspectRepository.isPending) return;
+    try {
+      const response = await inspectRepository.mutateAsync(repository.url);
+      if (!response.metadata) throw new Error(t(($) => $.toast.inspect_failed));
+      setBranches(response.metadata.branches);
+    } catch (error) {
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : t(($) => $.toast.inspect_failed),
+      );
+    }
+  };
+
+  const handleBranchChange = async (defaultBranch: string | null) => {
+    if (!defaultBranch || defaultBranch === repository.default_branch) return;
+    try {
+      await updateRepository.mutateAsync({
+        repositoryId: repository.id,
+        input: { default_branch: defaultBranch },
+      });
+      toast.success(t(($) => $.toast.branch_updated));
+    } catch (error) {
+      toast.error(
+        error instanceof Error && error.message
+          ? error.message
+          : t(($) => $.toast.branch_update_failed),
+      );
+    }
+  };
+
+  if (!canManage) {
+    return (
+      <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {repository.default_branch ? (
+          <>
+            <GitBranch className="size-3 shrink-0" />
+            <span className="truncate">{repository.default_branch}</span>
+          </>
+        ) : (
+          "--"
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <Select
+      value={repository.default_branch}
+      onValueChange={handleBranchChange}
+      onOpenChange={(open) => {
+        if (open) void loadBranches();
+      }}
+      disabled={updateRepository.isPending}
+    >
+      <SelectTrigger
+        size="sm"
+        className="w-full min-w-0 font-mono text-xs"
+        aria-label={t(($) => $.table.default_branch_aria, { name: repository.name })}
+      >
+        <GitBranch className="size-3" />
+        <SelectValue placeholder={t(($) => $.table.default_branch_placeholder)}>
+          {repository.default_branch || null}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent align="start" className="max-h-64">
+        {branches.map((branch) => (
+          <SelectItem key={branch} value={branch} className="font-mono text-xs">
+            {branch}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 }
 
 export function RepositoriesPage() {
@@ -63,7 +159,6 @@ export function RepositoriesPage() {
   const repositories = repositoryResponse?.repositories ?? EMPTY_REPOSITORIES;
   const removeRepository = useRemoveWorkspaceRepository(workspaceId);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<RepositoryFilter>("all");
   const [importOpen, setImportOpen] = useState(false);
   const [repositoryToRemove, setRepositoryToRemove] =
     useState<WorkspaceRepository | null>(null);
@@ -74,13 +169,12 @@ export function RepositoriesPage() {
   const filteredRepositories = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return repositories.filter((repository) => {
-      if (filter !== "all" && repository.source !== filter) return false;
       if (!normalizedSearch) return true;
       return [repository.name, repository.url, repository.description]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(normalizedSearch));
     });
-  }, [filter, repositories, search]);
+  }, [repositories, search]);
 
   const handleRemove = async () => {
     if (!repositoryToRemove || removeRepository.isPending) return;
@@ -96,12 +190,6 @@ export function RepositoriesPage() {
       );
     }
   };
-
-  const filters: Array<{ value: RepositoryFilter; label: string }> = [
-    { value: "all", label: t(($) => $.filters.all) },
-    { value: "github", label: t(($) => $.sources.github) },
-    { value: "codebase", label: t(($) => $.sources.codebase) },
-  ];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -123,7 +211,7 @@ export function RepositoriesPage() {
         )}
       </PageHeader>
 
-      <div className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
+      <div className="flex h-12 shrink-0 items-center border-b px-4">
         <div className="relative min-w-0 flex-1 sm:max-w-72">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -134,34 +222,14 @@ export function RepositoriesPage() {
             className="pl-8"
           />
         </div>
-
-        <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-muted p-0.5">
-          {filters.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              aria-pressed={filter === item.value}
-              onClick={() => setFilter(item.value)}
-              className={cn(
-                "h-7 rounded px-2.5 text-xs font-medium transition-colors",
-                filter === item.value
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
         {isLoading ? (
-          <div className="min-w-[820px]">
+          <div className="min-w-[700px]">
             {Array.from({ length: 7 }).map((_, index) => (
               <div key={index} className={cn(TABLE_GRID, "h-12 items-center gap-3 border-b px-5")}>
                 <Skeleton className="h-4 w-44" />
-                <Skeleton className="h-5 w-16" />
                 <Skeleton className="h-4 w-20" />
                 <Skeleton className="h-4 w-40" />
                 <Skeleton className="h-4 w-20" />
@@ -187,10 +255,9 @@ export function RepositoriesPage() {
             <p className="text-sm">{t(($) => $.empty.search)}</p>
           </div>
         ) : (
-          <div className="min-w-[820px]">
+          <div className="min-w-[700px]">
             <div className={cn(TABLE_GRID, "sticky top-0 z-10 h-9 items-center gap-3 border-b bg-background px-5 text-xs font-medium text-muted-foreground")}>
               <span>{t(($) => $.table.repository)}</span>
-              <span>{t(($) => $.table.source)}</span>
               <span>{t(($) => $.table.default_branch)}</span>
               <span>{t(($) => $.table.description)}</span>
               <span>{t(($) => $.table.imported)}</span>
@@ -208,30 +275,11 @@ export function RepositoriesPage() {
                     {repository.url}
                   </div>
                 </div>
-                <div>
-                  <span className="inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-xs text-muted-foreground">
-                    {repository.source === "github" ? (
-                      <GitHubMark className="size-3" />
-                    ) : (
-                      <GitBranch className="size-3" />
-                    )}
-                    {repository.source === "github"
-                      ? t(($) => $.sources.github)
-                      : repository.source === "codebase"
-                        ? t(($) => $.sources.codebase)
-                        : t(($) => $.sources.git)}
-                  </span>
-                </div>
-                <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                  {repository.default_branch ? (
-                    <>
-                      <GitBranch className="size-3 shrink-0" />
-                      <span className="truncate">{repository.default_branch}</span>
-                    </>
-                  ) : (
-                    "--"
-                  )}
-                </div>
+                <RepositoryDefaultBranchSelect
+                  workspaceId={workspaceId}
+                  repository={repository}
+                  canManage={canManage}
+                />
                 <div className="truncate text-xs text-muted-foreground" title={repository.description ?? undefined}>
                   {repository.description || "--"}
                 </div>

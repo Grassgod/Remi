@@ -23,7 +23,23 @@ export interface ImportWorkspaceRepositoryInput {
   url?: string;
   name?: string;
   description?: string | null;
+  default_branch?: string | null;
 }
+
+export interface InspectWorkspaceRepositoryInput {
+  url?: string;
+}
+
+export interface UpdateWorkspaceRepositoryInput {
+  default_branch?: string | null;
+}
+
+export interface GitRemoteMetadata {
+  default_branch: string;
+  branches: string[];
+}
+
+export type GitRemoteInspector = (url: string) => Promise<GitRemoteMetadata>;
 
 export class WorkspaceRepositoryError extends Error {
   constructor(
@@ -45,11 +61,12 @@ export function listWorkspaceRepositories(
   return normalizeWorkspaceRepositories(workspace.repos);
 }
 
-export function importWorkspaceRepository(
+export async function importWorkspaceRepository(
   store: MultiremiStore,
   workspaceId: string,
   input: ImportWorkspaceRepositoryInput,
-): { repository: WorkspaceRepositoryData; workspace: MultiremiWorkspace } {
+  inspectRemote: GitRemoteInspector,
+): Promise<{ repository: WorkspaceRepositoryData; workspace: MultiremiWorkspace }> {
   const workspace = workspaceId === "local"
     ? store.ensureLocalWorkspace()
     : store.getWorkspace(workspaceId);
@@ -63,6 +80,12 @@ export function importWorkspaceRepository(
   if (repositories.some((repo) => canonicalGitRemoteKey(repo.url) === key)) {
     throw new WorkspaceRepositoryError("repository is already imported", 409);
   }
+  const metadata = await inspectRemote(url);
+  const defaultBranch = cleanOptionalString(input.default_branch)
+    ?? metadata.default_branch;
+  if (!metadata.branches.includes(defaultBranch)) {
+    throw new WorkspaceRepositoryError("default branch does not exist in repository", 400);
+  }
 
   const now = nowIso();
   const repository: WorkspaceRepositoryData = {
@@ -71,7 +94,7 @@ export function importWorkspaceRepository(
     url,
     source,
     description: cleanOptionalString(input.description),
-    default_branch: null,
+    default_branch: defaultBranch,
     imported_at: now,
     updated_at: now,
   };
@@ -79,6 +102,144 @@ export function importWorkspaceRepository(
     repos: [...repositories, repository],
   });
   return { repository, workspace: updated };
+}
+
+export async function inspectWorkspaceRepository(
+  input: InspectWorkspaceRepositoryInput,
+  inspectRemote: GitRemoteInspector,
+): Promise<{ metadata: GitRemoteMetadata & { name: string; url: string } }> {
+  const url = normalizeGitRemoteUrl(input.url);
+  if (!url) throw new WorkspaceRepositoryError("invalid git repository URL", 400);
+  const metadata = await inspectRemote(url);
+  return {
+    metadata: {
+      ...metadata,
+      name: repositoryNameFromUrl(url),
+      url,
+    },
+  };
+}
+
+export async function backfillWorkspaceRepositoryDefaultBranches(
+  store: MultiremiStore,
+  workspaceId: string,
+  inspectRemote: GitRemoteInspector,
+): Promise<WorkspaceRepositoryData[]> {
+  const repositories = listWorkspaceRepositories(store, workspaceId);
+  const missing = repositories.filter((repository) => !repository.default_branch);
+  if (missing.length === 0) return repositories;
+
+  const resolved = await Promise.all(missing.map(async (repository) => {
+    try {
+      const metadata = await inspectRemote(repository.url);
+      return [repository.id, metadata.default_branch] as const;
+    } catch {
+      return [repository.id, null] as const;
+    }
+  }));
+  const branches = new Map(resolved);
+  if (![...branches.values()].some(Boolean)) return repositories;
+
+  const now = nowIso();
+  const updatedRepositories = repositories.map((repository) => {
+    const defaultBranch = branches.get(repository.id);
+    return defaultBranch
+      ? { ...repository, default_branch: defaultBranch, updated_at: now }
+      : repository;
+  });
+  store.updateWorkspace(workspaceId, { repos: updatedRepositories });
+  return updatedRepositories;
+}
+
+export async function updateWorkspaceRepository(
+  store: MultiremiStore,
+  workspaceId: string,
+  repositoryId: string,
+  input: UpdateWorkspaceRepositoryInput,
+  inspectRemote: GitRemoteInspector,
+): Promise<{ repository: WorkspaceRepositoryData; workspace: MultiremiWorkspace }> {
+  const repositories = listWorkspaceRepositories(store, workspaceId);
+  const repository = repositories.find((candidate) => candidate.id === repositoryId);
+  if (!repository) throw new WorkspaceRepositoryError("repository not found", 404);
+  const defaultBranch = cleanOptionalString(input.default_branch);
+  if (!defaultBranch) throw new WorkspaceRepositoryError("default branch is required", 400);
+
+  const metadata = await inspectRemote(repository.url);
+  if (!metadata.branches.includes(defaultBranch)) {
+    throw new WorkspaceRepositoryError("default branch does not exist in repository", 400);
+  }
+
+  const updatedRepository = {
+    ...repository,
+    default_branch: defaultBranch,
+    updated_at: nowIso(),
+  };
+  const updated = store.updateWorkspace(workspaceId, {
+    repos: repositories.map((candidate) =>
+      candidate.id === repositoryId ? updatedRepository : candidate
+    ),
+  });
+  return { repository: updatedRepository, workspace: updated };
+}
+
+export async function inspectGitRemoteRepository(
+  url: string,
+): Promise<GitRemoteMetadata> {
+  const env = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND
+      ?? "ssh -o BatchMode=yes -o ConnectTimeout=10",
+  };
+  const proc = Bun.spawn(
+    ["git", "ls-remote", "--symref", url, "HEAD", "refs/heads/*"],
+    { env, stdout: "pipe", stderr: "pipe" },
+  );
+  const stdoutPromise = new Response(proc.stdout).text();
+  const stderrPromise = new Response(proc.stderr).text();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, 15_000);
+
+  try {
+    const exitCode = await proc.exited;
+    const [stdout] = await Promise.all([stdoutPromise, stderrPromise]);
+    if (timedOut) {
+      throw new WorkspaceRepositoryError("repository inspection timed out", 400);
+    }
+    if (exitCode !== 0) {
+      throw new WorkspaceRepositoryError(
+        "unable to read repository metadata; check the clone URL and server credentials",
+        400,
+      );
+    }
+    return parseGitRemoteMetadata(stdout);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function parseGitRemoteMetadata(output: string): GitRemoteMetadata {
+  const branches = new Set<string>();
+  let defaultBranch = "";
+  for (const line of output.split(/\r?\n/)) {
+    const symbolicHead = line.match(/^ref:\s+refs\/heads\/(.+)\tHEAD$/);
+    if (symbolicHead?.[1]) {
+      defaultBranch = symbolicHead[1];
+      branches.add(defaultBranch);
+      continue;
+    }
+    const branch = line.match(/^[0-9a-f]+\trefs\/heads\/(.+)$/i)?.[1];
+    if (branch) branches.add(branch);
+  }
+  const sortedBranches = [...branches].sort((left, right) => left.localeCompare(right));
+  if (!defaultBranch && sortedBranches.length === 1) defaultBranch = sortedBranches[0]!;
+  if (!defaultBranch) {
+    throw new WorkspaceRepositoryError("repository does not advertise a default branch", 400);
+  }
+  return { default_branch: defaultBranch, branches: sortedBranches };
 }
 
 export function removeWorkspaceRepository(
