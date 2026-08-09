@@ -23,7 +23,7 @@
     "description": "プロジェクトで利用できるよう、Git リポジトリをワークスペースに追加します。",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "HTTPS または SSH clone URL を入力してください。clone 時はリモートのデフォルトブランチを使用します。",
+    "url_hint": "HTTPS または SSH の clone URL を入力してください。読み込み後、リモートのデフォルトブランチが自動選択されます。",
     "inspect": "ブランチを取得",
     "inspecting": "取得中...",
     "default_branch_label": "デフォルトブランチ",
@@ -34,6 +34,13 @@
     "cancel": "キャンセル",
     "submit": "インポート",
     "importing": "インポート中..."
+  },
+  "branch_picker": {
+    "search_placeholder": "ブランチを検索...",
+    "empty": "一致するブランチがありません。",
+    "loading": "ブランチを読み込み中...",
+    "remote_default": "リモート既定",
+    "other_branches": "その他のブランチ"
   },
   "remove": {
     "action": "リポジトリを削除",

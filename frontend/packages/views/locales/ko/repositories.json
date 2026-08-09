@@ -23,7 +23,7 @@
     "description": "프로젝트에서 사용할 수 있도록 Git 저장소를 워크스페이스에 추가합니다.",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "HTTPS 또는 SSH clone URL을 입력하세요. clone할 때 원격 기본 브랜치를 사용합니다.",
+    "url_hint": "HTTPS 또는 SSH clone URL을 입력하세요. 브랜치를 불러오면 원격 기본 브랜치가 자동 선택됩니다.",
     "inspect": "브랜치 읽기",
     "inspecting": "읽는 중...",
     "default_branch_label": "기본 브랜치",
@@ -34,6 +34,13 @@
     "cancel": "취소",
     "submit": "가져오기",
     "importing": "가져오는 중..."
+  },
+  "branch_picker": {
+    "search_placeholder": "브랜치 검색...",
+    "empty": "일치하는 브랜치가 없습니다.",
+    "loading": "브랜치를 불러오는 중...",
+    "remote_default": "원격 기본값",
+    "other_branches": "기타 브랜치"
   },
   "remove": {
     "action": "저장소 제거",

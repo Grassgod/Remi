@@ -26,18 +26,12 @@ import {
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@multiremi/ui/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@multiremi/ui/components/ui/tooltip";
 import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../i18n";
 import { PageHeader } from "../layout/page-header";
+import { BranchPicker } from "./branch-picker";
 import { ImportRepositoryDialog } from "./import-repository-dialog";
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
@@ -70,6 +64,7 @@ function RepositoryDefaultBranchSelect({
   const [branches, setBranches] = useState<string[]>(
     repository.default_branch ? [repository.default_branch] : [],
   );
+  const [remoteDefaultBranch, setRemoteDefaultBranch] = useState<string | null>(null);
 
   const loadBranches = async () => {
     if (inspectRepository.isPending) return;
@@ -77,6 +72,7 @@ function RepositoryDefaultBranchSelect({
       const response = await inspectRepository.mutateAsync(repository.url);
       if (!response.metadata) throw new Error(t(($) => $.toast.inspect_failed));
       setBranches(response.metadata.branches);
+      setRemoteDefaultBranch(response.metadata.default_branch);
     } catch (error) {
       toast.error(
         error instanceof Error && error.message
@@ -119,32 +115,21 @@ function RepositoryDefaultBranchSelect({
   }
 
   return (
-    <Select
-      value={repository.default_branch}
+    <BranchPicker
+      value={repository.default_branch ?? ""}
+      branches={branches}
+      remoteDefaultBranch={remoteDefaultBranch}
       onValueChange={handleBranchChange}
       onOpenChange={(open) => {
         if (open) void loadBranches();
       }}
       disabled={updateRepository.isPending}
-    >
-      <SelectTrigger
-        size="sm"
-        className="w-full min-w-0 font-mono text-xs"
-        aria-label={t(($) => $.table.default_branch_aria, { name: repository.name })}
-      >
-        <GitBranch className="size-3" />
-        <SelectValue placeholder={t(($) => $.table.default_branch_placeholder)}>
-          {repository.default_branch || null}
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent align="start" className="max-h-64">
-        {branches.map((branch) => (
-          <SelectItem key={branch} value={branch} className="font-mono text-xs">
-            {branch}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      loading={inspectRepository.isPending || updateRepository.isPending}
+      compact
+      ariaLabel={t(($) => $.table.default_branch_aria, { name: repository.name })}
+      placeholder={t(($) => $.table.default_branch_placeholder)}
+      triggerClassName="w-full"
+    />
   );
 }
 

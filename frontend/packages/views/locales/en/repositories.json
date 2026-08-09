@@ -23,7 +23,7 @@
     "description": "Add a Git repository to this workspace so projects can use it.",
     "url_label": "Clone URL",
     "url_placeholder": "https://github.com/owner/repository.git",
-    "url_hint": "Paste an HTTPS or SSH clone URL. Git uses the remote default branch when cloned.",
+    "url_hint": "Paste an HTTPS or SSH clone URL. The remote default is selected after branches load.",
     "inspect": "Read branches",
     "inspecting": "Reading...",
     "default_branch_label": "Default branch",
@@ -34,6 +34,13 @@
     "cancel": "Cancel",
     "submit": "Import repository",
     "importing": "Importing..."
+  },
+  "branch_picker": {
+    "search_placeholder": "Search branches...",
+    "empty": "No matching branches.",
+    "loading": "Loading branches...",
+    "remote_default": "Remote default",
+    "other_branches": "Other branches"
   },
   "remove": {
     "action": "Remove repository",

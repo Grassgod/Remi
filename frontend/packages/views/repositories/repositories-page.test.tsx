@@ -101,6 +101,7 @@ import { RepositoriesPage } from "./repositories-page";
 
 describe("RepositoriesPage", () => {
   beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
     mockImport.mockReset();
     mockInspect.mockReset();
     mockRemove.mockReset();
@@ -153,6 +154,10 @@ describe("RepositoriesPage", () => {
     expect(branchSelect).toBeEnabled();
     expect(branchSelect).toHaveTextContent("main");
     await user.click(branchSelect);
+    expect(screen.getByPlaceholderText("Search branches...")).toBeInTheDocument();
+    expect(screen.getAllByText("Remote default").length).toBeGreaterThan(0);
+    await user.type(screen.getByPlaceholderText("Search branches..."), "rel");
+    expect(screen.queryByRole("option", { name: /main/i })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("option", { name: "release" }));
     await user.click(within(dialog).getByRole("button", { name: "Import repository" }));
 
@@ -182,6 +187,10 @@ describe("RepositoriesPage", () => {
     await user.click(screen.getByRole("combobox", {
       name: "Default branch for agent-platform",
     }));
+    const picker = screen.getByPlaceholderText("Search branches...").closest(
+      '[data-slot="popover-content"]',
+    );
+    expect(picker).toHaveClass("w-96");
     await user.click(await screen.findByRole("option", { name: "develop" }));
 
     await waitFor(() => expect(mockUpdate).toHaveBeenCalledWith({
