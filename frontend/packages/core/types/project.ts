@@ -12,6 +12,7 @@ export interface Project {
   priority: ProjectPriority;
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   issue_count: number;
@@ -25,8 +26,8 @@ export interface CreateProjectRequest {
   icon?: string;
   status?: ProjectStatus;
   priority?: ProjectPriority;
-  lead_type?: "member" | "agent";
-  lead_id?: string;
+  lead_type?: "member" | "agent" | null;
+  lead_id?: string | null;
   // Resources to attach in the same transaction as the project. Server returns
   // 4xx (and rolls back) if any one is invalid or duplicate.
   resources?: CreateProjectResourceRequest[];

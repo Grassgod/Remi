@@ -21,12 +21,12 @@ const state = vi.hoisted(() => ({
   issuesError: false,
   issuesErrorValue: null as unknown,
   members: [] as unknown[],
-  agents: [] as unknown[],
 }));
 
 const refetchIssues = vi.hoisted(() => vi.fn());
 const updateProject = vi.hoisted(() => vi.fn());
-const deleteProject = vi.hoisted(() => vi.fn());
+const archiveProject = vi.hoisted(() => vi.fn());
+const restoreProject = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options?: { queryKey?: readonly unknown[] }) => {
@@ -44,8 +44,6 @@ vi.mock("@tanstack/react-query", () => ({
         };
       case "members":
         return { data: state.members };
-      case "agents":
-        return { data: state.agents };
       default:
         return { data: undefined };
     }
@@ -58,7 +56,8 @@ vi.mock("@multiremi/core/projects/queries", () => ({
 
 vi.mock("@multiremi/core/projects/mutations", () => ({
   useUpdateProject: () => ({ mutate: updateProject }),
-  useDeleteProject: () => ({ mutate: deleteProject }),
+  useArchiveProject: () => ({ mutate: archiveProject, isPending: false }),
+  useRestoreProject: () => ({ mutate: restoreProject, isPending: false }),
 }));
 
 vi.mock("@multiremi/core/pins", () => ({
@@ -80,7 +79,6 @@ vi.mock("@multiremi/core/issues/mutations", () => ({
 
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
-  agentListOptions: () => ({ queryKey: ["agents"] }),
 }));
 
 vi.mock("@multiremi/core/agents", () => ({
@@ -155,6 +153,7 @@ vi.mock("@multiremi/ui/components/common/emoji-picker", () => ({
 vi.mock("../../editor", () => ({
   TitleEditor: ({ defaultValue }: { defaultValue: string }) => <div>{defaultValue}</div>,
   ContentEditor: () => <div data-testid="content-editor" />,
+  ReadonlyContent: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
 vi.mock("../../navigation", () => ({
@@ -172,7 +171,9 @@ vi.mock("../../layout/breadcrumb-header", () => ({
 }));
 
 vi.mock("./project-resources-section", () => ({
-  ProjectResourcesSection: () => <div data-testid="resources" />,
+  ProjectResourcesSection: ({ editable = true }: { editable?: boolean }) => (
+    <div data-testid="resources" data-editable={String(editable)} />
+  ),
 }));
 
 vi.mock("./wiki/project-content-tabs", () => ({
@@ -231,6 +232,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     priority: "medium",
     lead_type: null,
     lead_id: null,
+    archived_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     issue_count: 4,
@@ -259,7 +261,6 @@ describe("ProjectDetail issues surface", () => {
     state.issuesError = false;
     state.issuesErrorValue = null;
     state.members = [];
-    state.agents = [];
     refetchIssues.mockClear();
     updateProject.mockClear();
   });
@@ -342,7 +343,6 @@ describe("ProjectDetail lead picker", () => {
     state.issuesError = false;
     state.issuesErrorValue = null;
     state.members = [{ user_id: "user-2", name: "张三" }];
-    state.agents = [{ id: "agent-1", name: "Alpha", archived_at: null }];
     updateProject.mockClear();
   });
 
@@ -358,12 +358,12 @@ describe("ProjectDetail lead picker", () => {
       screen.getByRole("textbox", { name: "Filter options" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Members")).toBeInTheDocument();
-    expect(screen.getByText("Agents")).toBeInTheDocument();
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument();
   });
 
   it("assigns a member as lead and closes", () => {
     renderDetail();
-    fireEvent.click(screen.getByText("No lead"));
+    fireEvent.click(screen.getByText("No owner"));
 
     fireEvent.click(screen.getByText("张三"));
 
@@ -376,7 +376,7 @@ describe("ProjectDetail lead picker", () => {
 
   it("filters by pinyin and falls back to the shared empty state", () => {
     renderDetail();
-    fireEvent.click(screen.getByText("No lead"));
+    fireEvent.click(screen.getByText("No owner"));
 
     const search = screen.getByRole("textbox", { name: "Filter options" });
     fireEvent.change(search, { target: { value: "zhang" } });
@@ -391,7 +391,7 @@ describe("ProjectDetail lead picker", () => {
 
     renderDetail();
     fireEvent.click(screen.getByText("member:user-2"));
-    fireEvent.click(screen.getByText("No lead"));
+    fireEvent.click(screen.getByText("No owner"));
 
     expect(updateProject).toHaveBeenCalledWith({
       id: "proj-1",
@@ -409,7 +409,6 @@ describe("ProjectDetail semantic tokens", () => {
     state.issuesLoading = false;
     state.issuesError = false;
     state.members = [];
-    state.agents = [];
   });
 
   it("paints the progress bar with the success token, not a palette literal", () => {
@@ -417,5 +416,32 @@ describe("ProjectDetail semantic tokens", () => {
 
     expect(document.querySelector(".bg-success")).not.toBeNull();
     expect(document.querySelector(".bg-emerald-500")).toBeNull();
+  });
+});
+
+describe("ProjectDetail archived state", () => {
+  beforeEach(() => {
+    state.project = makeProject({
+      archived_at: "2026-08-10T00:00:00Z",
+      description: "Historical context",
+    });
+    state.projectLoading = false;
+    state.issues = [];
+    state.issuesLoading = false;
+    state.issuesError = false;
+    state.members = [];
+    restoreProject.mockClear();
+  });
+
+  it("renders project metadata read-only and offers restore", () => {
+    renderDetail();
+
+    expect(screen.getByText("Archived")).toBeInTheDocument();
+    expect(screen.getByText("Historical context")).toBeInTheDocument();
+    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
+    expect(screen.getByTestId("resources")).toHaveAttribute("data-editable", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore project" }));
+    expect(restoreProject).toHaveBeenCalledWith("proj-1", expect.any(Object));
   });
 });

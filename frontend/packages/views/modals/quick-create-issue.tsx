@@ -91,8 +91,12 @@ export function AgentCreatePanel({
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
   // loading" from "loaded as empty". Reading length alone treats both as
   // empty and incorrectly clears a valid persisted preference on every open.
-  const { data: projects = [], isSuccess: projectsLoaded } = useQuery(
+  const { data: allProjects = [], isSuccess: projectsLoaded } = useQuery(
     projectListOptions(wsId),
+  );
+  const projects = useMemo(
+    () => allProjects.filter((project) => !project.archived_at),
+    [allProjects],
   );
 
   const memberRole = useMemo(

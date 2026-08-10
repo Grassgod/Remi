@@ -451,6 +451,7 @@ function normalizeDaemonClaimProject(raw: any): MultiremiTaskWithAgent["project"
     issueCount: numberOrDefault(raw.issue_count ?? raw.issueCount, 0),
     doneCount: numberOrDefault(raw.done_count ?? raw.doneCount, 0),
     resourceCount: numberOrDefault(raw.resource_count ?? raw.resourceCount, 0),
+    archivedAt: stringOrNull(raw.archived_at ?? raw.archivedAt),
     createdAt: stringOrNull(raw.created_at ?? raw.createdAt) ?? "",
     updatedAt: stringOrNull(raw.updated_at ?? raw.updatedAt) ?? "",
   };

@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ChevronRight,
   FolderGit,
   FolderKanban,
   FolderOpen,
@@ -69,11 +68,16 @@ function isProjectRef(r: ProjectResource): r is ProjectResource & {
   return r.resource_type === "project_ref";
 }
 
-export function ProjectResourcesSection({ projectId }: { projectId: string }) {
+export function ProjectResourcesSection({
+  projectId,
+  editable = true,
+}: {
+  projectId: string;
+  editable?: boolean;
+}) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const daemonStatus = useLocalDaemonStatus();
-  const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
 
   const { data: resources = [] } = useQuery(
@@ -151,69 +155,75 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   };
 
   return (
-    <div>
-      <button
-        type="button"
-        className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${open ? "" : "text-muted-foreground hover:text-foreground"}`}
-        onClick={() => setOpen(!open)}
-      >
-        {t(($) => $.resources.section_header)}
-        <ChevronRight
-          className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
-        />
-      </button>
-      {open && (
-        <div className="pl-2 space-y-1.5">
-          {resources.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              {t(($) => $.resources.empty)}
-            </p>
-          )}
-          {resources.length > 0 && (
-            <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
-              {resources.map((resource) => (
-                <ResourceRow
-                  key={resource.id}
-                  resource={resource}
-                  localDaemonId={localDaemonId}
-                  canEdit={desktopMode}
-                  onRemove={() => handleRemove(resource)}
-                  onRenameLocalDirectory={handleRenameLocalDirectory}
-                />
-              ))}
-            </div>
-          )}
-          <Popover open={addOpen} onOpenChange={setAddOpen}>
-            <PopoverTrigger
+    <section>
+      <div className="mb-1 flex min-h-7 items-center justify-between gap-2">
+        <h3 className="text-xs font-medium">
+          {t(($) => $.resources.section_header)}
+          {resources.length > 0 && <span className="ml-1.5 font-normal tabular-nums text-muted-foreground">{resources.length}</span>}
+        </h3>
+        {editable && <Popover open={addOpen} onOpenChange={setAddOpen}>
+          <Tooltip>
+            <TooltipTrigger
               render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <Plus className="size-3" />
-                  {t(($) => $.resources.add_button)}
-                </Button>
+                <PopoverTrigger
+                  render={
+                    <Button variant="ghost" size="icon-sm" className="text-muted-foreground">
+                      <Plus />
+                    </Button>
+                  }
+                />
               }
             />
-            <PopoverContent align="start" className="w-auto p-2">
-              <RepoSourcePopover
-                resources={pendingResources}
-                onAdd={handleAdd}
-                currentProjectId={projectId}
-                onClose={() => setAddOpen(false)}
-              />
-            </PopoverContent>
-          </Popover>
+            <TooltipContent side="top">{t(($) => $.resources.add_button)}</TooltipContent>
+          </Tooltip>
+          <PopoverContent align="end" className="w-auto p-2">
+            <RepoSourcePopover
+              resources={pendingResources}
+              onAdd={handleAdd}
+              currentProjectId={projectId}
+              onClose={() => setAddOpen(false)}
+            />
+          </PopoverContent>
+        </Popover>}
+      </div>
+      {resources.length === 0 ? (
+        <p className="text-xs text-muted-foreground">{t(($) => $.resources.empty)}</p>
+      ) : (
+        <div className="max-h-64 overflow-y-auto pr-1">
+          {resources.map((resource) => (
+            <ResourceRow
+              key={resource.id}
+              resource={resource}
+              localDaemonId={localDaemonId}
+              editable={editable}
+              canEdit={desktopMode && editable}
+              onRemove={() => handleRemove(resource)}
+              onRenameLocalDirectory={handleRenameLocalDirectory}
+            />
+          ))}
         </div>
       )}
-    </div>
+    </section>
   );
+}
+
+export function formatGitResourceName(url: string): string {
+  const trimmed = url.trim();
+  let path = "";
+  try {
+    path = new URL(trimmed).pathname;
+  } catch {
+    const colon = trimmed.indexOf(":");
+    path = colon >= 0 ? trimmed.slice(colon + 1) : trimmed;
+  }
+  const normalized = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "");
+  return normalized || trimmed;
 }
 
 interface ResourceRowProps {
   resource: ProjectResource;
   localDaemonId: string | null;
+  editable: boolean;
   canEdit: boolean;
   onRemove: () => void;
   onRenameLocalDirectory: (
@@ -225,6 +235,7 @@ interface ResourceRowProps {
 function ResourceRow({
   resource,
   localDaemonId,
+  editable,
   canEdit,
   onRemove,
   onRenameLocalDirectory,
@@ -233,7 +244,7 @@ function ResourceRow({
   if (isGithubRef(resource)) {
     const ref = resource.resource_ref;
     return (
-      <div className="flex items-center gap-2 text-xs group">
+      <div className="group flex min-h-9 items-center gap-2 border-b text-xs last:border-b-0">
         <FolderGit className="size-3.5 text-muted-foreground shrink-0" />
         <Tooltip>
           <TooltipTrigger
@@ -244,20 +255,20 @@ function ResourceRow({
                 rel="noopener noreferrer"
                 className="truncate flex-1 hover:underline"
               >
-                {resource.label || ref.url}
+                {resource.label || formatGitResourceName(ref.url)}
               </a>
             }
           />
           <TooltipContent side="top">{ref.url}</TooltipContent>
         </Tooltip>
-        <button
+        {editable && <button
           type="button"
           onClick={onRemove}
           className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
           title={t(($) => $.resources.remove_tooltip)}
         >
           <Trash2 className="size-3 text-muted-foreground" />
-        </button>
+        </button>}
       </div>
     );
   }
@@ -268,6 +279,7 @@ function ResourceRow({
         resource={resource}
         localDaemonId={localDaemonId}
         canEdit={canEdit}
+        canRemove={editable}
         onRemove={onRemove}
         onRename={onRenameLocalDirectory}
       />
@@ -275,7 +287,7 @@ function ResourceRow({
   }
 
   if (isProjectRef(resource)) {
-    return <ProjectRefRow resource={resource} onRemove={onRemove} />;
+    return <ProjectRefRow resource={resource} editable={editable} onRemove={onRemove} />;
   }
 
   return (
@@ -283,23 +295,25 @@ function ResourceRow({
       <span className="truncate flex-1">
         {resource.label || resource.resource_type}
       </span>
-      <button
+      {editable && <button
         type="button"
         onClick={onRemove}
         className="rounded-sm p-0.5 hover:bg-accent"
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3" />
-      </button>
+      </button>}
     </div>
   );
 }
 
 function ProjectRefRow({
   resource,
+  editable,
   onRemove,
 }: {
   resource: ProjectResource & { resource_ref: ProjectRefResourceRef };
+  editable: boolean;
   onRemove: () => void;
 }) {
   const { t } = useT("projects");
@@ -309,7 +323,7 @@ function ProjectRefRow({
   const target = projects.find((p) => p.id === resource.resource_ref.project_id);
 
   return (
-    <div className="flex items-center gap-2 text-xs group">
+    <div className="group flex min-h-9 items-center gap-2 border-b text-xs last:border-b-0">
       {target ? (
         <>
           <ProjectIcon project={target} size="sm" />
@@ -340,14 +354,14 @@ function ProjectRefRow({
           />
         </>
       )}
-      <button
+      {editable && <button
         type="button"
         onClick={onRemove}
         className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3 text-muted-foreground" />
-      </button>
+      </button>}
     </div>
   );
 }
@@ -356,6 +370,7 @@ interface LocalDirectoryRowProps {
   resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef };
   localDaemonId: string | null;
   canEdit: boolean;
+  canRemove: boolean;
   onRemove: () => void;
   onRename: (
     resource: ProjectResource & { resource_ref: LocalDirectoryResourceRef },
@@ -367,6 +382,7 @@ function LocalDirectoryRow({
   resource,
   localDaemonId,
   canEdit,
+  canRemove,
   onRemove,
   onRename,
 }: LocalDirectoryRowProps) {
@@ -401,7 +417,7 @@ function LocalDirectoryRow({
 
   return (
     <div
-      className={`flex items-center gap-2 text-xs group ${
+      className={`group flex min-h-9 items-center gap-2 border-b text-xs last:border-b-0 ${
         mismatch ? "opacity-60" : ""
       }`}
     >
@@ -455,14 +471,14 @@ function LocalDirectoryRow({
           <Pencil className="size-3 text-muted-foreground" />
         </button>
       )}
-      <button
+      {canRemove && <button
         type="button"
         onClick={onRemove}
         className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3 text-muted-foreground" />
-      </button>
+      </button>}
     </div>
   );
 }

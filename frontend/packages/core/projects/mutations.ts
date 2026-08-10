@@ -52,27 +52,78 @@ export function useUpdateProject() {
   });
 }
 
-export function useDeleteProject() {
+export function useArchiveProject() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: (id: string) => api.deleteProject(id),
+    mutationFn: (id: string) => api.archiveProject(id),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: projectKeys.list(wsId) });
       const prevList = qc.getQueryData<ListProjectsResponse>(projectKeys.list(wsId));
+      const prevDetail = qc.getQueryData<Project>(projectKeys.detail(wsId, id));
+      const archivedAt = new Date().toISOString();
       qc.setQueryData<ListProjectsResponse>(projectKeys.list(wsId), (old) =>
-        old ? { ...old, projects: old.projects.filter((p) => p.id !== id), total: old.total - 1 } : old,
+        old ? {
+          ...old,
+          projects: old.projects.map((project) =>
+            project.id === id
+              ? { ...project, archived_at: archivedAt, status: "cancelled" }
+              : project,
+          ),
+        } : old,
       );
-      qc.removeQueries({ queryKey: projectKeys.detail(wsId, id) });
-      return { prevList };
+      qc.setQueryData<Project>(projectKeys.detail(wsId, id), (old) =>
+        old ? { ...old, archived_at: archivedAt, status: "cancelled" } : old,
+      );
+      return { prevList, prevDetail, id };
     },
     onError: (_err, _id, ctx) => {
       if (ctx?.prevList) qc.setQueryData(projectKeys.list(wsId), ctx.prevList);
+      if (ctx?.prevDetail) qc.setQueryData(projectKeys.detail(wsId, ctx.id), ctx.prevDetail);
     },
     onSuccess: (_data, id) => {
       useRecentContextStore.getState().forgetContext(wsId, { type: "project", id });
     },
-    onSettled: () => {
+    onSettled: (_data, _err, id) => {
+      qc.invalidateQueries({ queryKey: projectKeys.detail(wsId, id) });
+      qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
+    },
+  });
+}
+
+export function useRestoreProject() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (id: string) => api.restoreProject(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: projectKeys.list(wsId) });
+      const prevList = qc.getQueryData<ListProjectsResponse>(projectKeys.list(wsId));
+      const prevDetail = qc.getQueryData<Project>(projectKeys.detail(wsId, id));
+      qc.setQueryData<ListProjectsResponse>(projectKeys.list(wsId), (old) =>
+        old ? {
+          ...old,
+          projects: old.projects.map((project) =>
+            project.id === id
+              ? { ...project, archived_at: null, status: "in_progress" }
+              : project,
+          ),
+        } : old,
+      );
+      qc.setQueryData<Project>(projectKeys.detail(wsId, id), (old) =>
+        old ? { ...old, archived_at: null, status: "in_progress" } : old,
+      );
+      return { prevList, prevDetail, id };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prevList) qc.setQueryData(projectKeys.list(wsId), ctx.prevList);
+      if (ctx?.prevDetail) qc.setQueryData(projectKeys.detail(wsId, ctx.id), ctx.prevDetail);
+    },
+    onSuccess: (project) => {
+      qc.setQueryData(projectKeys.detail(wsId, project.id), project);
+    },
+    onSettled: (_data, _err, id) => {
+      qc.invalidateQueries({ queryKey: projectKeys.detail(wsId, id) });
       qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
     },
   });

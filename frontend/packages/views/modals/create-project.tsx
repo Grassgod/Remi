@@ -14,26 +14,16 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multiremi/core/projects/mutations";
 import { useProjectDraftStore } from "@multiremi/core/projects";
+import { useAuthStore } from "@multiremi/core/auth";
 import { repositoryListOptions } from "@multiremi/core/repositories";
-import {
-  PROJECT_STATUS_CONFIG,
-  PROJECT_STATUS_ORDER,
-  PROJECT_PRIORITY_ORDER,
-} from "@multiremi/core/projects/config";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multiremi/core/paths";
-import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
+import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import type { ProjectStatus, ProjectPriority, WorkspaceRepository } from "@multiremi/core/types";
+import type { WorkspaceRepository } from "@multiremi/core/types";
 import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@multiremi/ui/components/ui/dropdown-menu";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -41,15 +31,10 @@ import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { EmojiPicker } from "@multiremi/ui/components/common/emoji-picker";
 import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
-import { PriorityIcon } from "../issues/components/priority-icon";
 import { ActorAvatar } from "../common/actor-avatar";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
-import {
-  useProjectStatusLabels,
-  useProjectPriorityLabels,
-} from "../projects/components/labels";
 
 const EMPTY_REPOSITORIES: WorkspaceRepository[] = [];
 
@@ -80,15 +65,13 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const workspaceName = workspace?.name;
   const wsPaths = useWorkspacePaths();
   const wsId = useWorkspaceId();
+  const userId = useAuthStore((state) => state.user?.id ?? null);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: repositoryResponse, isLoading: repositoriesLoading } = useQuery(
     repositoryListOptions(wsId),
   );
   const repositories = repositoryResponse?.repositories ?? EMPTY_REPOSITORIES;
   const { getActorName } = useActorName();
-  const projectStatusLabels = useProjectStatusLabels();
-  const projectPriorityLabels = useProjectPriorityLabels();
 
   const draft = useProjectDraftStore((s) => s.draft);
   const setDraft = useProjectDraftStore((s) => s.setDraft);
@@ -96,10 +79,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
   const [title, setTitle] = useState(draft.title);
   const descEditorRef = useRef<ContentEditorRef>(null);
-  const [status, setStatus] = useState<ProjectStatus>(draft.status);
-  const [priority, setPriority] = useState<ProjectPriority>(draft.priority);
-  const [leadType, setLeadType] = useState<"member" | "agent" | undefined>(draft.leadType);
-  const [leadId, setLeadId] = useState<string | undefined>(draft.leadId);
+  const [leadType, setLeadType] = useState<"member" | null>(
+    draft.leadType === undefined ? (userId ? "member" : null) : draft.leadType,
+  );
+  const [leadId, setLeadId] = useState<string | null>(
+    draft.leadId === undefined ? userId : draft.leadId,
+  );
   const [icon, setIcon] = useState<string | undefined>(draft.icon);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -128,9 +113,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
   // Sync field changes to draft store
   const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
-  const updateStatus = (v: ProjectStatus) => { setStatus(v); setDraft({ status: v }); };
-  const updatePriority = (v: ProjectPriority) => { setPriority(v); setDraft({ priority: v }); };
-  const updateLead = (type?: "member" | "agent", id?: string) => {
+  const updateLead = (type: "member" | null, id: string | null) => {
     setLeadType(type); setLeadId(id);
     setDraft({ leadType: type, leadId: id });
   };
@@ -141,9 +124,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
   const leadQuery = leadFilter.toLowerCase();
   const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
-  const filteredAgents = agents.filter(
-    (a) => !a.archived_at && (a.name.toLowerCase().includes(leadQuery) || matchesPinyin(a.name, leadQuery)),
-  );
 
   const leadLabel =
     leadType && leadId ? getActorName(leadType, leadId) : t(($) => $.create_project.lead);
@@ -167,8 +147,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         title: title.trim(),
         description: descEditorRef.current?.getMarkdown()?.trim() || undefined,
         icon,
-        status,
-        priority,
         lead_type: leadType,
         lead_id: leadId,
         // Server attaches these in the same transaction as the project.
@@ -389,44 +367,6 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
         <div className="flex items-center justify-between gap-2 px-4 py-3 border-t shrink-0">
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <PillButton>
-                  <span className={cn("size-2 rounded-full", PROJECT_STATUS_CONFIG[status].dotColor)} />
-                  <span>{projectStatusLabels[status]}</span>
-                </PillButton>
-              }
-            />
-            <DropdownMenuContent align="start" className="w-44">
-              {PROJECT_STATUS_ORDER.map((s) => (
-                <DropdownMenuItem key={s} onClick={() => updateStatus(s)}>
-                  <span className={cn("size-2 rounded-full", PROJECT_STATUS_CONFIG[s].dotColor)} />
-                  <span>{projectStatusLabels[s]}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <PillButton>
-                  <PriorityIcon priority={priority} />
-                  <span>{projectPriorityLabels[priority]}</span>
-                </PillButton>
-              }
-            />
-            <DropdownMenuContent align="start" className="w-44">
-              {PROJECT_PRIORITY_ORDER.map((pr) => (
-                <DropdownMenuItem key={pr} onClick={() => updatePriority(pr)}>
-                  <PriorityIcon priority={pr} />
-                  <span>{projectPriorityLabels[pr]}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           <Popover
             open={leadOpen}
             onOpenChange={(v) => {
@@ -462,7 +402,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   onClick={() => {
-                    updateLead(undefined, undefined);
+                    updateLead(null, null);
                     setLeadOpen(false);
                   }}
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
@@ -491,30 +431,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     ))}
                   </>
                 )}
-                {filteredAgents.length > 0 && (
-                  <>
-                    <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                      {t(($) => $.create_project.agents_group)}
-                    </div>
-                    {filteredAgents.map((a) => (
-                      <button
-                        type="button"
-                        key={a.id}
-                        onClick={() => {
-                          updateLead("agent", a.id);
-                          setLeadOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                      >
-                        <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
-                        <span>{a.name}</span>
-                      </button>
-                    ))}
-                  </>
-                )}
-                {filteredMembers.length === 0 &&
-                  filteredAgents.length === 0 &&
-                  leadFilter && (
+                {filteredMembers.length === 0 && leadFilter && (
                     <div className="px-2 py-3 text-center text-sm text-muted-foreground">
                       {t(($) => $.create_project.no_results)}
                     </div>

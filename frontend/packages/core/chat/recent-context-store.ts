@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { defaultStorage } from "../platform/storage";
-import type { IssueStatus, ProjectStatus } from "../types";
+import type { IssueStatus } from "../types";
 
 const MAX_RECENT_CONTEXTS = 20;
 const MAX_WORKSPACES = 50;
@@ -17,14 +17,13 @@ export interface RecentContextEntry {
   label?: string;
   subtitle?: string;
   status?: IssueStatus;
-  projectStatus?: ProjectStatus;
   icon?: string | null;
   visitedAt: number;
 }
 
 interface RecentContextState {
   byWorkspace: Record<string, RecentContextEntry[]>;
-  recordVisit: (wsId: string, entry: Pick<RecentContextEntry, "type" | "id"> & Partial<Pick<RecentContextEntry, "label" | "subtitle" | "status" | "projectStatus" | "icon">>) => void;
+  recordVisit: (wsId: string, entry: Pick<RecentContextEntry, "type" | "id"> & Partial<Pick<RecentContextEntry, "label" | "subtitle" | "status" | "icon">>) => void;
   forgetContext: (wsId: string, entry: Pick<RecentContextEntry, "type" | "id">) => void;
   pruneWorkspaces: (activeWsIds: string[]) => void;
 }
@@ -48,7 +47,6 @@ export const useRecentContextStore = create<RecentContextState>()(
             label: entry.label,
             subtitle: entry.subtitle,
             status: entry.status,
-            projectStatus: entry.projectStatus,
             icon: entry.icon,
             visitedAt: Date.now(),
           };

@@ -85,7 +85,7 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { ProjectResourcesSection } from "./project-resources-section";
+import { formatGitResourceName, ProjectResourcesSection } from "./project-resources-section";
 
 function I18nWrapper({ children }: { children: ReactNode }) {
   return (
@@ -109,10 +109,10 @@ function projectRefResource(projectId: string, id = "res-1"): ProjectResource {
   };
 }
 
-function renderSection() {
+function renderSection(editable = true) {
   render(
     <I18nWrapper>
-      <ProjectResourcesSection projectId="proj-self" />
+      <ProjectResourcesSection projectId="proj-self" editable={editable} />
     </I18nWrapper>,
   );
 }
@@ -172,5 +172,24 @@ describe("ProjectResourcesSection — project_ref rows", () => {
 
     fireEvent.click(screen.getByTitle("Remove"));
     await waitFor(() => expect(mockDelete).toHaveBeenCalledWith("res-42"));
+  });
+
+  it("keeps archived project resources read-only", () => {
+    state.resources = [projectRefResource("proj-target")];
+    state.projects = [{ id: "proj-target", title: "Backend", icon: "🛠️" }];
+
+    renderSection(false);
+
+    expect(screen.queryByTitle("Remove")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("repo-source-popover")).not.toBeInTheDocument();
+  });
+});
+
+describe("formatGitResourceName", () => {
+  it("shows owner/repo for HTTPS and SSH remotes", () => {
+    expect(formatGitResourceName("https://github.com/multimira-ai/remi.git"))
+      .toBe("multimira-ai/remi");
+    expect(formatGitResourceName("git@code.byted.org:ies/sdma.git"))
+      .toBe("ies/sdma");
   });
 });

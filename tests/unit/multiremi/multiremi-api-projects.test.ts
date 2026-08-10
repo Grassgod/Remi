@@ -29,7 +29,12 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(store.archiveAutopilot(autopilot.id).status).toBe("archived");
     expect(store.listAutopilots()).toHaveLength(0);
 
-    expect(store.archiveProject(project.id).status).toBe("cancelled");
+    const archivedProject = store.archiveProject(project.id);
+    expect(archivedProject.archivedAt).toBeString();
+    expect(archivedProject.status).toBe("cancelled");
+    const restoredProject = store.restoreProject(project.id);
+    expect(restoredProject.archivedAt).toBeNull();
+    expect(restoredProject.status).toBe("in_progress");
     expect(store.archiveSquad(squad.id).archivedAt).toBeString();
     expect(store.listSquads()).toHaveLength(0);
   });
@@ -177,6 +182,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(projectBody.lead_id).toBe(agent.id);
     expect(projectBody.issue_count).toBe(0);
     expect(projectBody.resource_count).toBe(0);
+    expect(projectBody.archived_at).toBeNull();
     expect(projectBody.workspaceId).toBeUndefined();
     expect(events.find((event) => event.type === "project:created")).toMatchObject({
       workspaceId: "local",
@@ -246,8 +252,8 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const camelProjectCreateBody = await camelProjectCreate.json();
     expect(camelProjectCreate.status).toBe(201);
     expect(camelProjectCreateBody.workspace_id).toBe("local");
-    expect(camelProjectCreateBody.lead_type).toBeNull();
-    expect(camelProjectCreateBody.lead_id).toBeNull();
+    expect(camelProjectCreateBody.lead_type).toBe("member");
+    expect(camelProjectCreateBody.lead_id).toBe("local");
 
     const invalidResourceCreate = await app.request(`/api/projects/${projectBody.id}/resources`, {
       method: "POST",
@@ -653,12 +659,23 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect((await app.request(`/api/autopilots/${autopilotBody.id}`, { method: "DELETE" })).status).toBe(204);
     const deletedProject = await app.request(`/api/projects/${projectBody.id}`, { method: "DELETE" });
     expect(deletedProject.status).toBe(204);
-    expect(events.find((event) => event.type === "project:deleted")).toMatchObject({
+    expect(events.find((event) =>
+      event.type === "project:updated"
+      && typeof event.payload.project === "object"
+      && event.payload.project !== null
+      && "archived_at" in event.payload.project
+      && event.payload.project.archived_at !== null
+    )).toMatchObject({
       workspaceId: "local",
       actorId: "local",
       actorType: "member",
-      payload: { project_id: projectBody.id },
+      payload: { project: { id: projectBody.id, status: "cancelled", archived_at: expect.any(String) } },
     });
+    const archivedProjectBody = await (await app.request(`/api/projects/${projectBody.id}`)).json();
+    expect(archivedProjectBody.archived_at).toBeString();
+    const restoredProjectResponse = await app.request(`/api/projects/${projectBody.id}/restore`, { method: "POST" });
+    expect(restoredProjectResponse.status).toBe(200);
+    expect((await restoredProjectResponse.json()).archived_at).toBeNull();
     const missingProjectDelete = await app.request("/api/projects/missing-project", { method: "DELETE" });
     expect(missingProjectDelete.status).toBe(404);
     expect(await missingProjectDelete.json()).toEqual({ error: "project not found" });

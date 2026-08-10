@@ -26,14 +26,13 @@ function issueToMentionItem(issue: Pick<Issue, "id" | "identifier" | "title" | "
   };
 }
 
-function projectToMentionItem(project: Pick<Project, "id" | "title" | "description" | "icon" | "status">, group: "current" | "recent"): MentionItem {
+function projectToMentionItem(project: Pick<Project, "id" | "title" | "description" | "icon">, group: "current" | "recent"): MentionItem {
   return {
     id: project.id,
     label: project.title,
     type: "project",
     description: project.description ?? undefined,
     icon: project.icon,
-    projectStatus: project.status,
     group,
   };
 }
@@ -45,7 +44,6 @@ function recentEntryToMentionItem(entry: RecentContextEntry): MentionItem {
     type: entry.type,
     description: entry.subtitle,
     status: entry.status,
-    projectStatus: entry.projectStatus,
     icon: entry.icon,
     group: "recent",
   };
@@ -118,4 +116,3 @@ export function useChatContextItems(wsId: string): MentionItem[] {
     return [...currentItems, ...recentItems];
   }, [currentIssue, currentProject, recentQueries, visibleRecentEntries]);
 }
-

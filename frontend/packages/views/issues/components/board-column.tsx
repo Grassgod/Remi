@@ -48,6 +48,7 @@ export const BoardColumn = memo(function BoardColumn({
   totalCount,
   footer,
   projectId,
+  allowCreate = true,
   sortLabel,
 }: {
   group: BoardColumnGroup;
@@ -58,6 +59,7 @@ export const BoardColumn = memo(function BoardColumn({
   footer?: ReactNode;
   /** When set, the per-column "+" pre-fills the project on the create form. */
   projectId?: string;
+  allowCreate?: boolean;
   sortLabel?: string | null;
 }) {
   const status = group.status;
@@ -100,7 +102,7 @@ export const BoardColumn = memo(function BoardColumn({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <Tooltip>
+          {allowCreate && <Tooltip>
             <TooltipTrigger
               render={
                 <Button
@@ -120,7 +122,7 @@ export const BoardColumn = memo(function BoardColumn({
               }
             />
             <TooltipContent>{t(($) => $.board.add_issue_tooltip)}</TooltipContent>
-          </Tooltip>
+          </Tooltip>}
         </div>
       </div>
       <div className="relative min-h-[200px] flex-1 rounded-lg">

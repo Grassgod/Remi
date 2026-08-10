@@ -48,8 +48,6 @@ import { resolvePublicFileUrl } from "@multiremi/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { STATUS_CONFIG } from "@multiremi/core/issues/config";
-import { PROJECT_STATUS_CONFIG } from "@multiremi/core/projects/config";
-import type { ProjectStatus } from "@multiremi/core/types";
 import { ActorAvatar as ActorAvatarBase } from "@multiremi/ui/components/common/actor-avatar";
 import {
   Dialog,
@@ -582,11 +580,6 @@ export function SearchCommand() {
                       <ProjectIcon project={project} size="md" />
                       <span className="truncate">
                         <HighlightText text={project.title} query={query} />
-                      </span>
-                      <span
-                        className={`ml-auto text-xs shrink-0 ${PROJECT_STATUS_CONFIG[project.status as ProjectStatus]?.color ?? "text-muted-foreground"}`}
-                      >
-                        {PROJECT_STATUS_CONFIG[project.status as ProjectStatus]?.label ?? project.status}
                       </span>
                     </div>
                     {project.match_source === "description" &&

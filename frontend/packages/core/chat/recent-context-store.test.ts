@@ -42,7 +42,6 @@ describe("useRecentContextStore.recordVisit", () => {
       label: "MUL-1",
       subtitle: "Fix login redirect",
       status: "todo",
-      projectStatus: "in_progress",
       icon: "🚀",
     });
 
@@ -52,7 +51,6 @@ describe("useRecentContextStore.recordVisit", () => {
       label: "MUL-1",
       subtitle: "Fix login redirect",
       status: "todo",
-      projectStatus: "in_progress",
       icon: "🚀",
     });
   });

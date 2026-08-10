@@ -77,6 +77,37 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
+  it("backfills archived_at for legacy completed and cancelled projects", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_projects (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        status TEXT NOT NULL DEFAULT 'planned',
+        updated_at TEXT NOT NULL
+      )
+    `);
+    database.run(
+      "INSERT INTO multiremi_projects (id, status, updated_at) VALUES (?, ?, ?)",
+      ["prj_cancelled", "cancelled", "2026-08-01T00:00:00.000Z"],
+    );
+    database.run(
+      "INSERT INTO multiremi_projects (id, status, updated_at) VALUES (?, ?, ?)",
+      ["prj_active", "in_progress", "2026-08-02T00:00:00.000Z"],
+    );
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_projects")).toContain("archived_at");
+    const rows = database.query(
+      "SELECT id, archived_at FROM multiremi_projects ORDER BY id",
+    ).all() as Array<{ id: string; archived_at: string | null }>;
+    expect(rows).toEqual([
+      { id: "prj_active", archived_at: null },
+      { id: "prj_cancelled", archived_at: "2026-08-01T00:00:00.000Z" },
+    ]);
+  });
+
   it("renames legacy multica_* objects on every startup", () => {
     const database = freshDb();
     database.exec("CREATE TABLE multica_legacy_notes (id TEXT PRIMARY KEY, body TEXT)");

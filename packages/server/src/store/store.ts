@@ -1310,6 +1310,10 @@ runMigrations(this.db);
     return this.projects.archiveProject(id);
   }
 
+  restoreProject(id: string): MultiremiProject {
+    return this.projects.restoreProject(id);
+  }
+
   listPinnedItems(workspaceId?: string | null, userId?: string | null): MultiremiPinnedItem[] {
     return this.projects.listPinnedItems(workspaceId, userId);
   }

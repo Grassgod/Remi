@@ -15,6 +15,7 @@ import type {
   UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
+import { currentRequestUserId } from "./context.js";
 
 export function projectCompatibilityResponse(project: MultiremiProject): Record<string, unknown> {
   return {
@@ -32,6 +33,7 @@ export function projectCompatibilityResponse(project: MultiremiProject): Record<
     issue_count: project.issueCount,
     done_count: project.doneCount,
     resource_count: project.resourceCount,
+    archived_at: project.archivedAt,
   };
 }
 
@@ -44,10 +46,17 @@ export function projectCreateCompatibilityInput(c: Context, input: CreateProject
     workspaceId: input.workspace_id ?? c.req.query("workspace_id") ?? "local",
     status: input.status,
     priority: input.priority,
-    leadType: input.lead_type,
-    leadId: input.lead_id,
+    leadType: input.lead_type === undefined && input.lead_id === undefined ? "member" : input.lead_type,
+    leadId: input.lead_type === undefined && input.lead_id === undefined ? currentRequestUserId(c) : input.lead_id,
     resources: input.resources,
   };
+}
+
+export function projectCreateInputWithDefaultLead(c: Context, input: CreateProjectInput): CreateProjectInput {
+  if (input.leadType !== undefined || input.lead_type !== undefined || input.leadId !== undefined || input.lead_id !== undefined) {
+    return input;
+  }
+  return { ...input, leadType: "member", leadId: currentRequestUserId(c) };
 }
 
 export function projectUpdateCompatibilityInput(input: UpdateProjectInput): UpdateProjectInput {

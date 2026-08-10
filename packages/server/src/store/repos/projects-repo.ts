@@ -71,22 +71,25 @@ export class ProjectsRepo {
     if (!input.title?.trim()) throw new Error("Project title is required");
     const id = input.id ?? createId("prj");
     const now = nowIso();
+    const status = input.status ?? "in_progress";
+    const archivedAt = isArchivedProjectStatus(status) ? now : null;
     const tx = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `INSERT INTO multiremi_projects (
           id, title, description, icon, status, priority, workspace_id,
-          lead_type, lead_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lead_type, lead_id, archived_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           input.title.trim(),
           input.description ?? null,
           input.icon ?? null,
-          input.status ?? "planned",
+          status,
           input.priority ?? "none",
           input.workspaceId ?? input.workspace_id ?? "local",
           input.leadType === undefined ? input.lead_type ?? null : input.leadType,
           input.leadId === undefined ? input.lead_id ?? null : input.leadId,
+          archivedAt,
           now,
           now,
         ],
@@ -119,7 +122,7 @@ export class ProjectsRepo {
     const limit = clampSearchLimit(input.limit);
     const offset = Math.max(0, Number(input.offset ?? 0));
     const rows = this.listProjects(workspaceId).filter((project) => {
-      if (!includeClosed && ["completed", "cancelled"].includes(project.status)) return false;
+      if (!includeClosed && project.archivedAt) return false;
       return searchMatch(project.title, query) || searchMatch(project.description ?? "", query);
     }).map((project) => {
       const matchSource = searchMatch(project.title, query) ? "title" : "description";
@@ -137,6 +140,10 @@ export class ProjectsRepo {
     const current = this.getProject(id);
     if (!current) throw new Error(`Project not found: ${id}`);
     const now = nowIso();
+    const status = input.status ?? current.status;
+    const archivedAt = input.status === undefined
+      ? current.archivedAt
+      : isArchivedProjectStatus(status) ? current.archivedAt ?? now : null;
     this.ctx.db.run(
       `UPDATE multiremi_projects SET
         title = ?,
@@ -146,16 +153,18 @@ export class ProjectsRepo {
         priority = ?,
         lead_type = ?,
         lead_id = ?,
+        archived_at = ?,
         updated_at = ?
        WHERE id = ?`,
       [
         input.title ?? current.title,
         input.description === undefined ? current.description : input.description,
         input.icon === undefined ? current.icon : input.icon,
-        input.status ?? current.status,
+        status,
         input.priority ?? current.priority,
         input.leadType === undefined ? input.lead_type === undefined ? current.leadType : input.lead_type : input.leadType,
         input.leadId === undefined ? input.lead_id === undefined ? current.leadId : input.lead_id : input.leadId,
+        archivedAt,
         now,
         id,
       ],
@@ -164,7 +173,27 @@ export class ProjectsRepo {
   }
 
   archiveProject(id: string): MultiremiProject {
-    return this.updateProject(id, { status: "cancelled" });
+    const project = this.getProject(id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    if (project.archivedAt) return project;
+    const now = nowIso();
+    this.ctx.db.run(
+      "UPDATE multiremi_projects SET archived_at = ?, status = 'cancelled', updated_at = ? WHERE id = ?",
+      [now, now, id],
+    );
+    return this.getProject(id)!;
+  }
+
+  restoreProject(id: string): MultiremiProject {
+    const project = this.getProject(id);
+    if (!project) throw new Error(`Project not found: ${id}`);
+    if (!project.archivedAt) return project;
+    const now = nowIso();
+    this.ctx.db.run(
+      "UPDATE multiremi_projects SET archived_at = NULL, status = 'in_progress', updated_at = ? WHERE id = ?",
+      [now, id],
+    );
+    return this.getProject(id)!;
   }
 
   listPinnedItems(workspaceId?: string | null, userId?: string | null): MultiremiPinnedItem[] {
@@ -650,6 +679,10 @@ export class ProjectsRepo {
   }
 }
 
+function isArchivedProjectStatus(status: string): boolean {
+  return status === "completed" || status === "cancelled";
+}
+
 function normalizeProjectResourcePosition(value: number | null | undefined, fallback: number): number {
   if (value == null) return fallback;
   const position = Number(value);
@@ -760,6 +793,7 @@ function toProject(row: Row): MultiremiProject {
     issueCount: Number(row.issue_count ?? 0),
     doneCount: Number(row.done_count ?? 0),
     resourceCount: Number(row.resource_count ?? 0),
+    archivedAt: nullableString(row.archived_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

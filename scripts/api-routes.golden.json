@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 492,
+    "routeCount": 496,
     "routeCountByPrefix": {
-      "native": 171,
-      "compat": 308,
+      "native": 172,
+      "compat": 311,
       "root": 13
     },
     "getRoutes": 219,
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 273,
+    "mutationRoutes": 277,
     "mutationRoutesCovered": 271,
     "flows": [
       "agents-compat",
@@ -356,6 +356,7 @@
     "PATCH /api/squads/:id/members/role",
     "PATCH /api/workspaces/:id",
     "PATCH /api/workspaces/:id/members/:memberId",
+    "PATCH /api/workspaces/:id/repos/:repositoryId",
     "POST /api/agents",
     "POST /api/agents/:id/archive",
     "POST /api/agents/:id/cancel-tasks",
@@ -476,6 +477,7 @@
     "POST /api/multiremi/pins",
     "POST /api/multiremi/projects",
     "POST /api/multiremi/projects/:id/resources",
+    "POST /api/multiremi/projects/:id/restore",
     "POST /api/multiremi/runtimes",
     "POST /api/multiremi/runtimes/:id/directory-scans",
     "POST /api/multiremi/runtimes/:id/heartbeat",
@@ -495,6 +497,7 @@
     "POST /api/projects",
     "POST /api/projects/:id/docs",
     "POST /api/projects/:id/resources",
+    "POST /api/projects/:id/restore",
     "POST /api/runtimes/:id/archive-agents-and-delete",
     "POST /api/runtimes/:id/directory-scans",
     "POST /api/runtimes/:id/local-skills",
@@ -519,6 +522,7 @@
     "POST /api/workspaces/:id/members",
     "POST /api/workspaces/:id/relay-config/:engine/reveal",
     "POST /api/workspaces/:id/repos",
+    "POST /api/workspaces/:id/repos/inspect",
     "POST /auth/google",
     "POST /auth/lark/callback",
     "POST /auth/logout",
@@ -3481,7 +3485,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "lead_type": null,
             "lead_id": null,
@@ -3489,7 +3493,8 @@
             "updated_at": "<timestamp>",
             "issue_count": 4,
             "done_count": 1,
-            "resource_count": 1
+            "resource_count": 1,
+            "archived_at": null
           },
           "project_resources": [
             {
@@ -3656,7 +3661,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "lead_type": null,
             "lead_id": null,
@@ -3664,7 +3669,8 @@
             "updated_at": "<timestamp>",
             "issue_count": 4,
             "done_count": 1,
-            "resource_count": 1
+            "resource_count": 1,
+            "archived_at": null
           },
           "project_resources": [
             {
@@ -3859,7 +3865,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "lead_type": null,
             "lead_id": null,
@@ -3867,7 +3873,8 @@
             "updated_at": "<timestamp>",
             "issue_count": 4,
             "done_count": 1,
-            "resource_count": 1
+            "resource_count": 1,
+            "archived_at": null
           },
           "project_resources": [
             {
@@ -10755,13 +10762,14 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "leadType": null,
             "leadId": null,
             "issueCount": 4,
             "doneCount": 1,
             "resourceCount": 1,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           }
@@ -10781,13 +10789,14 @@
           "title": "Snapshot Project",
           "description": "Project used by the snapshot",
           "icon": null,
-          "status": "planned",
+          "status": "in_progress",
           "priority": "none",
           "leadType": null,
           "leadId": null,
           "issueCount": 4,
           "doneCount": 1,
           "resourceCount": 1,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         },
@@ -10845,13 +10854,14 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "leadType": null,
             "leadId": null,
             "issueCount": 4,
             "doneCount": 1,
             "resourceCount": 1,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>",
             "matchSource": "title"
@@ -11680,13 +11690,14 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "leadType": null,
             "leadId": null,
             "issueCount": 4,
             "doneCount": 1,
             "resourceCount": 1,
+            "archivedAt": null,
             "createdAt": "<timestamp>",
             "updatedAt": "<timestamp>"
           },
@@ -11894,7 +11905,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "lead_type": null,
             "lead_id": null,
@@ -11902,7 +11913,8 @@
             "updated_at": "<timestamp>",
             "issue_count": 4,
             "done_count": 1,
-            "resource_count": 1
+            "resource_count": 1,
+            "archived_at": null
           }
         ],
         "total": 1
@@ -11919,7 +11931,7 @@
         "title": "Snapshot Project",
         "description": "Project used by the snapshot",
         "icon": null,
-        "status": "planned",
+        "status": "in_progress",
         "priority": "none",
         "lead_type": null,
         "lead_id": null,
@@ -11927,7 +11939,8 @@
         "updated_at": "<timestamp>",
         "issue_count": 4,
         "done_count": 1,
-        "resource_count": 1
+        "resource_count": 1,
+        "archived_at": null
       }
     },
     {
@@ -12076,7 +12089,7 @@
             "title": "Snapshot Project",
             "description": "Project used by the snapshot",
             "icon": null,
-            "status": "planned",
+            "status": "in_progress",
             "priority": "none",
             "lead_type": null,
             "lead_id": null,
@@ -12085,6 +12098,7 @@
             "issue_count": 4,
             "done_count": 1,
             "resource_count": 1,
+            "archived_at": null,
             "match_source": "title"
           }
         ],
@@ -14595,15 +14609,16 @@
         "title": "Compat project",
         "description": "compat",
         "icon": null,
-        "status": "planned",
+        "status": "in_progress",
         "priority": "none",
-        "lead_type": null,
-        "lead_id": null,
+        "lead_type": "member",
+        "lead_id": "local",
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "issue_count": 0,
         "done_count": 0,
-        "resource_count": 0
+        "resource_count": 0,
+        "archived_at": null
       }
     },
     {
@@ -14617,15 +14632,16 @@
         "title": "Compat project renamed",
         "description": "compat",
         "icon": null,
-        "status": "planned",
+        "status": "in_progress",
         "priority": "none",
-        "lead_type": null,
-        "lead_id": null,
+        "lead_type": "member",
+        "lead_id": "local",
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "issue_count": 0,
         "done_count": 0,
-        "resource_count": 0
+        "resource_count": 0,
+        "archived_at": null
       }
     },
     {
@@ -14692,13 +14708,14 @@
           "title": "Native project",
           "description": null,
           "icon": null,
-          "status": "planned",
+          "status": "in_progress",
           "priority": "none",
-          "leadType": null,
-          "leadId": null,
+          "leadType": "member",
+          "leadId": "local",
           "issueCount": 0,
           "doneCount": 0,
           "resourceCount": 0,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14716,13 +14733,14 @@
           "title": "Native project patched",
           "description": "Project used by the snapshot",
           "icon": null,
-          "status": "planned",
+          "status": "in_progress",
           "priority": "none",
           "leadType": null,
           "leadId": null,
           "issueCount": 4,
           "doneCount": 1,
           "resourceCount": 1,
+          "archivedAt": null,
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }
@@ -14798,6 +14816,7 @@
           "issueCount": 4,
           "doneCount": 1,
           "resourceCount": 1,
+          "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
           "updatedAt": "<timestamp>"
         }

@@ -7,6 +7,14 @@
     "view_compact": "Compact",
     "view_comfortable": "Comfortable",
     "search_placeholder": "Search projects...",
+    "search_active": "Search active projects...",
+    "search_archived": "Search archived projects...",
+    "active_projects": "Active",
+    "archived_projects": "Archived",
+    "archived_empty": "No archived projects",
+    "archive_project": "Archive project",
+    "restore_project": "Restore project",
+    "restore": "Restore",
     "no_search_results": "No results match your search"
   },
   "table": {
@@ -14,8 +22,12 @@
     "priority": "Priority",
     "status": "Status",
     "progress": "Progress",
-    "lead": "Lead",
-    "created": "Created"
+    "lead": "Owner",
+    "created": "Created",
+    "issue_completion": "Issue completion",
+    "issue_completion_suffix": "issues completed",
+    "updated": "Updated",
+    "archived": "Archived"
   },
   "status": {
     "planned": "Planned",
@@ -32,8 +44,8 @@
     "none": "No priority"
   },
   "lead": {
-    "no_lead": "No lead",
-    "assign_placeholder": "Assign lead...",
+    "no_lead": "No owner",
+    "assign_placeholder": "Assign owner...",
     "members_group": "Members",
     "agents_group": "Agents",
     "no_results": "No results"
@@ -54,8 +66,11 @@
     "sidebar_tooltip": "Toggle sidebar",
     "copy_link": "Copy link",
     "delete_action": "Delete project",
+    "archive_action": "Archive project",
+    "restore_action": "Restore project",
+    "archived_state": "Archived",
     "section_properties": "Properties",
-    "section_progress": "Progress",
+    "section_progress": "Issue completion",
     "section_description": "Description",
     "description_placeholder": "Add description...",
     "empty_issues_title": "No issues linked",
@@ -64,6 +79,10 @@
     "no_issues_yet": "No issues yet",
     "toast_link_copied": "Link copied",
     "toast_project_deleted": "Project deleted",
+    "toast_project_archived": "Project archived",
+    "toast_project_archive_failed": "Failed to archive project",
+    "toast_project_restored": "Project restored",
+    "toast_project_restore_failed": "Failed to restore project",
     "toast_move_issue_failed": "Failed to move issue",
     "issues_error_title": "Couldn't load issues",
     "issues_error_hint": "Something went wrong fetching this project's issues.",

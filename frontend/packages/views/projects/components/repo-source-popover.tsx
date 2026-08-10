@@ -1091,7 +1091,7 @@ function ProjectRefTab({
   // Keep already-referenced projects in the list (rendered as checked rows) so
   // a selection stays visible instead of vanishing on click.
   const candidates = projects.filter(
-    (p) => p.id !== currentProjectId && p.title.toLowerCase().includes(query),
+    (p) => !p.archived_at && p.id !== currentProjectId && p.title.toLowerCase().includes(query),
   );
 
   return (

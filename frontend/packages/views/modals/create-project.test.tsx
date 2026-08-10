@@ -68,8 +68,6 @@ vi.mock("@multiremi/core/projects", () => ({
       draft: {
         title: "",
         description: "",
-        status: "planned",
-        priority: "medium",
         leadType: undefined,
         leadId: undefined,
         icon: undefined,
@@ -81,6 +79,11 @@ vi.mock("@multiremi/core/projects", () => ({
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
+}));
+
+vi.mock("@multiremi/core/auth", () => ({
+  useAuthStore: (selector: (state: unknown) => unknown) =>
+    selector({ user: { id: "user-1" } }),
 }));
 
 vi.mock("@multiremi/core/paths", () => ({
@@ -97,7 +100,6 @@ vi.mock("@multiremi/core/paths", () => ({
 
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: vi.fn() }),
-  agentListOptions: () => ({ queryKey: ["agents"], queryFn: vi.fn() }),
 }));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -247,6 +249,13 @@ describe("CreateProjectModal", () => {
     await user.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => expect(mockCreateProjectMutate).toHaveBeenCalledTimes(1));
+    expect(mockCreateProjectMutate.mock.calls[0]![0]).toMatchObject({
+      title: "Platform",
+      lead_type: "member",
+      lead_id: "user-1",
+    });
+    expect(mockCreateProjectMutate.mock.calls[0]![0]).not.toHaveProperty("status");
+    expect(mockCreateProjectMutate.mock.calls[0]![0]).not.toHaveProperty("priority");
     expect(mockCreateProjectMutate.mock.calls[0]![0].resources).toEqual([
       {
         resource_type: "github_repo",

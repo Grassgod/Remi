@@ -40,6 +40,7 @@ export function ListView({
   myIssuesScope,
   myIssuesFilter,
   projectId,
+  allowCreate = true,
   onMoveIssue,
   sort,
 }: {
@@ -49,6 +50,7 @@ export function ListView({
   myIssuesScope?: string;
   myIssuesFilter?: MyIssuesFilter;
   projectId?: string;
+  allowCreate?: boolean;
   onMoveIssue?: (issueId: string, updates: DragMoveUpdates, onSettled?: () => void) => void;
   sort?: IssueSortParam;
 }) {
@@ -129,6 +131,7 @@ export function ListView({
             childProgressMap={childProgressMap}
             myIssuesOpts={myIssuesOpts}
             projectId={projectId}
+            allowCreate={allowCreate}
             dragEnabled={dragEnabled}
             isExpanded={isExpanded}
             sortLabel={sortLabel}
@@ -178,6 +181,7 @@ function StatusAccordionItem({
   childProgressMap,
   myIssuesOpts,
   projectId,
+  allowCreate,
   dragEnabled,
   isExpanded,
   sortLabel,
@@ -189,6 +193,7 @@ function StatusAccordionItem({
   childProgressMap: Map<string, ChildProgress>;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   projectId?: string;
+  allowCreate: boolean;
   dragEnabled: boolean;
   isExpanded: boolean;
   sortLabel: string | null;
@@ -253,7 +258,7 @@ function StatusAccordionItem({
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-aria-expanded/trigger:rotate-90" />
           <StatusHeading status={status} count={total} />
         </Accordion.Trigger>
-        <div className="pr-2">
+        {allowCreate && <div className="pr-2">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -273,7 +278,7 @@ function StatusAccordionItem({
             </TooltipTrigger>
             <TooltipContent>{t(($) => $.list.add_issue_tooltip)}</TooltipContent>
           </Tooltip>
-        </div>
+        </div>}
       </Accordion.Header>
       <Accordion.Panel>
         {issues.length > 0 ? (

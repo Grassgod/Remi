@@ -34,6 +34,7 @@ export function ProjectPicker({
   const wsId = useWorkspaceId();
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const current = projects.find((p) => p.id === projectId);
+  const activeProjects = projects.filter((project) => !project.archived_at);
 
   return (
     <DropdownMenu defaultOpen={defaultOpen}>
@@ -49,21 +50,21 @@ export function ProjectPicker({
         <span className="truncate">{current ? current.title : t(($) => $.picker.no_project)}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align} className="w-52">
-        {projects.map((p) => (
+        {activeProjects.map((p) => (
           <DropdownMenuItem key={p.id} onClick={() => onUpdate({ project_id: p.id })}>
             <ProjectIcon project={p} size="md" className="mr-1" />
             <span className="truncate">{p.title}</span>
             {p.id === projectId && <Check className="ml-auto h-3.5 w-3.5 shrink-0" />}
           </DropdownMenuItem>
         ))}
-        {projects.length > 0 && projectId && <DropdownMenuSeparator />}
+        {activeProjects.length > 0 && projectId && <DropdownMenuSeparator />}
         {projectId && (
           <DropdownMenuItem onClick={() => onUpdate({ project_id: null })}>
             <X className="h-3.5 w-3.5 text-muted-foreground" />
             {t(($) => $.picker.remove)}
           </DropdownMenuItem>
         )}
-        {projects.length === 0 && (
+        {activeProjects.length === 0 && (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">{t(($) => $.picker.empty)}</div>
         )}
       </DropdownMenuContent>

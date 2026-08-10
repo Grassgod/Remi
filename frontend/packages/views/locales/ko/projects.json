@@ -7,6 +7,14 @@
     "view_compact": "간결하게",
     "view_comfortable": "넓게",
     "search_placeholder": "프로젝트 검색...",
+    "search_active": "활성 프로젝트 검색...",
+    "search_archived": "보관된 프로젝트 검색...",
+    "active_projects": "활성",
+    "archived_projects": "보관됨",
+    "archived_empty": "보관된 프로젝트가 없습니다",
+    "archive_project": "프로젝트 보관",
+    "restore_project": "프로젝트 복원",
+    "restore": "복원",
     "no_search_results": "검색 결과가 없습니다"
   },
   "table": {
@@ -14,8 +22,12 @@
     "priority": "우선순위",
     "status": "상태",
     "progress": "진행률",
-    "lead": "리드",
-    "created": "생성일"
+    "lead": "담당자",
+    "created": "생성일",
+    "issue_completion": "Issue 완료 현황",
+    "issue_completion_suffix": "개 issue 완료",
+    "updated": "업데이트",
+    "archived": "보관일"
   },
   "status": {
     "planned": "계획됨",
@@ -32,8 +44,8 @@
     "none": "우선순위 없음"
   },
   "lead": {
-    "no_lead": "리드 없음",
-    "assign_placeholder": "리드 지정...",
+    "no_lead": "담당자 없음",
+    "assign_placeholder": "담당자 지정...",
     "members_group": "멤버",
     "agents_group": "에이전트",
     "no_results": "결과 없음"
@@ -54,8 +66,11 @@
     "sidebar_tooltip": "사이드바 열기/닫기",
     "copy_link": "링크 복사",
     "delete_action": "프로젝트 삭제",
+    "archive_action": "프로젝트 보관",
+    "restore_action": "프로젝트 복원",
+    "archived_state": "보관됨",
     "section_properties": "속성",
-    "section_progress": "진행률",
+    "section_progress": "Issue 완료 현황",
     "section_description": "설명",
     "description_placeholder": "설명 추가...",
     "empty_issues_title": "연결된 이슈가 없습니다",
@@ -64,6 +79,10 @@
     "no_issues_yet": "아직 이슈가 없습니다",
     "toast_link_copied": "링크를 복사했습니다",
     "toast_project_deleted": "프로젝트를 삭제했습니다",
+    "toast_project_archived": "프로젝트를 보관했습니다",
+    "toast_project_archive_failed": "프로젝트를 보관하지 못했습니다",
+    "toast_project_restored": "프로젝트를 복원했습니다",
+    "toast_project_restore_failed": "프로젝트를 복원하지 못했습니다",
     "toast_move_issue_failed": "이슈를 이동하지 못했습니다",
     "issues_error_title": "이슈를 불러오지 못했습니다",
     "issues_error_hint": "이 프로젝트의 이슈를 가져오는 중 문제가 발생했습니다.",

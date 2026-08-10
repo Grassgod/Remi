@@ -9,7 +9,6 @@ import {
   projectDocCreateInput,
   projectDocUpdateInput,
   publishProjectCreated,
-  publishProjectDeleted,
   publishProjectDocCreated,
   publishProjectDocDeleted,
   publishProjectDocUpdated,
@@ -26,6 +25,7 @@ import {
   parseOptionalInt,
   projectCompatibilityResponse,
   projectCreateCompatibilityInput,
+  projectCreateInputWithDefaultLead,
   projectDocCompatibilityResponse,
   projectDocErrorResponse,
   projectDocRevisionCompatibilityResponse,
@@ -135,7 +135,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       body.resources,
     );
     if (repositoryError) return c.json({ error: repositoryError }, 400);
-    return c.json({ project: store.createProject(body) }, 201);
+    return c.json({ project: store.createProject(projectCreateInputWithDefaultLead(c, body)) }, 201);
   });
   app.get("/api/multiremi/projects/:id", (c) => {
     const project = store.getProject(c.req.param("id"));
@@ -149,6 +149,9 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.delete("/api/multiremi/projects/:id", (c) => {
     return c.json({ project: store.archiveProject(c.req.param("id")) });
+  });
+  app.post("/api/multiremi/projects/:id/restore", (c) => {
+    return c.json({ project: store.restoreProject(c.req.param("id")) });
   });
   app.get("/api/multiremi/projects/:id/resources", (c) => {
     const resources = store.listProjectResources(c.req.param("id"));
@@ -209,9 +212,17 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.delete("/api/projects/:id", (c) => {
     const project = store.getProject(c.req.param("id"));
     if (!project) return c.json({ error: "project not found" }, 404);
-    store.archiveProject(project.id);
-    publishProjectDeleted(c, store, project);
+    const archived = store.archiveProject(project.id);
+    publishProjectUpdated(c, store, archived, projectCompatibilityResponse(archived));
     return c.body(null, 204);
+  });
+  app.post("/api/projects/:id/restore", (c) => {
+    const project = store.getProject(c.req.param("id"));
+    if (!project) return c.json({ error: "project not found" }, 404);
+    const restored = store.restoreProject(project.id);
+    const response = projectCompatibilityResponse(restored);
+    publishProjectUpdated(c, store, restored, response);
+    return c.json(response);
   });
   app.get("/api/projects/:id/resources", (c) => {
     const resources = store.listProjectResources(c.req.param("id")).map(projectResourceCompatibilityResponse);

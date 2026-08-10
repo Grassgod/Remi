@@ -1512,6 +1512,7 @@ export interface MultiremiProject {
   issueCount: number;
   doneCount: number;
   resourceCount: number;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -31,8 +31,7 @@ import { StatusIcon } from "../../issues/components/status-icon";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
 import { Badge } from "@multiremi/ui/components/ui/badge";
-import type { IssueStatus, ProjectStatus } from "@multiremi/core/types";
-import { PROJECT_STATUS_CONFIG } from "@multiremi/core/projects/config";
+import type { IssueStatus } from "@multiremi/core/types";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
 import {
@@ -60,7 +59,6 @@ export interface MentionItem {
   /** Project emoji/icon snapshot for ProjectIcon rendering */
   icon?: string | null;
   /** Project status snapshot for recent/current project rendering */
-  projectStatus?: ProjectStatus;
 }
 
 interface MentionListProps {
@@ -407,7 +405,6 @@ function MentionRow({
   }
 
   if (item.type === "project") {
-    const projectStatusCfg = item.projectStatus ? PROJECT_STATUS_CONFIG[item.projectStatus] : null;
     return (
       <button
         type="button"
@@ -428,9 +425,6 @@ function MentionRow({
             </span>
           )}
         </span>
-        {projectStatusCfg && (
-          <span className={`${projectStatusCfg.dotColor} ml-auto size-1.5 shrink-0 rounded-full`} />
-        )}
       </button>
     );
   }
@@ -481,14 +475,13 @@ function issueToMention(i: Pick<Issue, "id" | "identifier" | "title" | "status">
   };
 }
 
-function projectToMention(p: { id: string; title: string; description?: string | null; icon?: string | null; status?: ProjectStatus }): MentionItem {
+function projectToMention(p: { id: string; title: string; description?: string | null; icon?: string | null }): MentionItem {
   return {
     id: p.id,
     label: p.title,
     type: "project" as const,
     description: p.description ?? undefined,
     icon: p.icon ?? null,
-    projectStatus: p.status,
   };
 }
 

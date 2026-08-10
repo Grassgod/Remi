@@ -7,6 +7,14 @@
     "view_compact": "コンパクト",
     "view_comfortable": "ゆったり",
     "search_placeholder": "プロジェクトを検索...",
+    "search_active": "アクティブなプロジェクトを検索...",
+    "search_archived": "アーカイブ済みプロジェクトを検索...",
+    "active_projects": "アクティブ",
+    "archived_projects": "アーカイブ済み",
+    "archived_empty": "アーカイブ済みプロジェクトはありません",
+    "archive_project": "プロジェクトをアーカイブ",
+    "restore_project": "プロジェクトを復元",
+    "restore": "復元",
     "no_search_results": "検索条件に一致する結果はありません"
   },
   "table": {
@@ -14,8 +22,12 @@
     "priority": "優先度",
     "status": "ステータス",
     "progress": "進捗",
-    "lead": "リード",
-    "created": "作成日"
+    "lead": "オーナー",
+    "created": "作成日",
+    "issue_completion": "Issue 完了状況",
+    "issue_completion_suffix": "件の issue が完了",
+    "updated": "更新日",
+    "archived": "アーカイブ日"
   },
   "status": {
     "planned": "計画中",
@@ -32,8 +44,8 @@
     "none": "優先度なし"
   },
   "lead": {
-    "no_lead": "リードなし",
-    "assign_placeholder": "リードを割り当て...",
+    "no_lead": "オーナーなし",
+    "assign_placeholder": "オーナーを割り当て...",
     "members_group": "メンバー",
     "agents_group": "エージェント",
     "no_results": "結果なし"
@@ -54,8 +66,11 @@
     "sidebar_tooltip": "サイドバーの開閉",
     "copy_link": "リンクをコピー",
     "delete_action": "プロジェクトを削除",
+    "archive_action": "プロジェクトをアーカイブ",
+    "restore_action": "プロジェクトを復元",
+    "archived_state": "アーカイブ済み",
     "section_properties": "プロパティ",
-    "section_progress": "進捗",
+    "section_progress": "Issue 完了状況",
     "section_description": "説明",
     "description_placeholder": "説明を追加...",
     "empty_issues_title": "リンクされたイシューはありません",
@@ -64,6 +79,10 @@
     "no_issues_yet": "イシューはまだありません",
     "toast_link_copied": "リンクをコピーしました",
     "toast_project_deleted": "プロジェクトを削除しました",
+    "toast_project_archived": "プロジェクトをアーカイブしました",
+    "toast_project_archive_failed": "プロジェクトをアーカイブできませんでした",
+    "toast_project_restored": "プロジェクトを復元しました",
+    "toast_project_restore_failed": "プロジェクトを復元できませんでした",
     "toast_move_issue_failed": "イシューを移動できませんでした",
     "issues_error_title": "イシューを読み込めませんでした",
     "issues_error_hint": "このプロジェクトのイシューの取得中に問題が発生しました。",

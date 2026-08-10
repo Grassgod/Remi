@@ -34,6 +34,20 @@ describe("ProjectsRepo", () => {
     expect(repo.updateProject(project.id, { status: "in_progress" }).status).toBe("in_progress");
   });
 
+  it("keeps legacy project status writes in sync with archive state", () => {
+    const repo = createRepo();
+    const archived = repo.createProject({ title: "Legacy archive", status: "cancelled" });
+    expect(archived.archivedAt).not.toBeNull();
+    expect(repo.searchProjects({ q: "legacy archive" }).total).toBe(0);
+
+    const restored = repo.updateProject(archived.id, { status: "in_progress" });
+    expect(restored.archivedAt).toBeNull();
+    expect(repo.searchProjects({ q: "legacy archive" }).total).toBe(1);
+
+    const completed = repo.updateProject(archived.id, { status: "completed" });
+    expect(completed.archivedAt).not.toBeNull();
+  });
+
   it("revisions a project doc and seeds the reserved _schema doc", () => {
     const repo = createRepo();
     const project = repo.createProject({ title: "Docs", workspaceId: "local" });

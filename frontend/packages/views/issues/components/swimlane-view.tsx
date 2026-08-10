@@ -441,6 +441,7 @@ export function SwimLaneView({
   myIssuesFilter,
   sort,
   projectId,
+  allowCreate = true,
 }: {
   issues: Issue[];
   /**
@@ -462,6 +463,7 @@ export function SwimLaneView({
   sort?: IssueSortParam;
   /** Pre-fills `project_id` on the create form for the in-cell "+" button. */
   projectId?: string;
+  allowCreate?: boolean;
 }) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
@@ -1118,6 +1120,7 @@ export function SwimLaneView({
                 gridStyle={gridStyle}
                 paths={paths}
                 projectId={projectId}
+                allowCreate={allowCreate}
               />
             ))}
           <SortableContext
@@ -1142,6 +1145,7 @@ export function SwimLaneView({
                   gridStyle={gridStyle}
                   paths={paths}
                   projectId={projectId}
+                  allowCreate={allowCreate}
                 />
               ))}
           </SortableContext>
@@ -1201,6 +1205,7 @@ function DraggableSwimLane({
   gridStyle,
   paths,
   projectId,
+  allowCreate,
 }: {
   lane: LaneGroup;
   grouping: SwimlaneGrouping;
@@ -1213,6 +1218,7 @@ function DraggableSwimLane({
   gridStyle: React.CSSProperties;
   paths: ReturnType<typeof useWorkspacePaths>;
   projectId?: string;
+  allowCreate: boolean;
 }) {
   const { t } = useT("issues");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -1310,7 +1316,7 @@ function DraggableSwimLane({
                 status={status}
                 lane={lane}
                 projectId={projectId}
-                readOnly={lane.isOrphan}
+                readOnly={lane.isOrphan || !allowCreate}
               />
             );
           })}

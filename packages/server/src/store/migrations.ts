@@ -689,11 +689,12 @@ export function runMigrations(db: SqlDatabase): void {
       title TEXT NOT NULL,
       description TEXT,
       icon TEXT,
-      status TEXT NOT NULL DEFAULT 'planned',
+      status TEXT NOT NULL DEFAULT 'in_progress',
       priority TEXT NOT NULL DEFAULT 'none',
       workspace_id TEXT NOT NULL DEFAULT 'local',
       lead_type TEXT,
       lead_id TEXT,
+      archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1127,6 +1128,11 @@ export function runMigrations(db: SqlDatabase): void {
   // only dev databases predate the column, but CREATE TABLE IF NOT EXISTS never
   // revisits an existing table — so it gets patched in like every other column.
   addColumnIfMissing(db, "multiremi_project_docs", "refs TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
+  db.run(
+    "UPDATE multiremi_projects SET archived_at = updated_at WHERE archived_at IS NULL AND status IN ('completed', 'cancelled')",
+  );
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_projects_archive ON multiremi_projects(workspace_id, archived_at, updated_at)");
   // Multi-user auth: stable external identity (Feishu open_id) on users, and an
   // explicit user↔member link so membership no longer relies solely on the
   // legacy `mem_<ws>_<userId>` id convention.

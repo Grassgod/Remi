@@ -15,5 +15,6 @@ export * from "./autopilots";
 export * from "./billing";
 export * from "./users";
 export * from "./project-docs";
+export * from "./projects";
 export * from "./lark";
 export * from "./repositories";
