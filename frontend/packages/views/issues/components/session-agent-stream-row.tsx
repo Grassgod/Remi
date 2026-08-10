@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, XCircle } from "lucide-react";
+import { Clock, Loader2, XCircle } from "lucide-react";
 import { api } from "@multiremi/core/api";
 import { issueKeys } from "@multiremi/core/issues/queries";
 import { taskMessagesOptions } from "@multiremi/core/chat/queries";
@@ -76,6 +76,10 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const [elapsed, setElapsed] = useState("");
   const [open, setOpen] = useState(false);
   const ended = FAILED_STATUS.has(task.status);
+  const isQueued = task.status === "queued";
+  const isWaitingLocalDirectory = task.status === "waiting_local_directory";
+  const isDispatched = task.status === "dispatched";
+  const isParked = isQueued || isWaitingLocalDirectory;
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
   const { data: messages } = useQuery(taskMessagesOptions(task.id));
@@ -120,6 +124,8 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
           <span className="flex items-center gap-1.5 text-xs">
             {ended ? (
               <XCircle className="h-3 w-3 shrink-0 text-destructive" />
+            ) : isParked ? (
+              <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
             ) : (
               <Loader2 className="h-3 w-3 shrink-0 animate-spin text-info" />
             )}
@@ -128,10 +134,18 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
                 ? t(($) => $.agent_stream.cancelled, { name: agentName })
                 : task.status === "failed"
                   ? t(($) => $.agent_stream.failed, { name: agentName })
-                  : t(($) => $.agent_live.is_working, { name: agentName })}
+                  : isQueued
+                    ? t(($) => $.agent_live.is_queued, { name: agentName })
+                    : isWaitingLocalDirectory
+                      ? t(($) => $.agent_live.is_waiting_local_directory, { name: agentName })
+                      : isDispatched
+                        ? t(($) => $.agent_live.is_starting, { name: agentName })
+                        : t(($) => $.agent_live.is_working, { name: agentName })}
             </span>
             {!ended && elapsed && (
-              <span className="shrink-0 tabular-nums text-muted-foreground">{elapsed}</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {isParked ? t(($) => $.agent_live.queued_elapsed_prefix, { elapsed }) : elapsed}
+              </span>
             )}
           </span>
           {!ended && stepSummary && (
@@ -148,7 +162,7 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
         task={task}
         items={items}
         agentName={agentName}
-        isLive={!ended}
+        isLive={task.status === "running"}
       />
     </>
   );

@@ -45,6 +45,89 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(firstRuntime.id)?.id).toBe(task.id);
   });
 
+  it("lets another provider on the same daemon continue a persistent Issue workspace", () => {
+    const store = createStore();
+    const claude = store.registerRuntime({
+      id: "rt_workspace_claude",
+      name: "claude",
+      provider: "claude",
+      daemonId: "machine-a",
+    });
+    const codex = store.registerRuntime({
+      id: "rt_workspace_codex",
+      name: "codex",
+      provider: "codex",
+      daemonId: "machine-a",
+    });
+    const otherCodex = store.registerRuntime({
+      id: "rt_workspace_codex_elsewhere",
+      name: "codex elsewhere",
+      provider: "codex",
+      daemonId: "machine-b",
+    });
+    const agent = store.createAgent({ name: "Codex follower", provider: "codex" });
+    const issue = store.createIssue({ title: "Cross-provider continuation", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: claude.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "ready",
+      repos: [],
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue with Codex" });
+
+    expect(store.claimTask(otherCodex.id)).toBeNull();
+    expect(store.claimTask(codex.id)?.id).toBe(task.id);
+
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: codex.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "in_use",
+      repos: [],
+    });
+    expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(codex.id);
+    expect(store.markIssueWorkspaceCleaned(issue.id, claude.id).status).toBe("cleaned");
+  });
+
+  it("rejects Issue workspace reports and cleanup from a different daemon", () => {
+    const store = createStore();
+    const owner = store.registerRuntime({
+      id: "rt_workspace_owner",
+      name: "owner",
+      provider: "claude",
+      daemonId: "machine-a",
+    });
+    const foreign = store.registerRuntime({
+      id: "rt_workspace_foreign",
+      name: "foreign",
+      provider: "codex",
+      daemonId: "machine-b",
+    });
+    const issue = store.createIssue({ title: "Machine affinity", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: owner.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "ready",
+      repos: [],
+    });
+
+    expect(() => store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: foreign.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "in_use",
+      repos: [],
+    })).toThrow("runtime does not own active issue workspace");
+    expect(() => store.markIssueWorkspaceCleaned(issue.id, foreign.id))
+      .toThrow("runtime does not own issue workspace");
+  });
+
   it("keeps Issue tasks off legacy runtimes without blocking ordinary tasks", () => {
     const store = createStore();
     const legacyRuntime = store.registerRuntime({

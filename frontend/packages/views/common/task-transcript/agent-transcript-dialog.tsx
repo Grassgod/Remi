@@ -310,27 +310,38 @@ export function AgentTranscriptDialog({
     return null;
   }, [items]);
 
-  // Status display
-  const statusBadge = isLive ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-xs font-medium text-info">
-      <Loader2 className="h-3 w-3 animate-spin" />
-      {t(($) => $.transcript.status_running)}
-    </span>
-  ) : task.status === "completed" ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
-      <CheckCircle2 className="h-3 w-3" />
-      {t(($) => $.transcript.status_completed)}
-    </span>
-  ) : task.status === "failed" ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive">
-      <XCircle className="h-3 w-3" />
-      {t(($) => $.transcript.status_failed)}
-    </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground capitalize">
-      {task.status}
+  const statusDisplay = task.status === "queued"
+    ? { label: t(($) => $.transcript.status_queued), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
+    : task.status === "dispatched"
+      ? { label: t(($) => $.transcript.status_dispatched), icon: Loader2, tone: "bg-info/15 text-info", spins: true }
+      : task.status === "waiting_local_directory"
+        ? { label: t(($) => $.transcript.status_waiting_local_directory), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
+        : task.status === "running"
+          ? { label: t(($) => $.transcript.status_running), icon: Loader2, tone: "bg-info/15 text-info", spins: true }
+          : task.status === "completed"
+            ? { label: t(($) => $.transcript.status_completed), icon: CheckCircle2, tone: "bg-success/15 text-success", spins: false }
+            : task.status === "failed"
+              ? { label: t(($) => $.transcript.status_failed), icon: XCircle, tone: "bg-destructive/15 text-destructive", spins: false }
+              : task.status === "cancelled"
+                ? { label: t(($) => $.transcript.status_cancelled), icon: XCircle, tone: "bg-muted text-muted-foreground", spins: false }
+                : { label: task.status, icon: null, tone: "bg-muted text-muted-foreground", spins: false };
+  const StatusIcon = statusDisplay.icon;
+  const statusBadge = (
+    <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium", statusDisplay.tone)}>
+      {StatusIcon ? <StatusIcon className={cn("h-3 w-3", statusDisplay.spins && "animate-spin")} /> : null}
+      {statusDisplay.label}
     </span>
   );
+  const emptyStateLabel = task.status === "queued"
+    ? t(($) => $.transcript.waiting_dispatch)
+    : task.status === "dispatched"
+      ? t(($) => $.transcript.waiting_start)
+      : task.status === "waiting_local_directory"
+        ? t(($) => $.transcript.waiting_local_directory)
+        : isLive
+          ? t(($) => $.transcript.waiting_events)
+          : null;
+  const emptyStateSpins = task.status === "dispatched" || (task.status === "running" && isLive);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -596,10 +607,12 @@ export function AgentTranscriptDialog({
         >
           {entries.length === 0 ? (
             <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
-              {isLive ? (
+              {emptyStateLabel ? (
                 <div className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {t(($) => $.transcript.waiting_events)}
+                  {emptyStateSpins
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <Clock className="h-4 w-4" />}
+                  {emptyStateLabel}
                 </div>
               ) : (
                 t(($) => $.transcript.no_data)

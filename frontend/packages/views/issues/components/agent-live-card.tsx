@@ -436,7 +436,7 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
             task={task}
             agentName={agentName}
             items={items}
-            isLive
+            isLive={task.status === "running"}
             title={t(($) => $.agent_live.transcript_button)}
           />
         )}

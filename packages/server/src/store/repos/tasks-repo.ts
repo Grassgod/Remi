@@ -17,6 +17,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
+import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import { createLogger } from "@shared/logger.js";
 import type {
   CreateTaskHumanRequestInput,
@@ -638,6 +639,8 @@ export class TasksRepo {
     // workspace's (the old `runtime.workspaceId ? ... : ""` dropped the filter
     // entirely for NULL-workspace runtimes, letting one claim across tenants).
     const workspaceFilter = "AND COALESCE(t.workspace_id, 'local') = ?";
+    const daemonAliases = runtimeDaemonAliases(runtime);
+    const daemonAliasPlaceholders = daemonAliases.map(() => "?").join(", ");
     const params = [
       runtime.id,
       now,
@@ -646,7 +649,9 @@ export class TasksRepo {
       runtime.maxConcurrency,
       runtime.workspaceId ?? "local",
       runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0,
-      runtime.id,
+      ...daemonAliases,
+      ...daemonAliases,
+      ...daemonAliases,
       runtime.id,
       runtime.id,
       runtime.provider,
@@ -690,9 +695,15 @@ export class TasksRepo {
              )
              OR EXISTS (
                SELECT 1 FROM multiremi_issue_workspaces issue_workspace
+               LEFT JOIN multiremi_runtimes issue_workspace_runtime
+                 ON issue_workspace_runtime.id = issue_workspace.runtime_id
                WHERE issue_workspace.issue_id = t.issue_id
-                 AND issue_workspace.runtime_id = ?
                  AND issue_workspace.status <> 'cleaned'
+                 AND (
+                   issue_workspace.runtime_id IN (${daemonAliasPlaceholders})
+                   OR issue_workspace_runtime.daemon_id IN (${daemonAliasPlaceholders})
+                   OR issue_workspace_runtime.legacy_daemon_id IN (${daemonAliasPlaceholders})
+                 )
              )
            )
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)

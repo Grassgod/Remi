@@ -1,6 +1,7 @@
 import { nowIso } from "@multiremi/ids.js";
 import { nullableString, parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
+import { runtimesShareDaemon } from "@multiremi/store/runtime-affinity.js";
 import type {
   MultiremiIssueWorkspace,
   MultiremiIssueWorkspaceRepo,
@@ -45,7 +46,12 @@ export class IssueWorkspacesRepo {
       }
     }
     const current = this.get(input.issueId);
-    if (current?.runtimeId && current.runtimeId !== input.runtimeId && current.status !== "cleaned") {
+    if (
+      current?.runtimeId
+      && current.runtimeId !== input.runtimeId
+      && current.status !== "cleaned"
+      && !this.runtimesShareDaemon(current.runtimeId, input.runtimeId)
+    ) {
       throw new Error("runtime does not own active issue workspace");
     }
     const now = nowIso();
@@ -84,15 +90,26 @@ export class IssueWorkspacesRepo {
   markCleaned(issueId: string, runtimeId: string): MultiremiIssueWorkspace {
     const current = this.get(issueId);
     if (!current) throw new Error(`Issue workspace not found: ${issueId}`);
-    if (current.runtimeId !== runtimeId) throw new Error("runtime does not own issue workspace");
+    if (
+      !current.runtimeId
+      || (current.runtimeId !== runtimeId && !this.runtimesShareDaemon(current.runtimeId, runtimeId))
+    ) {
+      throw new Error("runtime does not own issue workspace");
+    }
     const now = nowIso();
     this.ctx.db.run(
       `UPDATE multiremi_issue_workspaces
        SET status = 'cleaned', repos = '[]', cleaned_at = ?, updated_at = ?
-       WHERE issue_id = ? AND runtime_id = ?`,
-      [now, now, issueId, runtimeId],
+       WHERE issue_id = ?`,
+      [now, now, issueId],
     );
     return this.get(issueId)!;
+  }
+
+  private runtimesShareDaemon(firstRuntimeId: string, secondRuntimeId: string): boolean {
+    const first = this.ctx.runtimes().getRuntime(firstRuntimeId);
+    const second = this.ctx.runtimes().getRuntime(secondRuntimeId);
+    return Boolean(first && second && runtimesShareDaemon(first, second));
   }
 }
 

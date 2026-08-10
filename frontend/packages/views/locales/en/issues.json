@@ -379,6 +379,7 @@
   },
   "agent_live": {
     "is_working": "{{name}} is working",
+    "is_starting": "{{name}} is starting",
     "is_queued": "{{name}} is queued",
     "is_waiting_local_directory": "{{name}} is waiting for the local directory",
     "queued_elapsed_prefix": "queued for {{elapsed}}",

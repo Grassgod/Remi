@@ -370,6 +370,7 @@
   },
   "agent_live": {
     "is_working": "{{name}} が作業中",
+    "is_starting": "{{name}} を起動中",
     "is_queued": "{{name}} が待機中",
     "is_waiting_local_directory": "{{name}} がローカルディレクトリを待機中",
     "queued_elapsed_prefix": "{{elapsed}} 待機中",

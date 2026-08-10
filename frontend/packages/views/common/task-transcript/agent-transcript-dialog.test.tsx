@@ -63,6 +63,18 @@ function renderTranscript(
   );
 }
 
+describe("transcript pending task state", () => {
+  it("shows a queued task as waiting for a runtime, even if a caller marks the dialog live", () => {
+    renderTranscript([], { task: { status: "queued" }, isLive: true });
+
+    expect(screen.getByText("Queued")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for an available runtime...")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(screen.queryByText("Waiting for events...")).not.toBeInTheDocument();
+    expect(document.querySelector(".animate-spin")).toBeNull();
+  });
+});
+
 describe("transcript step card — Bash command", () => {
   it("renders the shell prompt with the command when the input carries one", () => {
     renderTranscript(bashStep({ command: "echo hi" }));

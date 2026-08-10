@@ -87,6 +87,15 @@ describe("session agent stream row", () => {
     expect(await screen.findByText("$ bun test")).toBeInTheDocument();
   });
 
+  it("keeps a queued agent visibly queued instead of calling it working", async () => {
+    listTasksByIssue.mockResolvedValue([task({ status: "queued", runtime_id: null, started_at: null })]);
+
+    renderRow();
+
+    expect(await screen.findByText("Agent a1 is queued")).toBeInTheDocument();
+    expect(screen.queryByText("Agent a1 is working")).not.toBeInTheDocument();
+  });
+
   it("shows nothing when the session has no active run", async () => {
     listTasksByIssue.mockResolvedValue([task({ status: "completed" })]);
 

@@ -375,6 +375,7 @@
   },
   "agent_live": {
     "is_working": "{{name}} 正在处理",
+    "is_starting": "{{name}} 正在启动",
     "is_queued": "{{name}} 排队中",
     "is_waiting_local_directory": "{{name}} 正在等待本地目录",
     "queued_elapsed_prefix": "已排队 {{elapsed}}",
