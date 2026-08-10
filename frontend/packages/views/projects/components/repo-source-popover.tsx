@@ -60,14 +60,10 @@ import {
 } from "../../platform";
 import { useT } from "../../i18n";
 
-// Three-source resource picker shared by the create-project modal and the
-// project detail sidebar. It's fully controlled: `resources` is the current
-// pending/attached set (drives checked state, the project_ref exclusion, and
-// the one-local_directory-per-daemon cap), `onAdd` appends, and the optional
-// `onRemove` toggles a selection back off (the create flow wires it; the
-// detail flow removes via the resource row instead and leaves it undefined,
-// so already-attached rows render as disabled).
-type SourceTab = "git" | "runtime" | "project";
+// Fully-controlled resource picker. Callers can narrow the visible sources;
+// legacy runtime/project resources remain renderable without exposing new
+// attachment entry points in the project UI.
+export type RepoSource = "git" | "runtime" | "project";
 
 export interface RepoSourcePopoverProps {
   resources: CreateProjectResourceRequest[];
@@ -77,6 +73,8 @@ export interface RepoSourcePopoverProps {
   currentProjectId?: string;
   /** Closes the containing popover from the footer's Done button. */
   onClose?: () => void;
+  /** Resource sources available in this flow. Defaults to all legacy sources. */
+  allowedSources?: readonly RepoSource[];
 }
 
 // Scanning is a machine-level action, so the fleet picker lists computers, not
@@ -240,12 +238,17 @@ export function RepoSourcePopover({
   onRemove,
   currentProjectId,
   onClose,
+  allowedSources,
 }: RepoSourcePopoverProps) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const workspace = useCurrentWorkspace();
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
-  const [tab, setTab] = useState<SourceTab>("git");
+  const sourceIds = allowedSources?.length
+    ? allowedSources
+    : (["git", "runtime", "project"] as const);
+  const [tab, setTab] = useState<RepoSource>(sourceIds[0] ?? "git");
+  const activeTab = sourceIds.includes(tab) ? tab : sourceIds[0] ?? "git";
 
   const isSelected = (resource: CreateProjectResourceRequest) =>
     resources.some((r) => sameResource(r, resource));
@@ -259,11 +262,12 @@ export function RepoSourcePopover({
     }
   };
 
-  const TABS: Array<{ id: SourceTab; label: string }> = [
+  const allTabs: Array<{ id: RepoSource; label: string }> = [
     { id: "git", label: t(($) => $.repo_source.tab_git) },
     { id: "runtime", label: t(($) => $.repo_source.tab_runtime) },
     { id: "project", label: t(($) => $.repo_source.tab_project) },
   ];
+  const tabs = allTabs.filter((entry) => sourceIds.includes(entry.id));
 
   return (
     <div
@@ -271,18 +275,21 @@ export function RepoSourcePopover({
         "space-y-2",
         // The fleet tab needs room to breathe (path browser + long remotes);
         // the other tabs stay compact.
-        tab === "runtime" ? "w-[560px] max-w-[90vw]" : "w-72",
+        activeTab === "runtime" ? "w-[560px] max-w-[90vw]" : "w-72",
       )}
     >
-      <div className="grid grid-cols-3 gap-1 rounded-md bg-muted/60 p-0.5">
-        {TABS.map((entry) => (
+      {tabs.length > 1 && <div
+        className="grid gap-1 rounded-md bg-muted/60 p-0.5"
+        style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}
+      >
+        {tabs.map((entry) => (
           <button
             key={entry.id}
             type="button"
             onClick={() => setTab(entry.id)}
             className={cn(
               "rounded px-2 py-1 text-xs transition-colors",
-              tab === entry.id
+              activeTab === entry.id
                 ? "bg-background shadow-sm font-medium"
                 : "text-muted-foreground hover:text-foreground",
             )}
@@ -290,9 +297,9 @@ export function RepoSourcePopover({
             {entry.label}
           </button>
         ))}
-      </div>
+      </div>}
 
-      {tab === "git" && (
+      {activeTab === "git" && (
         <GitRepoTab
           repos={workspace?.repos ?? []}
           isSelected={isSelected}
@@ -301,7 +308,7 @@ export function RepoSourcePopover({
           showSelected={!!onRemove}
         />
       )}
-      {tab === "runtime" && (
+      {activeTab === "runtime" && (
         <RuntimeImportTab
           wsId={wsId}
           resources={resources}
@@ -310,7 +317,7 @@ export function RepoSourcePopover({
           showSelected={!!onRemove}
         />
       )}
-      {tab === "project" && (
+      {activeTab === "project" && (
         <ProjectRefTab
           wsId={wsId}
           currentProjectId={currentProjectId}
@@ -329,7 +336,7 @@ export function RepoSourcePopover({
           resources={resources}
           projects={projects}
           onRemove={onRemove}
-          maxVisible={tab === "runtime" ? MAX_VISIBLE_CHIPS : NARROW_MAX_VISIBLE_CHIPS}
+          maxVisible={activeTab === "runtime" ? MAX_VISIBLE_CHIPS : NARROW_MAX_VISIBLE_CHIPS}
         />
       )}
 

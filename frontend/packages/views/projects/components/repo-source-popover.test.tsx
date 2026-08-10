@@ -111,6 +111,7 @@ function renderPopover(
     onAdd: (r: CreateProjectResourceRequest) => void;
     onRemove: (r: CreateProjectResourceRequest) => void;
     currentProjectId: string;
+    allowedSources: Array<"git" | "runtime" | "project">;
   }> = {},
 ) {
   const onAdd = props.onAdd ?? vi.fn();
@@ -125,12 +126,33 @@ function renderPopover(
           onAdd={onAdd}
           onRemove={props.onRemove}
           currentProjectId={props.currentProjectId}
+          allowedSources={props.allowedSources}
         />
       </QueryClientProvider>
     </I18nWrapper>,
   );
   return { onAdd };
 }
+
+describe("RepoSourcePopover — source visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWorkspaceRepos.current = [];
+    mockProjectListOptions.mockReturnValue({
+      queryKey: ["projects", "ws-1", "list"],
+      queryFn: () => Promise.resolve([]),
+    });
+  });
+
+  it("shows only the Git flow when the project UI restricts resource sources", () => {
+    renderPopover({ allowedSources: ["git"] });
+
+    expect(screen.getByText("Attach Git repos to this project")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /From fleet/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reference project/i })).not.toBeInTheDocument();
+  });
+});
 
 // Self-managing wrapper: the selected bar and its two-way sync only make sense
 // when the parent owns the resource list, so mirror the create-project flow.

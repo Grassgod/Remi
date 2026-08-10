@@ -182,6 +182,7 @@ export function ProjectResourcesSection({
               onAdd={handleAdd}
               currentProjectId={projectId}
               onClose={() => setAddOpen(false)}
+              allowedSources={["git"]}
             />
           </PopoverContent>
         </Popover>}
