@@ -4,7 +4,6 @@ import { useState, useRef } from "react";
 import {
   ChevronRight,
   FolderKanban,
-  GitBranch,
   Maximize2,
   Minimize2,
   Search,
@@ -27,11 +26,11 @@ import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip";
 import { Button } from "@multiremi/ui/components/ui/button";
-import { Checkbox } from "@multiremi/ui/components/ui/checkbox";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { EmojiPicker } from "@multiremi/ui/components/common/emoji-picker";
 import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
 import { ActorAvatar } from "../common/actor-avatar";
+import { RepositoryOptionRow } from "../repositories/repository-option-row";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
@@ -308,34 +307,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   const checked = selectedRepositoryIds.includes(repository.id);
 
                   return (
-                    <div
+                    <RepositoryOptionRow
                       key={repository.id}
-                      className="flex items-start gap-3 border-b px-3 py-2.5 last:border-b-0 hover:bg-accent/40"
-                    >
-                      <Checkbox
-                        aria-label={repository.name}
-                        checked={checked}
-                        onCheckedChange={() => toggleRepository(repository.id)}
-                        className="mt-0.5"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-sm font-medium">{repository.name}</span>
-                          {repository.default_branch && (
-                            <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-                              <GitBranch className="size-3 shrink-0" />
-                              <span className="truncate">{repository.default_branch}</span>
-                            </span>
-                          )}
-                        </span>
-                        <span
-                          title={repository.url}
-                          className="mt-0.5 block truncate text-xs text-muted-foreground"
-                        >
-                          {repository.url}
-                        </span>
-                      </span>
-                    </div>
+                      repository={repository}
+                      checked={checked}
+                      onToggle={() => toggleRepository(repository.id)}
+                    />
                   );
                 })
               ) : repositories.length > 0 ? (

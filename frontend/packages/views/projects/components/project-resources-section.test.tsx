@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   projectsLoaded: true,
 }));
 const mockDelete = vi.hoisted(() => vi.fn());
+const mockCreate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options?: { queryKey?: readonly unknown[] }) => {
@@ -31,7 +32,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multiremi/core/projects", () => ({
   projectResourcesOptions: () => ({ queryKey: ["projectResources"] }),
-  useCreateProjectResource: () => ({ mutateAsync: vi.fn() }),
+  useCreateProjectResource: () => ({ mutateAsync: mockCreate }),
   useUpdateProjectResource: () => ({ mutateAsync: vi.fn() }),
   useDeleteProjectResource: () => ({ mutateAsync: mockDelete }),
 }));
@@ -75,10 +76,32 @@ vi.mock("../../navigation", () => ({
   ),
 }));
 
-// The add-flow popover is exercised in repo-source-popover.test.tsx; stub it
+// The add-flow popover is exercised in project-git-repository-picker.test.tsx; stub it
 // so this suite stays focused on how attached rows render.
-vi.mock("./repo-source-popover", () => ({
-  RepoSourcePopover: () => <div data-testid="repo-source-popover" />,
+vi.mock("./project-git-repository-picker", () => ({
+  ProjectGitRepositoryPicker: ({
+    onAttach,
+  }: {
+    onAttach: (resources: unknown[]) => Promise<readonly string[]>;
+  }) => (
+    <button
+      type="button"
+      data-testid="git-repository-picker"
+      onClick={() =>
+        onAttach([
+          {
+            resource_type: "github_repo",
+            resource_ref: {
+              url: "https://github.com/example/api.git",
+              default_branch_hint: "main",
+            },
+          },
+        ])
+      }
+    >
+      Attach selected
+    </button>
+  ),
 }));
 
 vi.mock("sonner", () => ({
@@ -123,6 +146,7 @@ describe("ProjectResourcesSection — project_ref rows", () => {
     state.resources = [];
     state.projects = [];
     state.projectsLoaded = true;
+    mockCreate.mockResolvedValue({ id: "resource-new" });
   });
 
   it("renders a project_ref row linking to the referenced project", () => {
@@ -181,7 +205,25 @@ describe("ProjectResourcesSection — project_ref rows", () => {
     renderSection(false);
 
     expect(screen.queryByTitle("Remove")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("repo-source-popover")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("git-repository-picker")).not.toBeInTheDocument();
+  });
+
+  it("creates selected Git repositories only after picker confirmation", async () => {
+    renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add resource" }));
+    expect(mockCreate).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Attach selected" }));
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith({
+        resource_type: "github_repo",
+        resource_ref: {
+          url: "https://github.com/example/api.git",
+          default_branch_hint: "main",
+        },
+      }),
+    );
   });
 });
 

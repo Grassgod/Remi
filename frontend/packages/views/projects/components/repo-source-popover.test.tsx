@@ -147,7 +147,7 @@ describe("RepoSourcePopover — source visibility", () => {
   it("shows only the Git flow when the project UI restricts resource sources", () => {
     renderPopover({ allowedSources: ["git"] });
 
-    expect(screen.getByText("Attach Git repos to this project")).toBeInTheDocument();
+    expect(screen.getByText("Attach Git repositories")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Git" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /From fleet/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Reference project/i })).not.toBeInTheDocument();

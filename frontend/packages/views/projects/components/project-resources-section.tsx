@@ -40,7 +40,7 @@ import {
 } from "@multiremi/ui/components/ui/tooltip";
 import { isDesktopShell, useLocalDaemonStatus } from "../../platform";
 import { AppLink } from "../../navigation";
-import { RepoSourcePopover } from "./repo-source-popover";
+import { ProjectGitRepositoryPicker } from "./project-git-repository-picker";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 
@@ -92,26 +92,51 @@ export function ProjectResourcesSection({
   const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
-  // The shared popover is controlled by the attached set (mapped to the
-  // create-request shape), so it marks already-attached repos, excludes
-  // referenced projects, and enforces the per-daemon local_directory cap.
-  const pendingResources: CreateProjectResourceRequest[] = resources.map(
-    (r) => ({ resource_type: r.resource_type, resource_ref: r.resource_ref }),
-  );
+  const attachedGitResources: CreateProjectResourceRequest[] = resources
+    .filter(isGithubRef)
+    .map((resource) => ({
+      resource_type: resource.resource_type,
+      resource_ref: resource.resource_ref,
+    }));
 
-  // Detail-view add commits immediately, one resource per selection. A 409
-  // (duplicate / per-daemon conflict) surfaces as a toast.
-  const handleAdd = async (resource: CreateProjectResourceRequest) => {
-    try {
-      await createResource.mutateAsync(resource);
-      toast.success(t(($) => $.resources.toast_attached));
-    } catch (err) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : t(($) => $.resources.toast_attach_failed);
-      toast.error(msg);
+  const handleAttach = async (
+    requests: CreateProjectResourceRequest[],
+  ): Promise<string[]> => {
+    const results = await Promise.allSettled(
+      requests.map((request) => createResource.mutateAsync(request)),
+    );
+    const attachedUrls: string[] = [];
+    let firstError: unknown;
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        const request = requests[index];
+        if (request?.resource_type === "github_repo") {
+          attachedUrls.push(
+            (request.resource_ref as GithubRepoResourceRef).url,
+          );
+        }
+      } else if (firstError === undefined) {
+        firstError = result.reason;
+      }
+    });
+
+    if (attachedUrls.length > 0) {
+      toast.success(
+        t(($) => $.resources.toast_attached_count, {
+          count: attachedUrls.length,
+        }),
+      );
     }
+    if (firstError !== undefined) {
+      toast.error(
+        firstError instanceof Error && firstError.message
+          ? firstError.message
+          : t(($) => $.resources.toast_attach_failed),
+      );
+    }
+
+    return attachedUrls;
   };
 
   const handleRemove = async (resource: ProjectResource) => {
@@ -168,6 +193,7 @@ export function ProjectResourcesSection({
                 <PopoverTrigger
                   render={
                     <Button variant="ghost" size="icon-sm" className="text-muted-foreground">
+                      <span className="sr-only">{t(($) => $.resources.add_button)}</span>
                       <Plus />
                     </Button>
                   }
@@ -176,13 +202,11 @@ export function ProjectResourcesSection({
             />
             <TooltipContent side="top">{t(($) => $.resources.add_button)}</TooltipContent>
           </Tooltip>
-          <PopoverContent align="end" className="w-auto p-2">
-            <RepoSourcePopover
-              resources={pendingResources}
-              onAdd={handleAdd}
-              currentProjectId={projectId}
+          <PopoverContent align="end" className="w-auto overflow-hidden p-0">
+            <ProjectGitRepositoryPicker
+              attachedResources={attachedGitResources}
+              onAttach={handleAttach}
               onClose={() => setAddOpen(false)}
-              allowedSources={["git"]}
             />
           </PopoverContent>
         </Popover>}
