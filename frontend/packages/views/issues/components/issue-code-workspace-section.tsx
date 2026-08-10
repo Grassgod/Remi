@@ -40,7 +40,12 @@ export function IssueCodeWorkspaceSection({ issueId }: { issueId: string }) {
             </span>
           </WorkspaceRow>
           <WorkspaceRow icon={<FolderGit2 className="size-3.5" />} label={t(($) => $.detail.workspace_path)}>
-            <CopyValue value={workspace.root_path} onCopy={copy} />
+            <CopyValue
+              value={workspace.root_path}
+              displayValue={displayWorkspacePath(workspace.root_path)}
+              onCopy={copy}
+              wrap
+            />
           </WorkspaceRow>
           {workspace.repos.length > 0 && (
             <div className="border-t border-border/60 pt-2">
@@ -59,8 +64,12 @@ export function IssueCodeWorkspaceSection({ issueId }: { issueId: string }) {
                       <span className="truncate font-medium">{repo.repo_name}</span>
                       {repo.dirty && <span className="shrink-0 text-[10px] text-amber-700">{t(($) => $.detail.workspace_dirty)}</span>}
                     </div>
-                    <div className="ml-5 mt-0.5 truncate font-mono text-[10px] text-muted-foreground" title={repo.worktree_path}>
-                      {repo.worktree_path}
+                    <div className="ml-5 mt-0.5 text-muted-foreground">
+                      <CopyValue
+                        value={repo.worktree_path}
+                        displayValue={displayRepoPath(workspace.root_path, repo.worktree_path)}
+                        onCopy={copy}
+                      />
                     </div>
                     {repo.error && <div className="ml-5 mt-0.5 text-[10px] text-destructive">{repo.error}</div>}
                   </div>
@@ -84,11 +93,39 @@ function WorkspaceRow({ icon, label, children }: { icon: ReactNode; label: strin
   );
 }
 
-function CopyValue({ value, onCopy }: { value: string; onCopy: (value: string) => void }) {
+function displayWorkspacePath(path: string): string {
+  const remiHome = path.indexOf("/.remi/");
+  return remiHome >= 0 ? `~${path.slice(remiHome)}` : path;
+}
+
+function displayRepoPath(rootPath: string, worktreePath: string): string {
+  const root = rootPath.replace(/\/+$/, "");
+  if (worktreePath === root) return ".";
+  if (worktreePath.startsWith(`${root}/`)) return `.${worktreePath.slice(root.length)}`;
+  const name = worktreePath.split("/").filter(Boolean).at(-1);
+  return name ? `./${name}` : worktreePath;
+}
+
+function CopyValue({
+  value,
+  displayValue = value,
+  onCopy,
+  wrap = false,
+}: {
+  value: string;
+  displayValue?: string;
+  onCopy: (value: string) => void;
+  wrap?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <span className="truncate font-mono text-[10px]" title={value}>{value}</span>
+    <div className={`flex min-w-0 gap-1 ${wrap ? "items-start" : "items-center"}`}>
+      <span
+        className={`min-w-0 font-mono text-[10px] ${wrap ? "break-all leading-4" : "truncate"}`}
+        title={value}
+      >
+        {displayValue}
+      </span>
       <button
         type="button"
         className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
