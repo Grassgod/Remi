@@ -65,8 +65,12 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: wsMembers = [] } = useQuery(memberListOptions(wsId));
 
-  const activeAgents = useMemo(
-    () => agents.filter((a: Agent) => !a.archived_at && a.runtime_id),
+  // Squad membership is logical and must not depend on transient runtime
+  // availability. Pool-model agents intentionally have an empty runtime_id;
+  // their presence dot separately reflects whether a matching provider
+  // runtime is currently online.
+  const selectableAgents = useMemo(
+    () => agents.filter((a: Agent) => !a.archived_at),
     [agents],
   );
 
@@ -200,14 +204,14 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
             </div>
 
             <LeaderPicker
-              agents={activeAgents}
+              agents={selectableAgents}
               currentUserId={currentUserId}
               value={leaderId}
               onChange={handleLeaderChange}
             />
 
             <AdditionalMembersPicker
-              agents={activeAgents}
+              agents={selectableAgents}
               members={wsMembers}
               currentUserId={currentUserId}
               leaderId={leaderId}

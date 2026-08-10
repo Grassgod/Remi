@@ -196,7 +196,8 @@ import { CreateSquadModal } from "./create-squad";
 function makeAgent(overrides: Partial<Agent> & { id: string; name: string; owner_id: string | null }): Agent {
   return {
     workspace_id: "ws-1",
-    runtime_id: "rt-1",
+    runtime_id: "",
+    provider: "claude",
     description: "",
     instructions: "",
     avatar_url: null,
@@ -323,6 +324,46 @@ describe("CreateSquadModal", () => {
     const myIdx = all.findIndex((n) => n.textContent === "My Agents");
     const wsIdx = all.findIndex((n) => n.textContent === "Workspace Agents");
     expect(myIdx).toBeLessThan(wsIdx);
+  });
+
+  it("keeps pool-model agents selectable without a runtime binding and excludes archived agents", async () => {
+    const poolAgent = makeAgent({
+      id: "agent-pool",
+      name: "PoolAgent",
+      owner_id: ME,
+      provider: "codex",
+      runtime_id: "",
+    });
+    const archivedAgent = makeAgent({
+      id: "agent-archived",
+      name: "ArchivedAgent",
+      owner_id: ME,
+      archived_at: "2026-02-01T00:00:00Z",
+    });
+    mocks.agents = [poolAgent, archivedAgent];
+    mocks.createSquad.mockResolvedValue(
+      makeSquad({ id: "sq-pool", leader_id: poolAgent.id }),
+    );
+
+    renderModal();
+
+    expect(screen.getAllByText("PoolAgent").length).toBeGreaterThan(0);
+    expect(screen.queryByText("ArchivedAgent")).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Frontend Team/i), {
+      target: { value: "Pool Team" },
+    });
+    fireEvent.click(firstMatch("PoolAgent"));
+    fireEvent.click(getSubmitButton());
+
+    await waitFor(() => {
+      expect(mocks.createSquad).toHaveBeenCalledWith({
+        name: "Pool Team",
+        description: undefined,
+        leader_id: "agent-pool",
+        avatar_url: undefined,
+      });
+    });
   });
 
   it("auto-clears an additional-members entry when the same agent is picked as leader", async () => {
