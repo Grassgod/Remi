@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  assertMultiremiBinaryVersion,
   createMultiremiArchive,
   MULTIREMI_ARCHIVE_ENTRIES,
   MULTIREMI_RELEASE_TARGETS,
@@ -45,6 +46,21 @@ describe("Multiremi release artifacts", () => {
         .trim()
         .split("\n");
       expect(contents).toEqual([...MULTIREMI_ARCHIVE_ENTRIES]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a compiled CLI that reports the wrong release version", () => {
+    const root = mkdtempSync(join(tmpdir(), "multiremi-version-"));
+    try {
+      const bin = join(root, "remi");
+      writeFileSync(bin, "#!/bin/sh\necho 0.2.0\n");
+      chmodSync(bin, 0o755);
+
+      expect(() => assertMultiremiBinaryVersion(bin, "v0.2.26")).toThrow(
+        "compiled remi version mismatch: expected 0.2.26, got 0.2.0",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

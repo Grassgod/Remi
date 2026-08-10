@@ -46,6 +46,14 @@ export function createMultiremiArchive(targetDir: string, archive: string, stdio
   execFileSync("tar", ["czf", archive, "-C", targetDir, ...MULTIREMI_ARCHIVE_ENTRIES], { stdio });
 }
 
+export function assertMultiremiBinaryVersion(bin: string, rawVersion: string): void {
+  const expected = multiremiAssetVersion(rawVersion);
+  const actual = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim();
+  if (actual !== expected) {
+    throw new Error(`compiled remi version mismatch: expected ${expected}, got ${actual}`);
+  }
+}
+
 export function buildMultiremiReleaseArchives(): void {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version?: string };
   const rawVersion = process.env.MULTIREMI_VERSION || process.env.GITHUB_REF_NAME || pkg.version || "0.0.0";
@@ -78,6 +86,9 @@ export function buildMultiremiReleaseArchives(): void {
       { cwd: ROOT, stdio: "inherit" },
     );
     chmodSync(bin, 0o755);
+    if (target.os === process.platform && target.arch === process.arch) {
+      assertMultiremiBinaryVersion(bin, tagVersion);
+    }
 
     const claudeWrapper = join(targetDir, "remi-claude-agent-acp");
     cpSync(join(ROOT, "bin", "remi-claude-agent-acp"), claudeWrapper);
