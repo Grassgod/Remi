@@ -11306,7 +11306,7 @@
             "squadId": "sqd_snapshot",
             "memberType": "agent",
             "memberId": "agt_snapshot",
-            "role": "member",
+            "role": "leader",
             "createdAt": "<timestamp>"
           }
         ]
@@ -11324,7 +11324,7 @@
             "squadId": "sqd_snapshot",
             "memberType": "agent",
             "memberId": "agt_snapshot",
-            "role": "member",
+            "role": "leader",
             "createdAt": "<timestamp>"
           }
         ]
@@ -12514,7 +12514,7 @@
               "squad_id": "sqd_snapshot",
               "member_type": "agent",
               "member_id": "agt_snapshot",
-              "role": "member",
+              "role": "leader",
               "created_at": "<timestamp>"
             }
           ]
@@ -12546,7 +12546,7 @@
             "squad_id": "sqd_snapshot",
             "member_type": "agent",
             "member_id": "agt_snapshot",
-            "role": "member",
+            "role": "leader",
             "created_at": "<timestamp>"
           }
         ]
@@ -12563,7 +12563,7 @@
           "squad_id": "sqd_snapshot",
           "member_type": "agent",
           "member_id": "agt_snapshot",
-          "role": "member",
+          "role": "leader",
           "created_at": "<timestamp>"
         }
       ]
@@ -15723,7 +15723,7 @@
         "squad_id": "sqd_xtp8jpp4a7us",
         "member_type": "agent",
         "member_id": "agt_snapshot",
-        "role": "member",
+        "role": "leader",
         "created_at": "<timestamp>"
       }
     },
@@ -15808,7 +15808,7 @@
           "squadId": "sqd_snapshot",
           "memberType": "agent",
           "memberId": "agt_snapshot",
-          "role": "member",
+          "role": "leader",
           "createdAt": "<timestamp>"
         }
       }

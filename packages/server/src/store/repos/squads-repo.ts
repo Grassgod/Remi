@@ -117,24 +117,35 @@ export class SquadsRepo {
       if (leader.workspaceId !== current.workspaceId) throw new Error("Squad member is in a different workspace");
     }
     const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_squads SET
-        name = ?,
-        description = ?,
-        instructions = ?,
-        leader_id = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.name ?? current.name,
-        input.description === undefined ? current.description : input.description ?? "",
-        input.instructions === undefined ? current.instructions : input.instructions ?? "",
-        input.leaderId === undefined ? current.leaderId : input.leaderId,
-        now,
-        id,
-      ],
-    );
-    if (input.leaderId) this.addSquadMember(id, { memberType: "agent", memberId: input.leaderId, role: "leader" });
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.db.run(
+        `UPDATE multiremi_squads SET
+          name = ?,
+          description = ?,
+          instructions = ?,
+          leader_id = ?,
+          updated_at = ?
+         WHERE id = ?`,
+        [
+          input.name ?? current.name,
+          input.description === undefined ? current.description : input.description ?? "",
+          input.instructions === undefined ? current.instructions : input.instructions ?? "",
+          input.leaderId === undefined ? current.leaderId : input.leaderId,
+          now,
+          id,
+        ],
+      );
+      if (input.leaderId !== undefined) {
+        this.ctx.db.run(
+          "UPDATE multiremi_squad_members SET role = 'member' WHERE squad_id = ? AND role = 'leader'",
+          [id],
+        );
+        if (input.leaderId) {
+          this.upsertSquadMemberRow(id, "agent", input.leaderId, "leader", now);
+        }
+      }
+    });
+    tx();
     return this.getSquad(id)!;
   }
 
@@ -161,24 +172,31 @@ export class SquadsRepo {
       if (!member) throw new Error(`Member not found: ${input.memberId}`);
       if (member.archivedAt) throw new Error(`Member is archived: ${input.memberId}`);
     }
-    const now = nowIso();
-    const existing = this.ctx.db.query(
-      "SELECT * FROM multiremi_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
-    ).get(squadId, input.memberType, input.memberId) as Row | null;
-    if (existing) {
-      this.ctx.db.run(
-        "UPDATE multiremi_squad_members SET role = ? WHERE id = ?",
-        [input.role ?? "member", String(existing.id)],
-      );
-      return this.getSquadMember(String(existing.id))!;
+    // Re-adding the current leader is an idempotent membership operation. Keep
+    // the canonical role even if an older caller sends the default `member`.
+    const isCurrentLeader = input.memberType === "agent" && squad.leaderId === input.memberId;
+    const role = isCurrentLeader ? "leader" : input.role ?? "member";
+    if (role === "leader" && input.memberType !== "agent") {
+      throw new Error("Squad leader must be an agent");
     }
-    const id = createId("sqm");
-    this.ctx.db.run(
-      `INSERT INTO multiremi_squad_members (id, squad_id, member_type, member_id, role, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, squadId, input.memberType, input.memberId, input.role ?? "member", now],
-    );
-    this.ctx.db.run("UPDATE multiremi_squads SET updated_at = ? WHERE id = ?", [now, squadId]);
+    const now = nowIso();
+    let id = "";
+    const tx = this.ctx.db.transaction(() => {
+      if (role === "leader") {
+        this.ctx.db.run(
+          "UPDATE multiremi_squad_members SET role = 'member' WHERE squad_id = ? AND role = 'leader'",
+          [squadId],
+        );
+      }
+      id = this.upsertSquadMemberRow(squadId, input.memberType, input.memberId, role, now);
+      this.ctx.db.run(
+        role === "leader"
+          ? "UPDATE multiremi_squads SET leader_id = ?, updated_at = ? WHERE id = ?"
+          : "UPDATE multiremi_squads SET updated_at = ? WHERE id = ?",
+        role === "leader" ? [input.memberId, now, squadId] : [now, squadId],
+      );
+    });
+    tx();
     return this.getSquadMember(id)!;
   }
 
@@ -203,9 +221,42 @@ export class SquadsRepo {
 
   listSquadMembers(squadId: string): MultiremiSquadMember[] {
     const rows = this.ctx.db.query(
-      "SELECT * FROM multiremi_squad_members WHERE squad_id = ? ORDER BY role = 'leader' DESC, created_at ASC",
+      `SELECT m.*,
+              CASE
+                WHEN m.member_type = 'agent' AND m.member_id = s.leader_id THEN 'leader'
+                WHEN m.role = 'leader' THEN 'member'
+                ELSE m.role
+              END AS role
+       FROM multiremi_squad_members m
+       JOIN multiremi_squads s ON s.id = m.squad_id
+       WHERE m.squad_id = ?
+       ORDER BY (m.member_type = 'agent' AND m.member_id = s.leader_id) DESC, m.created_at ASC`,
     ).all(squadId) as Row[];
     return rows.map(toSquadMember);
+  }
+
+  private upsertSquadMemberRow(
+    squadId: string,
+    memberType: AddSquadMemberInput["memberType"],
+    memberId: string,
+    role: string,
+    now: string,
+  ): string {
+    const existing = this.ctx.db.query(
+      "SELECT id FROM multiremi_squad_members WHERE squad_id = ? AND member_type = ? AND member_id = ?",
+    ).get(squadId, memberType, memberId) as Row | null;
+    if (existing) {
+      const id = String(existing.id);
+      this.ctx.db.run("UPDATE multiremi_squad_members SET role = ? WHERE id = ?", [role, id]);
+      return id;
+    }
+    const id = createId("sqm");
+    this.ctx.db.run(
+      `INSERT INTO multiremi_squad_members (id, squad_id, member_type, member_id, role, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, squadId, memberType, memberId, role, now],
+    );
+    return id;
   }
 }
 

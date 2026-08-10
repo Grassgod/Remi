@@ -139,6 +139,15 @@ describe("buildEntries pairing", () => {
     expect((entries[0] as { input?: unknown }).input).toEqual({ command: "ls" });
   });
 
+  it("keeps the concrete tool name when a legacy result says unknown", () => {
+    const entries = buildEntries([
+      item({ seq: 1, type: "tool_use", tool: "Bash", toolCallId: "tc_1", status: "in_progress" }),
+      item({ seq: 2, type: "tool_result", tool: "unknown", toolCallId: "tc_1", status: "completed" }),
+    ]);
+
+    expect(entries[0]).toMatchObject({ kind: "step", tool: "Bash", status: "completed" });
+  });
+
   it("takes the input from the result when the use had none (claude terminal calls)", () => {
     // The claude bridge's initial tool_call only resolves to a terminal id, so
     // the daemon emits the use without input and lets the result carry the

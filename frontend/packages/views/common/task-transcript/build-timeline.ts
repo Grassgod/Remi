@@ -87,7 +87,12 @@ export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
         steps.set(id, step);
         out.push(step);
       }
-      if (item.tool) step.tool = item.tool;
+      // Older Codex runs persisted `unknown` on the terminal frame even though
+      // their initial frame had the real tool name. Do not let a placeholder
+      // erase a concrete paired value; a later concrete refinement still wins.
+      if (item.tool && (!step.tool || !isPlaceholderToolName(item.tool) || isPlaceholderToolName(step.tool))) {
+        step.tool = item.tool;
+      }
       if (item.status) step.status = item.status;
       if (item.meta) step.meta = { ...step.meta, ...item.meta };
       if (item.createdAt && !step.createdAt) step.createdAt = item.createdAt;
@@ -112,6 +117,11 @@ export function buildEntries(items: TimelineItem[]): TranscriptEntry[] {
     out.push({ kind: "event", seq: item.seq, item });
   }
   return out;
+}
+
+function isPlaceholderToolName(name?: string): boolean {
+  const normalized = name?.trim().toLowerCase();
+  return !normalized || normalized === "unknown" || normalized === "tool";
 }
 
 /**

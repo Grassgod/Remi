@@ -190,4 +190,38 @@ describe("store migrations", () => {
     expect(row?.severity).toBe("info");
     expect(tableNames(database)).not.toContain("multiremi_inbox_items_legacy");
   });
+
+  it("repairs duplicate squad leader roles from the squad leader id", () => {
+    const database = freshDb();
+    migrate(database);
+    database.run(
+      `INSERT INTO multiremi_squads (id, name, leader_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      ["sqd_1", "Workers", "agt_new", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"],
+    );
+    database.run(
+      `INSERT INTO multiremi_squad_members (id, squad_id, member_type, member_id, role, created_at)
+       VALUES (?, ?, 'agent', ?, 'leader', ?)`,
+      ["sqm_old", "sqd_1", "agt_old", "2026-01-01T00:00:00.000Z"],
+    );
+    database.run(
+      `INSERT INTO multiremi_squad_members (id, squad_id, member_type, member_id, role, created_at)
+       VALUES (?, ?, 'agent', ?, 'member', ?)`,
+      ["sqm_new", "sqd_1", "agt_new", "2026-01-01T00:00:01.000Z"],
+    );
+
+    migrate(database);
+
+    const roles = database.query(
+      "SELECT member_id, role FROM multiremi_squad_members WHERE squad_id = ? ORDER BY member_id",
+    ).all("sqd_1") as Array<{ member_id: string; role: string }>;
+    expect(roles).toEqual([
+      { member_id: "agt_new", role: "leader" },
+      { member_id: "agt_old", role: "member" },
+    ]);
+    expect(() => database.run(
+      `INSERT INTO multiremi_squad_members (id, squad_id, member_type, member_id, role, created_at)
+       VALUES ('sqm_extra', 'sqd_1', 'agent', 'agt_extra', 'leader', '2026-01-01T00:00:02.000Z')`,
+    )).toThrow();
+  });
 });

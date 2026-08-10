@@ -132,10 +132,14 @@ export function SquadMembersTab({
                     </span>
                   )}
                 </div>
-                <RoleEditor
-                  value={m.role ?? ""}
-                  onSave={async (next) => { await onUpdateRole(m, next); }}
-                />
+                {isLeader(m) ? (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{m.role}</span>
+                ) : (
+                  <RoleEditor
+                    value={m.role ?? ""}
+                    onSave={async (next) => { await onUpdateRole(m, next); }}
+                  />
+                )}
                 {primaryIssue && (
                   <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground min-w-0">
                     <AppLink

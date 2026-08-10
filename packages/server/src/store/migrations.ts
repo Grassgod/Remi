@@ -1162,6 +1162,7 @@ export function runMigrations(db: SqlDatabase): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_workspace_members_user ON multiremi_workspace_members(user_id, workspace_id)");
   backfillMemberUserIds(db);
   backfillOwnerExternalId(db);
+  normalizeSquadLeaderRoles(db);
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_trigger_comment ON multiremi_tasks(trigger_comment_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_issue_session ON multiremi_tasks(issue_session_id, created_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issue_comments_session ON multiremi_issue_comments(issue_session_id, created_at)");
@@ -1185,6 +1186,36 @@ export function runMigrations(db: SqlDatabase): void {
   // is cleared, which is the invariant the pool model needs.
   backfillDefaultIssueSessions(db);
   backfillIssueKeys(db);
+}
+
+function normalizeSquadLeaderRoles(db: SqlDatabase): void {
+  // `leader_id` is the squad's source of truth. Older leader changes updated
+  // that column but left the previous membership row as `leader`, so repair
+  // those rows before enforcing one leader role per squad.
+  db.run(
+    `UPDATE multiremi_squad_members
+     SET role = 'member'
+     WHERE role = 'leader'
+       AND NOT EXISTS (
+         SELECT 1 FROM multiremi_squads s
+         WHERE s.id = multiremi_squad_members.squad_id
+           AND multiremi_squad_members.member_type = 'agent'
+           AND s.leader_id = multiremi_squad_members.member_id
+       )`,
+  );
+  db.run(
+    `UPDATE multiremi_squad_members
+     SET role = 'leader'
+     WHERE member_type = 'agent'
+       AND EXISTS (
+         SELECT 1 FROM multiremi_squads s
+         WHERE s.id = multiremi_squad_members.squad_id
+           AND s.leader_id = multiremi_squad_members.member_id
+       )`,
+  );
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_squad_members_one_leader ON multiremi_squad_members(squad_id) WHERE role = 'leader'",
+  );
 }
 
 function backfillDefaultIssueSessions(db: SqlDatabase): void {

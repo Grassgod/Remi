@@ -118,6 +118,7 @@ describe("daemon task-message mapper", () => {
     }));
     expect(finished).toHaveLength(1);
     expect(finished[0]?.type).toBe("tool_result");
+    expect(finished[0]?.tool).toBe("Bash");
     // The use already showed the args, so the result doesn't repeat them.
     expect(finished[0]?.input).toBeUndefined();
     expect(finished[0]?.output).toBe(JSON.stringify({ formatted_output: "hello_from_acp_test\n", exit_code: 0 }));

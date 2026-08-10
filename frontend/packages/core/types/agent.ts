@@ -68,7 +68,7 @@ export interface AgentTask {
   /** Delegated instruction. Older backends may omit it from list responses. */
   prompt?: string;
   agent_id: string;
-  runtime_id: string;
+  runtime_id: string | null;
   // Empty string ("") when the task has no linked issue — either chat- or
   // autopilot-spawned. Check chat_session_id / autopilot_run_id to tell
   // which source produced it.

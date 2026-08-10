@@ -444,7 +444,7 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
     workspaceId,
     leaderId: agent.id,
   });
-  store.addSquadMember(squad.id, { memberType: "agent", memberId: agent.id, role: "member" });
+  store.addSquadMember(squad.id, { memberType: "agent", memberId: agent.id, role: "leader" });
 
   const label = store.createLabel({ id: "lbl_snapshot", workspaceId, name: "snapshot", color: "#3366ff" });
 

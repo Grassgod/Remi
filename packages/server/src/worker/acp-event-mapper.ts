@@ -144,7 +144,14 @@ function mapToolEvent(
   // The adapter resolves the real tool name and reconstructs input from
   // title/content/locations — claude-agent-acp leaves rawInput empty and encodes
   // the args there instead (the command in title, file path in locations, etc.).
-  const name = adapter.resolveToolName(raw as never) || tools.get(id)?.name || "tool";
+  const existing = tools.get(id);
+  const resolvedName = adapter.resolveToolName(raw as never);
+  // Codex terminal updates only carry the id, status and output. Its adapter
+  // therefore resolves those sparse frames to the placeholder `unknown`; keep
+  // the concrete name learned from the initial frame instead of replacing it.
+  const name = isPlaceholderToolName(resolvedName) && existing
+    ? existing.name
+    : resolvedName || existing?.name || "tool";
   const input = adapter.extractToolInput(raw as never);
   const status: string | undefined = typeof raw.status === "string" ? raw.status : undefined;
   const output = raw.rawOutput != null ? JSON.stringify(raw.rawOutput) : extractText(raw.content) || undefined;
@@ -154,7 +161,6 @@ function mapToolEvent(
   if (Array.isArray(raw.locations) && raw.locations.length) meta.locations = raw.locations;
 
   const messages: TaskMessageInput[] = [];
-  const existing = tools.get(id);
   const state: ToolCallState = existing ?? {
     name,
     kind: raw.kind,
@@ -236,6 +242,11 @@ function mapToolEvent(
   }
 
   return messages;
+}
+
+function isPlaceholderToolName(name: string | null | undefined): boolean {
+  const normalized = name?.trim().toLowerCase();
+  return !normalized || normalized === "unknown" || normalized === "tool";
 }
 
 function extractText(content: unknown): string {

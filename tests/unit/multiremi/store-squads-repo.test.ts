@@ -47,6 +47,52 @@ describe("SquadsRepo", () => {
     expect(repo.listSquadMembers(squad.id)).toEqual([]);
   });
 
+  it("keeps exactly one leader when leadership changes", () => {
+    const repo = createRepo();
+    const first = store!.createAgent({ name: "First", provider: "claude", workspaceId: "local" });
+    const second = store!.createAgent({ name: "Second", provider: "codex", workspaceId: "local" });
+    const squad = repo.createSquad({ name: "Reviewers", workspaceId: "local", leaderId: first.id, memberIds: [second.id] });
+
+    repo.updateSquad(squad.id, { leaderId: second.id });
+
+    expect(repo.getSquad(squad.id)?.leaderId).toBe(second.id);
+    expect(repo.listSquadMembers(squad.id).map((member) => [member.memberId, member.role])).toEqual([
+      [second.id, "leader"],
+      [first.id, "member"],
+    ]);
+    const storedLeaders = db!.query(
+      "SELECT member_id FROM multiremi_squad_members WHERE squad_id = ? AND role = 'leader'",
+    ).all(squad.id) as Array<{ member_id: string }>;
+    expect(storedLeaders.map((row) => row.member_id)).toEqual([second.id]);
+  });
+
+  it("keeps an idempotently re-added current leader canonical", () => {
+    const repo = createRepo();
+    const leader = store!.createAgent({ name: "Lead", provider: "claude", workspaceId: "local" });
+    const squad = repo.createSquad({ name: "Reviewers", workspaceId: "local", leaderId: leader.id });
+
+    const member = repo.addSquadMember(squad.id, {
+      memberType: "agent",
+      memberId: leader.id,
+      role: "member",
+    });
+
+    expect(member.role).toBe("leader");
+    expect(repo.getSquad(squad.id)?.leaderId).toBe(leader.id);
+  });
+
+  it("promoting a member through its role synchronizes the squad leader", () => {
+    const repo = createRepo();
+    const first = store!.createAgent({ name: "First", provider: "claude", workspaceId: "local" });
+    const second = store!.createAgent({ name: "Second", provider: "codex", workspaceId: "local" });
+    const squad = repo.createSquad({ name: "Reviewers", workspaceId: "local", leaderId: first.id, memberIds: [second.id] });
+
+    repo.addSquadMember(squad.id, { memberType: "agent", memberId: second.id, role: "leader" });
+
+    expect(repo.getSquad(squad.id)?.leaderId).toBe(second.id);
+    expect(repo.listSquadMembers(squad.id).filter((member) => member.role === "leader").map((member) => member.memberId)).toEqual([second.id]);
+  });
+
   it("resolves an assignee ref across agents, members and squads", () => {
     const repo = createRepo();
     const agent = store!.createAgent({ name: "Resolver", provider: "claude", workspaceId: "local" });
