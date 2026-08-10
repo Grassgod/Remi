@@ -12,6 +12,7 @@ import { ProjectsRepo } from "@multiremi/store/repos/projects-repo.js";
 import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js";
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
+import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
 import { RuntimesRepo } from "@multiremi/store/repos/runtimes-repo.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import {
@@ -130,6 +131,7 @@ import type {
   MultiremiIssueReaction,
   MultiremiIssueSubscriber,
   MultiremiIssueWithTasks,
+  MultiremiIssueWorkspace,
   ListIssuesInput,
   MultiremiMetricCounter,
   MultiremiProject,
@@ -182,6 +184,7 @@ import type {
   MultiremiWorkspaceInvitation,
   MultiremiWorkspaceMember,
   RegisterRuntimeInput,
+  ReportIssueWorkspaceInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
   RunAutopilotInput,
@@ -227,6 +230,7 @@ export class MultiremiStore {
   private sessions: IssueSessionsRepo;
   private chat: ChatRepo;
   private issues: IssuesRepo;
+  private issueWorkspaces: IssueWorkspacesRepo;
   private runtimes: RuntimesRepo;
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
@@ -250,6 +254,7 @@ export class MultiremiStore {
     this.sessions = new IssueSessionsRepo(this.ctx);
     this.chat = new ChatRepo(this.ctx);
     this.issues = new IssuesRepo(this.ctx);
+    this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
@@ -910,6 +915,18 @@ runMigrations(this.db);
 
   getIssue(id: string): MultiremiIssue | null {
     return this.issues.getIssue(id);
+  }
+
+  getIssueWorkspace(issueId: string): MultiremiIssueWorkspace | null {
+    return this.issueWorkspaces.get(issueId);
+  }
+
+  reportIssueWorkspace(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
+    return this.issueWorkspaces.report(input);
+  }
+
+  markIssueWorkspaceCleaned(issueId: string, runtimeId: string): MultiremiIssueWorkspace {
+    return this.issueWorkspaces.markCleaned(issueId, runtimeId);
   }
 
   getIssueByRef(ref: string, workspaceId?: string | null): MultiremiIssue | null {

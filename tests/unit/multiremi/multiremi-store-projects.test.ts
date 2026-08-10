@@ -56,16 +56,12 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
         resourceType: "github_repo",
         resourceRef: { url: "https://github.com/example/repo", defaultBranchHint: "main" },
         label: "primary repo",
-      }, {
-        resourceType: "local_directory",
-        resourceRef: { localPath: "/tmp/multiremi-local-project", daemonId: "daemon-local", label: "local clone" },
-        label: "local clone",
       }],
     });
     const issue = store.createIssue({ title: "Use resources", projectId: project.id });
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Inspect the repo" });
 
-    expect(store.getProject(project.id)?.resourceCount).toBe(2);
+    expect(store.getProject(project.id)?.resourceCount).toBe(1);
     const repoResource = store.listProjectResources(project.id).find((resource) => resource.resourceType === "github_repo")!;
     expect(repoResource.resourceRef.url).toBe("https://github.com/example/repo");
     const updatedRepoResource = store.updateProjectResource(project.id, repoResource.id, {
@@ -80,17 +76,11 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     });
     expect(updatedRepoResource.label).toBeNull();
     expect(updatedRepoResource.position).toBe(5);
-    expect(() => store.createProjectResource(project.id, {
+    const legacyLocal = store.createProjectResource(project.id, {
       resourceType: "local_directory",
       resourceRef: { localPath: "/tmp/multiremi-local-project-duplicate", daemonId: "daemon-local" },
-    })).toThrow("this daemon already has a local_directory attached to the project; remove it before adding another");
-    const otherLocal = store.createProjectResource(project.id, {
-      resourceType: "local_directory",
-      resourceRef: { localPath: "/tmp/multiremi-local-project-other", daemonId: "daemon-other" },
     });
-    expect(() => store.updateProjectResource(project.id, otherLocal.id, {
-      resource_ref: { local_path: "/tmp/multiremi-local-project-other", daemon_id: "daemon-local" },
-    })).toThrow("another local_directory on this daemon is already attached to the project");
+    expect(legacyLocal.resourceType).toBe("local_directory");
 
     const taskWithContext = store.getTaskWithAgent(task.id)!;
     expect(taskWithContext.repos).toEqual([{ url: "https://github.com/example/repo-updated" }]);
@@ -99,11 +89,12 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(prompt).toContain("## Available Repositories");
     expect(prompt).toContain("remi repo checkout <url>");
     expect(prompt).toContain("https://github.com/example/repo-updated");
-    expect(prompt).toContain("Local directory: /tmp/multiremi-local-project (local clone)");
+    expect(prompt).not.toContain("Local directory:");
     expect(prompt).not.toContain("https://github.com/example/workspace");
 
     store.deleteProjectResource(project.id, updatedRepoResource.id);
-    expect(store.getProject(project.id)?.resourceCount).toBe(2);
+    store.deleteProjectResource(project.id, legacyLocal.id);
+    expect(store.getProject(project.id)?.resourceCount).toBe(0);
   });
 
   it("falls back to workspace repos when a task has no project repos", () => {

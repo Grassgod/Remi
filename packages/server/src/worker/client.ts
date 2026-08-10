@@ -12,6 +12,8 @@ import type {
   RegisterRuntimeInput,
   TaskMessageInput,
   TaskUsageEntry,
+  MultiremiIssueWorkspaceRepo,
+  MultiremiIssueWorkspaceStatus,
 } from "@multiremi/contracts/types.js";
 
 export interface MultiremiWorkspaceReposResponse {
@@ -213,6 +215,31 @@ export class MultiremiDaemonClient {
     });
   }
 
+  async reportIssueWorkspace(taskId: string, input: {
+    runtimeId: string;
+    rootPath: string;
+    branchName: string;
+    status: MultiremiIssueWorkspaceStatus;
+    repos: MultiremiIssueWorkspaceRepo[];
+  }): Promise<void> {
+    await this.post(`/api/daemon/tasks/${taskId}/workspace`, {
+      runtime_id: input.runtimeId,
+      root_path: input.rootPath,
+      branch_name: input.branchName,
+      status: input.status,
+      repos: input.repos.map((repo) => ({
+        repo_url: repo.repoUrl,
+        repo_name: repo.repoName,
+        worktree_path: repo.worktreePath,
+        branch_name: repo.branchName,
+        base_ref: repo.baseRef,
+        status: repo.status,
+        dirty: repo.dirty,
+        error: repo.error,
+      })),
+    });
+  }
+
   async completeTask(taskId: string, output: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
     await this.post(`/api/daemon/tasks/${taskId}/complete`, {
       output,
@@ -271,6 +298,10 @@ export class MultiremiDaemonClient {
 
   async getIssueGcCheck(issueId: string): Promise<MultiremiDaemonGcStatus> {
     return this.get<MultiremiDaemonGcStatus>(`/api/daemon/issues/${encodeURIComponent(issueId)}/gc-check`);
+  }
+
+  async reportIssueWorkspaceCleaned(issueId: string, runtimeId: string): Promise<void> {
+    await this.post(`/api/daemon/issues/${encodeURIComponent(issueId)}/workspace/cleaned`, { runtime_id: runtimeId });
   }
 
   async getChatSessionGcCheck(sessionId: string): Promise<MultiremiDaemonGcStatus> {

@@ -4,6 +4,7 @@ import type {
   GroupedIssuesResponse,
   Issue,
   IssueStatus,
+  IssueWorkspace,
   ListGroupedIssuesParams,
   ListIssuesParams,
   ListIssuesCache,
@@ -54,6 +55,7 @@ export const issueKeys = {
     [...issueKeys.projectGanttAll(wsId), projectId] as const,
   detail: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "detail", id] as const,
+  workspace: (issueId: string) => ["issues", "workspace", issueId] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
   /** Prefix for invalidating all batched-children queries in a workspace. */
@@ -371,6 +373,17 @@ export function issueDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.detail(wsId, id),
     queryFn: () => api.getIssue(id),
+  });
+}
+
+export function issueWorkspaceOptions(issueId: string) {
+  return queryOptions<IssueWorkspace | null>({
+    queryKey: issueKeys.workspace(issueId),
+    queryFn: async () => (await api.getIssueWorkspace(issueId)).workspace,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "preparing" || status === "in_use" ? 5_000 : 30_000;
+    },
   });
 }
 

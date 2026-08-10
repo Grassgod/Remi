@@ -396,7 +396,7 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("auto-checks out issue-task repos and publishes a branch result", async () => {
+  it("auto-checks out repos into the stable Issue workspace and reports it", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-autorepo-");
     const sourceRepo = createSourceRepo(join(workDir, "_source", "repo"));
     store.ensureLocalWorkspace();
@@ -447,19 +447,22 @@ describe("Bun Multiremi daemon smoke", () => {
       await daemon.start();
 
       expect(store.getTask(task.id)?.status).toBe("completed");
-      const worktree = join(workDir, "workspaces", "local", task.id, "repo");
+      const worktree = join(workDir, "workspaces", issue.key, "repo");
       expect(existsSync(join(worktree, "README.md"))).toBe(true);
       const branch = gitOutput(worktree, ["branch", "--show-current"]);
-      expect(branch.startsWith("agent/repo-claude/")).toBe(true);
+      expect(branch).toBe(`agent/${issue.key}`);
       expect(prompts[0]).toContain("already checked out into the working directory");
       expect(prompts[0]).toContain(`on branch \`${branch}\``);
       expect(prompts[0]).not.toContain("For repositories without a path above");
 
-      const results = store.listIssueSessionResults(issue.id);
-      expect(results.length).toBe(1);
-      expect(results[0]!.metadata.kind).toBe("branch");
-      expect(results[0]!.title).toBe(branch);
-      expect(results[0]!.body).toContain(worktree);
+      expect(store.listIssueSessionResults(issue.id)).toHaveLength(0);
+      expect(store.getIssueWorkspace(issue.id)).toMatchObject({
+        issueId: issue.id,
+        rootPath: join(workDir, "workspaces", issue.key),
+        branchName: branch,
+        status: "ready",
+        repos: [{ repoName: "repo", worktreePath: worktree, branchName: branch }],
+      });
     } finally {
       server.stop(true);
     }
@@ -591,7 +594,7 @@ describe("Bun Multiremi daemon smoke", () => {
     }
   });
 
-  it("runs local_directory project tasks in the user directory", async () => {
+  it("ignores a legacy local_directory when resolving an Issue workspace", async () => {
     const { store, workDir } = daemonTestBed("multiremi-daemon-local-dir-");
     const localDir = join(workDir, "local-project");
     mkdirSync(localDir, { recursive: true });
@@ -624,6 +627,7 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     let providerCwd = "";
+    let providerPrompt = "";
     try {
       const daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -634,147 +638,36 @@ describe("Bun Multiremi daemon smoke", () => {
         daemonId: "daemon-local",
         once: true,
         daemonPort: 0,
+        workspacesRoot: join(workDir, "workspaces"),
         repoCacheRoot: join(workDir, ".repo-cache"),
         providerFactory: messageProviderFactory({
           text: () => `cwd=${providerCwd}`,
           sessionId: "sess-local-dir",
           requestId: "req-local-dir",
-          onSend: (_message, options) => { providerCwd = options.cwd!; },
+          onSend: (message, options) => {
+            providerCwd = options.cwd!;
+            providerPrompt = message;
+          },
         }),
       });
 
       await daemon.start();
 
       const completed = store.getTask(task.id)!;
-      expect(providerCwd).toBe(localDir);
+      const issueWorkDir = join(workDir, "workspaces", issue.key);
+      expect(providerCwd).toBe(issueWorkDir);
       expect(completed.status).toBe("completed");
-      expect(completed.workDir).toBe(localDir);
-      expect(JSON.parse(readFileSync(join(localDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
+      expect(completed.workDir).toBe(issueWorkDir);
+      expect(providerPrompt).not.toContain(localDir);
+      expect(existsSync(join(localDir, ".multiremi"))).toBe(false);
+      expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
         kind: "issue",
         task_id: task.id,
         issue_id: issue.id,
-        local_directory: true,
+        version: 2,
       });
-      expect(JSON.parse(readFileSync(join(localDir, ".multiremi", "project", "resources.json"), "utf8")).resources[0]).toMatchObject({
-        resource_type: "local_directory",
-        resource_ref: {
-          local_path: localDir,
-          daemon_id: "daemon-local",
-        },
-      });
+      expect(JSON.parse(readFileSync(join(issueWorkDir, ".multiremi", "project", "resources.json"), "utf8")).resources).toEqual([]);
     } finally {
-      server.stop(true);
-    }
-  });
-
-  it("does not fail a local_directory task cancelled while waiting for the lock", async () => {
-    const { store, workDir } = daemonTestBed("multiremi-daemon-local-cancel-");
-    const localDir = join(workDir, "local-project");
-    mkdirSync(localDir, { recursive: true });
-    const runtime = store.registerRuntime({
-      id: "rt_local_cancel",
-      name: "Local cancel runtime",
-      provider: "claude",
-      workspaceId: "local",
-    });
-    const project = store.createProject({
-      title: "Local cancellation project",
-      resources: [{
-        resourceType: "local_directory",
-        resourceRef: { localPath: localDir, daemonId: "daemon-local-cancel" },
-      }],
-    });
-    const agent = store.createAgent({ name: "Local Cancel Claude", provider: "claude" });
-    const firstIssue = store.createIssue({ title: "Hold local directory", projectId: project.id });
-    const secondIssue = store.createIssue({ title: "Cancel while waiting", projectId: project.id });
-    const firstTask = store.createTask({ agentId: agent.id, issueId: firstIssue.id, prompt: "Hold the directory" });
-    const secondTask = store.createTask({ agentId: agent.id, issueId: secondIssue.id, prompt: "Wait for the directory" });
-    const dispatchedAt = new Date().toISOString();
-    db!.run("UPDATE multiremi_tasks SET status = 'dispatched', runtime_id = ?, dispatched_at = ?, updated_at = ? WHERE id IN (?, ?)", [
-      runtime.id,
-      dispatchedAt,
-      dispatchedAt,
-      firstTask.id,
-      secondTask.id,
-    ]);
-    const daemonToken = await store.createAccessToken({
-      name: "Local cancellation daemon",
-      type: "daemon",
-      workspaceId: "local",
-      daemonId: "daemon-local-cancel",
-    });
-    const server = startMultiremiServer({
-      store,
-      scheduler: null,
-      authToken: "root-local-cancel-secret",
-      hostname: "127.0.0.1",
-      port: 0,
-    });
-
-    const firstStarted = deferred<void>();
-    const releaseFirst = deferred<void>();
-    let secondProviderStarted = false;
-    try {
-      const daemon = new MultiremiDaemon({
-        serverUrl: `http://127.0.0.1:${server.port}`,
-        token: daemonToken.token,
-        runtimeName: "local-cancel-runtime",
-        provider: "claude",
-        workspaceId: "local",
-        daemonId: "daemon-local-cancel",
-        daemonPort: 0,
-        repoCacheRoot: join(workDir, ".repo-cache"),
-        providerFactory: (options) => {
-          const taskId = String(options.env?.MULTIREMI_TASK_ID ?? "");
-          return {
-            async *sendStream() {
-              if (taskId === firstTask.id) {
-                firstStarted.resolve();
-                await releaseFirst.promise;
-                yield {
-                  sessionUpdate: "agent_message_chunk",
-                  content: [{ type: "text", text: "released" }],
-                } as any;
-                return;
-              }
-              secondProviderStarted = true;
-              yield {
-                sessionUpdate: "agent_message_chunk",
-                content: [{ type: "text", text: "should not run" }],
-              } as any;
-            },
-            getLastResponse: () => ({
-              text: taskId === firstTask.id ? "released" : "should not run",
-              sessionId: `sess-${taskId}`,
-              requestId: `req-${taskId}`,
-            }),
-          };
-        },
-      });
-      const handleTask = (daemon as unknown as {
-        handleTask(task: ReturnType<MultiremiStore["getTaskWithAgent"]>): Promise<void>;
-      }).handleTask.bind(daemon);
-
-      const firstRun = handleTask(store.getTaskWithAgent(firstTask.id)!);
-      await firstStarted.promise;
-      const secondRun = handleTask(store.getTaskWithAgent(secondTask.id)!);
-      await waitForCondition(() => store.getTask(secondTask.id)?.status === "waiting_local_directory");
-
-      store.cancelTask(secondTask.id);
-      await withTimeout(secondRun, 8_000, "second local_directory task did not stop after cancellation");
-
-      expect(store.getTask(secondTask.id)).toMatchObject({
-        status: "cancelled",
-        error: null,
-        failureReason: null,
-      });
-      expect(secondProviderStarted).toBe(false);
-
-      releaseFirst.resolve();
-      await firstRun;
-      expect(store.getTask(firstTask.id)?.status).toBe("completed");
-    } finally {
-      releaseFirst.resolve();
       server.stop(true);
     }
   });
@@ -831,7 +724,7 @@ describe("Bun Multiremi daemon smoke", () => {
 
       await daemon.start();
 
-      const completedDir = join(workspacesRoot, "local", completedTask.id);
+      const completedDir = join(workspacesRoot, completedIssue.key);
       expect(existsSync(completedDir)).toBe(true);
       expect(JSON.parse(readFileSync(join(completedDir, ".multiremi", "gc.json"), "utf8"))).toMatchObject({
         kind: "issue",

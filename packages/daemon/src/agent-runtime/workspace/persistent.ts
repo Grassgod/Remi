@@ -2,8 +2,8 @@
  * Persistent workspace path resolution.
  *
  * Computes the (non-ephemeral) working directory for a task: an explicit
- * task.workDir wins, then the agent's fixed cwd, then the default per-task
- * directory under the workspaces root.
+ * Issue tasks use one stable directory per Issue key. Other task kinds keep
+ * the legacy resolution order: task.workDir, agent cwd, then a per-task dir.
  *
  * Pool scheduling makes agent.cwd machine-relative: an agent is no longer
  * bound to one machine, so its configured cwd (a machine-local absolute path)
@@ -37,6 +37,9 @@ export function resolveWorkDir(
   task: AgentTask,
   workspacesRoot = join(homedir(), ".remi", "multiremi", "workspaces"),
 ): ResolvedWorkDir {
+  if (task.issue?.key) {
+    return { workDir: join(workspacesRoot, safeIssueKey(task.issue.key)), ensureDir: true };
+  }
   if (task.workDir) return { workDir: task.workDir, ensureDir: true };
   // agent.cwd is a machine-local absolute path; under pool scheduling it may
   // not exist on the machine that claimed this task. Honour it only when it is
@@ -46,6 +49,12 @@ export function resolveWorkDir(
     return { workDir: task.agent.cwd, ensureDir: false };
   }
   return { workDir: join(workspacesRoot, task.workspaceId, task.id), ensureDir: true };
+}
+
+function safeIssueKey(value: string): string {
+  const key = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!key || key === "." || key === "..") throw new Error(`invalid issue key for workspace path: ${JSON.stringify(value)}`);
+  return key;
 }
 
 function isExistingDir(path: string): boolean {

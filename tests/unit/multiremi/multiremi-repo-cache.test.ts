@@ -70,6 +70,33 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("uncommitted\n");
   });
 
+  it("uses one explicit Issue branch and refuses to switch a reused workspace", () => {
+    const source = createRepo("main", "issue branch repo");
+    const cacheRoot = tempDir("multiremi-repo-issue-");
+    const workDir = tempDir("multiremi-repo-issue-work-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    cache.sync("local", [{ url: source }]);
+
+    const first = cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      branchName: "agent/MUL-28",
+      reuseExisting: true,
+    });
+    expect(first.branchName).toBe("agent/MUL-28");
+    writeFileSync(join(first.path, "wip.txt"), "keep me\n");
+
+    expect(() => cache.createWorktree({
+      workspaceId: "local",
+      repoUrl: source,
+      workDir,
+      branchName: "agent/MUL-29",
+      reuseExisting: true,
+    })).toThrow(/refusing to switch a persistent workspace/);
+    expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("keep me\n");
+  });
+
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");

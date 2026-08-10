@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 496,
+    "routeCount": 499,
     "routeCountByPrefix": {
       "native": 172,
-      "compat": 311,
+      "compat": 314,
       "root": 13
     },
-    "getRoutes": 219,
-    "getRoutesWithBody": 216,
+    "getRoutes": 220,
+    "getRoutesWithBody": 217,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 277,
+    "mutationRoutes": 279,
     "mutationRoutesCovered": 271,
     "flows": [
       "agents-compat",
@@ -190,6 +190,7 @@
     "GET /api/issues/:id/task-runs",
     "GET /api/issues/:id/timeline",
     "GET /api/issues/:id/usage",
+    "GET /api/issues/:id/workspace",
     "GET /api/issues/child-progress",
     "GET /api/issues/children",
     "GET /api/issues/grouped",
@@ -385,6 +386,7 @@
     "POST /api/contact-sales",
     "POST /api/daemon/deregister",
     "POST /api/daemon/heartbeat",
+    "POST /api/daemon/issues/:issueId/workspace/cleaned",
     "POST /api/daemon/register",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
     "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
@@ -408,6 +410,7 @@
     "POST /api/daemon/tasks/:taskId/start",
     "POST /api/daemon/tasks/:taskId/usage",
     "POST /api/daemon/tasks/:taskId/wait-local-directory",
+    "POST /api/daemon/tasks/:taskId/workspace",
     "POST /api/feedback",
     "POST /api/inbox/:id/archive",
     "POST /api/inbox/:id/read",
@@ -687,6 +690,7 @@
     "GET /api/issues/:id/task-runs",
     "GET /api/issues/:id/timeline",
     "GET /api/issues/:id/usage",
+    "GET /api/issues/:id/workspace",
     "GET /api/issues/child-progress",
     "GET /api/issues/children",
     "GET /api/issues/grouped",
@@ -7183,6 +7187,15 @@
         "total_cache_write_tokens": 0,
         "total_tokens": 0,
         "task_count": 1
+      }
+    },
+    {
+      "key": "get-sweep GET /api/issues/:id/workspace",
+      "route": "GET /api/issues/:id/workspace",
+      "path": "/api/issues/iss_snapshot/workspace",
+      "status": 200,
+      "body": {
+        "workspace": null
       }
     },
     {

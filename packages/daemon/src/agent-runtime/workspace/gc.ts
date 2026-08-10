@@ -12,6 +12,7 @@
 
 import { readFileSync, readdirSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 
 export interface MultiremiDaemonGcSummary {
   cleaned: number;
@@ -32,6 +33,7 @@ export interface WorkspaceGcClient {
   getChatSessionGcCheck(sessionId: string): Promise<WorkspaceGcStatus>;
   getAutopilotRunGcCheck(runId: string): Promise<WorkspaceGcStatus>;
   getTaskGcCheck(taskId: string): Promise<WorkspaceGcStatus>;
+  reportIssueWorkspaceCleaned?(issueId: string, runtimeId: string): Promise<void>;
 }
 
 export interface RunWorkspaceGcOnceOptions {
@@ -39,6 +41,7 @@ export interface RunWorkspaceGcOnceOptions {
   ttlMs: number;
   orphanTtlMs: number;
   client: WorkspaceGcClient;
+  runtimeId?: string | null;
   now?: number;
 }
 
@@ -67,22 +70,41 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
   for (const workspace of workspaces) {
     if (!workspace.isDirectory() || workspace.name === ".repos") continue;
     const workspaceDir = join(root, workspace.name);
+    if (readGcMeta(workspaceDir)) {
+      await collectWorkspaceGcDecision(root, workspaceDir, options, summary);
+      continue;
+    }
+    // Legacy layout: <root>/<workspace-id>/<task-id>. New Issue workspaces
+    // place gc.json directly at <root>/<issue-key> and are handled above.
     const tasks = safeReadDir(workspaceDir) ?? [];
     for (const task of tasks) {
       if (!task.isDirectory()) continue;
       const taskDir = join(workspaceDir, task.name);
-      const decision = await getWorkspaceGcDecision(taskDir, options);
-      if (decision === "skip") {
-        summary.skipped++;
-        continue;
-      }
-      removeGcWorkDir(root, taskDir);
-      if (decision === "orphan") summary.orphaned++;
-      else summary.cleaned++;
+      await collectWorkspaceGcDecision(root, taskDir, options, summary);
     }
   }
 
   return summary;
+}
+
+async function collectWorkspaceGcDecision(
+  root: string,
+  workspaceDir: string,
+  options: RunWorkspaceGcOnceOptions,
+  summary: MultiremiDaemonGcSummary,
+): Promise<void> {
+  const decision = await getWorkspaceGcDecision(workspaceDir, options);
+  if (decision === "skip") {
+    summary.skipped++;
+    return;
+  }
+  const issueId = stringField(readGcMeta(workspaceDir)?.issue_id);
+  removeGcWorkDir(root, workspaceDir);
+  if (decision === "clean" && issueId && options.runtimeId) {
+    await options.client.reportIssueWorkspaceCleaned?.(issueId, options.runtimeId);
+  }
+  if (decision === "orphan") summary.orphaned++;
+  else summary.cleaned++;
 }
 
 async function getWorkspaceGcDecision(taskDir: string, options: RunWorkspaceGcOnceOptions): Promise<MultiremiGcDecision> {
@@ -107,12 +129,29 @@ async function getIssueGcDecision(
   if (!issueId) return staleDirDecision(taskDir, options.orphanTtlMs, now);
   try {
     const status = await options.client.getIssueGcCheck(issueId);
-    if (isTerminalIssueStatus(status.status) && isOlderThan(status.updated_at, options.ttlMs, now)) return "clean";
+    if (
+      isTerminalIssueStatus(status.status)
+      && isOlderThan(status.updated_at, options.ttlMs, now)
+      && !hasDirtyGitWorktree(taskDir)
+    ) return "clean";
     return "skip";
   } catch (err) {
     if (isNotFoundError(err)) return staleDirDecision(taskDir, options.orphanTtlMs, now);
     throw err;
   }
+}
+
+function hasDirtyGitWorktree(workspaceDir: string): boolean {
+  for (const entry of safeReadDir(workspaceDir) ?? []) {
+    if (!entry.isDirectory() || entry.name === ".multiremi") continue;
+    const repoPath = join(workspaceDir, entry.name);
+    if (!safeStat(join(repoPath, ".git"))) continue;
+    const status = spawnSync("git", ["status", "--porcelain"], { cwd: repoPath, encoding: "utf8" });
+    if (status.status !== 0 || String(status.stdout ?? "").trim()) return true;
+    const contained = spawnSync("git", ["branch", "-r", "--contains", "HEAD"], { cwd: repoPath, encoding: "utf8" });
+    if (contained.status !== 0 || !String(contained.stdout ?? "").trim()) return true;
+  }
+  return false;
 }
 
 async function getChatGcDecision(

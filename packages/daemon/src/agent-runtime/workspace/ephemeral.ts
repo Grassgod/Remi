@@ -119,7 +119,11 @@ export async function resolveTaskWorkDir(
   task: AgentTask,
   opts: ResolveTaskWorkDirOptions,
 ): Promise<ResolvedTaskWorkDir> {
-  const assignment = findLocalDirectoryAssignment(task, opts.daemonIds);
+  // Issue workspaces are daemon-owned and stable by Issue key. Historical
+  // local_directory resources must never redirect an Issue into a user's
+  // checkout; they are retained here only for non-Issue compatibility while
+  // archived local_directory projects are removed.
+  const assignment = task.issueId ? null : findLocalDirectoryAssignment(task, opts.daemonIds);
   if (!assignment) {
     const resolved = resolveWorkDir(task, opts.workspacesRoot);
     return {

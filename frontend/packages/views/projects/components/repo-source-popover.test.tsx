@@ -224,14 +224,14 @@ describe("RepoSourcePopover — fleet import tab", () => {
     });
   });
 
-  it("scans the selected runtime and lists the discovered repos", async () => {
+  it("scans the selected runtime and lists only remote-backed repos", async () => {
     renderPopover();
     await openFleetTabAndScan();
 
     expect(
       await screen.findByText("/home/dev/api", {}, { timeout: 5000 }),
     ).toBeInTheDocument();
-    expect(screen.getByText("/home/dev/notes")).toBeInTheDocument();
+    expect(screen.queryByText("/home/dev/notes")).not.toBeInTheDocument();
     expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
       root: "~",
     });
@@ -250,24 +250,16 @@ describe("RepoSourcePopover — fleet import tab", () => {
     });
   });
 
-  it("maps a candidate without a remote to a daemon-pinned local_directory", async () => {
+  it("does not offer a candidate without a remote as a project resource", async () => {
     const { onAdd } = renderPopover();
     await openFleetTabAndScan();
 
-    const row = (await screen.findByText("/home/dev/notes")).closest("button")!;
-    fireEvent.click(row);
-
-    expect(onAdd).toHaveBeenCalledWith({
-      resource_type: "local_directory",
-      resource_ref: {
-        local_path: "/home/dev/notes",
-        daemon_id: "daemon-1",
-        label: "notes",
-      },
-    });
+    expect(await screen.findByText("/home/dev/api")).toBeInTheDocument();
+    expect(screen.queryByText("/home/dev/notes")).not.toBeInTheDocument();
+    expect(onAdd).not.toHaveBeenCalled();
   });
 
-  it("caps local directories at one per daemon and disables further no-remote rows", async () => {
+  it("ignores a legacy local resource while importing a remote-backed repo", async () => {
     const { onAdd } = renderPopover({
       resources: [
         {
@@ -281,25 +273,17 @@ describe("RepoSourcePopover — fleet import tab", () => {
     });
     await openFleetTabAndScan();
 
-    const localRow = (
-      await screen.findByText("/home/dev/notes")
-    ).closest("button")!;
-    expect(localRow).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(localRow);
-    expect(onAdd).not.toHaveBeenCalled();
-
-    // The per-daemon cap only applies to local_directory rows; a candidate
-    // with a remote still imports as a github_repo (no cap).
-    const remoteRow = screen.getByText("/home/dev/api").closest("button")!;
+    expect(screen.queryByText("/home/dev/notes")).not.toBeInTheDocument();
+    const remoteRow = (await screen.findByText("/home/dev/api")).closest("button")!;
     expect(remoteRow).not.toHaveAttribute("aria-disabled", "true");
-    expect(
-      screen.getByText(
-        "Only one local directory per computer can be attached to a project.",
-      ),
-    ).toBeInTheDocument();
+    fireEvent.click(remoteRow);
+    expect(onAdd).toHaveBeenCalledWith({
+      resource_type: "github_repo",
+      resource_ref: { url: "git@github.com:org/api.git" },
+    });
   });
 
-  it("disables the desktop directory picker when this machine already has a local directory", async () => {
+  it("does not expose the deprecated desktop directory picker", async () => {
     mockIsDesktopShell.mockReturnValue(true);
     mockUseLocalDaemonStatus.mockReturnValue({
       daemonId: "daemon-local",
@@ -319,15 +303,8 @@ describe("RepoSourcePopover — fleet import tab", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /From fleet/i }));
 
-    const pickButton = await screen.findByRole("button", {
-      name: /Choose a directory/i,
-    });
-    expect(pickButton).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Only one local directory per computer can be attached to a project.",
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Fleet computer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Choose a directory/i })).not.toBeInTheDocument();
   });
 
   it("shows the empty state when the scan finds nothing", async () => {
@@ -584,13 +561,13 @@ describe("RepoSourcePopover — fleet import tab", () => {
     );
   });
 
-  it("disables a browse row's import checkbox once the daemon already has a local directory", async () => {
-    mockResolveRuntimeDirectoryScan.mockResolvedValue({
+  it("keeps a repo without a remote navigable but not importable", async () => {
+    mockResolveRuntimeDirectoryScan.mockImplementation((_id: string, params?: { root?: string; mode?: string }) => Promise.resolve({
       id: "rds-b",
       runtime_id: "runtime-1",
       status: "completed",
-      params: { root: "~", mode: "browse" },
-      candidates: [
+      params: { root: params?.root ?? "~", mode: "browse" },
+      candidates: params?.root === "/home/dev/notes" ? [] : [
         {
           path: "/home/dev/notes",
           name: "notes",
@@ -605,7 +582,7 @@ describe("RepoSourcePopover — fleet import tab", () => {
       run_started_at: null,
       created_at: "2026-04-16T00:00:00Z",
       updated_at: "2026-04-16T00:00:00Z",
-    });
+    }));
     const { onAdd } = renderPopover({
       resources: [
         {
@@ -622,10 +599,13 @@ describe("RepoSourcePopover — fleet import tab", () => {
     await waitFor(() => expect(browseButton).not.toBeDisabled());
     fireEvent.click(browseButton);
 
-    // The per-daemon cap disables the import control, and clicking it is inert.
-    const checkbox = await screen.findByRole("checkbox", { name: "notes" });
-    expect(checkbox).toHaveAttribute("data-disabled");
-    fireEvent.click(checkbox);
+    const row = (await screen.findByText("/home/dev/notes")).closest("button")!;
+    expect(within(row).queryByRole("checkbox")).not.toBeInTheDocument();
+    fireEvent.click(row);
+    await waitFor(() => expect(mockResolveRuntimeDirectoryScan).toHaveBeenCalledWith("runtime-1", {
+      root: "/home/dev/notes",
+      mode: "browse",
+    }));
     expect(onAdd).not.toHaveBeenCalled();
   });
 });

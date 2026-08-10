@@ -29,6 +29,19 @@ test("explicit task.workDir wins over everything (daemon-owned, may create)", ()
   });
 });
 
+test("issue key owns the stable workspace path across tasks and agent cwd", () => {
+  expect(resolveWorkDir(task({
+    id: "tsk_second",
+    issueId: "iss_1",
+    issue: { id: "iss_1", key: "MUL-28" },
+    workDir: "/legacy/task/path",
+    agent: { cwd: "/legacy/agent/path" },
+  }), ROOT)).toEqual({
+    workDir: join(ROOT, "MUL-28"),
+    ensureDir: true,
+  });
+});
+
 test("uses agent.cwd when it is an existing directory, but never recreates it (ensureDir=false)", () => {
   const real = mkdtempSync(join(tmpdir(), "cwd-real-"));
   expect(resolveWorkDir(task({ agent: { cwd: real } }), ROOT)).toEqual({ workDir: real, ensureDir: false });

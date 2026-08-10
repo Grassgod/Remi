@@ -167,21 +167,18 @@ describe("Bun Multiremi project_ref resource", () => {
     expect((await cycle.json()).error).toContain("project_ref");
   });
 
-  it("expands referenced project github repos and skips their local directories", () => {
+  it("expands referenced project github repos", () => {
     const store = createStore();
     const lib = store.createProject({
       title: "Lib",
-      resources: [
-        githubResource("https://github.com/acme/lib"),
-        { resourceType: "local_directory", resourceRef: { localPath: "/home/dev/lib", daemonId: "daemon-a" } },
-      ],
+      resources: [githubResource("https://github.com/acme/lib")],
     });
     const main = store.createProject({
       title: "Main",
       resources: [githubResource("https://github.com/acme/main"), projectRefResource(lib.id)],
     });
 
-    // Own repo + referenced repo, but never the referenced project's local_directory.
+    // Own repo + referenced repo.
     expect(taskReposForProject(store, main.id).map((repo) => repo.url)).toEqual([
       "https://github.com/acme/main",
       "https://github.com/acme/lib",

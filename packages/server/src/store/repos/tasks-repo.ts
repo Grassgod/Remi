@@ -632,6 +632,7 @@ export class TasksRepo {
       runtime.workspaceId ?? "local",
       runtime.id,
       runtime.id,
+      runtime.id,
       runtime.provider,
       runtime.provider,
       runtime.visibility,
@@ -663,6 +664,20 @@ export class TasksRepo {
                AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < ?
            ${workspaceFilter}
+           AND (
+             t.issue_id IS NULL
+             OR NOT EXISTS (
+               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
+               WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.status <> 'cleaned'
+             )
+             OR EXISTS (
+               SELECT 1 FROM multiremi_issue_workspaces issue_workspace
+               WHERE issue_workspace.issue_id = t.issue_id
+                 AND issue_workspace.runtime_id = ?
+                 AND issue_workspace.status <> 'cleaned'
+             )
+           )
            AND (t.runtime_id IS NULL OR t.runtime_id = ?)
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
@@ -675,12 +690,13 @@ export class TasksRepo {
            ) < a.max_concurrent_tasks
            AND NOT EXISTS (
              SELECT 1 FROM multiremi_tasks active
-             WHERE active.agent_id = t.agent_id
-               AND active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+             WHERE active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
                AND (
                  (t.issue_id IS NOT NULL AND active.issue_id = t.issue_id)
-                 OR (t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
+                 OR (active.agent_id = t.agent_id AND t.chat_session_id IS NOT NULL AND active.chat_session_id = t.chat_session_id)
                  OR (
+                   active.agent_id = t.agent_id
+                   AND
                    t.issue_id IS NULL
                    AND t.chat_session_id IS NULL
                    AND active.issue_id IS NULL

@@ -52,7 +52,7 @@ export function writeTaskGcContext(workDir: string, task: AgentTask, options: { 
         ? "issue"
         : "quick_create";
   const payload = {
-    version: 1,
+    version: task.issueId ? 2 : 1,
     kind,
     workspace_id: task.workspaceId,
     task_id: task.id,
@@ -70,10 +70,11 @@ export function writeProjectResourceContext(workDir: string, task: AgentTask): v
   if (!task.project && task.projectResources.length === 0) return;
   const dir = join(workDir, ".multiremi", "project");
   mkdirSync(dir, { recursive: true });
+  const resources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
   const payload = {
     project_id: task.project?.id ?? "",
     project_title: task.project?.title ?? "",
-    resources: task.projectResources.map((resource) => ({
+    resources: resources.map((resource) => ({
       id: resource.id,
       resource_type: resource.resourceType,
       resource_ref: serializeProjectResourceRef(resource.resourceType, resource.resourceRef),

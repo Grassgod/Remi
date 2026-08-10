@@ -839,6 +839,54 @@ export interface MultiremiIssueWithTasks extends MultiremiIssue {
   dependencies: MultiremiIssueDependency[];
 }
 
+export type MultiremiIssueWorkspaceStatus =
+  | "preparing"
+  | "ready"
+  | "in_use"
+  | "dirty"
+  | "runtime_offline"
+  | "cleaned"
+  | "error";
+
+export interface MultiremiIssueWorkspaceRepo {
+  repoUrl: string;
+  repoName: string;
+  worktreePath: string;
+  branchName: string;
+  baseRef: string;
+  status: "ready" | "dirty" | "error";
+  dirty: boolean;
+  error: string | null;
+}
+
+export interface MultiremiIssueWorkspace {
+  issueId: string;
+  workspaceId: string;
+  issueKey: string;
+  runtimeId: string | null;
+  runtimeName: string | null;
+  runtimeStatus: MultiremiRuntimeStatus | null;
+  rootPath: string;
+  branchName: string;
+  status: MultiremiIssueWorkspaceStatus;
+  repos: MultiremiIssueWorkspaceRepo[];
+  lastTaskId: string | null;
+  cleanedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReportIssueWorkspaceInput {
+  issueId: string;
+  runtimeId: string;
+  rootPath: string;
+  branchName: string;
+  status: MultiremiIssueWorkspaceStatus;
+  repos?: MultiremiIssueWorkspaceRepo[];
+  lastTaskId?: string | null;
+  cleanedAt?: string | null;
+}
+
 export interface MultiremiIssueAssigneeGroup {
   id: string;
   assigneeType: MultiremiAssigneeType | null;

@@ -1,4 +1,15 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction } from "./issue";
+export type {
+  Issue,
+  IssueStatus,
+  IssuePriority,
+  IssueAssigneeType,
+  IssueMetadata,
+  IssueMetadataValue,
+  IssueReaction,
+  IssueWorkspace,
+  IssueWorkspaceRepo,
+  IssueWorkspaceStatus,
+} from "./issue";
 export type {
   Agent,
   AgentStatus,

@@ -59,3 +59,33 @@ export interface Issue {
   created_at: string;
   updated_at: string;
 }
+
+export type IssueWorkspaceStatus = "preparing" | "ready" | "in_use" | "dirty" | "runtime_offline" | "cleaned" | "error";
+
+export interface IssueWorkspaceRepo {
+  repo_url: string;
+  repo_name: string;
+  worktree_path: string;
+  branch_name: string;
+  base_ref: string;
+  status: "ready" | "dirty" | "error";
+  dirty: boolean;
+  error: string | null;
+}
+
+export interface IssueWorkspace {
+  issue_id: string;
+  workspace_id: string;
+  issue_key: string;
+  runtime_id: string | null;
+  runtime_name: string | null;
+  runtime_status: "online" | "offline" | null;
+  root_path: string;
+  branch_name: string;
+  status: IssueWorkspaceStatus;
+  repos: IssueWorkspaceRepo[];
+  last_task_id: string | null;
+  cleaned_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

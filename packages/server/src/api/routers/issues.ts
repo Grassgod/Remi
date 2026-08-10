@@ -337,6 +337,41 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (issue.attachments.length) response.attachments = issue.attachments.map(issueDetailAttachmentCompatibilityResponse);
     return c.json(response);
   });
+  app.get("/api/issues/:id/workspace", (c) => {
+    const issue = issueFromParam(store, c, "id", "compat");
+    if (!issue) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, issue.workspaceId);
+    if (denied) return denied;
+    const workspace = store.getIssueWorkspace(issue.id);
+    if (!workspace) return c.json({ workspace: null });
+    return c.json({
+      workspace: {
+        issue_id: workspace.issueId,
+        workspace_id: workspace.workspaceId,
+        issue_key: workspace.issueKey,
+        runtime_id: workspace.runtimeId,
+        runtime_name: workspace.runtimeName,
+        runtime_status: workspace.runtimeStatus,
+        root_path: workspace.rootPath,
+        branch_name: workspace.branchName,
+        status: workspace.runtimeStatus === "offline" && workspace.status !== "cleaned" ? "runtime_offline" : workspace.status,
+        repos: workspace.repos.map((repo) => ({
+          repo_url: repo.repoUrl,
+          repo_name: repo.repoName,
+          worktree_path: repo.worktreePath,
+          branch_name: repo.branchName,
+          base_ref: repo.baseRef,
+          status: repo.status,
+          dirty: repo.dirty,
+          error: repo.error,
+        })),
+        last_task_id: workspace.lastTaskId,
+        cleaned_at: workspace.cleanedAt,
+        created_at: workspace.createdAt,
+        updated_at: workspace.updatedAt,
+      },
+    });
+  });
   app.get("/api/multiremi/issues/:id/timeline", (c) => {
     const issue = issueFromParam(store, c);
     if (!issue) return c.json({ error: "issue not found" }, 404);

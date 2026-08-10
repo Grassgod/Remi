@@ -319,18 +319,9 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
         resource_ref: { local_path: "/tmp/multiremi-local-project-api", daemon_id: "daemon-api" },
       }),
     });
-    expect(localResource.status).toBe(201);
-    const duplicateLocalResource = await app.request(`/api/projects/${projectBody.id}/resources`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        resource_type: "local_directory",
-        resource_ref: { local_path: "/tmp/multiremi-local-project-api-other", daemon_id: "daemon-api" },
-      }),
-    });
-    expect(duplicateLocalResource.status).toBe(409);
-    expect(await duplicateLocalResource.json()).toEqual({
-      error: "this daemon already has a local_directory attached to the project; remove it before adding another",
+    expect(localResource.status).toBe(400);
+    expect(await localResource.json()).toEqual({
+      error: "local_directory resources are no longer supported; import a Git repository instead",
     });
 
     const camelSquad = await app.request("/api/squads", {

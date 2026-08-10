@@ -160,6 +160,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/projects/:id/resources", async (c) => {
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (isLocalDirectoryResourceInput(body)) return c.json({ error: localDirectoryRemovedError() }, 400);
     try {
       const resource = store.createProjectResource(c.req.param("id"), body);
       publishProjectResourceCreated(c, store, resource);
@@ -231,6 +232,7 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/projects/:id/resources", async (c) => {
     const body = await readJsonStrict<CreateProjectResourceInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    if (isLocalDirectoryResourceInput(body)) return c.json({ error: localDirectoryRemovedError() }, 400);
     try {
       const resource = store.createProjectResource(c.req.param("id"), body);
       const response = projectResourceCompatibilityResponse(resource);
@@ -357,4 +359,12 @@ export function registerProjectRoutes(app: Hono, deps: RouterDeps): void {
       throw err;
     }
   });
+}
+
+function isLocalDirectoryResourceInput(input: CreateProjectResourceInput): boolean {
+  return (input.resourceType ?? input.resource_type) === "local_directory";
+}
+
+function localDirectoryRemovedError(): string {
+  return "local_directory resources are no longer supported; import a Git repository instead";
 }

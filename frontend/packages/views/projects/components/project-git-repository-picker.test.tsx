@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
-import type { CreateProjectResourceRequest } from "@multiremi/core/types";
+import type { CreateProjectResourceRequest, GithubRepoResourceRef } from "@multiremi/core/types";
 import enCommon from "../../locales/en/common.json";
 import enProjects from "../../locales/en/projects.json";
 
@@ -79,7 +79,7 @@ function renderPicker({
   attachedResources = [],
   onAttach = vi.fn(async (resources: CreateProjectResourceRequest[]) =>
     resources.map((resource) =>
-      resource.resource_type === "github_repo" ? resource.resource_ref.url : "",
+      resource.resource_type === "github_repo" ? (resource.resource_ref as GithubRepoResourceRef).url : "",
     ),
   ),
   onClose = vi.fn(),
@@ -116,7 +116,7 @@ describe("ProjectGitRepositoryPicker", () => {
   it("keeps attached repositories locked and batches new selections", async () => {
     const user = userEvent.setup();
     const attachedUrl = repositories[0]!.url;
-    const onAttach = vi.fn(async () => [repositories[1]!.url]);
+    const onAttach = vi.fn(async (_resources: CreateProjectResourceRequest[]) => [repositories[1]!.url]);
     const onClose = vi.fn();
     renderPicker({
       attachedResources: [gitResource(attachedUrl)],

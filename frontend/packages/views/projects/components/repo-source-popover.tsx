@@ -52,12 +52,6 @@ import {
   TooltipTrigger,
 } from "@multiremi/ui/components/ui/tooltip";
 import { ProjectIcon } from "./project-icon";
-import {
-  isDesktopShell,
-  pickDirectory,
-  useLocalDaemonStatus,
-  validateLocalDirectory,
-} from "../../platform";
 import { useT } from "../../i18n";
 
 // Fully-controlled resource picker. Callers can narrow the visible sources;
@@ -137,24 +131,11 @@ function githubRepoResource(url: string): CreateProjectResourceRequest {
   return { resource_type: "github_repo", resource_ref: { url } };
 }
 
-// Import mapping (per contract): a candidate with a remote becomes a
-// github_repo (parallel worktrees, no per-daemon cap); one without a remote
-// becomes a local_directory pinned to the scanned runtime's daemon.
-function candidateResource(
-  candidate: RuntimeDirectoryCandidate,
-  daemonId: string,
-): CreateProjectResourceRequest {
-  if (candidate.remote_url) {
-    return githubRepoResource(candidate.remote_url);
-  }
-  return {
-    resource_type: "local_directory",
-    resource_ref: {
-      local_path: candidate.path,
-      daemon_id: daemonId,
-      label: candidate.name,
-    },
-  };
+// Runtime scans only import repositories that have a remote. Directories
+// without one remain browsable but cannot become project resources.
+function candidateResource(candidate: RuntimeDirectoryCandidate): CreateProjectResourceRequest {
+  if (!candidate.remote_url) throw new Error("repository remote is required");
+  return githubRepoResource(candidate.remote_url);
 }
 
 function sameResource(
@@ -311,7 +292,6 @@ export function RepoSourcePopover({
       {activeTab === "runtime" && (
         <RuntimeImportTab
           wsId={wsId}
-          resources={resources}
           isSelected={isSelected}
           toggle={toggle}
           showSelected={!!onRemove}
@@ -636,13 +616,11 @@ function CandidateBody({
 
 function RuntimeImportTab({
   wsId,
-  resources,
   isSelected,
   toggle,
   showSelected,
 }: {
   wsId: string;
-  resources: CreateProjectResourceRequest[];
   isSelected: (r: CreateProjectResourceRequest) => boolean;
   toggle: (r: CreateProjectResourceRequest) => void;
   // When false (detail flow, no onRemove), an already-attached row locks with
@@ -667,7 +645,6 @@ function RuntimeImportTab({
   }, [machines]);
 
   const machine = machines.find((m) => m.key === selectedKey);
-  const daemonId = machine?.daemonId ?? null;
   const runtimeId = machine?.scanRuntimeId ?? "";
   const online = machine?.online ?? false;
 
@@ -704,6 +681,7 @@ function RuntimeImportTab({
   };
 
   const candidates = scan.data?.candidates ?? [];
+  const importableCandidates = candidates.filter((candidate) => Boolean(candidate.remote_url));
   const browseCandidates = browse.data?.candidates ?? [];
   // The daemon echoes the expanded absolute root (e.g. "~" -> "/home/dev"), so
   // prefer that for the current dir — it renders and ascends even on an empty
@@ -721,72 +699,6 @@ function RuntimeImportTab({
     if (msg && !/timed out|timeout/i.test(msg)) return msg;
     return t(($) => $.repo_source.scan_timeout_error);
   })();
-
-  // Client mirror of the server's one-local_directory-per-(project, daemon)
-  // rule: once a no-remote directory is pending on this daemon, block adding
-  // more (the server would 409 otherwise).
-  const hasLocalForDaemon =
-    daemonId !== null &&
-    resources.some(
-      (r) =>
-        r.resource_type === "local_directory" &&
-        (r.resource_ref as LocalDirectoryResourceRef).daemon_id === daemonId,
-    );
-
-  const desktop = isDesktopShell();
-  const localDaemon = useLocalDaemonStatus();
-  // The desktop picker always attaches to THIS machine's daemon, so it hits the
-  // same one-local_directory-per-(project, daemon) cap as the scan candidates.
-  const hasLocalForLocalDaemon =
-    localDaemon.daemonId !== null &&
-    resources.some(
-      (r) =>
-        r.resource_type === "local_directory" &&
-        (r.resource_ref as LocalDirectoryResourceRef).daemon_id ===
-          localDaemon.daemonId,
-    );
-  const [picking, setPicking] = useState(false);
-  const [pickError, setPickError] = useState<string | null>(null);
-
-  const handlePickLocal = async () => {
-    if (picking) return;
-    setPickError(null);
-    if (!localDaemon.daemonId || !localDaemon.running) {
-      setPickError(t(($) => $.repo_source.desktop_daemon_offline));
-      return;
-    }
-    if (hasLocalForLocalDaemon) {
-      setPickError(t(($) => $.repo_source.local_cap_hint));
-      return;
-    }
-    setPicking(true);
-    try {
-      const picked = await pickDirectory();
-      if (!picked.ok || !picked.path) {
-        if (picked.reason && picked.reason !== "cancelled") {
-          setPickError(picked.error ?? t(($) => $.repo_source.desktop_pick_failed));
-        }
-        return;
-      }
-      const validation = await validateLocalDirectory(picked.path);
-      if (!validation.ok) {
-        setPickError(validation.error ?? t(($) => $.repo_source.desktop_invalid_dir));
-        return;
-      }
-      const resource: CreateProjectResourceRequest = {
-        resource_type: "local_directory",
-        resource_ref: {
-          local_path: picked.path,
-          daemon_id: localDaemon.daemonId,
-          ...(picked.basename ? { label: picked.basename } : {}),
-        },
-      };
-      // Add-only — a re-pick of the same directory must not toggle it off.
-      if (!isSelected(resource)) toggle(resource);
-    } finally {
-      setPicking(false);
-    }
-  };
 
   if (machines.length === 0) {
     return (
@@ -918,8 +830,9 @@ function RuntimeImportTab({
               </p>
             )}
             {browseCandidates.map((candidate) => {
-              if (candidate.is_git_repo !== true) {
-                // Plain directory — navigate into it, nothing to import.
+              if (candidate.is_git_repo !== true || !candidate.remote_url) {
+                // Plain directories and repos without a remote remain
+                // navigable, but only remote-backed repos can be imported.
                 return (
                   <button
                     type="button"
@@ -927,7 +840,11 @@ function RuntimeImportTab({
                     onClick={() => browseTo(candidate.path)}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors"
                   >
-                    <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                    {candidate.is_git_repo ? (
+                      <FolderGit className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                    )}
                     <div className="min-w-0 flex-1 text-left">
                       <div className="truncate font-medium">{candidate.name}</div>
                       <div
@@ -942,14 +859,11 @@ function RuntimeImportTab({
                 );
               }
               // Git repo — descend on the row, import via the checkbox.
-              const resource = candidateResource(candidate, daemonId ?? "");
+              const resource = candidateResource(candidate);
               const checked = isSelected(resource);
-              const noRemote = !candidate.remote_url;
-              const capped = noRemote && !checked && hasLocalForDaemon;
               // Already attached in the detail flow: lock, don't toggle off.
               const locked = checked && !showSelected;
-              const importDisabled =
-                locked || capped || (noRemote && daemonId === null);
+              const importDisabled = locked;
               return (
                 <div
                   key={candidate.path}
@@ -989,24 +903,20 @@ function RuntimeImportTab({
         </div>
       )}
 
-      {view === "scan" && scan.isSuccess && candidates.length === 0 && (
+      {view === "scan" && scan.isSuccess && importableCandidates.length === 0 && (
         <p className="px-1 py-4 text-center text-xs text-muted-foreground">
           {t(($) => $.repo_source.scan_empty)}
         </p>
       )}
 
-      {view === "scan" && candidates.length > 0 && (
+      {view === "scan" && importableCandidates.length > 0 && (
         <div className="max-h-[340px] space-y-1 overflow-y-auto">
-          {candidates.map((candidate) => {
-            const resource = candidateResource(candidate, daemonId ?? "");
+          {importableCandidates.map((candidate) => {
+            const resource = candidateResource(candidate);
             const checked = isSelected(resource);
-            const noRemote = !candidate.remote_url;
-            // No-remote candidates become local_directory rows and hit the
-            // per-daemon cap; disable further ones once one is pending.
-            const capped = noRemote && !checked && hasLocalForDaemon;
             // Already attached in the detail flow: lock, don't toggle off.
             const locked = checked && !showSelected;
-            const disabled = locked || capped || (noRemote && daemonId === null);
+            const disabled = locked;
             return (
               <button
                 type="button"
@@ -1039,38 +949,6 @@ function RuntimeImportTab({
         </div>
       )}
 
-      {hasLocalForDaemon && (
-        <p className="text-[10px] text-muted-foreground leading-snug">
-          {t(($) => $.repo_source.local_cap_hint)}
-        </p>
-      )}
-
-      {desktop && (
-        <div className="space-y-1 border-t pt-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="w-full text-xs"
-            onClick={() => void handlePickLocal()}
-            disabled={picking || !localDaemon.running || hasLocalForLocalDaemon}
-          >
-            <FolderOpen className="size-3" />
-            {picking
-              ? t(($) => $.repo_source.desktop_picking)
-              : t(($) => $.repo_source.desktop_pick_button)}
-          </Button>
-          {/* Skip the hint when the scan tab already shows it for this machine. */}
-          {hasLocalForLocalDaemon && localDaemon.daemonId !== daemonId && (
-            <p className="text-[10px] text-muted-foreground leading-snug">
-              {t(($) => $.repo_source.local_cap_hint)}
-            </p>
-          )}
-          {pickError && (
-            <p className="text-[11px] text-destructive">{pickError}</p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

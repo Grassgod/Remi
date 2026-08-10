@@ -7,6 +7,87 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — daemon endpoints", () => {
+  it("reports an Issue code workspace and exposes it to the Issue sidebar", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_workspace_api", name: "codex (devbox)", provider: "codex" });
+    const agent = store.createAgent({ name: "Workspace Codex", provider: "codex" });
+    const issue = store.createIssue({ title: "Show workspace", workspaceId: "local" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "work" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const app = createMultiremiApp({ store });
+
+    const report = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtime.id,
+        root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
+        branch_name: `agent/${issue.key}`,
+        status: "in_use",
+        repos: [{
+          repo_url: "git@example.test:team/remi.git",
+          repo_name: "remi",
+          worktree_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}/remi`,
+          branch_name: `agent/${issue.key}`,
+          base_ref: "refs/remotes/origin/main",
+          status: "ready",
+          dirty: false,
+        }],
+      }),
+    });
+    expect(report.status).toBe(200);
+
+    const response = await app.request(`/api/issues/${issue.id}/workspace`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      workspace: {
+        issue_id: issue.id,
+        runtime_id: runtime.id,
+        runtime_name: "codex (devbox)",
+        runtime_status: "online",
+        root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
+        branch_name: `agent/${issue.key}`,
+        status: "in_use",
+        repos: [{ repo_name: "remi", branch_name: `agent/${issue.key}`, dirty: false }],
+      },
+    });
+
+    store.setRuntimeOffline(runtime.id);
+    const offline = await app.request(`/api/issues/${issue.id}/workspace`);
+    expect((await offline.json()).workspace.status).toBe("runtime_offline");
+
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "done" });
+    store.markIssueWorkspaceCleaned(issue.id, runtime.id);
+    const nextRuntime = store.registerRuntime({ id: "rt_workspace_next", name: "codex (next)", provider: "codex" });
+    const nextTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
+    expect(store.claimTask(nextRuntime.id)?.id).toBe(nextTask.id);
+    const nextReport = await app.request(`/api/daemon/tasks/${nextTask.id}/workspace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: nextRuntime.id,
+        root_path: `/home/next/.remi/multiremi/workspaces/${issue.key}`,
+        branch_name: `agent/${issue.key}`,
+        status: "preparing",
+      }),
+    });
+    expect(nextReport.status).toBe(200);
+
+    const staleReport = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtime.id,
+        root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
+        branch_name: `agent/${issue.key}`,
+        status: "ready",
+      }),
+    });
+    expect(staleReport.status).toBe(409);
+    expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(nextRuntime.id);
+  });
+
   it("serves Multiremi daemon install commands and mints daemon tokens", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });

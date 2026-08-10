@@ -7,6 +7,44 @@ import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi store — task claim, routing, and workspace scoping", () => {
+  it("serializes one Issue across different agents and runtimes", () => {
+    const store = createStore();
+    const codex = store.registerRuntime({ id: "rt_issue_codex", name: "codex", provider: "codex" });
+    const claude = store.registerRuntime({ id: "rt_issue_claude", name: "claude", provider: "claude" });
+    const codexAgent = store.createAgent({ name: "Issue Codex", provider: "codex" });
+    const claudeAgent = store.createAgent({ name: "Issue Claude", provider: "claude" });
+    const issue = store.createIssue({ title: "One workspace", workspaceId: "local" });
+    const first = store.createTask({ agentId: codexAgent.id, issueId: issue.id, prompt: "first" });
+    const second = store.createTask({ agentId: claudeAgent.id, issueId: issue.id, prompt: "second" });
+
+    expect(store.claimTask(codex.id)?.id).toBe(first.id);
+    expect(store.claimTask(claude.id)).toBeNull();
+
+    store.startTask(first.id);
+    store.completeTask(first.id, { output: "done" });
+    expect(store.claimTask(claude.id)?.id).toBe(second.id);
+  });
+
+  it("pins follow-up Issue tasks to the runtime that owns its workspace", () => {
+    const store = createStore();
+    const firstRuntime = store.registerRuntime({ id: "rt_workspace_a", name: "a", provider: "codex" });
+    const otherRuntime = store.registerRuntime({ id: "rt_workspace_b", name: "b", provider: "codex" });
+    const agent = store.createAgent({ name: "Workspace Agent", provider: "codex" });
+    const issue = store.createIssue({ title: "Runtime affinity", workspaceId: "local" });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: firstRuntime.id,
+      rootPath: "/tmp/MUL-1",
+      branchName: "agent/MUL-1",
+      status: "ready",
+      repos: [],
+    });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "continue" });
+
+    expect(store.claimTask(otherRuntime.id)).toBeNull();
+    expect(store.claimTask(firstRuntime.id)?.id).toBe(task.id);
+  });
+
   it("claims queued tasks by runtime provider and completes them", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });

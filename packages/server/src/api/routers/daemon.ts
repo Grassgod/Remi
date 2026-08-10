@@ -31,7 +31,7 @@ import {
   daemonTaskWireResponse,
   workspaceReposResponse,
 } from "../wire/index.js";
-import type { MultiremiTask } from "@multiremi/contracts/types.js";
+import type { MultiremiIssueWorkspaceRepo, MultiremiIssueWorkspaceStatus, MultiremiTask } from "@multiremi/contracts/types.js";
 import type { DaemonRegisterRequestBody } from "../helpers.js";
 import type { RouterDeps } from "./deps.js";
 
@@ -269,6 +269,60 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     );
     return c.body(null, 204);
   });
+  app.post("/api/daemon/tasks/:taskId/workspace", async (c) => {
+    const taskId = c.req.param("taskId");
+    const task = store.getTask(taskId);
+    if (!task || !task.issueId) return c.json({ error: "issue task not found" }, 404);
+    const body = await readJsonStrict<{
+      runtime_id?: string;
+      root_path?: string;
+      branch_name?: string;
+      status?: MultiremiIssueWorkspaceStatus;
+      repos?: Array<{
+        repo_url?: string;
+        repo_name?: string;
+        worktree_path?: string;
+        branch_name?: string;
+        base_ref?: string;
+        status?: "ready" | "dirty" | "error";
+        dirty?: boolean;
+        error?: string | null;
+      }>;
+    }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const runtimeId = body.runtime_id?.trim() ?? "";
+    if (!runtimeId || runtimeId !== task.runtimeId) return c.json({ error: "runtime_id does not own task" }, 403);
+    const denied = denyDaemonTokenRuntimeWorkspace(c, store, runtimeId);
+    if (denied) return denied;
+    if (!body.root_path?.trim() || !body.branch_name?.trim() || !body.status) {
+      return c.json({ error: "root_path, branch_name and status are required" }, 400);
+    }
+    const repos: MultiremiIssueWorkspaceRepo[] = (body.repos ?? []).map((repo) => ({
+      repoUrl: repo.repo_url?.trim() ?? "",
+      repoName: repo.repo_name?.trim() ?? "",
+      worktreePath: repo.worktree_path?.trim() ?? "",
+      branchName: repo.branch_name?.trim() ?? body.branch_name!,
+      baseRef: repo.base_ref?.trim() ?? "",
+      status: repo.status ?? (repo.dirty ? "dirty" : "ready"),
+      dirty: repo.dirty ?? false,
+      error: repo.error?.trim() || null,
+    }));
+    try {
+      const workspace = store.reportIssueWorkspace({
+        issueId: task.issueId,
+        runtimeId,
+        rootPath: body.root_path.trim(),
+        branchName: body.branch_name.trim(),
+        status: body.status,
+        repos,
+        lastTaskId: taskId,
+      });
+      return c.json({ issue_id: workspace.issueId, status: workspace.status });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, message.includes("does not own active") ? 409 : 400);
+    }
+  });
   app.post("/api/daemon/tasks/:taskId/complete", async (c) => {
     const taskId = c.req.param("taskId");
     const existing = store.getTask(taskId);
@@ -320,6 +374,21 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     const issue = issueFromParam(store, c, "issueId");
     if (!issue) return c.json({ error: "issue not found" }, 404);
     return c.json({ status: issue.status, updated_at: issue.updatedAt });
+  });
+  app.post("/api/daemon/issues/:issueId/workspace/cleaned", async (c) => {
+    const body = await readJsonStrict<{ runtime_id?: string }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const runtimeId = body.runtime_id?.trim() ?? "";
+    if (!runtimeId) return c.json({ error: "runtime_id is required" }, 400);
+    const denied = denyDaemonTokenRuntimeWorkspace(c, store, runtimeId);
+    if (denied) return denied;
+    if (!store.getIssueWorkspace(c.req.param("issueId"))) return c.body(null, 204);
+    try {
+      const workspace = store.markIssueWorkspaceCleaned(c.req.param("issueId"), runtimeId);
+      return c.json({ issue_id: workspace.issueId, status: workspace.status, cleaned_at: workspace.cleanedAt });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
   });
   app.get("/api/daemon/chat-sessions/:sessionId/gc-check", (c) => {
     const session = store.getChatSession(c.req.param("sessionId"));

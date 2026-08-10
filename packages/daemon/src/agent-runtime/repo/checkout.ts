@@ -15,6 +15,8 @@ export interface MultiremiWorktreeParams {
   ref?: string;
   agentName?: string;
   taskId?: string;
+  /** Stable branch for Issue workspaces, for example agent/MUL-28. */
+  branchName?: string;
   coAuthoredByEnabled?: boolean;
   // Leave an existing worktree untouched (no reset/clean/checkout) and return
   // its current branch. Used by the daemon's pre-flight auto-checkout so a
@@ -29,11 +31,19 @@ export interface MultiremiWorktreeResult {
   branchName: string;
   /** false when reuseExisting found the worktree already in place. */
   created: boolean;
+  base_ref: string;
+  baseRef: string;
 }
 
 export interface MultiremiRepoCacheOptions {
   lockTimeoutMs?: number;
   staleLockMs?: number;
+}
+
+export interface MultiremiWorktreeState {
+  dirty: boolean;
+  hasChanges: boolean;
+  hasUnpushedCommits: boolean;
 }
 
 const AGENT_GIT_EXCLUDE_PATTERNS = [".agent_context", ".multiremi", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"];
@@ -133,48 +143,54 @@ export class MultiremiRepoCache {
     return pruned;
   }
 
+  inspectWorktree(worktreePath: string): MultiremiWorktreeState {
+    if (!isGitWorktree(worktreePath)) throw new Error(`not a git worktree: ${worktreePath}`);
+    const hasChanges = Boolean(git(worktreePath, ["status", "--porcelain"]));
+    const hasUnpushedCommits = !Boolean(git(worktreePath, ["branch", "-r", "--contains", "HEAD"], { allowFailure: true }));
+    return { dirty: hasChanges || hasUnpushedCommits, hasChanges, hasUnpushedCommits };
+  }
+
   private createWorktreeLocked(barePath: string, params: MultiremiWorktreeParams): MultiremiWorktreeResult {
     const worktreePath = join(params.workDir, repoNameFromUrl(params.repoUrl));
+    const requestedBranch = params.branchName?.trim() || null;
     if (params.reuseExisting && existsSync(worktreePath) && isGitWorktree(worktreePath)) {
       const currentBranch = git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
-      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false };
+      if (requestedBranch && currentBranch !== requestedBranch) {
+        throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
+      }
+      const baseRef = resolveBaseRef(barePath, params.ref);
+      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
     gitFetch(barePath, { allowFailure: true });
 
     const baseRef = resolveBaseRef(barePath, params.ref);
-    const branchBase = `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
-    let branchName = branchBase;
+    const branchName = requestedBranch ?? `agent/${sanitizeName(params.agentName ?? "agent")}/${shortId(params.taskId ?? "task")}`;
 
     if (existsSync(worktreePath)) {
       if (!isGitWorktree(worktreePath)) {
         throw new Error(`worktree path already exists and is not a git worktree: ${worktreePath}`);
       }
-      git(worktreePath, ["reset", "--hard"]);
-      git(worktreePath, ["clean", "-fd"]);
-      try {
-        git(worktreePath, ["checkout", "-B", branchName, baseRef]);
-      } catch (err) {
-        if (!isBranchCollisionError(err)) throw err;
-        branchName = `${branchName}-${Date.now()}`;
-        git(worktreePath, ["checkout", "-B", branchName, baseRef]);
+      const currentBranch = git(worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      if (requestedBranch && currentBranch !== requestedBranch) {
+        throw new Error(`worktree ${worktreePath} is on ${currentBranch}, expected ${requestedBranch}; refusing to switch a persistent workspace`);
       }
       excludeAgentFiles(worktreePath);
       applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-      return { path: worktreePath, branch_name: branchName, branchName, created: true };
+      return { path: worktreePath, branch_name: currentBranch, branchName: currentBranch, created: false, base_ref: baseRef, baseRef };
     }
 
     mkdirSync(params.workDir, { recursive: true });
-    try {
-      git(barePath, ["worktree", "add", "-b", branchName, worktreePath, baseRef]);
-    } catch (err) {
-      if (!isBranchCollisionError(err)) throw err;
-      branchName = `${branchName}-${Date.now()}`;
+    if (gitRefExists(barePath, `refs/heads/${branchName}`)) {
+      git(barePath, ["worktree", "add", worktreePath, branchName]);
+    } else if (gitRefExists(barePath, `refs/remotes/origin/${branchName}`)) {
+      git(barePath, ["worktree", "add", "-b", branchName, worktreePath, `origin/${branchName}`]);
+    } else {
       git(barePath, ["worktree", "add", "-b", branchName, worktreePath, baseRef]);
     }
     excludeAgentFiles(worktreePath);
     applyCoAuthoredByHook(worktreePath, params.coAuthoredByEnabled !== false);
-    return { path: worktreePath, branch_name: branchName, branchName, created: true };
+    return { path: worktreePath, branch_name: branchName, branchName, created: true, base_ref: baseRef, baseRef };
   }
 
   private barePath(workspaceId: string, repoUrl: string): string {
@@ -393,10 +409,6 @@ function sanitizeName(value: string): string {
 function shortId(value: string): string {
   const normalized = safePathPart(value);
   return normalized.length > 12 ? normalized.slice(0, 12) : normalized;
-}
-
-function isBranchCollisionError(err: unknown): boolean {
-  return err instanceof Error && err.message.toLowerCase().includes("a branch named");
 }
 
 function excludeAgentFiles(worktreePath: string): void {

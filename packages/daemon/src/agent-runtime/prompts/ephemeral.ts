@@ -5,6 +5,7 @@ export interface TaskRepoCheckout {
   repoUrl: string;
   path: string;
   branch: string;
+  baseRef?: string;
 }
 
 export interface BuildTaskPromptOptions {
@@ -40,14 +41,15 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
   appendTriggerCommentSection(sections, task);
 
   if (task.project) {
+    const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
     sections.push("");
     sections.push("## Project Context");
     sections.push(`This issue belongs to project: ${task.project.title}`);
     if (task.project.description) sections.push(task.project.description);
-    if (task.projectResources.length) {
+    if (gitResources.length) {
       sections.push("");
       sections.push("Project resources:");
-      for (const resource of task.projectResources) {
+      for (const resource of gitResources) {
         sections.push(formatProjectResource(resource));
       }
     }
@@ -352,11 +354,6 @@ function formatProjectResource(resource: AgentTask["projectResources"][number]):
     const url = String(resource.resourceRef.url ?? "");
     const branch = String(resource.resourceRef.defaultBranchHint ?? resource.resourceRef.default_branch_hint ?? "");
     return branch ? `- GitHub repo: ${url} (default branch: ${branch})` : `- GitHub repo: ${url}`;
-  }
-  if (resource.resourceType === "local_directory") {
-    const path = String(resource.resourceRef.localPath ?? resource.resourceRef.local_path ?? "");
-    const label = String(resource.resourceRef.label ?? "").trim();
-    return label ? `- Local directory: ${path} (${label})` : `- Local directory: ${path}`;
   }
   return `- ${resource.resourceType}: ${JSON.stringify(resource.resourceRef)}`;
 }

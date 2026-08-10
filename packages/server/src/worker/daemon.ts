@@ -39,6 +39,7 @@ import {
 import { runWorkspaceGcOnce, type MultiremiDaemonGcSummary } from "@daemon/agent-runtime/workspace/gc.js";
 import type {
   MultiremiDaemonHeartbeatAck,
+  MultiremiIssueWorkspaceRepo,
   MultiremiRepoData,
   MultiremiRuntimeModel,
   MultiremiRuntimeUpdateScope,
@@ -122,6 +123,11 @@ interface RunSummary {
   sessionId: string | null;
   workDir: string | null;
   usage: TaskUsageEntry[];
+}
+
+interface PreparedIssueWorkspace {
+  checkouts: TaskRepoCheckout[];
+  repos: MultiremiIssueWorkspaceRepo[];
 }
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
@@ -607,6 +613,7 @@ export class MultiremiDaemon {
       ttlMs: this.options.gcTtlMs,
       orphanTtlMs: this.options.gcOrphanTtlMs,
       client: this.client,
+      runtimeId: this.options.runtimeId,
     });
     this.repoCache.pruneWorktrees();
     return summary;
@@ -714,11 +721,24 @@ export class MultiremiDaemon {
   private async autoCheckoutTaskRepos(
     task: MultiremiTaskWithAgent,
     resolvedWorkDir: ResolvedTaskWorkDir,
-  ): Promise<TaskRepoCheckout[]> {
+  ): Promise<PreparedIssueWorkspace> {
     const repos = normalizeRepoList(task.repos ?? []);
-    if (!repos.length || !task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) return [];
+    if (!repos.length || !task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
+      return { checkouts: [], repos: [] };
+    }
     const checkouts: TaskRepoCheckout[] = [];
-    let createdAny = false;
+    const workspaceRepos: MultiremiIssueWorkspaceRepo[] = [];
+    const runtimeId = task.runtimeId ?? this.options.runtimeId;
+    const branchName = `agent/${task.issue?.key ?? task.id}`;
+    if (runtimeId) {
+      await this.client.reportIssueWorkspace(task.id, {
+        runtimeId,
+        rootPath: resolvedWorkDir.workDir,
+        branchName,
+        status: "preparing",
+        repos: [],
+      }).catch((err) => log.warn(`Failed to report workspace preparation for ${task.id}: ${err instanceof Error ? err.message : String(err)}`));
+    }
     for (const repo of repos) {
       try {
         await this.ensureRepoReady(task.workspaceId, repo.url);
@@ -727,51 +747,82 @@ export class MultiremiDaemon {
           repoUrl: repo.url,
           workDir: resolvedWorkDir.workDir,
           agentName: task.agent?.name ?? "agent",
-          // Issue key over task id: the branch then names the issue it serves
-          // (agent/<name>/REMI-42) and stays stable across the issue's tasks.
           taskId: task.issue?.key || task.id,
+          branchName,
           reuseExisting: true,
           coAuthoredByEnabled: this.workspaceCoAuthoredByEnabled(task.workspaceId),
         });
-        checkouts.push({ repoUrl: repo.url, path: result.path, branch: result.branchName });
-        if (result.created) createdAny = true;
+        checkouts.push({ repoUrl: repo.url, path: result.path, branch: result.branchName, baseRef: result.baseRef });
+        workspaceRepos.push({
+          repoUrl: repo.url,
+          repoName: basename(result.path),
+          worktreePath: result.path,
+          branchName: result.branchName,
+          baseRef: result.baseRef,
+          status: "ready",
+          dirty: false,
+          error: null,
+        });
       } catch (err) {
-        log.warn(`Auto checkout of ${repo.url} failed for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        const error = err instanceof Error ? err.message : String(err);
+        workspaceRepos.push({
+          repoUrl: repo.url,
+          repoName: basename(repo.url.replace(/\.git$/, "")),
+          worktreePath: join(resolvedWorkDir.workDir, basename(repo.url.replace(/\.git$/, ""))),
+          branchName,
+          baseRef: "",
+          status: "error",
+          dirty: false,
+          error,
+        });
+        log.warn(`Auto checkout of ${repo.url} failed for task ${task.id}: ${error}`);
       }
     }
-    if (createdAny) await this.publishBranchArtifact(task, checkouts);
-    return checkouts;
+    if (runtimeId) {
+      await this.client.reportIssueWorkspace(task.id, {
+        runtimeId,
+        rootPath: resolvedWorkDir.workDir,
+        branchName,
+        status: workspaceRepos.some((repo) => repo.status === "error") ? "error" : "in_use",
+        repos: workspaceRepos,
+      }).catch((err) => log.warn(`Failed to report workspace for ${task.id}: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    return { checkouts, repos: workspaceRepos };
   }
 
-  /**
-   * Surface freshly created worktree branches on the issue's key-results
-   * panel as a `branch` result. Published only when a worktree was newly
-   * created (a resumed task reusing its worktrees does not re-publish).
-   */
-  private async publishBranchArtifact(task: MultiremiTaskWithAgent, checkouts: TaskRepoCheckout[]): Promise<void> {
-    const issueId = task.issueId ?? task.issue?.id ?? null;
-    const sessionId = task.issueSessionId ?? task.issue_session_id ?? null;
-    if (!issueId || !sessionId || !checkouts.length) return;
-    const body = checkouts
-      .map((checkout) => `- ${basename(checkout.path)}: \`${checkout.branch}\`\n  \`${checkout.path}\``)
-      .join("\n");
-    try {
-      await this.client.publishTaskSessionResult(issueId, sessionId, {
-        title: checkouts[0]!.branch,
-        body,
-        metadata: {
-          kind: "branch",
-          refs: [{ type: "task", value: task.id }],
-          worktrees: checkouts.map((checkout) => ({
-            repo_url: checkout.repoUrl,
-            branch: checkout.branch,
-            path: checkout.path,
-          })),
-        },
-      }, task.authToken ?? task.auth_token ?? null);
-    } catch (err) {
-      log.warn(`Failed to publish branch result for task ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  private async reportIssueWorkspaceAfterRun(
+    task: MultiremiTaskWithAgent,
+    rootPath: string,
+    workspaceRepos: MultiremiIssueWorkspaceRepo[],
+  ): Promise<void> {
+    const runtimeId = task.runtimeId ?? this.options.runtimeId;
+    if (!task.issueId || !runtimeId) return;
+    const branchName = `agent/${task.issue?.key ?? task.id}`;
+    const repos: MultiremiIssueWorkspaceRepo[] = workspaceRepos.map((repo) => {
+      if (repo.status === "error") return repo;
+      try {
+        const state = this.repoCache.inspectWorktree(repo.worktreePath);
+        return {
+          ...repo,
+          status: state.dirty ? "dirty" : "ready",
+          dirty: state.dirty,
+          error: null,
+        };
+      } catch (err) {
+        return {
+          ...repo,
+          status: "error",
+          dirty: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    });
+    const status = repos.some((repo) => repo.status === "error")
+      ? "error"
+      : repos.some((repo) => repo.dirty)
+        ? "dirty"
+        : "ready";
+    await this.client.reportIssueWorkspace(task.id, { runtimeId, rootPath, branchName, status, repos });
   }
 
   private localDirectoryDaemonIds(task: MultiremiTaskWithAgent): string[] {
@@ -911,7 +962,7 @@ export class MultiremiDaemon {
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
-    const repoCheckouts = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+    const preparedWorkspace = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
     try {
       writeTaskContext(workDir, task);
       writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });
@@ -961,7 +1012,7 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
-      const prompt = buildTaskPrompt(task, { repoCheckouts });
+      const prompt = buildTaskPrompt(task, { repoCheckouts: preparedWorkspace.checkouts });
       for await (const event of session.run(prompt)) {
         // One event may yield several messages (e.g. a completed tool_call →
         // tool_use + tool_result). Each gets its own seq so none collides.
@@ -983,6 +1034,9 @@ export class MultiremiDaemon {
         usage,
       };
     } finally {
+      await this.reportIssueWorkspaceAfterRun(task, workDir, preparedWorkspace.repos).catch((err) => {
+        log.warn(`Failed to report final workspace state for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+      });
       await provider.close?.();
     }
   }

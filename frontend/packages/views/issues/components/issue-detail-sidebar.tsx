@@ -34,6 +34,7 @@ import { IssueSessionActions } from "./issue-session-bar";
 import { IssueKeyResultsSection } from "./issue-key-results-section";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { IssueCodeWorkspaceSection } from "./issue-code-workspace-section";
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -204,6 +205,8 @@ export function IssueDetailSidebar({
           )}
         </div>}
       </div>
+
+      <IssueCodeWorkspaceSection issueId={issueId} />
 
       {/* Parent issue — standalone section, only when the issue has a
           parent. Setting a parent is reachable via the issue actions menu;

@@ -2,6 +2,7 @@ import type {
   CreateIssueRequest,
   GroupedIssuesResponse,
   Issue,
+  IssueWorkspace,
   ListGroupedIssuesParams,
   ListIssuesParams,
   ListIssuesResponse,
@@ -103,6 +104,10 @@ export class IssuesEndpoints {
 
   async getIssue(id: string): Promise<Issue> {
     return this.http.fetch(`/api/issues/${id}`);
+  }
+
+  async getIssueWorkspace(id: string): Promise<{ workspace: IssueWorkspace | null }> {
+    return this.http.fetch(`/api/issues/${id}/workspace`);
   }
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {

@@ -1031,6 +1031,26 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_human_requests_task ON multiremi_task_human_requests(task_id, status);
   `);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS multiremi_issue_workspaces (
+      issue_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      issue_key TEXT NOT NULL,
+      runtime_id TEXT,
+      root_path TEXT NOT NULL,
+      branch_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'preparing',
+      repos TEXT NOT NULL DEFAULT '[]',
+      last_task_id TEXT,
+      cleaned_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE,
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_workspaces_runtime
+      ON multiremi_issue_workspaces(runtime_id, status, updated_at);
+  `);
+  db.exec(`
     DELETE FROM multiremi_task_messages
     WHERE rowid NOT IN (
       SELECT MAX(rowid)
