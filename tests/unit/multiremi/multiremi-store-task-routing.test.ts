@@ -45,6 +45,32 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     expect(store.claimTask(firstRuntime.id)?.id).toBe(task.id);
   });
 
+  it("keeps Issue tasks off legacy runtimes without blocking ordinary tasks", () => {
+    const store = createStore();
+    const legacyRuntime = store.registerRuntime({
+      id: "rt_legacy_issue_workspace",
+      name: "legacy",
+      provider: "codex",
+      metadata: { cli_version: "v0.2.24" },
+    });
+    const currentRuntime = store.registerRuntime({
+      id: "rt_current_issue_workspace",
+      name: "current",
+      provider: "codex",
+      metadata: { cli_version: "v0.2.26" },
+    });
+    const agent = store.createAgent({ name: "Workspace Agent", provider: "codex" });
+    const issue = store.createIssue({ title: "Use persistent workspace", workspaceId: "local" });
+    const issueTask = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "issue work" });
+    const ordinaryTask = store.createTask({ agentId: agent.id, prompt: "ordinary work" });
+
+    expect(store.claimTask(legacyRuntime.id)?.id).toBe(ordinaryTask.id);
+    store.startTask(ordinaryTask.id);
+    store.completeTask(ordinaryTask.id, { output: "done" });
+    expect(store.claimTask(legacyRuntime.id)).toBeNull();
+    expect(store.claimTask(currentRuntime.id)?.id).toBe(issueTask.id);
+  });
+
   it("claims queued tasks by runtime provider and completes them", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex", maxConcurrentTasks: 2 });

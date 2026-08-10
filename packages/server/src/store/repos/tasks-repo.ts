@@ -63,6 +63,20 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
+const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
+
+function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
+  const rawVersion = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
+  if (typeof rawVersion !== "string" || !rawVersion.trim()) return true;
+  const match = rawVersion.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  if (!match) return true;
+  const version = match.slice(1, 4).map(Number);
+  for (let index = 0; index < ISSUE_WORKSPACE_MIN_CLI_VERSION.length; index += 1) {
+    const delta = version[index] - ISSUE_WORKSPACE_MIN_CLI_VERSION[index];
+    if (delta !== 0) return delta > 0;
+  }
+  return true;
+}
 
 export class TasksRepo {
   constructor(private ctx: StoreContext) {}
@@ -578,7 +592,8 @@ export class TasksRepo {
     const eligible = task?.agent != null
       && !task.agent.archivedAt
       && runtime != null
-      && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent);
+      && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
+      && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime));
     if (task && !eligible) {
       const now = nowIso();
       const repool = () =>
@@ -630,6 +645,7 @@ export class TasksRepo {
       runtime.id,
       runtime.maxConcurrency,
       runtime.workspaceId ?? "local",
+      runtimeSupportsIssueWorkspaces(runtime) ? 1 : 0,
       runtime.id,
       runtime.id,
       runtime.id,
@@ -664,6 +680,7 @@ export class TasksRepo {
                AND runtime_active.status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
            ) < ?
            ${workspaceFilter}
+           AND (t.issue_id IS NULL OR ? = 1)
            AND (
              t.issue_id IS NULL
              OR NOT EXISTS (

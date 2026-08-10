@@ -1233,7 +1233,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
       name: "Console Claude",
       provider: "claude",
       workspaceId: "local",
-      metadata: { cli_version: "0.2.0-test" },
+      metadata: { cli_version: "0.2.26-test" },
     });
     const agent = store.createAgent({
       id: "agt_console_contract",

@@ -314,7 +314,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
       max_concurrency: 2,
       runtime_mode: "local",
       device_info: "Laptop · 1.0.0",
-      metadata: { version: "1.0.0", cli_version: "0.2.0", launched_by: "desktop" },
+      metadata: { version: "1.0.0", cli_version: "0.2.26", launched_by: "desktop" },
       models: [{ id: "gpt-5.5", label: "GPT-5.5", provider: "openai", default: true }],
     });
     const firstIssue = store.createIssue({ title: "First usage task", assigneeType: "agent", assigneeId: agent.id });
@@ -325,7 +325,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(runtime.ownerId).toBe(member.id);
     expect(runtime.runtimeMode).toBe("local");
     expect(runtime.deviceInfo).toBe("Laptop · 1.0.0");
-    expect(runtime.metadata).toMatchObject({ version: "1.0.0", cli_version: "0.2.0", launched_by: "desktop" });
+    expect(runtime.metadata).toMatchObject({ version: "1.0.0", cli_version: "0.2.26", launched_by: "desktop" });
     expect(runtime.visibility).toBe("public");
     expect(runtime.maxConcurrency).toBe(2);
     expect(runtime.models[0].id).toBe("gpt-5.5");
