@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { IssueSession, ProjectDocRef, SessionResult } from "@multiremi/core/types";
 import {
+  issueWorkspaceOptions,
   issueSessionResultsOptions,
   sessionResultKind,
   sessionResultRefs,
@@ -75,6 +76,17 @@ function useResultTitle(result: SessionResult): string {
   return result.title.trim() || t(($) => $.detail.result_untitled);
 }
 
+function useVisibleResults(issueId: string): SessionResult[] {
+  const { data: results = [] } = useQuery(issueSessionResultsOptions(issueId));
+  const { data: workspace, isPending: workspacePending } = useQuery(issueWorkspaceOptions(issueId));
+  if (workspacePending) return [];
+  if (!workspace) return results;
+  return results.filter((result) => {
+    const worktrees = result.metadata?.worktrees;
+    return sessionResultKind(result) !== "branch" || !Array.isArray(worktrees) || worktrees.length === 0;
+  });
+}
+
 export function IssueKeyResultsSection({
   issueId,
   sessions,
@@ -84,7 +96,7 @@ export function IssueKeyResultsSection({
 }) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
-  const { data: results = [] } = useQuery(issueSessionResultsOptions(issueId));
+  const results = useVisibleResults(issueId);
 
   if (results.length === 0) return null;
 
@@ -229,7 +241,7 @@ export function IssueResultActivityLines({
   issueId: string;
   onShowResults: () => void;
 }) {
-  const { data: results = [] } = useQuery(issueSessionResultsOptions(issueId));
+  const results = useVisibleResults(issueId);
   if (results.length === 0) return null;
 
   return (

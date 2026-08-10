@@ -10,6 +10,7 @@ const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockApiObj = vi.hoisted(() => ({
   listIssueSessionResults: vi.fn(),
+  getIssueWorkspace: vi.fn(),
 }));
 
 vi.mock("@multiremi/core/api", () => ({
@@ -91,8 +92,9 @@ function makeResult(overrides: Partial<SessionResult> = {}): SessionResult {
   };
 }
 
-function renderSection(results: SessionResult[]) {
+function renderSection(results: SessionResult[], workspace: Record<string, unknown> | null = null) {
   mockApiObj.listIssueSessionResults.mockResolvedValue(results);
+  mockApiObj.getIssueWorkspace.mockResolvedValue({ workspace });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -103,8 +105,13 @@ function renderSection(results: SessionResult[]) {
   );
 }
 
-function renderActivityLines(results: SessionResult[], onShowResults = vi.fn()) {
+function renderActivityLines(
+  results: SessionResult[],
+  onShowResults = vi.fn(),
+  workspace: Record<string, unknown> | null = null,
+) {
   mockApiObj.listIssueSessionResults.mockResolvedValue(results);
+  mockApiObj.getIssueWorkspace.mockResolvedValue({ workspace });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -140,6 +147,20 @@ describe("IssueKeyResultsSection", () => {
     expect(container.querySelector(".lucide-git-merge")).not.toBeNull();
     expect(container.querySelector(".lucide-rocket")).not.toBeNull();
     expect(container.querySelector(".lucide-file-text")).not.toBeNull();
+  });
+
+  it("hides an obsolete auto-checkout branch result once the Issue has a workspace", async () => {
+    renderSection([
+      makeResult({
+        id: "r-legacy-branch",
+        title: "agent/default/MUL-30",
+        metadata: { kind: "branch", worktrees: [{ branch: "agent/default/MUL-30" }] },
+      }),
+      makeResult({ id: "r-report", title: "Repository report", metadata: { kind: "report" } }),
+    ], { issue_id: "issue-1", branch_name: "agent/MUL-30" });
+
+    expect(await screen.findByText("Repository report")).toBeInTheDocument();
+    expect(screen.queryByText("agent/default/MUL-30")).not.toBeInTheDocument();
   });
 
   it("degrades an unknown or absent kind to the generic icon", async () => {
@@ -265,6 +286,18 @@ describe("IssueResultActivityLines", () => {
 
     fireEvent.click(screen.getByText('published the result "API contract"'));
     expect(onShowResults).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits obsolete auto-checkout branch activity once the Issue has a workspace", async () => {
+    renderActivityLines([
+      makeResult({
+        title: "agent/default/MUL-30",
+        metadata: { kind: "branch", worktrees: [{ branch: "agent/default/MUL-30" }] },
+      }),
+    ], vi.fn(), { issue_id: "issue-1", branch_name: "agent/MUL-30" });
+
+    await vi.waitFor(() => expect(mockApiObj.getIssueWorkspace).toHaveBeenCalled());
+    expect(screen.queryByText(/agent\/default\/MUL-30/)).not.toBeInTheDocument();
   });
 
   it("falls back to a placeholder title for an untitled result", async () => {
