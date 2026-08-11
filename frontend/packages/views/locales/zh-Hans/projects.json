@@ -50,6 +50,10 @@
     "agents_group": "智能体",
     "no_results": "未找到结果"
   },
+  "default_assignee": {
+    "label": "默认负责人",
+    "none": "无默认负责人"
+  },
   "relative_date": {
     "today": "今天",
     "one_day_ago": "1 天前",

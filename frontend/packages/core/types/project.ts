@@ -1,3 +1,5 @@
+import type { IssueAssigneeType } from "./issue";
+
 export type ProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
 
 export type ProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
@@ -12,6 +14,10 @@ export interface Project {
   priority: ProjectPriority;
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
+  // Default assignee (member/agent/squad) prefilled when creating an issue
+  // under this project, so frequent users skip the assignee picker.
+  default_assignee_type: IssueAssigneeType | null;
+  default_assignee_id: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
@@ -28,6 +34,8 @@ export interface CreateProjectRequest {
   priority?: ProjectPriority;
   lead_type?: "member" | "agent" | null;
   lead_id?: string | null;
+  default_assignee_type?: IssueAssigneeType | null;
+  default_assignee_id?: string | null;
   // Resources to attach in the same transaction as the project. Server returns
   // 4xx (and rolls back) if any one is invalid or duplicate.
   resources?: CreateProjectResourceRequest[];
@@ -41,6 +49,8 @@ export interface UpdateProjectRequest {
   priority?: ProjectPriority;
   lead_type?: "member" | "agent" | null;
   lead_id?: string | null;
+  default_assignee_type?: IssueAssigneeType | null;
+  default_assignee_id?: string | null;
 }
 
 export interface ListProjectsResponse {

@@ -41,6 +41,30 @@ describe("ProjectSchema", () => {
   it("rejects rows without stable identity fields", () => {
     expect(ProjectSchema.safeParse({ title: "Missing id" }).success).toBe(false);
   });
+
+  it("parses the default assignee and defaults it to null on older servers", () => {
+    const parsed = ProjectSchema.parse({
+      ...project,
+      default_assignee_type: "squad",
+      default_assignee_id: "sqd_1",
+    });
+    expect(parsed.default_assignee_type).toBe("squad");
+    expect(parsed.default_assignee_id).toBe("sqd_1");
+
+    // A server predating the field omits it entirely.
+    const legacy = ProjectSchema.parse(project);
+    expect(legacy.default_assignee_type).toBeNull();
+    expect(legacy.default_assignee_id).toBeNull();
+  });
+
+  it("downgrades an unknown default assignee type instead of failing the row", () => {
+    const parsed = ProjectSchema.parse({
+      ...project,
+      default_assignee_type: "hologram",
+      default_assignee_id: "hol_1",
+    });
+    expect(parsed.default_assignee_type).toBeNull();
+  });
 });
 
 describe("ListProjectsResponseSchema", () => {

@@ -74,6 +74,19 @@ vi.mock("@multiremi/core/issues/queries", () => ({
   }),
 }));
 
+// Feeds the project-default-assignee prefill: one project that binds a squad,
+// one without a binding.
+vi.mock("@multiremi/core/projects/queries", () => ({
+  projectListOptions: (wsId: string) => ({
+    queryKey: ["projects", wsId],
+    queryFn: () =>
+      Promise.resolve([
+        { id: "prj_squad", default_assignee_type: "squad", default_assignee_id: "sqd_ops", archived_at: null },
+        { id: "prj_plain", default_assignee_type: null, default_assignee_id: null, archived_at: null },
+      ]),
+  }),
+}));
+
 vi.mock("@multiremi/core/issues/stores/draft-store", () => ({
   useIssueDraftStore: Object.assign(
     (selector?: (state: typeof mockDraftStore) => unknown) =>
@@ -189,7 +202,27 @@ vi.mock("../issues/components", () => ({
   StatusIcon: ({ status }: { status: string }) => <span data-testid="status-icon">{status}</span>,
   StatusPicker: () => <div data-testid="status-picker" />,
   PriorityPicker: () => <div data-testid="priority-picker" />,
-  AssigneePicker: () => <div data-testid="assignee-picker" />,
+  // Surfaces its props so the project-default prefill is observable, plus a
+  // manual-pick button to assert user choices beat the auto-fill.
+  AssigneePicker: ({
+    assigneeType,
+    assigneeId,
+    onUpdate,
+  }: {
+    assigneeType?: string | null;
+    assigneeId?: string | null;
+    onUpdate?: (u: { assignee_type?: string | null; assignee_id?: string | null }) => void;
+  }) => (
+    <div
+      data-testid="assignee-picker"
+      data-assignee-type={assigneeType ?? ""}
+      data-assignee-id={assigneeId ?? ""}
+    >
+      <button type="button" onClick={() => onUpdate?.({ assignee_type: "member", assignee_id: "user-9" })}>
+        Pick member assignee
+      </button>
+    </div>
+  ),
   // Surface open/onOpenChange so tests can assert progressive-disclosure
   // behavior (mounted only when the user has opted in or has a value).
   StartDatePicker: ({ open, onOpenChange }: { open?: boolean; onOpenChange?: (v: boolean) => void }) => (
@@ -203,7 +236,17 @@ vi.mock("../issues/components", () => ({
 }));
 
 vi.mock("../projects/components/project-picker", () => ({
-  ProjectPicker: () => <div data-testid="project-picker" />,
+  // Two fixed picks so tests can flip between the defaulted and plain project.
+  ProjectPicker: ({ onUpdate }: { onUpdate?: (u: { project_id?: string | null }) => void }) => (
+    <div data-testid="project-picker">
+      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_squad" })}>
+        Pick squad project
+      </button>
+      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_plain" })}>
+        Pick plain project
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@multiremi/ui/components/ui/dialog", () => ({
@@ -654,5 +697,73 @@ describe("CreateIssueModal", () => {
     await user.click(screen.getByRole("button", { name: /Switch to Agent/i }));
 
     expect(mockSetDraft).toHaveBeenCalledWith({ title: "", description: "" });
+  });
+
+  it("prefills the assignee from the picked project's bound default", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
+      target: { value: "Routed to the squad" },
+    });
+    await user.click(screen.getByRole("button", { name: "Pick squad project" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("squad");
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("sqd_ops");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
+        project_id: "prj_squad",
+        assignee_type: "squad",
+        assignee_id: "sqd_ops",
+      }));
+    });
+  });
+
+  it("lets a manual assignee pick beat the project default, and drops a stale auto-fill", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    // Auto-fill first (also proves the project list has loaded).
+    await user.click(screen.getByRole("button", { name: "Pick squad project" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("squad");
+    });
+
+    // A manual pick overrides the auto-fill and sticks.
+    await user.click(screen.getByRole("button", { name: "Pick member assignee" }));
+    expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("member");
+    expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("user-9");
+
+    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
+      target: { value: "Manually assigned" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create Issue" }));
+    await waitFor(() => {
+      expect(mockCreateIssue).toHaveBeenCalledWith(expect.objectContaining({
+        project_id: "prj_squad",
+        assignee_type: "member",
+        assignee_id: "user-9",
+      }));
+    });
+  });
+
+  it("clears an auto-filled assignee when switching to a project without a default", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Pick squad project" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("squad");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Pick plain project" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("");
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("");
+    });
   });
 });

@@ -50,6 +50,10 @@
     "agents_group": "エージェント",
     "no_results": "結果なし"
   },
+  "default_assignee": {
+    "label": "デフォルト担当者",
+    "none": "デフォルトなし"
+  },
   "relative_date": {
     "today": "今日",
     "one_day_ago": "1日前",

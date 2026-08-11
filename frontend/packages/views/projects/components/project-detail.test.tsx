@@ -79,6 +79,11 @@ vi.mock("@multiremi/core/issues/mutations", () => ({
 
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
+  // Consumed by the default-assignee AssigneePicker in the sidebar; the
+  // useQuery mock's default branch serves them as empty lists.
+  agentListOptions: () => ({ queryKey: ["agents"] }),
+  squadListOptions: () => ({ queryKey: ["squads"] }),
+  assigneeFrequencyOptions: () => ({ queryKey: ["assigneeFrequency"] }),
 }));
 
 vi.mock("@multiremi/core/agents", () => ({
@@ -232,6 +237,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     priority: "medium",
     lead_type: null,
     lead_id: null,
+    default_assignee_type: null,
+    default_assignee_id: null,
     archived_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",

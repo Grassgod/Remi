@@ -1557,6 +1557,9 @@ export interface MultiremiProject {
   priority: MultiremiProjectPriority;
   leadType: "member" | "agent" | null;
   leadId: string | null;
+  /** Default assignee prefilled on issues created under this project (e.g. a squad). */
+  defaultAssigneeType: MultiremiAssigneeType | null;
+  defaultAssigneeId: string | null;
   issueCount: number;
   doneCount: number;
   resourceCount: number;
@@ -1664,6 +1667,10 @@ export interface CreateProjectInput {
   lead_type?: "member" | "agent" | null;
   leadId?: string | null;
   lead_id?: string | null;
+  defaultAssigneeType?: MultiremiAssigneeType | null;
+  default_assignee_type?: MultiremiAssigneeType | null;
+  defaultAssigneeId?: string | null;
+  default_assignee_id?: string | null;
   resources?: CreateProjectResourceInput[];
 }
 
@@ -1677,6 +1684,10 @@ export interface UpdateProjectInput {
   lead_type?: "member" | "agent" | null;
   leadId?: string | null;
   lead_id?: string | null;
+  defaultAssigneeType?: MultiremiAssigneeType | null;
+  default_assignee_type?: MultiremiAssigneeType | null;
+  defaultAssigneeId?: string | null;
+  default_assignee_id?: string | null;
 }
 
 export interface CreateProjectResourceInput {

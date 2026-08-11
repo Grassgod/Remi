@@ -50,6 +50,10 @@
     "agents_group": "Agents",
     "no_results": "No results"
   },
+  "default_assignee": {
+    "label": "Default assignee",
+    "none": "No default"
+  },
   "relative_date": {
     "today": "Today",
     "one_day_ago": "1d ago",

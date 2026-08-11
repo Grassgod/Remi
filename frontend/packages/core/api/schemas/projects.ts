@@ -11,6 +11,10 @@ export const ProjectSchema = z.object({
   priority: z.string().default("none"),
   lead_type: z.enum(["member", "agent"]).nullable().optional().transform((value) => value ?? null),
   lead_id: z.string().nullable().optional().transform((value) => value ?? null),
+  // `.catch(null)` so a future server-side assignee type degrades to "no
+  // default" instead of failing the whole project parse (enum drift rule).
+  default_assignee_type: z.enum(["member", "agent", "squad"]).nullable().optional().catch(null).transform((value) => value ?? null),
+  default_assignee_id: z.string().nullable().optional().catch(null).transform((value) => value ?? null),
   archived_at: z.string().nullable().optional(),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
@@ -40,6 +44,8 @@ export const EMPTY_PROJECT: Project = {
   priority: "none",
   lead_type: null,
   lead_id: null,
+  default_assignee_type: null,
+  default_assignee_id: null,
   archived_at: null,
   created_at: "",
   updated_at: "",

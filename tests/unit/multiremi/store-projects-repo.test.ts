@@ -34,6 +34,36 @@ describe("ProjectsRepo", () => {
     expect(repo.updateProject(project.id, { status: "in_progress" }).status).toBe("in_progress");
   });
 
+  it("binds, resolves and clears a project default assignee", () => {
+    const repo = createRepo();
+    const agent = store!.createAgent({ name: "Claude", provider: "claude" });
+    const squad = store!.createSquad({ name: "Ops squad", leaderId: agent.id });
+
+    // Type is inferred from the sqd_ prefix when omitted.
+    const project = repo.createProject({ title: "Atlas", workspaceId: "local", defaultAssigneeId: squad.id });
+    expect(project.defaultAssigneeType).toBe("squad");
+    expect(project.defaultAssigneeId).toBe(squad.id);
+
+    // Unrelated updates leave the binding alone.
+    expect(repo.updateProject(project.id, { title: "Atlas 2" }).defaultAssigneeId).toBe(squad.id);
+
+    // Snake-case (compat wire) fields switch the default to an agent.
+    const switched = repo.updateProject(project.id, { default_assignee_type: "agent", default_assignee_id: agent.id });
+    expect(switched.defaultAssigneeType).toBe("agent");
+    expect(switched.defaultAssigneeId).toBe(agent.id);
+
+    // Explicit nulls clear it.
+    const cleared = repo.updateProject(project.id, { defaultAssigneeType: null, defaultAssigneeId: null });
+    expect(cleared.defaultAssigneeType).toBeNull();
+    expect(cleared.defaultAssigneeId).toBeNull();
+
+    // Unknown or half-specified refs are rejected.
+    expect(() => repo.createProject({ title: "Bad", defaultAssigneeType: "squad", defaultAssigneeId: "sqd_missing" }))
+      .toThrow("Squad not found: sqd_missing");
+    expect(() => repo.updateProject(project.id, { defaultAssigneeType: "agent", defaultAssigneeId: null }))
+      .toThrow("Assignee id is required when assignee type is provided");
+  });
+
   it("keeps legacy project status writes in sync with archive state", () => {
     const repo = createRepo();
     const archived = repo.createProject({ title: "Legacy archive", status: "cancelled" });

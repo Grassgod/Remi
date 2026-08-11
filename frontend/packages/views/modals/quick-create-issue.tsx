@@ -87,7 +87,7 @@ export function AgentCreatePanel({
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [], isSuccess: agentsLoaded } = useQuery(agentListOptions(wsId));
-  const { data: squads = [] } = useQuery(squadListOptions(wsId));
+  const { data: squads = [], isSuccess: squadsLoaded } = useQuery(squadListOptions(wsId));
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
   // loading" from "loaded as empty". Reading length alone treats both as
   // empty and incorrectly clears a valid persisted preference on every open.
@@ -214,6 +214,36 @@ export function AgentCreatePanel({
   const parentIssueId = (data?.parent_issue_id as string | undefined) ?? undefined;
   const parentIssueIdentifier =
     (data?.parent_issue_identifier as string | undefined) ?? undefined;
+
+  // Project default actor: a project can bind a default assignee (squad or
+  // agent) that issues created under it should route to. Member defaults
+  // don't apply here — the quick-create actor must be able to run the prompt.
+  const projectDefaultActor = useCallback(
+    (pid: string | null | undefined): ActorSelection | null => {
+      if (!pid) return null;
+      const project = projects.find((p) => p.id === pid);
+      if (!project?.default_assignee_type || !project.default_assignee_id) return null;
+      if (project.default_assignee_type === "member") return null;
+      return resolveActor(project.default_assignee_type, project.default_assignee_id);
+    },
+    [projects, resolveActor],
+  );
+
+  // Flips once the user picks an actor by hand this open — a manual pick
+  // always beats the project default.
+  const userPickedActorRef = useRef(false);
+  // One-shot on open: once every list has resolved, let the seeded project's
+  // bound default override the persisted last-actor seed. The explicit
+  // binding is configuration; last-actor is incidental history.
+  const appliedProjectDefaultRef = useRef(false);
+  useEffect(() => {
+    if (appliedProjectDefaultRef.current) return;
+    if (!projectsLoaded || !agentsLoaded || !squadsLoaded) return;
+    appliedProjectDefaultRef.current = true;
+    if (userPickedActorRef.current) return;
+    const def = projectDefaultActor(projectId);
+    if (def) setActor(def);
+  }, [projectsLoaded, agentsLoaded, squadsLoaded, projectDefaultActor, projectId]);
 
   // Stale-id sweep. Once the project list query has actually resolved
   // (`isSuccess` — distinct from "data is the empty default during loading"),
@@ -452,6 +482,7 @@ export function AgentCreatePanel({
             selectedAgent={selectedAgent}
             selectedSquad={selectedSquad}
             onPick={(next) => {
+              userPickedActorRef.current = true;
               setActor(next);
               setError(null);
             }}
@@ -516,7 +547,19 @@ export function AgentCreatePanel({
         <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0 flex-wrap">
           <ProjectPicker
             projectId={projectId}
-            onUpdate={(u) => setProjectId(u.project_id ?? null)}
+            onUpdate={(u) => {
+              const next = u.project_id ?? null;
+              setProjectId(next);
+              // An explicit project pick re-applies that project's bound
+              // default actor (even over a manual pick — choosing the project
+              // is the newer intent). No default → keep the current actor.
+              const def = projectDefaultActor(next);
+              if (def) {
+                userPickedActorRef.current = false;
+                setActor(def);
+                setError(null);
+              }
+            }}
             triggerRender={<PillButton />}
             align="start"
           />

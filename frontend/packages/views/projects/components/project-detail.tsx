@@ -44,6 +44,7 @@ import {
   PickerSection,
   PropertyPicker,
 } from "../../issues/components/pickers/property-picker";
+import { AssigneePicker } from "../../issues/components/pickers/assignee-picker";
 import { ProjectResourcesSection } from "./project-resources-section";
 import { ProjectContentTabs, type ProjectContentTab } from "./wiki/project-content-tabs";
 import { IssuesHeader } from "../../issues/components/issues-header";
@@ -650,6 +651,47 @@ export function ProjectDetail({
                 <PickerEmpty />
               )}
           </PropertyPicker>}
+        </PropRow>
+
+        {/* Default assignee — prefilled on issues created under this project.
+            Reuses the issue AssigneePicker so squads/agents/members show the
+            same way they do on an issue. */}
+        <PropRow label={t(($) => $.default_assignee.label)}>
+          {isArchived ? (
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              {project.default_assignee_type && project.default_assignee_id ? (
+                <>
+                  <ActorAvatar actorType={project.default_assignee_type} actorId={project.default_assignee_id} size={16} enableHoverCard />
+                  <span className="truncate">{getActorName(project.default_assignee_type, project.default_assignee_id)}</span>
+                </>
+              ) : t(($) => $.default_assignee.none)}
+            </span>
+          ) : (
+            <AssigneePicker
+              assigneeType={project.default_assignee_type}
+              assigneeId={project.default_assignee_id}
+              onUpdate={(u) =>
+                handleUpdateField({
+                  default_assignee_type: u.assignee_type ?? null,
+                  default_assignee_id: u.assignee_id ?? null,
+                })
+              }
+              align="start"
+              triggerRender={
+                <button type="button" className="inline-flex items-center gap-1.5 text-xs hover:text-foreground transition-colors" />
+              }
+              trigger={
+                project.default_assignee_type && project.default_assignee_id ? (
+                  <>
+                    <ActorAvatar actorType={project.default_assignee_type} actorId={project.default_assignee_id} size={16} enableHoverCard showStatusDot />
+                    <span className="cursor-pointer">{getActorName(project.default_assignee_type, project.default_assignee_id)}</span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">{t(($) => $.default_assignee.none)}</span>
+                )
+              }
+            />
+          )}
         </PropRow>
       </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "../navigation";
 import {
@@ -43,6 +43,7 @@ import { useIssueDraftStore } from "@multiremi/core/issues/stores/draft-store";
 import { useCreateModeStore } from "@multiremi/core/issues/stores/create-mode-store";
 import { useQuickCreateStore } from "@multiremi/core/issues/stores/quick-create-store";
 import { issueDetailOptions } from "@multiremi/core/issues/queries";
+import { projectListOptions } from "@multiremi/core/projects/queries";
 import { useCreateIssue, useUpdateIssue } from "@multiremi/core/issues/mutations";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import {
@@ -167,6 +168,41 @@ export function ManualCreatePanel({
   };
   const updateStartDate = (v: string | null) => { setStartDate(v); setDraft({ startDate: v }); };
   const updateDueDate = (v: string | null) => { setDueDate(v); setDraft({ dueDate: v }); };
+
+  // Project default assignee: when a project that binds a default (squad /
+  // agent / member) is picked — or seeded via data.project_id — prefill the
+  // assignee pill so the user stops re-picking the same group every time.
+  // Only fills when the assignee is empty or was itself auto-filled; a manual
+  // pick always wins. The fill is visible in the form before submit, so the
+  // "assigned agent/squad dispatches on create" behavior stays deliberate.
+  const { data: projectsForDefaults = [] } = useQuery(projectListOptions(wsId));
+  const autoAssignedRef = useRef(false);
+  // Sentinel `null` ≠ "no project" (`undefined`): the first pass must still
+  // process an absent project so the refs settle consistently.
+  const defaultAppliedForProjectRef = useRef<string | undefined | null>(null);
+  useEffect(() => {
+    if (defaultAppliedForProjectRef.current === (projectId ?? undefined)) return;
+    const project = projectId ? projectsForDefaults.find((p) => p.id === projectId) : undefined;
+    // Wait for the project list before deciding — otherwise a seeded projectId
+    // would be marked processed while its default is still unknown.
+    if (projectId && !project) return;
+    defaultAppliedForProjectRef.current = projectId ?? undefined;
+    const defType = project?.default_assignee_type ?? null;
+    const defId = project?.default_assignee_id ?? null;
+    if (defType && defId && (!assigneeId || autoAssignedRef.current)) {
+      autoAssignedRef.current = true;
+      updateAssignee(defType, defId);
+    } else if (autoAssignedRef.current && !(defType && defId)) {
+      // Switched to a project without a default: drop the stale auto-fill.
+      autoAssignedRef.current = false;
+      updateAssignee(undefined, undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- updateAssignee is recreated per render; the ref guard keeps re-runs no-op
+  }, [projectId, projectsForDefaults, assigneeId]);
+  const handleAssigneePicked = (type?: IssueAssigneeType, id?: string) => {
+    autoAssignedRef.current = false;
+    updateAssignee(type, id);
+  };
 
   const createIssueMutation = useCreateIssue();
   const updateIssueMutation = useUpdateIssue();
@@ -508,7 +544,7 @@ export function ManualCreatePanel({
               <AssigneePicker
                 assigneeType={assigneeType ?? null}
                 assigneeId={assigneeId ?? null}
-                onUpdate={(u) => updateAssignee(
+                onUpdate={(u) => handleAssigneePicked(
                   u.assignee_type ?? undefined,
                   u.assignee_id ?? undefined,
                 )}

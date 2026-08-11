@@ -28,6 +28,8 @@ export function projectCompatibilityResponse(project: MultiremiProject): Record<
     priority: project.priority,
     lead_type: project.leadType,
     lead_id: project.leadId,
+    default_assignee_type: project.defaultAssigneeType,
+    default_assignee_id: project.defaultAssigneeId,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
     issue_count: project.issueCount,
@@ -48,6 +50,8 @@ export function projectCreateCompatibilityInput(c: Context, input: CreateProject
     priority: input.priority,
     leadType: input.lead_type === undefined && input.lead_id === undefined ? "member" : input.lead_type,
     leadId: input.lead_type === undefined && input.lead_id === undefined ? currentRequestUserId(c) : input.lead_id,
+    defaultAssigneeType: input.default_assignee_type,
+    defaultAssigneeId: input.default_assignee_id,
     resources: input.resources,
   };
 }
@@ -68,6 +72,8 @@ export function projectUpdateCompatibilityInput(input: UpdateProjectInput): Upda
     priority: input.priority,
     leadType: input.lead_type,
     leadId: input.lead_id,
+    defaultAssigneeType: input.default_assignee_type,
+    defaultAssigneeId: input.default_assignee_id,
   };
 }
 
@@ -149,6 +155,14 @@ export function projectErrorResponse(c: Context, err: unknown): Response | null 
   if (!(err instanceof Error)) return null;
   if (err.message === "Project title is required") return c.json({ error: "title is required" }, 400);
   if (err.message.startsWith("Project not found:")) return c.json({ error: "project not found" }, 404);
+  // Default-assignee resolution failures (resolveAssigneeRef) are client errors.
+  if (
+    /^(Agent|Member|Squad|Assignee) not found:/.test(err.message)
+    || err.message.startsWith("Ambiguous assignee reference:")
+    || err.message === "Assignee id is required when assignee type is provided"
+  ) {
+    return c.json({ error: err.message }, 400);
+  }
   return null;
 }
 

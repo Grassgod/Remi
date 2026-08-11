@@ -19,6 +19,7 @@ import type {
   CreateProjectDocInput,
   CreateProjectInput,
   CreateProjectResourceInput,
+  MultiremiAssigneeType,
   MultiremiPinnedItem,
   MultiremiPinnedItemType,
   MultiremiProject,
@@ -73,12 +74,19 @@ export class ProjectsRepo {
     const now = nowIso();
     const status = input.status ?? "in_progress";
     const archivedAt = isArchivedProjectStatus(status) ? now : null;
+    const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
+    const defaultAssignee = this.resolveDefaultAssignee(
+      input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType,
+      input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId,
+      workspaceId,
+    );
     const tx = this.ctx.db.transaction(() => {
       this.ctx.db.run(
         `INSERT INTO multiremi_projects (
           id, title, description, icon, status, priority, workspace_id,
-          lead_type, lead_id, archived_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lead_type, lead_id, default_assignee_type, default_assignee_id,
+          archived_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           input.title.trim(),
@@ -86,9 +94,11 @@ export class ProjectsRepo {
           input.icon ?? null,
           status,
           input.priority ?? "none",
-          input.workspaceId ?? input.workspace_id ?? "local",
+          workspaceId,
           input.leadType === undefined ? input.lead_type ?? null : input.leadType,
           input.leadId === undefined ? input.lead_id ?? null : input.leadId,
+          defaultAssignee.assigneeType,
+          defaultAssignee.assigneeId,
           archivedAt,
           now,
           now,
@@ -144,6 +154,11 @@ export class ProjectsRepo {
     const archivedAt = input.status === undefined
       ? current.archivedAt
       : isArchivedProjectStatus(status) ? current.archivedAt ?? now : null;
+    const defaultAssigneeTypeInput = input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType;
+    const defaultAssigneeIdInput = input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId;
+    const defaultAssignee = defaultAssigneeTypeInput === undefined && defaultAssigneeIdInput === undefined
+      ? { assigneeType: current.defaultAssigneeType, assigneeId: current.defaultAssigneeId }
+      : this.resolveDefaultAssignee(defaultAssigneeTypeInput, defaultAssigneeIdInput, current.workspaceId);
     this.ctx.db.run(
       `UPDATE multiremi_projects SET
         title = ?,
@@ -153,6 +168,8 @@ export class ProjectsRepo {
         priority = ?,
         lead_type = ?,
         lead_id = ?,
+        default_assignee_type = ?,
+        default_assignee_id = ?,
         archived_at = ?,
         updated_at = ?
        WHERE id = ?`,
@@ -164,12 +181,27 @@ export class ProjectsRepo {
         input.priority ?? current.priority,
         input.leadType === undefined ? input.lead_type === undefined ? current.leadType : input.lead_type : input.leadType,
         input.leadId === undefined ? input.lead_id === undefined ? current.leadId : input.lead_id : input.leadId,
+        defaultAssignee.assigneeType,
+        defaultAssignee.assigneeId,
         archivedAt,
         now,
         id,
       ],
     );
     return this.getProject(id)!;
+  }
+
+  /**
+   * Validates and canonicalizes the project's default assignee (agent, member
+   * or squad — same polymorphic ref an issue assignee uses). Null when unset.
+   */
+  private resolveDefaultAssignee(
+    type: MultiremiAssigneeType | null | undefined,
+    id: string | null | undefined,
+    workspaceId: string,
+  ): { assigneeType: MultiremiAssigneeType | null; assigneeId: string | null } {
+    const resolved = this.ctx.squads().resolveAssigneeRef(type ?? null, id ?? null, workspaceId);
+    return resolved ?? { assigneeType: null, assigneeId: null };
   }
 
   archiveProject(id: string): MultiremiProject {
@@ -790,6 +822,8 @@ function toProject(row: Row): MultiremiProject {
     priority: String(row.priority ?? "none") as MultiremiProject["priority"],
     leadType: nullableString(row.lead_type) as MultiremiProject["leadType"],
     leadId: nullableString(row.lead_id),
+    defaultAssigneeType: nullableString(row.default_assignee_type) as MultiremiProject["defaultAssigneeType"],
+    defaultAssigneeId: nullableString(row.default_assignee_id),
     issueCount: Number(row.issue_count ?? 0),
     doneCount: Number(row.done_count ?? 0),
     resourceCount: Number(row.resource_count ?? 0),

@@ -104,6 +104,8 @@ function project(partial: Partial<Project> & { id: string }): Project {
     priority: "none",
     lead_type: null,
     lead_id: null,
+    default_assignee_type: null,
+    default_assignee_id: null,
     archived_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",

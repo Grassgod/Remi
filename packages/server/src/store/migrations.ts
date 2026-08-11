@@ -694,6 +694,8 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       lead_type TEXT,
       lead_id TEXT,
+      default_assignee_type TEXT,
+      default_assignee_id TEXT,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -1149,6 +1151,10 @@ export function runMigrations(db: SqlDatabase): void {
   // revisits an existing table — so it gets patched in like every other column.
   addColumnIfMissing(db, "multiremi_project_docs", "refs TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
+  // Per-project default assignee: prefills the group/agent/member on new issues
+  // created under the project so users stop re-picking the same squad each time.
+  addColumnIfMissing(db, "multiremi_projects", "default_assignee_type TEXT");
+  addColumnIfMissing(db, "multiremi_projects", "default_assignee_id TEXT");
   db.run(
     "UPDATE multiremi_projects SET archived_at = updated_at WHERE archived_at IS NULL AND status IN ('completed', 'cancelled')",
   );

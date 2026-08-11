@@ -146,6 +146,54 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     expect(await missingDelete.json()).toEqual({ error: "project resource not found" });
   });
 
+  it("round-trips the project default assignee over the compat API", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Ops Leader", provider: "claude" });
+    const squad = store.createSquad({ name: "Ops squad", leaderId: agent.id });
+    const app = createMultiremiApp({ store });
+
+    const created = await app.request("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Squad Project", default_assignee_type: "squad", default_assignee_id: squad.id }),
+    });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.default_assignee_type).toBe("squad");
+    expect(createdBody.default_assignee_id).toBe(squad.id);
+
+    // An unrelated PUT must not clobber the binding (whitelisted merge).
+    const renamed = await app.request(`/api/projects/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Squad Project Renamed" }),
+    });
+    expect(renamed.status).toBe(200);
+    const renamedBody = await renamed.json();
+    expect(renamedBody.default_assignee_type).toBe("squad");
+    expect(renamedBody.default_assignee_id).toBe(squad.id);
+
+    // Explicit nulls clear it.
+    const cleared = await app.request(`/api/projects/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_assignee_type: null, default_assignee_id: null }),
+    });
+    expect(cleared.status).toBe(200);
+    const clearedBody = await cleared.json();
+    expect(clearedBody.default_assignee_type).toBeNull();
+    expect(clearedBody.default_assignee_id).toBeNull();
+
+    // Unknown refs are a 400, not a 500.
+    const invalid = await app.request(`/api/projects/${createdBody.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_assignee_type: "squad", default_assignee_id: "sqd_missing" }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "Squad not found: sqd_missing" });
+  });
+
   it("serves original project, squad, and autopilot compatibility endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Original Codex", provider: "codex" });
