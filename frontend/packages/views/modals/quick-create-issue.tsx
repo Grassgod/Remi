@@ -20,10 +20,10 @@ import { useIssueDraftStore } from "@multiremi/core/issues/stores/draft-store";
 import { useCreateModeStore } from "@multiremi/core/issues/stores/create-mode-store";
 import {
   runtimeListOptions,
-  checkQuickCreateCliVersion,
-  readRuntimeCliVersion,
+  checkQuickCreateCliVersionAcrossRuntimes,
   MIN_QUICK_CREATE_CLI_VERSION,
 } from "@multiremi/core/runtimes";
+import { resolveAgentRuntimes } from "@multiremi/core/agents/derive-presence";
 import { useFileUpload } from "@multiremi/core/hooks/use-file-upload";
 import { formatShortcut, modKey, enterKey } from "@multiremi/core/platform";
 import type { Agent, Squad } from "@multiremi/core/types";
@@ -240,16 +240,20 @@ export function AgentCreatePanel({
   const { data: runtimes = [], isSuccess: runtimesLoaded } = useQuery(
     runtimeListOptions(wsId),
   );
-  const selectedRuntime = useMemo(
-    () =>
-      selectedAgent?.runtime_id
-        ? runtimes.find((r) => r.id === selectedAgent.runtime_id)
-        : undefined,
-    [runtimes, selectedAgent?.runtime_id],
+  // Pool-model backends return agents with no pinned runtime
+  // (`runtime_id === ""`) — any provider-matching machine can claim their
+  // tasks, so gate on the same candidate set presence uses instead of the
+  // legacy single binding (which resolved to no runtime at all and read as
+  // "missing", tripping the dead-end fallback below on every mode switch).
+  // Legacy bound agents resolve to their single pinned runtime, so the old
+  // behavior is preserved.
+  const candidateRuntimes = useMemo(
+    () => (selectedAgent ? resolveAgentRuntimes(selectedAgent, runtimes) : []),
+    [runtimes, selectedAgent],
   );
   const versionCheck = useMemo(
-    () => checkQuickCreateCliVersion(readRuntimeCliVersion(selectedRuntime?.metadata)),
-    [selectedRuntime?.metadata],
+    () => checkQuickCreateCliVersionAcrossRuntimes(candidateRuntimes),
+    [candidateRuntimes],
   );
   const versionBlocked = versionCheck.state !== "ok";
 

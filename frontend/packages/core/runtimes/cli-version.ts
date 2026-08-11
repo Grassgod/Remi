@@ -72,3 +72,26 @@ export function readRuntimeCliVersion(metadata: Record<string, unknown> | undefi
   const v = metadata?.cli_version;
   return typeof v === "string" ? v : "";
 }
+
+/**
+ * Best-of gate across an agent's candidate runtimes. Pool-model backends
+ * return agents with no pinned runtime (`runtime_id === ""`) — any
+ * provider-matching machine can claim their tasks — so the quick-create
+ * gate passes when ANY candidate passes: one capable machine is enough,
+ * mirroring deriveAgentAvailability. When none passes, prefer a `too_old`
+ * verdict over `missing` (it carries the version the upgrade notice
+ * renders); an empty candidate set reports `missing`.
+ */
+export function checkQuickCreateCliVersionAcrossRuntimes(
+  candidates: ReadonlyArray<{ metadata?: Record<string, unknown> }>,
+): CliVersionCheck {
+  const checks = candidates.map((r) =>
+    checkQuickCreateCliVersion(readRuntimeCliVersion(r.metadata)),
+  );
+  return (
+    checks.find((c) => c.state === "ok") ??
+    checks.find((c) => c.state === "too_old") ??
+    checks[0] ??
+    checkQuickCreateCliVersion("")
+  );
+}

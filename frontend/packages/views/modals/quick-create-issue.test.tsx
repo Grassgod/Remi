@@ -40,6 +40,19 @@ const mockSquadsData = vi.hoisted(
   () => ({ list: [] as Array<{ id: string; name: string; leader_id: string; archived_at: string | null }> }),
 );
 
+// Per-test overrides for the agents / runtimes queries so the CLI-version
+// gate tests can swap between a legacy runtime-bound agent and a pool-model
+// agent (runtime_id "") without re-mocking the whole module. `isSuccess`
+// must be true for the dead-end auto-fallback effect to be armed.
+const mockAgentsQuery = vi.hoisted(() => ({
+  data: [] as Array<Record<string, unknown>>,
+  isSuccess: true,
+}));
+const mockRuntimesQuery = vi.hoisted(() => ({
+  data: [] as Array<Record<string, unknown>>,
+  isSuccess: true,
+}));
+
 vi.mock("@tanstack/react-query", () => ({
   useQuery: ({ queryKey }: { queryKey: string[] }) => {
     // Workspace-scoped query keys carry the wsId as `queryKey[1]`; the
@@ -51,11 +64,9 @@ vi.mock("@tanstack/react-query", () => ({
       case "members":
         return { data: [{ user_id: "user-1", role: "admin" }] };
       case "agents":
-        return {
-          data: [{ id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" }],
-        };
+        return mockAgentsQuery;
       case "runtimes":
-        return { data: [{ id: "runtime-1", metadata: { cli_version: "1.2.3" } }] };
+        return mockRuntimesQuery;
       case "projects":
         return mockProjectsQuery;
       default:
@@ -108,12 +119,18 @@ vi.mock("@multiremi/core/auth", () => ({
     (selector ? selector({ user: { id: "user-1" } }) : { user: { id: "user-1" } }),
 }));
 
-vi.mock("@multiremi/core/runtimes", () => ({
-  runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
-  checkQuickCreateCliVersion: () => ({ state: "ok", min: "1.0.0" }),
-  readRuntimeCliVersion: () => "1.2.3",
-  MIN_QUICK_CREATE_CLI_VERSION: "1.0.0",
-}));
+// Real version-check implementations (cli-version.ts is pure) so the
+// pool-model regression tests below exercise the actual gate; only the
+// query options are stubbed.
+vi.mock("@multiremi/core/runtimes", async () => {
+  const actual = await vi.importActual<
+    typeof import("@multiremi/core/runtimes/cli-version")
+  >("@multiremi/core/runtimes/cli-version");
+  return {
+    ...actual,
+    runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
+  };
+});
 
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({
   useFileUpload: () => ({ uploadWithToast: vi.fn(), uploading: false }),
@@ -286,6 +303,12 @@ describe("AgentCreatePanel", () => {
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
     mockSquadsData.list = [];
+    mockAgentsQuery.data = [
+      { id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" },
+    ];
+    mockAgentsQuery.isSuccess = true;
+    mockRuntimesQuery.data = [{ id: "runtime-1", metadata: { cli_version: "1.2.3" } }];
+    mockRuntimesQuery.isSuccess = true;
     mockQuickCreateIssue.mockResolvedValue(undefined);
     mockSetKeepOpen.mockImplementation((value: boolean) => {
       mockQuickCreateStore.keepOpen = value;
@@ -462,5 +485,69 @@ describe("AgentCreatePanel", () => {
   it("does not render the sub-issue chip when no parent is seeded", () => {
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
     expect(screen.queryByTestId("agent-sub-issue-chip")).toBeNull();
+  });
+
+  // MUL-34 regression: pool-model backends return agents with runtime_id ""
+  // (no pinned machine). The version gate used to resolve the bound runtime
+  // only, read the version as "missing", and the dead-end guard instantly
+  // flipped back to manual — the "Switch to agent" button appeared dead.
+  // The gate must instead pass when any provider-matching runtime passes.
+  it("does not auto-fall back to manual for a pool-model agent when a provider-matching runtime passes the CLI gate", async () => {
+    mockAgentsQuery.data = [
+      {
+        id: "agent-1",
+        name: "Bohan",
+        archived_at: null,
+        runtime_id: "",
+        provider: "claude",
+        owner_id: "local",
+      },
+    ];
+    mockRuntimesQuery.data = [
+      {
+        id: "rt-1",
+        provider: "claude",
+        visibility: "private",
+        owner_id: "local",
+        metadata: { cli_version: "v0.2.26" },
+      },
+    ];
+    const onSwitchMode = vi.fn();
+
+    renderPanel({ onClose: vi.fn(), onSwitchMode, isExpanded: false, setIsExpanded: vi.fn() });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Create \(/i })).not.toBeDisabled();
+    });
+    expect(onSwitchMode).not.toHaveBeenCalled();
+  });
+
+  it("still auto-falls back to manual when every candidate runtime is below the minimum CLI version", async () => {
+    mockAgentsQuery.data = [
+      {
+        id: "agent-1",
+        name: "Bohan",
+        archived_at: null,
+        runtime_id: "",
+        provider: "claude",
+        owner_id: "local",
+      },
+    ];
+    mockRuntimesQuery.data = [
+      {
+        id: "rt-1",
+        provider: "claude",
+        visibility: "private",
+        owner_id: "local",
+        metadata: { cli_version: "v0.1.0" },
+      },
+    ];
+    const onSwitchMode = vi.fn();
+
+    renderPanel({ onClose: vi.fn(), onSwitchMode, isExpanded: false, setIsExpanded: vi.fn() });
+
+    await waitFor(() => {
+      expect(onSwitchMode).toHaveBeenCalled();
+    });
   });
 });
