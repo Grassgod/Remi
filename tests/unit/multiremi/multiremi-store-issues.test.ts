@@ -352,6 +352,58 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.listIssueActivity(issue.id).filter((item) => item.type === "comment_mention_triggered")).toHaveLength(2);
   });
 
+  it("routes un-mentioned human comments to the issue's assigned agent or squad leader", () => {
+    const store = createStore();
+    const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
+    const squad = store.createSquad({ name: "Ops Squad", leaderId: leader.id });
+    const issue = store.createIssue({ title: "Auto respond", assigneeType: "squad", assigneeId: squad.id, status: "backlog" });
+
+    const comment = store.createIssueComment(issue.id, { body: "How is this going?" });
+
+    const tasks = store.listTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.agentId).toBe(leader.id);
+    expect(tasks[0]?.triggerCommentId).toBe(comment.id);
+    const activity = store.listIssueActivity(issue.id).filter((item) => item.type === "comment_assignee_triggered");
+    expect(activity).toHaveLength(1);
+
+    // Each human comment dispatches individually — no batching.
+    store.createIssueComment(issue.id, { body: "One more thing." });
+    expect(store.listTasks()).toHaveLength(2);
+  });
+
+  it("suppresses assignee auto-response when the comment addresses someone explicitly", () => {
+    const store = createStore();
+    const assignee = store.createAgent({ name: "Assignee Bot", provider: "claude" });
+    const other = store.createAgent({ name: "Other Bot", provider: "codex" });
+    const member = store.createWorkspaceMember({ name: "Human Reviewer" });
+    const issue = store.createIssue({ title: "Explicit wins", assigneeType: "agent", assigneeId: assignee.id, status: "backlog" });
+
+    // @another agent → only the mention dispatch, no auto-response for the assignee.
+    store.createIssueComment(issue.id, { body: `Take a look [@Other Bot](mention://agent/${other.id})` });
+    expect(store.listTasks().map((task) => task.agentId)).toEqual([other.id]);
+
+    // @a human member → addressed to a person, agent stays quiet.
+    store.createIssueComment(issue.id, { body: `Your call [@Human Reviewer](mention://member/${member.id})` });
+    expect(store.listTasks()).toHaveLength(1);
+
+    // Agent-authored comment without mentions → never auto-triggers (no loops).
+    store.createIssueComment(issue.id, { authorType: "agent", authorId: assignee.id, body: "Done, see above." });
+    expect(store.listTasks()).toHaveLength(1);
+  });
+
+  it("skips assignee auto-response for unassigned or member-assigned issues", () => {
+    const store = createStore();
+    const member = store.createWorkspaceMember({ name: "Human Owner" });
+    const unassigned = store.createIssue({ title: "Nobody yet" });
+    store.createIssueComment(unassigned.id, { body: "Thoughts?" });
+
+    const humanOwned = store.createIssue({ title: "Human owned", assigneeType: "member", assigneeId: member.id });
+    store.createIssueComment(humanOwned.id, { body: "Ping" });
+
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
   it("notifies subscribed members through inbox items", () => {
     const store = createStore();
     const alice = store.createWorkspaceMember({ name: "Alice Reviewer" });

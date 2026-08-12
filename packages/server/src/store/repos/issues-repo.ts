@@ -1038,8 +1038,52 @@ export class IssuesRepo {
       mentionedMemberIds,
       { comment_id: id, issue_session_id: issueSessionId },
     );
-    this.triggerCommentMentions(issue, comment);
+    const mentionTasks = this.triggerCommentMentions(issue, comment);
+    this.triggerAssigneeAutoResponse(issue, comment, mentionTasks.length > 0 || mentionedMemberIds.length > 0);
     return comment;
+  }
+
+  /**
+   * Un-mentioned human comments route to the issue's assigned agent (squad →
+   * leader) so the assignee keeps the conversation without an explicit @
+   * (MUL-35). Any explicit mention — agent, squad or member — suppresses this:
+   * the author already addressed someone. Agent/system comments never trigger
+   * it, so an agent's own replies cannot re-queue itself; agents wake other
+   * agents only through explicit mentions. Each human comment dispatches
+   * individually (no batching, by request).
+   */
+  private triggerAssigneeAutoResponse(
+    issue: MultiremiIssue,
+    comment: MultiremiIssueComment,
+    hasExplicitMentions: boolean,
+  ): MultiremiTask | null {
+    if (comment.authorType !== "member") return null;
+    if (hasExplicitMentions) return null;
+    if (issue.assigneeType !== "agent" && issue.assigneeType !== "squad") return null;
+    if (!issue.assigneeId) return null;
+    const agent = this.ctx.resolveRunnableAgentForAssignee(issue.assigneeType, issue.assigneeId);
+    if (!agent) return null;
+    const task = this.ctx.tasks().createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      triggerCommentId: comment.id,
+      workspaceId: issue.workspaceId,
+      prompt: assigneeCommentPrompt(comment),
+    });
+    this.ctx.appendIssueActivity(issue.id, {
+      actorType: "system",
+      actorId: null,
+      type: "comment_assignee_triggered",
+      body: `Queued ${agent.name}`,
+      data: {
+        commentId: comment.id,
+        assigneeType: issue.assigneeType,
+        assigneeId: issue.assigneeId,
+        agentId: agent.id,
+        taskId: task.id,
+      },
+    });
+    return task;
   }
 
   updateIssueComment(id: string, input: UpdateIssueCommentInput): MultiremiIssueComment {
@@ -2209,6 +2253,15 @@ function formatIssueKey(number: number): string {
 function commentMentionPrompt(comment: MultiremiIssueComment): string {
   return [
     "A teammate mentioned you in an issue comment.",
+    "",
+    "## Triggering Comment",
+    comment.body,
+  ].join("\n");
+}
+
+function assigneeCommentPrompt(comment: MultiremiIssueComment): string {
+  return [
+    "A teammate commented on an issue assigned to you. Respond as the issue's assignee.",
     "",
     "## Triggering Comment",
     comment.body,

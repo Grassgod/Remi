@@ -51,8 +51,8 @@
     "no_results": "未找到结果"
   },
   "default_assignee": {
-    "label": "默认负责人",
-    "none": "无默认负责人"
+    "label": "默认执行者",
+    "none": "无默认执行者"
   },
   "relative_date": {
     "today": "今天",

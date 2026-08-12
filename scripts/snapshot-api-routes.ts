@@ -479,30 +479,6 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
   store.addIssueSubscriber(issue.id, member.id, "manual");
   const dependency = store.createIssueDependency(issue.id, { id: "dep_snapshot", dependsOnIssueId: blockedIssue.id, type: "blocks" });
 
-  const comment = store.createIssueComment(issue.id, {
-    authorType: "member",
-    authorId: member.id,
-    body: "Snapshot comment body",
-  });
-  store.addCommentReaction(comment.id, { actorType: "member", actorId: member.id, emoji: "eyes" });
-
-  const attachment = store.createAttachment({
-    id: "att_snapshot",
-    workspaceId,
-    issueId: issue.id,
-    commentId: comment.id,
-    uploaderType: "member",
-    uploaderId: "local",
-    filename: "snapshot.txt",
-    url: "/api/attachments/att_snapshot/content",
-    contentType: "text/plain",
-    sizeBytes: 18,
-  });
-  // Mirrors uploadRelativePath() in api.ts so the content/download routes serve
-  // a real file instead of 404-ing.
-  mkdirSync(join(UPLOAD_DIR, workspaceId), { recursive: true });
-  writeFileSync(join(UPLOAD_DIR, workspaceId, `${attachment.id}.txt`), "snapshot attachment");
-
   const issueSession = store.createIssueSession(issue.id, {
     id: "ise_snapshot",
     title: "Snapshot session",
@@ -543,6 +519,33 @@ async function seedStore(store: MultiremiStore): Promise<SeedRefs> {
     payload: { tool: "Bash", command: "ls" },
   });
   store.completeTask(task.id, { result: "done", summary: "Snapshot task complete" } as any);
+
+  // Created after the task above: the issue is assigned to `agent`, so this
+  // un-mentioned member comment auto-queues an assignee task — seeded earlier
+  // it would win the claim race for `task` and break the seed.
+  const comment = store.createIssueComment(issue.id, {
+    authorType: "member",
+    authorId: member.id,
+    body: "Snapshot comment body",
+  });
+  store.addCommentReaction(comment.id, { actorType: "member", actorId: member.id, emoji: "eyes" });
+
+  const attachment = store.createAttachment({
+    id: "att_snapshot",
+    workspaceId,
+    issueId: issue.id,
+    commentId: comment.id,
+    uploaderType: "member",
+    uploaderId: "local",
+    filename: "snapshot.txt",
+    url: "/api/attachments/att_snapshot/content",
+    contentType: "text/plain",
+    sizeBytes: 18,
+  });
+  // Mirrors uploadRelativePath() in api.ts so the content/download routes serve
+  // a real file instead of 404-ing.
+  mkdirSync(join(UPLOAD_DIR, workspaceId), { recursive: true });
+  writeFileSync(join(UPLOAD_DIR, workspaceId, `${attachment.id}.txt`), "snapshot attachment");
 
   // Created after the task above: sendChatMessage enqueues its own task, and a
   // queued chat task would win the claim race for `task` and break the seed.
