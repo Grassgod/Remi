@@ -380,6 +380,7 @@ vi.mock("@multiremi/core/hooks/use-file-upload", () => ({
 vi.mock("@multiremi/core/realtime", () => ({
   useWSEvent: vi.fn(),
   useWSReconnect: vi.fn(),
+  useTaskScopeSubscription: vi.fn(),
   useWS: () => ({ subscribe: vi.fn(() => () => {}), onReconnect: vi.fn(() => () => {}) }),
   WSProvider: ({ children }: { children: React.ReactNode }) => children,
   useRealtimeSync: () => {},
@@ -567,6 +568,112 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("offers result acceptance in the sidebar after the latest agent task completes", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+    mockApiObj.listTasksByIssue.mockResolvedValue([
+      {
+        id: "task-completed",
+        agent_id: "agent-1",
+        issue_id: mockIssue.id,
+        runtime_id: "runtime-1",
+        status: "completed",
+        priority: 0,
+        dispatched_at: "2026-01-20T00:00:00Z",
+        started_at: "2026-01-20T00:01:00Z",
+        completed_at: "2026-01-20T00:02:00Z",
+        result: { output: "Ready" },
+        error: null,
+        created_at: "2026-01-20T00:00:00Z",
+      },
+    ]);
+    renderIssueDetail();
+
+    const button = await screen.findByRole("button", { name: "Complete issue" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(mockApiObj.updateIssue).toHaveBeenCalledWith("issue-1", { status: "done" });
+    });
+  });
+
+  it("does not offer result acceptance while the latest agent task is active", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+    mockApiObj.listTasksByIssue.mockResolvedValue([
+      {
+        id: "task-running",
+        agent_id: "agent-1",
+        issue_id: mockIssue.id,
+        runtime_id: "runtime-1",
+        status: "running",
+        priority: 0,
+        dispatched_at: "2026-01-20T01:00:00Z",
+        started_at: "2026-01-20T01:01:00Z",
+        completed_at: null,
+        result: null,
+        error: null,
+        created_at: "2026-01-20T01:00:00Z",
+      },
+      {
+        id: "task-completed",
+        agent_id: "agent-1",
+        issue_id: mockIssue.id,
+        runtime_id: "runtime-1",
+        status: "completed",
+        priority: 0,
+        dispatched_at: "2026-01-20T00:00:00Z",
+        started_at: "2026-01-20T00:01:00Z",
+        completed_at: "2026-01-20T00:02:00Z",
+        result: { output: "Old result" },
+        error: null,
+        created_at: "2026-01-20T00:00:00Z",
+      },
+    ]);
+    renderIssueDetail();
+
+    await screen.findByDisplayValue("Implement authentication");
+    await waitFor(() => expect(mockApiObj.listTasksByIssue).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Complete issue" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer result acceptance while another agent task awaits review", async () => {
+    mockApiObj.getIssue.mockResolvedValue({ ...mockIssue, status: "in_review" });
+    mockApiObj.listTasksByIssue.mockResolvedValue([
+      {
+        id: "task-completed",
+        agent_id: "agent-1",
+        issue_id: mockIssue.id,
+        runtime_id: "runtime-1",
+        status: "completed",
+        priority: 0,
+        dispatched_at: "2026-01-20T01:00:00Z",
+        started_at: "2026-01-20T01:01:00Z",
+        completed_at: "2026-01-20T01:02:00Z",
+        result: { output: "Partial result" },
+        error: null,
+        created_at: "2026-01-20T01:00:00Z",
+      },
+      {
+        id: "task-awaiting-human",
+        agent_id: "agent-2",
+        issue_id: mockIssue.id,
+        runtime_id: "runtime-1",
+        status: "awaiting_human",
+        priority: 0,
+        dispatched_at: "2026-01-20T00:00:00Z",
+        started_at: "2026-01-20T00:01:00Z",
+        completed_at: null,
+        result: null,
+        error: null,
+        created_at: "2026-01-20T00:00:00Z",
+      },
+    ]);
+    renderIssueDetail();
+
+    await screen.findByDisplayValue("Implement authentication");
+    await waitFor(() => expect(mockApiObj.listTasksByIssue).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Complete issue" })).not.toBeInTheDocument();
   });
 
   it("opens the conversation landed on its newest entry", async () => {

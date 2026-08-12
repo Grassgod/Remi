@@ -207,6 +207,15 @@ describe("deriveWorkloadDetail", () => {
     expect(r.queuedCount).toBe(1);
   });
 
+  it("counts awaiting_human as occupied instead of idle", () => {
+    const r = deriveWorkloadDetail([
+      makeTask({ status: "awaiting_human" }),
+    ]);
+    expect(r.workload).toBe("queued");
+    expect(r.runningCount).toBe(0);
+    expect(r.queuedCount).toBe(1);
+  });
+
   it("returns working when running coexists with queued (overflow)", () => {
     // Capacity-saturated agent: still running, but with a queue building.
     // The chip says "Working" with the queue expressed as a `+Nq` badge.

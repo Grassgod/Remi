@@ -54,12 +54,14 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
   const wsId = useWorkspaceId();
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
-  const { runningTasks, queuedTasks, agentIds, opacity } = useMemo(() => {
+  const { runningTasks, awaitingTasks, queuedTasks, agentIds, opacity, label } = useMemo(() => {
     const running: AgentTask[] = [];
+    const awaiting: AgentTask[] = [];
     const queued: AgentTask[] = [];
     for (const task of snapshot) {
       if (task.issue_id !== issueId) continue;
       if (task.status === "running") running.push(task);
+      else if (task.status === "awaiting_human") awaiting.push(task);
       else if (
         task.status === "queued" ||
         task.status === "dispatched" ||
@@ -72,21 +74,23 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
       // Terminal statuses are intentionally ignored — they belong on the
       // issue history, not the live indicator.
     }
-    // Stack heads: prefer running. If 0 running, fall back to queued.
+    // Stack heads: prefer running, then human review, then queued.
     // Each case is visually distinct (running gets shimmer, queued gets
     // muted text) so the indicator always offers a face to hover.
-    const primary = running.length > 0 ? running : queued;
+    const primary = running.length > 0 ? running : awaiting.length > 0 ? awaiting : queued;
     const uniqueAgents = [...new Set(primary.map((t) => t.agent_id))];
     return {
       runningTasks: running,
+      awaitingTasks: awaiting,
       queuedTasks: queued,
       agentIds: uniqueAgents,
       opacity: (running.length > 0 ? "full" : "half") as "full" | "half",
+      label: running.length > 0 ? "running" : awaiting.length > 0 ? "awaiting_human" : "queued",
     };
   }, [snapshot, issueId]);
 
   if (agentIds.length === 0) return null;
-  const hoverTasks = [...runningTasks, ...queuedTasks];
+  const hoverTasks = [...runningTasks, ...awaitingTasks, ...queuedTasks];
   const isRunning = opacity === "full";
 
   return (
@@ -110,9 +114,11 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
               : "text-muted-foreground",
           )}
         >
-          {isRunning
+          {label === "running"
             ? t(($) => $.agent_activity.status_running)
-            : t(($) => $.agent_activity.status_queued)}
+            : label === "awaiting_human"
+              ? t(($) => $.agent_activity.status_awaiting_human)
+              : t(($) => $.agent_activity.status_queued)}
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="w-72">

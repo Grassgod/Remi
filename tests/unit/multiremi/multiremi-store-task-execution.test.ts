@@ -163,7 +163,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
 
     const issueEvent = events.find((e) => e.type === "issue:updated");
     expect(issueEvent?.workspaceId).toBe("local");
-    expect(issueEvent?.payload.issue).toMatchObject({ id: issue.id, status: "done" });
+    expect(issueEvent?.payload.issue).toMatchObject({ id: issue.id, status: "in_review" });
     expect(issueEvent?.payload.status_changed).toBe(true);
   });
 
@@ -231,6 +231,7 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(store.claimTask(runtime.id)).toBeNull();
 
     store.completeTask(firstA.id, { output: "done" });
+    expect(store.getIssue(issueA.id)?.status).toBe("todo");
     expect(store.claimTask(runtime.id)?.id).toBe(secondA.id);
 
     const cappedAgent = store.createAgent({ name: "Capped", provider: "codex", maxConcurrentTasks: 1 });

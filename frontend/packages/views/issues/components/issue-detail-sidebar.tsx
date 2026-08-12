@@ -1,6 +1,10 @@
 "use client";
 
-import { CalendarClock, CalendarDays, ChevronRight, Plus, Tag } from "lucide-react";
+import { CalendarClock, CalendarDays, CheckCircle2, ChevronRight, Plus, Tag } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@multiremi/core/api";
+import { issueKeys } from "@multiremi/core/issues/queries";
+import { Button } from "@multiremi/ui/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import type {
@@ -85,6 +89,25 @@ export function IssueDetailSidebar({
   const detailsOpen = sections.isOpen("details");
   const tokenUsageOpen = sections.isOpen("tokenUsage");
   const metadataOpen = sections.isOpen("metadata");
+  const { data: tasks = [] } = useQuery({
+    queryKey: issueKeys.tasks(issueId),
+    queryFn: () => api.listTasksByIssue(issueId),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const latestTask = tasks.toSorted(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )[0];
+  const hasActiveTask = tasks.some(
+    (task) =>
+      task.status !== "completed" &&
+      task.status !== "failed" &&
+      task.status !== "cancelled",
+  );
+  const canCompleteIssue =
+    issue.status === "in_review" &&
+    latestTask?.status === "completed" &&
+    !hasActiveTask;
 
   return (
     <div className="space-y-5">
@@ -101,7 +124,21 @@ export function IssueDetailSidebar({
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
-            <StatusPicker status={issue.status} onUpdate={onUpdateField} align="start" />
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <StatusPicker status={issue.status} onUpdate={onUpdateField} align="start" />
+              {canCompleteIssue && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={() => onUpdateField({ status: "done" })}
+                >
+                  <CheckCircle2 className="size-3.5" />
+                  {t(($) => $.detail.complete_issue_action)}
+                </Button>
+              )}
+            </div>
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={onUpdateField} align="start" />

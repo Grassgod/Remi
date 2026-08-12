@@ -80,6 +80,7 @@ export function AgentActivityHoverContent({
             ? deriveAgentAvailability(resolveAgentRuntimes(agent, runtimes), now)
             : "offline";
           const isRunning = task.status === "running";
+          const isAwaitingHuman = task.status === "awaiting_human";
           // queued/dispatched both read as "queued" in the user-facing
           // copy — `dispatched` is the daemon-acked sub-state of queued
           // and not user-meaningful here.
@@ -121,7 +122,9 @@ export function AgentActivityHoverContent({
                 <span className={labelClass}>
                   {isRunning
                     ? t(($) => $.agent_activity.status_running)
-                    : t(($) => $.agent_activity.status_queued)}
+                    : isAwaitingHuman
+                      ? t(($) => $.agent_activity.status_awaiting_human)
+                      : t(($) => $.agent_activity.status_queued)}
                 </span>
                 <span className="tabular-nums text-muted-foreground">
                   {formatElapsedSince(startedFrom, now, HOVER_DURATION)}
@@ -134,4 +137,3 @@ export function AgentActivityHoverContent({
     </div>
   );
 }
-

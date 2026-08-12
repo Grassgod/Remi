@@ -265,6 +265,10 @@ export class TasksRepo {
       }
     }
     const task = this.getTask(id)!;
+    const parentTaskId = cleanOptionalString(input.parentTaskId ?? input.parent_task_id);
+    if (task.issueId && !parentTaskId && !this.hasInFlightTaskForIssue(task.issueId)) {
+      this.syncIssueStatusFromTask(task, "todo");
+    }
     this.ctx.notifyTaskEnqueued(task);
     return task;
   }
@@ -755,6 +759,7 @@ export class TasksRepo {
     );
     if (result.changes === 0) throw new Error(`Task not found or not dispatched: ${taskId}`);
     const task = this.getTask(taskId)!;
+    this.syncIssueStatusFromTask(task, "in_progress");
     this.ctx.notifyTaskEvent("task:running", task);
     return task;
   }
@@ -799,7 +804,10 @@ export class TasksRepo {
     );
     if (transition.changes > 0) {
       const task = this.getTask(input.taskId);
-      if (task) this.ctx.notifyTaskEvent("task:awaiting_human", task);
+      if (task) {
+        this.syncIssueStatusFromTask(task, "in_review");
+        this.ctx.notifyTaskEvent("task:awaiting_human", task);
+      }
     }
     return this.getTaskHumanRequest(id)!;
   }
@@ -861,7 +869,10 @@ export class TasksRepo {
     );
     if (result.changes > 0) {
       const task = this.getTask(taskId);
-      if (task) this.ctx.notifyTaskEvent("task:running", task);
+      if (task) {
+        this.syncIssueStatusFromTask(task, "in_progress");
+        this.ctx.notifyTaskEvent("task:running", task);
+      }
     }
   }
 
@@ -1266,28 +1277,7 @@ export class TasksRepo {
     if (task.issueId) {
       const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry);
       const issue = this.ctx.issues().getIssue(task.issueId);
-      if (issueStatus) {
-        this.ctx.db.run(
-          "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
-          [issueStatus, now, task.issueId],
-        );
-        // Agent-driven status flips bypass the HTTP layer (where issue:updated
-        // is normally published), so boards/pages would only see the change on
-        // a manual refresh. The frontend accepts a partial issue patch.
-        if (issue) {
-          this.ctx.emitWorkspaceEvent({
-            type: "issue:updated",
-            workspaceId: issue.workspaceId,
-            actorType: "agent",
-            actorId: task.agentId,
-            payload: {
-              issue: { id: task.issueId, status: issueStatus, updated_at: now },
-              status_changed: issue.status !== issueStatus,
-              prev_status: issue.status,
-            },
-          });
-        }
-      }
+      if (issueStatus) this.syncIssueStatusFromTask(task, issueStatus);
       this.ctx.appendIssueActivity(task.issueId, {
         actorType: "agent",
         actorId: task.agentId,
@@ -1437,12 +1427,67 @@ export class TasksRepo {
     retry: MultiremiTask | null,
   ): string | null {
     if (!task.issueId) return null;
-    if (status === "completed") return "done";
+    if (status === "completed") {
+      return this.issueStatusForRemainingTasks(task.issueId) ?? "in_review";
+    }
     if (status === "cancelled") return "cancelled";
     if (retry) return "in_progress";
     const issue = this.ctx.issues().getIssue(task.issueId);
-    if (issue?.status === "in_progress" && !this.hasActiveTaskForIssue(task.issueId)) return "todo";
+    if (
+      (issue?.status === "in_progress" || issue?.status === "in_review") &&
+      !this.hasActiveTaskForIssue(task.issueId)
+    ) return "todo";
     return null;
+  }
+
+  private issueStatusForRemainingTasks(issueId: string): string | null {
+    const rows = this.ctx.db.query(
+      `SELECT status FROM multiremi_tasks
+       WHERE issue_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
+    ).all(issueId) as Array<{ status: string }>;
+    const statuses = new Set(rows.map((row) => row.status));
+    if (statuses.has("awaiting_human")) return "in_review";
+    if (
+      statuses.has("running") ||
+      statuses.has("dispatched") ||
+      statuses.has("waiting_local_directory")
+    ) return "in_progress";
+    if (statuses.has("queued")) return "todo";
+    return null;
+  }
+
+  private syncIssueStatusFromTask(task: MultiremiTask, status: string): void {
+    if (!task.issueId) return;
+    const issue = this.ctx.issues().getIssue(task.issueId);
+    if (!issue || issue.status === status) return;
+    const now = nowIso();
+    this.ctx.db.run(
+      "UPDATE multiremi_issues SET status = ?, updated_at = ? WHERE id = ?",
+      [status, now, task.issueId],
+    );
+    // Task lifecycle writes bypass the HTTP layer, so publish the same partial
+    // patch that issue pages and boards already consume from realtime updates.
+    this.ctx.emitWorkspaceEvent({
+      type: "issue:updated",
+      workspaceId: issue.workspaceId,
+      actorType: "agent",
+      actorId: task.agentId,
+      payload: {
+        issue: { id: task.issueId, status, updated_at: now },
+        status_changed: true,
+        prev_status: issue.status,
+      },
+    });
+  }
+
+  private hasInFlightTaskForIssue(issueId: string): boolean {
+    const row = this.ctx.db.query(
+      `SELECT 1 AS present FROM multiremi_tasks
+       WHERE issue_id = ?
+         AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')
+       LIMIT 1`,
+    ).get(issueId) as { present: number } | null;
+    return Boolean(row);
   }
 
   private hasActiveTaskForIssue(issueId: string): boolean {

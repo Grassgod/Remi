@@ -16,7 +16,7 @@ import { AgentTranscriptDialog, buildTimeline } from "../../common/task-transcri
 import { formatToolInputSummary, toolIcon } from "../../common/task-transcript/tool-summaries";
 import { useT } from "../../i18n";
 
-const ACTIVE_STATUS = new Set(["queued", "dispatched", "waiting_local_directory", "running"]);
+const ACTIVE_STATUS = new Set(["queued", "dispatched", "waiting_local_directory", "running", "awaiting_human"]);
 const FAILED_STATUS = new Set(["failed", "cancelled"]);
 
 /**
@@ -78,8 +78,9 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
   const ended = FAILED_STATUS.has(task.status);
   const isQueued = task.status === "queued";
   const isWaitingLocalDirectory = task.status === "waiting_local_directory";
+  const isAwaitingHuman = task.status === "awaiting_human";
   const isDispatched = task.status === "dispatched";
-  const isParked = isQueued || isWaitingLocalDirectory;
+  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman;
   const agentName = task.agent_id ? getActorName("agent", task.agent_id) : t(($) => $.agent_live.fallback_name);
 
   const { data: messages } = useQuery(taskMessagesOptions(task.id));
@@ -138,13 +139,17 @@ function AgentStreamRow({ task }: { task: AgentTask }) {
                     ? t(($) => $.agent_live.is_queued, { name: agentName })
                     : isWaitingLocalDirectory
                       ? t(($) => $.agent_live.is_waiting_local_directory, { name: agentName })
+                      : isAwaitingHuman
+                        ? t(($) => $.agent_live.is_awaiting_human, { name: agentName })
                       : isDispatched
                         ? t(($) => $.agent_live.is_starting, { name: agentName })
                         : t(($) => $.agent_live.is_working, { name: agentName })}
             </span>
             {!ended && elapsed && (
               <span className="shrink-0 tabular-nums text-muted-foreground">
-                {isParked ? t(($) => $.agent_live.queued_elapsed_prefix, { elapsed }) : elapsed}
+                {isParked && !isAwaitingHuman
+                  ? t(($) => $.agent_live.queued_elapsed_prefix, { elapsed })
+                  : elapsed}
               </span>
             )}
           </span>

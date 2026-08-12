@@ -38,8 +38,8 @@ describe("Multiremi store — autopilots, schedules, and webhooks", () => {
     store.startTask(run.taskId!);
     store.completeTask(run.taskId!, { output: "fixed" });
 
-    expect(store.getIssue(run.issueId!)?.status).toBe("done");
-    expect(store.getProject(project.id)?.doneCount).toBe(1);
+    expect(store.getIssue(run.issueId!)?.status).toBe("in_review");
+    expect(store.getProject(project.id)?.doneCount).toBe(0);
     expect(store.listAutopilotRuns(autopilot.id)[0]?.status).toBe("completed");
     // Completion appends task_completed, then the agent-reply comment_created.
     const activityTypes = store.listIssueActivity(run.issueId!).map((entry) => entry.type);

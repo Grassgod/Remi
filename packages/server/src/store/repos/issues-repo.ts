@@ -842,7 +842,7 @@ export class IssuesRepo {
       [
         assigneeType,
         assigneeId,
-        taskAgent ? "in_progress" : current.status,
+        taskAgent ? "todo" : current.status,
         now,
         id,
       ],
@@ -924,7 +924,7 @@ export class IssuesRepo {
       projectId,
       assigneeType,
       assigneeId,
-      status: "in_progress",
+      status: "todo",
       createdBy: input.requesterId ?? input.requester_id ?? null,
       contextRefs: [{ type: "quick_create", prompt }],
     });

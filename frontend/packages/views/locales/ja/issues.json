@@ -199,6 +199,7 @@
     "pull_request_card_show_more": "他 {{count}} 件を表示",
     "pull_request_card_show_less": "折りたたむ",
     "prop_status": "ステータス",
+    "complete_issue_action": "Issue を完了",
     "prop_priority": "優先度",
     "prop_assignee": "担当者",
     "prop_start_date": "開始日",
@@ -359,6 +360,7 @@
   "agent_activity": {
     "hover_header_other": "作業中のエージェント {{count}} 件",
     "status_running": "作業中",
+    "status_awaiting_human": "レビュー待ち",
     "status_queued": "待機中",
     "chip_label": "作業中",
     "empty_hover": "現在作業中のエージェントはありません",
@@ -373,6 +375,7 @@
     "is_starting": "{{name}} を起動中",
     "is_queued": "{{name}} が待機中",
     "is_waiting_local_directory": "{{name}} がローカルディレクトリを待機中",
+    "is_awaiting_human": "{{name}} がレビュー待ち",
     "queued_elapsed_prefix": "{{elapsed}} 待機中",
     "fallback_name": "エージェント",
     "tool_count_other": "ツール {{count}} 件",
@@ -403,6 +406,7 @@
     "status_dispatched": "開始中",
     "status_waiting_local_directory": "ローカルディレクトリ待機中",
     "status_running": "作業中",
+    "status_awaiting_human": "レビュー待ち",
     "status_completed": "完了",
     "status_failed": "失敗",
     "status_cancelled": "キャンセル済み"

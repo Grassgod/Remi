@@ -219,6 +219,7 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
   // would stay stuck on the optimistic dispatch state instead of flipping
   // to "waiting" then resuming "is working".
   useWSEvent("task:waiting_local_directory", handleTaskActive);
+  useWSEvent("task:awaiting_human", handleTaskActive);
   useWSEvent("task:running", handleTaskActive);
 
   // Fire the actual cancel once the user confirms. The banner is dropped
@@ -246,20 +247,21 @@ export function AgentLiveCard({ issueId, issueSessionId }: AgentLiveCardProps) {
 
   if (taskStates.size === 0) return null;
 
-  // Order: running → dispatched → waiting → queued. The most-active task
-  // takes the sticky slot; the parked / queued tasks sit below so the
+  // Order: running → awaiting human → dispatched → waiting → queued.
+  // The most-active task takes the sticky slot; parked / queued tasks sit below so the
   // "is working" banner isn't pushed off by a freshly-enqueued or
   // path-parked sibling. ListActiveTasksByIssue's server-side ORDER BY is
   // created_at DESC, which doesn't reflect lifecycle priority, so we
   // re-sort on the client.
   const statusRank: Record<AgentTask["status"], number> = {
     running: 0,
-    dispatched: 1,
-    waiting_local_directory: 2,
-    queued: 3,
-    completed: 4,
-    failed: 4,
-    cancelled: 4,
+    awaiting_human: 1,
+    dispatched: 2,
+    waiting_local_directory: 3,
+    queued: 4,
+    completed: 5,
+    failed: 5,
+    cancelled: 5,
   };
   const entries = Array.from(taskStates.values()).sort(
     (a, b) => statusRank[a.task.status] - statusRank[b.task.status],
@@ -381,10 +383,11 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
   // entered the running phase yet because another task on this daemon
   // holds the same local_directory lock.
   const isWaitingLocalDirectory = task.status === "waiting_local_directory";
+  const isAwaitingHuman = task.status === "awaiting_human";
   // Parked vs running is signalled by the icon (Clock vs spinning Loader2)
   // and the label below — the container chrome is shared, so there's no
   // per-row background variant.
-  const isParked = isQueued || isWaitingLocalDirectory;
+  const isParked = isQueued || isWaitingLocalDirectory || isAwaitingHuman;
 
   // Elapsed time — ticks every second so users see the agent is alive.
   // For queued tasks neither started_at nor dispatched_at is set yet, so
@@ -417,13 +420,17 @@ function AgentLiveRow({ task, items, agentName, onRequestCancel, cancelling }: A
         <span className="font-medium text-foreground truncate">
           {isWaitingLocalDirectory
             ? t(($) => $.agent_live.is_waiting_local_directory, { name: agentName })
+            : isAwaitingHuman
+              ? t(($) => $.agent_live.is_awaiting_human, { name: agentName })
             : isQueued
               ? t(($) => $.agent_live.is_queued, { name: agentName })
               : t(($) => $.agent_live.is_working, { name: agentName })}
         </span>
         <span className="text-muted-foreground tabular-nums shrink-0">
           {isParked
-            ? t(($) => $.agent_live.queued_elapsed_prefix, { elapsed })
+            ? isAwaitingHuman
+              ? elapsed
+              : t(($) => $.agent_live.queued_elapsed_prefix, { elapsed })
             : elapsed}
         </span>
         {!isParked && toolCount > 0 && (

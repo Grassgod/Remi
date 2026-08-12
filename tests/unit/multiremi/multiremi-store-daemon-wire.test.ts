@@ -592,7 +592,7 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.status).toBe("in_progress");
+    expect(body.status).toBe("todo");
 
     const tasks = store.listTasks().filter((task) => task.issueId === issue.id);
     expect(tasks).toHaveLength(1);

@@ -82,7 +82,8 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
           // (waiting on a path lock), not terminal. Surfacing it here is
           // what tells the user the agent is alive and will resume.
           t.status === "waiting_local_directory" ||
-          t.status === "running",
+          t.status === "running" ||
+          t.status === "awaiting_human",
       ),
     [tasks],
   );
@@ -198,6 +199,7 @@ const STATUS_TONE: Record<AgentTask["status"], string> = {
   // task is parked, but distinguished by the status label.
   waiting_local_directory: "text-warning",
   running: "text-info",
+  awaiting_human: "text-success",
   completed: "text-success",
   failed: "text-destructive",
   cancelled: "text-muted-foreground",
@@ -235,6 +237,7 @@ function useStatusLabel(status: AgentTask["status"]): string {
     case "waiting_local_directory":
       return t(($) => $.execution_log.status_waiting_local_directory);
     case "running": return t(($) => $.execution_log.status_running);
+    case "awaiting_human": return t(($) => $.execution_log.status_awaiting_human);
     case "completed": return t(($) => $.execution_log.status_completed);
     case "failed": return t(($) => $.execution_log.status_failed);
     case "cancelled": return t(($) => $.execution_log.status_cancelled);

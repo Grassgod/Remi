@@ -10,6 +10,7 @@ export const taskStatusConfig: Record<string, { label: string; icon: typeof Chec
   queued: { label: "Queued", icon: Clock, color: "text-muted-foreground" },
   dispatched: { label: "Dispatched", icon: Play, color: "text-info" },
   running: { label: "Running", icon: Loader2, color: "text-brand" },
+  awaiting_human: { label: "Waiting for review", icon: Clock, color: "text-success" },
   completed: { label: "Completed", icon: CheckCircle2, color: "text-success" },
   failed: { label: "Failed", icon: XCircle, color: "text-destructive" },
   cancelled: { label: "Cancelled", icon: XCircle, color: "text-muted-foreground" },

@@ -15,6 +15,46 @@ function createRunningTask(store: MultiremiStore): MultiremiTask {
 }
 
 describe("task human requests (store)", () => {
+  it("keeps an issue in sync through queue, work, review, resume, and acceptance", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_issue_flow",
+      name: "issue-flow-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      ownerId: "local",
+    });
+    const agent = store.createAgent({ name: "Issue Flow Agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Verify task-driven issue states", status: "in_review" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Implement it" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+
+    store.startTask(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+
+    const request = store.createTaskHumanRequest({
+      taskId: task.id,
+      kind: "permission",
+      payload: { title: "Approve changes" },
+    });
+    expect(store.getIssue(issue.id)?.status).toBe("in_review");
+
+    store.respondTaskHumanRequest(request.id, {
+      response: { option_id: "approve" },
+      respondedBy: "user-1",
+    });
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+
+    store.completeTask(task.id, { output: "Ready for acceptance" });
+    expect(store.getIssue(issue.id)?.status).toBe("in_review");
+
+    store.updateIssue(issue.id, { status: "done" });
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+  });
+
   it("create parks the task; respond resumes it first-write-wins", () => {
     const store = createStore();
     const task = createRunningTask(store);
@@ -72,6 +112,28 @@ describe("task human requests (store)", () => {
     const task2 = createRunningTask(store);
     store.createTaskHumanRequest({ taskId: task2.id, kind: "question", payload: {} });
     expect(store.cancelTask(task2.id).status).toBe("cancelled");
+  });
+
+  it("returns an issue to todo when a task fails while awaiting review", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_review_failure",
+      name: "review-failure-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      ownerId: "local",
+    });
+    const agent = store.createAgent({ name: "Review Failure Agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Review failure" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Try it" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.createTaskHumanRequest({ taskId: task.id, kind: "question", payload: {} });
+    expect(store.getIssue(issue.id)?.status).toBe("in_review");
+
+    store.failTask(task.id, { error: "approval channel closed", failureReason: "agent_error" });
+
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
   });
 
   it("counts awaiting_human toward runtime in-flight concurrency", () => {

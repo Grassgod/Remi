@@ -200,6 +200,7 @@
     "pull_request_card_show_more": "展开剩余 {{count}} 个",
     "pull_request_card_show_less": "收起",
     "prop_status": "状态",
+    "complete_issue_action": "完成 Issue",
     "prop_priority": "优先级",
     "prop_assignee": "负责人",
     "prop_start_date": "开始日期",
@@ -364,6 +365,7 @@
   "agent_activity": {
     "hover_header_other": "{{count}} 个智能体正在工作",
     "status_running": "正在工作",
+    "status_awaiting_human": "等待审核",
     "status_queued": "排队中",
     "chip_label": "工作中",
     "empty_hover": "当前没有智能体在工作",
@@ -378,6 +380,7 @@
     "is_starting": "{{name}} 正在启动",
     "is_queued": "{{name}} 排队中",
     "is_waiting_local_directory": "{{name}} 正在等待本地目录",
+    "is_awaiting_human": "{{name}} 正在等待审核",
     "queued_elapsed_prefix": "已排队 {{elapsed}}",
     "fallback_name": "智能体",
     "tool_count_other": "{{count}} 次工具调用",
@@ -408,6 +411,7 @@
     "status_dispatched": "启动中",
     "status_waiting_local_directory": "等待本地目录释放",
     "status_running": "处理中",
+    "status_awaiting_human": "等待审核",
     "status_completed": "已完成",
     "status_failed": "失败",
     "status_cancelled": "已取消"

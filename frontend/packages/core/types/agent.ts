@@ -79,12 +79,14 @@ export interface AgentTask {
   // local_directory flow: a task that has been dispatched but is parked
   // because another task currently owns the same on-disk path lock.
   // Treated as an active (non-terminal) state alongside queued/dispatched/
-  // running by every consumer that buckets tasks into "active vs done".
+  // running/awaiting_human by every consumer that buckets tasks into
+  // "active vs done".
   status:
     | "queued"
     | "dispatched"
     | "waiting_local_directory"
     | "running"
+    | "awaiting_human"
     | "completed"
     | "failed"
     | "cancelled";

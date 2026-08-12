@@ -318,6 +318,8 @@ export function AgentTranscriptDialog({
         ? { label: t(($) => $.transcript.status_waiting_local_directory), icon: Clock, tone: "bg-muted text-muted-foreground", spins: false }
         : task.status === "running"
           ? { label: t(($) => $.transcript.status_running), icon: Loader2, tone: "bg-info/15 text-info", spins: true }
+          : task.status === "awaiting_human"
+            ? { label: t(($) => $.transcript.status_awaiting_human), icon: Clock, tone: "bg-success/15 text-success", spins: false }
           : task.status === "completed"
             ? { label: t(($) => $.transcript.status_completed), icon: CheckCircle2, tone: "bg-success/15 text-success", spins: false }
             : task.status === "failed"
@@ -338,6 +340,8 @@ export function AgentTranscriptDialog({
       ? t(($) => $.transcript.waiting_start)
       : task.status === "waiting_local_directory"
         ? t(($) => $.transcript.waiting_local_directory)
+        : task.status === "awaiting_human"
+          ? t(($) => $.transcript.waiting_human)
         : isLive
           ? t(($) => $.transcript.waiting_events)
           : null;

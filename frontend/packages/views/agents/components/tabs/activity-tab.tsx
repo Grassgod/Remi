@@ -89,7 +89,8 @@ export function ActivityTab({ agent }: ActivityTabProps) {
         isWorkflowTask(t) &&
         (t.status === "running" ||
           t.status === "queued" ||
-          t.status === "dispatched"),
+          t.status === "dispatched" ||
+          t.status === "awaiting_human"),
     );
   }, [snapshot, agent.id]);
 
@@ -369,7 +370,8 @@ function TaskRow({
     timeMode === "active" &&
     (task.status === "queued" ||
       task.status === "dispatched" ||
-      task.status === "running");
+      task.status === "running" ||
+      task.status === "awaiting_human");
 
   const handleCancel = async () => {
     if (cancelling) return;
