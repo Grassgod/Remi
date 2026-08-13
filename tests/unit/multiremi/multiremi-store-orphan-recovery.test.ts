@@ -46,8 +46,8 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       maxAttempts: 3,
       issueId: secondIssue.id,
     });
-    expect(store.getIssue(firstIssue.id)?.status).toBe("in_progress");
-    expect(store.getIssue(secondIssue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(firstIssue.id)?.status).toBe("todo");
+    expect(store.getIssue(secondIssue.id)?.status).toBe("todo");
   });
 
   it("applies Go retry edge rules during orphan recovery", () => {
@@ -121,7 +121,7 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
     expect(store.listTasks().some((task) => task.parentTaskId === exhaustedTask.id)).toBeFalse();
     expect(store.listTasks().some((task) => task.parentTaskId === directTask.id)).toBeFalse();
     expect(store.getAutopilotRun(run.id)?.status).toBe("failed");
-    expect(store.getIssue(retryIssue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(retryIssue.id)?.status).toBe("todo");
     expect(store.getIssue(run.issueId!)?.status).toBe("todo");
     expect(store.getIssue(exhaustedIssue.id)?.status).toBe("todo");
   });
@@ -157,6 +157,6 @@ describe("Multiremi store — orphan recovery and retry rules", () => {
       sessionId: null,
       workDir: null,
     });
-    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
   });
 });

@@ -136,6 +136,55 @@ describe("task human requests (store)", () => {
     expect(store.getIssue(issue.id)?.status).toBe("todo");
   });
 
+  it("derives issue state from sibling tasks when one task is cancelled", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Parallel Agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Parallel work" });
+    const first = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "First" });
+    const second = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Second" });
+
+    store.cancelTask(first.id);
+    expect(store.getTask(second.id)?.status).toBe("queued");
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+
+    store.cancelTask(second.id);
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+  });
+
+  it("keeps issue cancellation explicit instead of inheriting task cancellation", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ name: "Cancel runtime", provider: "claude" });
+    const agent = store.createAgent({ name: "Cancel Agent", provider: "claude" });
+    const issue = store.createIssue({ title: "Cancel execution only" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Start" });
+
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("in_progress");
+
+    store.cancelTask(task.id);
+    expect(store.getIssue(issue.id)?.status).toBe("todo");
+
+    store.updateIssue(issue.id, { status: "cancelled" });
+    expect(store.getIssue(issue.id)?.status).toBe("cancelled");
+  });
+
+  it("does not reopen an explicitly terminal issue on a late task event", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ name: "Late runtime", provider: "claude" });
+    const agent = store.createAgent({ name: "Late Agent", provider: "claude" });
+
+    for (const terminalStatus of ["done", "cancelled"] as const) {
+      const issue = store.createIssue({ title: `Keep ${terminalStatus}` });
+      const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Run" });
+      expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+      store.startTask(task.id);
+      store.updateIssue(issue.id, { status: terminalStatus });
+      store.completeTask(task.id, { output: "Late completion" });
+      expect(store.getIssue(issue.id)?.status).toBe(terminalStatus);
+    }
+  });
+
   it("counts awaiting_human toward runtime in-flight concurrency", () => {
     const store = createStore();
     const task = createRunningTask(store);

@@ -2776,7 +2776,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600196",
+        "order_id": "local-1767225600200",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3377,7 +3377,7 @@
             "identifier": "MUL-1",
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "assignee_type": "agent",
             "assignee_id": "agt_snapshot",
@@ -3459,7 +3459,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null
           },
@@ -3697,7 +3697,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null
           },
@@ -3875,7 +3875,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null
           },
@@ -4305,7 +4305,7 @@
             "identifier": "MUL-1",
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "assignee_type": "agent",
             "assignee_id": "agt_snapshot",
@@ -4387,7 +4387,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null
           },
@@ -6149,7 +6149,7 @@
       "path": "/api/daemon/issues/iss_snapshot/gc-check",
       "status": 200,
       "body": {
-        "status": "done",
+        "status": "todo",
         "updated_at": "<timestamp>"
       }
     },
@@ -6586,7 +6586,7 @@
             "identifier": "MUL-1",
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "assignee_type": "agent",
             "assignee_id": "agt_snapshot",
@@ -6652,7 +6652,7 @@
         "identifier": "MUL-1",
         "title": "Snapshot issue",
         "description": "Issue used by the snapshot",
-        "status": "done",
+        "status": "todo",
         "priority": "high",
         "assignee_type": "agent",
         "assignee_id": "agt_snapshot",
@@ -6885,7 +6885,7 @@
               "identifier": "MUL-1",
               "title": "Snapshot issue",
               "description": "Issue used by the snapshot",
-              "status": "done",
+              "status": "todo",
               "priority": "high",
               "assignee_type": "agent",
               "assignee_id": "agt_snapshot",
@@ -7677,7 +7677,7 @@
                 "number": 1,
                 "title": "Snapshot issue",
                 "description": "Issue used by the snapshot",
-                "status": "done",
+                "status": "todo",
                 "priority": "high",
                 "workspaceId": "local",
                 "projectId": "prj_snapshot",
@@ -7869,6 +7869,32 @@
             "match_source": "title"
           },
           {
+            "id": "iss_snapshot",
+            "workspace_id": "local",
+            "number": 1,
+            "identifier": "MUL-1",
+            "title": "Snapshot issue",
+            "description": "Issue used by the snapshot",
+            "status": "todo",
+            "priority": "high",
+            "assignee_type": "agent",
+            "assignee_id": "agt_snapshot",
+            "creator_type": "member",
+            "creator_id": "mem_snapshot_one",
+            "parent_issue_id": null,
+            "project_id": "prj_snapshot",
+            "position": 0,
+            "start_date": null,
+            "due_date": null,
+            "created_at": "<timestamp>",
+            "updated_at": "<timestamp>",
+            "metadata": {
+              "snapshot_key": "snapshot_value"
+            },
+            "match_source": "title",
+            "matched_comment_snippet": "Snapshot comment body"
+          },
+          {
             "id": "iss_snapshot_child",
             "workspace_id": "local",
             "number": 2,
@@ -7892,7 +7918,7 @@
             "match_source": "title"
           }
         ],
-        "total": 4
+        "total": 5
       }
     },
     {
@@ -9828,7 +9854,7 @@
             "number": 1,
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "workspaceId": "local",
             "projectId": "prj_snapshot",
@@ -9902,7 +9928,7 @@
           "number": 1,
           "title": "Snapshot issue",
           "description": "Issue used by the snapshot",
-          "status": "done",
+          "status": "todo",
           "priority": "high",
           "workspaceId": "local",
           "projectId": "prj_snapshot",
@@ -10094,7 +10120,7 @@
                 "number": 1,
                 "title": "Snapshot issue",
                 "description": "Issue used by the snapshot",
-                "status": "done",
+                "status": "todo",
                 "priority": "high",
                 "workspaceId": "local",
                 "projectId": "prj_snapshot",
@@ -10195,7 +10221,7 @@
               "number": 1,
               "title": "Snapshot issue",
               "description": "Issue used by the snapshot",
-              "status": "done",
+              "status": "todo",
               "priority": "high",
               "workspaceId": "local",
               "projectId": "prj_snapshot",
@@ -10539,7 +10565,7 @@
               "number": 1,
               "title": "Snapshot issue",
               "description": "Issue used by the snapshot",
-              "status": "done",
+              "status": "todo",
               "priority": "high",
               "workspaceId": "local",
               "projectId": "prj_snapshot",
@@ -10976,7 +11002,7 @@
                 "number": 1,
                 "title": "Snapshot issue",
                 "description": "Issue used by the snapshot",
-                "status": "done",
+                "status": "todo",
                 "priority": "high",
                 "workspaceId": "local",
                 "projectId": "prj_snapshot",
@@ -11174,6 +11200,43 @@
             "matchSource": "title"
           },
           {
+            "id": "iss_snapshot",
+            "key": "MUL-1",
+            "number": 1,
+            "title": "Snapshot issue",
+            "description": "Issue used by the snapshot",
+            "status": "todo",
+            "priority": "high",
+            "workspaceId": "local",
+            "projectId": "prj_snapshot",
+            "parentIssueId": null,
+            "assigneeType": "agent",
+            "assigneeId": "agt_snapshot",
+            "position": 0,
+            "startDate": null,
+            "dueDate": null,
+            "acceptanceCriteria": [],
+            "contextRefs": [],
+            "metadata": {
+              "snapshot_key": "snapshot_value"
+            },
+            "labels": [
+              {
+                "id": "lbl_snapshot",
+                "workspaceId": "local",
+                "name": "snapshot",
+                "color": "#3366ff",
+                "createdAt": "<timestamp>",
+                "updatedAt": "<timestamp>"
+              }
+            ],
+            "createdBy": "mem_snapshot_one",
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>",
+            "matchSource": "title",
+            "matchedCommentSnippet": "Snapshot comment body"
+          },
+          {
             "id": "iss_snapshot_child",
             "key": "MUL-2",
             "number": 2,
@@ -11199,7 +11262,7 @@
             "matchSource": "title"
           }
         ],
-        "total": 4
+        "total": 5
       }
     },
     {
@@ -11363,7 +11426,7 @@
             "defaultAssigneeType": null,
             "defaultAssigneeId": null,
             "issueCount": 4,
-            "doneCount": 1,
+            "doneCount": 0,
             "resourceCount": 1,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -11392,7 +11455,7 @@
           "defaultAssigneeType": null,
           "defaultAssigneeId": null,
           "issueCount": 4,
-          "doneCount": 1,
+          "doneCount": 0,
           "resourceCount": 1,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -11459,7 +11522,7 @@
             "defaultAssigneeType": null,
             "defaultAssigneeId": null,
             "issueCount": 4,
-            "doneCount": 1,
+            "doneCount": 0,
             "resourceCount": 1,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -12303,7 +12366,7 @@
             "number": 1,
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "workspaceId": "local",
             "projectId": "prj_snapshot",
@@ -12345,7 +12408,7 @@
             "defaultAssigneeType": null,
             "defaultAssigneeId": null,
             "issueCount": 4,
-            "doneCount": 1,
+            "doneCount": 0,
             "resourceCount": 1,
             "archivedAt": null,
             "createdAt": "<timestamp>",
@@ -12564,7 +12627,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null
           }
@@ -12592,7 +12655,7 @@
         "created_at": "<timestamp>",
         "updated_at": "<timestamp>",
         "issue_count": 4,
-        "done_count": 1,
+        "done_count": 0,
         "resource_count": 1,
         "archived_at": null
       }
@@ -12752,7 +12815,7 @@
             "created_at": "<timestamp>",
             "updated_at": "<timestamp>",
             "issue_count": 4,
-            "done_count": 1,
+            "done_count": 0,
             "resource_count": 1,
             "archived_at": null,
             "match_source": "title"
@@ -13919,7 +13982,7 @@
             "identifier": "MUL-1",
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "assignee_type": "agent",
             "assignee_id": "agt_snapshot",
@@ -14098,7 +14161,7 @@
             "number": 1,
             "title": "Snapshot issue",
             "description": "Issue used by the snapshot",
-            "status": "done",
+            "status": "todo",
             "priority": "high",
             "workspaceId": "local",
             "projectId": "prj_snapshot",
@@ -14426,7 +14489,7 @@
         "identifier": "MUL-6",
         "title": "Compat issue renamed",
         "description": "created by the snapshot",
-        "status": "in_progress",
+        "status": "todo",
         "priority": "urgent",
         "assignee_type": "squad",
         "assignee_id": "sqd_snapshot",
@@ -14589,7 +14652,7 @@
           "number": 1,
           "title": "Snapshot issue",
           "description": "Issue used by the snapshot",
-          "status": "in_progress",
+          "status": "todo",
           "priority": "high",
           "workspaceId": "local",
           "projectId": "prj_snapshot",
@@ -14682,7 +14745,7 @@
           "number": 7,
           "title": "do the thing",
           "description": "do the thing",
-          "status": "in_progress",
+          "status": "todo",
           "priority": "none",
           "workspaceId": "local",
           "projectId": null,
@@ -15402,7 +15465,7 @@
           "defaultAssigneeType": null,
           "defaultAssigneeId": null,
           "issueCount": 4,
-          "doneCount": 1,
+          "doneCount": 0,
           "resourceCount": 1,
           "archivedAt": null,
           "createdAt": "<timestamp>",
@@ -15480,7 +15543,7 @@
           "defaultAssigneeType": null,
           "defaultAssigneeId": null,
           "issueCount": 4,
-          "doneCount": 1,
+          "doneCount": 0,
           "resourceCount": 1,
           "archivedAt": "<timestamp>",
           "createdAt": "<timestamp>",
@@ -16046,7 +16109,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600199",
+        "id": "local-contact-1767225600203",
         "status": "received",
         "mode": "local",
         "request": {
@@ -17284,7 +17347,7 @@
       "path": "/api/workspaces/ws_bbo9f1dxazyr/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600204",
+        "session_id": "local-lark-1767225600208",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

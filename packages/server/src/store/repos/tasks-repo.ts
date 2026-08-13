@@ -1275,7 +1275,7 @@ export class TasksRepo {
     }
 
     if (task.issueId) {
-      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status, retry);
+      const issueStatus = this.nextIssueStatusAfterTaskTerminal(task, status);
       const issue = this.ctx.issues().getIssue(task.issueId);
       if (issueStatus) this.syncIssueStatusFromTask(task, issueStatus);
       this.ctx.appendIssueActivity(task.issueId, {
@@ -1424,14 +1424,17 @@ export class TasksRepo {
   private nextIssueStatusAfterTaskTerminal(
     task: MultiremiTask,
     status: "completed" | "failed" | "cancelled",
-    retry: MultiremiTask | null,
   ): string | null {
     if (!task.issueId) return null;
-    if (status === "completed") {
-      return this.issueStatusForRemainingTasks(task.issueId) ?? "in_review";
-    }
-    if (status === "cancelled") return "cancelled";
-    if (retry) return "in_progress";
+
+    // A terminal task must not overwrite the state implied by sibling work.
+    // This also covers auto-retries: maybeRetryFailedTask creates the queued
+    // child before this method runs, so a retry correctly leaves the issue in
+    // todo until a daemon actually starts it.
+    const remainingStatus = this.issueStatusForRemainingTasks(task.issueId);
+    if (remainingStatus) return remainingStatus;
+
+    if (status === "completed") return "in_review";
     const issue = this.ctx.issues().getIssue(task.issueId);
     if (
       (issue?.status === "in_progress" || issue?.status === "in_review") &&
@@ -1459,6 +1462,10 @@ export class TasksRepo {
   private syncIssueStatusFromTask(task: MultiremiTask, status: string): void {
     if (!task.issueId) return;
     const issue = this.ctx.issues().getIssue(task.issueId);
+    // Explicit issue terminal states are user decisions. A late worker event
+    // (or a cancellation racing with it) must not reopen accepted/cancelled
+    // work; only a direct issue mutation may leave these states.
+    if (issue?.status === "done" || issue?.status === "cancelled") return;
     if (!issue || issue.status === status) return;
     const now = nowIso();
     this.ctx.db.run(

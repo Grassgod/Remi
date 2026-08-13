@@ -141,7 +141,37 @@ export class WorkspacesRepo {
     if (!current) throw new Error(`Member not found: ${id}`);
     if (current.role === "owner" && !current.archivedAt) this.assertWorkspaceKeepsOwner(current);
     const now = nowIso();
-    this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
+    const tx = this.ctx.db.transaction(() => {
+      affectedProjects.push(...this.ctx.db.query(
+        `SELECT id, workspace_id FROM multiremi_projects
+         WHERE default_assignee_type = 'member' AND default_assignee_id = ?`,
+      ).all(id) as Array<{ id: string; workspace_id: string }>);
+      this.ctx.db.run("UPDATE multiremi_workspace_members SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+      this.ctx.db.run(
+        `UPDATE multiremi_projects
+         SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
+         WHERE default_assignee_type = 'member' AND default_assignee_id = ?`,
+        [now, id],
+      );
+    });
+    tx();
+    for (const project of affectedProjects) {
+      this.ctx.emitWorkspaceEvent({
+        type: "project:updated",
+        workspaceId: project.workspace_id,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          project: {
+            id: project.id,
+            default_assignee_type: null,
+            default_assignee_id: null,
+            updated_at: now,
+          },
+        },
+      });
+    }
     return this.getWorkspaceMember(id)!;
   }
 

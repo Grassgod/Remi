@@ -211,10 +211,48 @@ export class AgentsSkillsRepo {
   }
 
   archiveAgent(id: string): MultiremiAgent {
-    if (!this.getAgent(id)) throw new Error(`Agent not found: ${id}`);
+    const agent = this.getAgent(id);
+    if (!agent) throw new Error(`Agent not found: ${id}`);
     const now = nowIso();
-    this.ctx.db.run("UPDATE multiremi_agents SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+    const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
+    const tx = this.ctx.db.transaction(() => {
+      affectedProjects.push(...this.ctx.db.query(
+        `SELECT id, workspace_id FROM multiremi_projects
+         WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
+      ).all(id) as Array<{ id: string; workspace_id: string }>);
+      this.ctx.db.run("UPDATE multiremi_agents SET archived_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+      this.ctx.db.run(
+        `UPDATE multiremi_projects
+         SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
+         WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
+        [now, id],
+      );
+    });
+    tx();
+    this.publishClearedProjectDefaults(affectedProjects, now);
     return this.getAgent(id)!;
+  }
+
+  private publishClearedProjectDefaults(
+    projects: Array<{ id: string; workspace_id: string }>,
+    updatedAt: string,
+  ): void {
+    for (const project of projects) {
+      this.ctx.emitWorkspaceEvent({
+        type: "project:updated",
+        workspaceId: project.workspace_id,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          project: {
+            id: project.id,
+            default_assignee_type: null,
+            default_assignee_id: null,
+            updated_at: updatedAt,
+          },
+        },
+      });
+    }
   }
 
   restoreAgent(id: string): MultiremiAgent {

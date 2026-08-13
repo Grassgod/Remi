@@ -28,6 +28,40 @@ describe("Multiremi store — agents, workspace skills, and members", () => {
     expect(store.ensureDefaultAgent("codex").archivedAt).toBeNull();
   });
 
+  it("clears project default assignees when their actors are archived", () => {
+    const store = createStore();
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    store.onWorkspaceEvent((event) => events.push(event));
+    const agent = store.createAgent({ name: "Project Agent", provider: "codex" });
+    const agentProject = store.createProject({
+      title: "Agent project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: agent.id,
+    });
+
+    store.archiveAgent(agent.id);
+    expect(store.getProject(agentProject.id)).toMatchObject({
+      defaultAssigneeType: null,
+      defaultAssigneeId: null,
+    });
+
+    const owner = store.createWorkspaceMember({ name: "Owner", role: "owner" });
+    const member = store.createWorkspaceMember({ name: "Project Member", role: "member" });
+    const memberProject = store.createProject({
+      title: "Member project",
+      defaultAssigneeType: "member",
+      defaultAssigneeId: member.id,
+    });
+
+    store.archiveWorkspaceMember(member.id);
+    expect(store.getProject(memberProject.id)).toMatchObject({
+      defaultAssigneeType: null,
+      defaultAssigneeId: null,
+    });
+    expect(store.getWorkspaceMember(owner.id)?.archivedAt).toBeNull();
+    expect(events.filter((event) => event.type === "project:updated")).toHaveLength(2);
+  });
+
   it("manages workspace skills, attaches them to agents, and includes files in claims", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Reviewer", provider: "claude" });

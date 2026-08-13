@@ -34,6 +34,24 @@ describe("SquadsRepo", () => {
     expect(repo.listSquads("local").map((entry) => entry.id)).not.toContain(squad.id);
   });
 
+  it("clears project defaults when a squad is archived", () => {
+    const repo = createRepo();
+    const leader = store!.createAgent({ name: "Leader", provider: "claude" });
+    const squad = repo.createSquad({ name: "Default squad", leaderId: leader.id });
+    const project = store!.createProject({
+      title: "Squad project",
+      defaultAssigneeType: "squad",
+      defaultAssigneeId: squad.id,
+    });
+
+    repo.archiveSquad(squad.id);
+
+    expect(store!.getProject(project.id)).toMatchObject({
+      defaultAssigneeType: null,
+      defaultAssigneeId: null,
+    });
+  });
+
   it("adds an agent as a squad member", () => {
     const repo = createRepo();
     const squad = repo.createSquad({ name: "Responders", workspaceId: "local" });
