@@ -1,11 +1,12 @@
 /**
  * @vitest-environment jsdom
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import { issueKeys } from "../issues/queries";
 import type { WSEventType, WSMessage } from "../types/events";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
@@ -215,6 +216,71 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     vi.advanceTimersByTime(500);
 
     expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("invalidates every cached Product Session timeline when a comment arrives before IssueDetail mounts", () => {
+    const issueId = "issue-1";
+    const mainTimeline = issueKeys.timeline(issueId, "session-main");
+    const reviewTimeline = issueKeys.timeline(issueId, "session-review");
+    const otherTimeline = issueKeys.timeline("issue-2", "session-main");
+    qc.setQueryData(mainTimeline, [{ id: "old-main" }]);
+    qc.setQueryData(reviewTimeline, [{ id: "old-review" }]);
+    qc.setQueryData(otherTimeline, [{ id: "other" }]);
+
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+
+    mock.emit("comment:created", {
+      comment: {
+        id: "agent-reply",
+        issue_id: issueId,
+        issue_session_id: "session-main",
+      },
+    });
+
+    expect(qc.getQueryState(mainTimeline)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(reviewTimeline)?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(otherTimeline)?.isInvalidated).toBe(false);
+  });
+
+  it("restarts an in-flight Product Session timeline request after a newer comment event", async () => {
+    const issueId = "issue-1";
+    const queryKey = issueKeys.timeline(issueId, "session-main");
+    let resolveStaleRequest!: (value: Array<{ id: string }>) => void;
+    const staleRequest = new Promise<Array<{ id: string }>>((resolve) => {
+      resolveStaleRequest = resolve;
+    });
+    const queryFn = vi
+      .fn<() => Promise<Array<{ id: string }>>>()
+      .mockImplementationOnce(() => staleRequest)
+      .mockResolvedValue([{ id: "agent-reply" }]);
+    const mock = createRecordingWs();
+
+    const { result } = renderHook(
+      () => {
+        useRealtimeSync(mock.ws, stores);
+        return useQuery({ queryKey, queryFn });
+      },
+      { wrapper: createWrapper(qc) },
+    );
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      mock.emit("comment:created", {
+        comment: {
+          id: "agent-reply",
+          issue_id: issueId,
+          issue_session_id: "session-main",
+        },
+      });
+    });
+
+    await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.data).toEqual([{ id: "agent-reply" }]));
+
+    resolveStaleRequest([{ id: "stale-user-comment" }]);
+    await Promise.resolve();
+    expect(result.current.data).toEqual([{ id: "agent-reply" }]);
   });
 
   it("flushes buffered task:message frames on unmount", () => {

@@ -36,10 +36,27 @@ import type { SyncContext, SyncModule } from "./types";
  */
 export function createTimelineHandlers({ qc }: SyncContext): SyncModule {
   const invalidateTimeline = (issueId: string) => {
-    qc.invalidateQueries({
-      queryKey: issueKeys.timeline(issueId),
+    // An Issue can have multiple Product Session timelines. Using the concrete
+    // "all" key here misses every session-scoped cache and leaves staleTime:
+    // Infinity data permanently fresh when its event arrived before
+    // IssueDetail mounted.
+    const queryKey = issueKeys.timelineAll(issueId);
+    const hadInFlightRequest = qc.isFetching({ queryKey }) > 0;
+    void qc.invalidateQueries({
+      queryKey,
       refetchType: "none",
     });
+
+    if (hadInFlightRequest) {
+      // An initial request may have captured the database just before this WS
+      // event was persisted. Letting that response finish would overwrite the
+      // granular cache append performed by useIssueTimeline. This path only
+      // runs for an already in-flight request; steady-state events keep the
+      // cheap setQueryData behavior and never refetch the whole timeline.
+      void qc
+        .cancelQueries({ queryKey }, { revert: false })
+        .then(() => qc.refetchQueries({ queryKey, type: "active" }));
+    }
   };
 
   return {

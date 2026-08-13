@@ -135,7 +135,7 @@ export function invalidateIssueScopedCaches(
   wsId: string,
   issueId: string,
 ) {
-  qc.invalidateQueries({ queryKey: issueKeys.timeline(issueId) });
+  qc.invalidateQueries({ queryKey: issueKeys.timelineAll(issueId) });
   qc.invalidateQueries({ queryKey: issueKeys.reactions(issueId) });
   qc.invalidateQueries({ queryKey: issueKeys.subscribers(issueId) });
   qc.invalidateQueries({ queryKey: issueKeys.usage(issueId) });
@@ -156,7 +156,7 @@ export function cleanupDeletedIssueCaches(
   invalidateDeletedIssueParentCaches(qc, wsId, metadata);
 
   qc.removeQueries({ queryKey: issueKeys.detail(wsId, issueId) });
-  qc.removeQueries({ queryKey: issueKeys.timeline(issueId) });
+  qc.removeQueries({ queryKey: issueKeys.timelineAll(issueId) });
   qc.removeQueries({ queryKey: issueKeys.reactions(issueId) });
   qc.removeQueries({ queryKey: issueKeys.subscribers(issueId) });
   qc.removeQueries({ queryKey: issueKeys.usage(issueId) });

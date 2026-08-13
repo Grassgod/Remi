@@ -48,12 +48,17 @@ vi.mock("@multiremi/core/issues/comment-mutations", () => ({
 }));
 
 vi.mock("@multiremi/core/issues/queries", () => ({
-  issueTimelineOptions: (id: string) => ({
-    queryKey: ["issues", "timeline", id],
+  issueTimelineOptions: (id: string, sessionId?: string) => ({
+    queryKey: ["issues", "timeline", id, sessionId ?? "all"],
     queryFn: () => Promise.resolve([]),
   }),
   issueKeys: {
-    timeline: (id: string) => ["issues", "timeline", id],
+    timeline: (id: string, sessionId?: string) => [
+      "issues",
+      "timeline",
+      id,
+      sessionId ?? "all",
+    ],
   },
 }));
 
@@ -68,6 +73,11 @@ const queryState = vi.hoisted(() => ({
 // can assert what would have been written.
 const cacheUpdates = vi.hoisted(() => ({
   last: null as unknown,
+}));
+
+const queryClientSpies = vi.hoisted(() => ({
+  getQueryState: vi.fn(),
+  refetchQueries: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -88,7 +98,9 @@ vi.mock("@tanstack/react-query", async () => {
           : updater;
       }),
       getQueryData: vi.fn(),
+      getQueryState: queryClientSpies.getQueryState,
       cancelQueries: vi.fn(),
+      refetchQueries: queryClientSpies.refetchQueries,
     }),
     useMutationState: () => [],
   };
@@ -113,6 +125,8 @@ describe("useIssueTimeline", () => {
     queryState.data = [];
     queryState.isLoading = false;
     cacheUpdates.last = null;
+    queryClientSpies.getQueryState.mockReset();
+    queryClientSpies.refetchQueries.mockReset();
   });
 
   // CommentCard is wrapped in React.memo (perf fix for long timelines, see
@@ -150,6 +164,31 @@ describe("useIssueTimeline", () => {
     ];
     const { result } = renderHook(() => useIssueTimeline("issue-1", "user-1"));
     expect(result.current.timeline.map((e) => e.id)).toEqual(["c1", "c2", "c3"]);
+  });
+
+  it("refetches an invalidated idle timeline after local WS subscriptions mount", () => {
+    queryClientSpies.getQueryState.mockReturnValue({
+      isInvalidated: true,
+      fetchStatus: "idle",
+    });
+
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    expect(queryClientSpies.refetchQueries).toHaveBeenCalledWith({
+      queryKey: ["issues", "timeline", "issue-1", "session-main"],
+      type: "active",
+    });
+  });
+
+  it("does not refetch a fresh timeline during mount reconciliation", () => {
+    queryClientSpies.getQueryState.mockReturnValue({
+      isInvalidated: false,
+      fetchStatus: "idle",
+    });
+
+    renderHook(() => useIssueTimeline("issue-1", "user-1", "session-main"));
+
+    expect(queryClientSpies.refetchQueries).not.toHaveBeenCalled();
   });
 
   it("comment:created appends the new entry to the cache", () => {

@@ -274,6 +274,19 @@ export function useIssueTimeline(
     ),
   );
 
+  useEffect(() => {
+    if (!enabled) return;
+    const queryKey = issueKeys.timeline(issueId, issueSessionId);
+    const state = qc.getQueryState(queryKey);
+    if (state?.isInvalidated && state.fetchStatus === "idle") {
+      // Global realtime sync is mounted above IssueDetail and can invalidate
+      // this cache after render but before the local granular WS subscriptions
+      // attach. Reconcile once after those subscriptions are registered so an
+      // event in that mount gap cannot leave staleTime: Infinity data visible.
+      void qc.refetchQueries({ queryKey, type: "active" });
+    }
+  }, [qc, issueId, issueSessionId, enabled]);
+
   // --- Mutation functions ---
 
   const submitComment = useCallback(

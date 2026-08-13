@@ -66,9 +66,12 @@ export const issueKeys = {
     [...issueKeys.childrenByParentsAll(wsId), parentIds] as const,
   childProgress: (wsId: string) =>
     [...issueKeys.all(wsId), "child-progress"] as const,
-  /** Full-issue timeline (single TanStack Query, no cursor). */
+  /** Prefix for every timeline cache belonging to one Issue. */
+  timelineAll: (issueId: string) =>
+    ["issues", "timeline", issueId] as const,
+  /** Full timeline query key, optionally scoped to one Product Session. */
   timeline: (issueId: string, issueSessionId?: string) =>
-    ["issues", "timeline", issueId, issueSessionId ?? "all"] as const,
+    [...issueKeys.timelineAll(issueId), issueSessionId ?? "all"] as const,
   sessions: (issueId: string) => ["issues", "sessions", issueId] as const,
   sessionTasks: (issueId: string, issueSessionId: string) =>
     ["issues", "sessions", issueId, issueSessionId, "tasks"] as const,
