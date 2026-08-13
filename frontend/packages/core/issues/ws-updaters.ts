@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { issueKeys } from "./queries";
+import { workbenchKeys } from "./workbench";
 import { labelKeys } from "../labels/queries";
 import { projectKeys } from "../projects/queries";
 import {
@@ -22,6 +23,9 @@ export function onIssueCreated(
   qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+  // Workbench caches are flat `{issues, total}` lists — no bucket shape to
+  // patch, so a plain invalidation keeps them (and the sidebar badge) fresh.
+  qc.invalidateQueries({ queryKey: workbenchKeys.all(wsId) });
   if (issue.project_id) {
     qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
   }
@@ -65,6 +69,7 @@ export function onIssueUpdated(
   qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+  qc.invalidateQueries({ queryKey: workbenchKeys.all(wsId) });
   if (issue.status !== undefined || issue.project_id !== undefined) {
     qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
   }
@@ -177,5 +182,6 @@ export function onIssueDeleted(
   cleanupDeletedIssueCaches(qc, wsId, issueId);
   qc.invalidateQueries({ queryKey: issueKeys.assigneeGroupsAll(wsId) });
   qc.invalidateQueries({ queryKey: issueKeys.myAssigneeGroupsAll(wsId) });
+  qc.invalidateQueries({ queryKey: workbenchKeys.all(wsId) });
   qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
 }

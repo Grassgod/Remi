@@ -1,0 +1,20 @@
+{
+  "page": {
+    "title": "Workbench",
+    "back": "Back",
+    "select_prompt": "Select an issue on the left to get started",
+    "all_clear_title": "All caught up",
+    "all_clear_description": "No issues are waiting on you"
+  },
+  "sections": {
+    "awaiting_input": "Waiting for your reply",
+    "awaiting_review": "Ready for review",
+    "in_progress": "In progress — can wait"
+  },
+  "time": {
+    "just_now": "just now",
+    "minutes": "{{count}}m",
+    "hours": "{{count}}h",
+    "days": "{{count}}d"
+  }
+}

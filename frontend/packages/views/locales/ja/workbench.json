@@ -1,0 +1,20 @@
+{
+  "page": {
+    "title": "ワークベンチ",
+    "back": "戻る",
+    "select_prompt": "左側からイシューを選択してください",
+    "all_clear_title": "すべて対応済み",
+    "all_clear_description": "対応が必要なイシューはありません"
+  },
+  "sections": {
+    "awaiting_input": "返信待ち",
+    "awaiting_review": "レビュー待ち",
+    "in_progress": "進行中（後で確認可）"
+  },
+  "time": {
+    "just_now": "たった今",
+    "minutes": "{{count}}分",
+    "hours": "{{count}}時間",
+    "days": "{{count}}日"
+  }
+}

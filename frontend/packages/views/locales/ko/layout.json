@@ -2,6 +2,7 @@
   "nav": {
     "inbox": "인박스",
     "my_issues": "내 이슈",
+    "workbench": "워크벤치",
     "issues": "이슈",
     "projects": "프로젝트",
     "repositories": "저장소",

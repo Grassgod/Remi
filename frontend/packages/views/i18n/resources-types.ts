@@ -14,6 +14,7 @@ import type invite from "../locales/en/invite.json";
 import type labels from "../locales/en/labels.json";
 import type members from "../locales/en/members.json";
 import type myIssues from "../locales/en/my-issues.json";
+import type workbench from "../locales/en/workbench.json";
 import type search from "../locales/en/search.json";
 import type inbox from "../locales/en/inbox.json";
 import type workspace from "../locales/en/workspace.json";
@@ -55,6 +56,7 @@ declare global {
     labels: typeof labels;
     members: typeof members;
     "my-issues": typeof myIssues;
+    workbench: typeof workbench;
     search: typeof search;
     inbox: typeof inbox;
     workspace: typeof workspace;

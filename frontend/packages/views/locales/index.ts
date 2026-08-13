@@ -10,6 +10,7 @@ import enInvite from "./en/invite.json";
 import enLabels from "./en/labels.json";
 import enMembers from "./en/members.json";
 import enMyIssues from "./en/my-issues.json";
+import enWorkbench from "./en/workbench.json";
 import enSearch from "./en/search.json";
 import enInbox from "./en/inbox.json";
 import enWorkspace from "./en/workspace.json";
@@ -35,6 +36,7 @@ import zhHansInvite from "./zh-Hans/invite.json";
 import zhHansLabels from "./zh-Hans/labels.json";
 import zhHansMembers from "./zh-Hans/members.json";
 import zhHansMyIssues from "./zh-Hans/my-issues.json";
+import zhHansWorkbench from "./zh-Hans/workbench.json";
 import zhHansSearch from "./zh-Hans/search.json";
 import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansWorkspace from "./zh-Hans/workspace.json";
@@ -60,6 +62,7 @@ import koInvite from "./ko/invite.json";
 import koLabels from "./ko/labels.json";
 import koMembers from "./ko/members.json";
 import koMyIssues from "./ko/my-issues.json";
+import koWorkbench from "./ko/workbench.json";
 import koSearch from "./ko/search.json";
 import koInbox from "./ko/inbox.json";
 import koWorkspace from "./ko/workspace.json";
@@ -85,6 +88,7 @@ import jaInvite from "./ja/invite.json";
 import jaLabels from "./ja/labels.json";
 import jaMembers from "./ja/members.json";
 import jaMyIssues from "./ja/my-issues.json";
+import jaWorkbench from "./ja/workbench.json";
 import jaSearch from "./ja/search.json";
 import jaInbox from "./ja/inbox.json";
 import jaWorkspace from "./ja/workspace.json";
@@ -116,6 +120,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     labels: enLabels,
     members: enMembers,
     "my-issues": enMyIssues,
+    workbench: enWorkbench,
     search: enSearch,
     inbox: enInbox,
     workspace: enWorkspace,
@@ -143,6 +148,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     labels: zhHansLabels,
     members: zhHansMembers,
     "my-issues": zhHansMyIssues,
+    workbench: zhHansWorkbench,
     search: zhHansSearch,
     inbox: zhHansInbox,
     workspace: zhHansWorkspace,
@@ -170,6 +176,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     labels: koLabels,
     members: koMembers,
     "my-issues": koMyIssues,
+    workbench: koWorkbench,
     search: koSearch,
     inbox: koInbox,
     workspace: koWorkspace,
@@ -197,6 +204,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     labels: jaLabels,
     members: jaMembers,
     "my-issues": jaMyIssues,
+    workbench: jaWorkbench,
     search: jaSearch,
     inbox: jaInbox,
     workspace: jaWorkspace,

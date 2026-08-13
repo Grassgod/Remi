@@ -1,0 +1,20 @@
+{
+  "page": {
+    "title": "工作台",
+    "back": "返回",
+    "select_prompt": "从左侧选择一个 issue 开始处理",
+    "all_clear_title": "全部处理完毕",
+    "all_clear_description": "当前没有等待你处理的 issue"
+  },
+  "sections": {
+    "awaiting_input": "等待你回复",
+    "awaiting_review": "待审核",
+    "in_progress": "进行中，可稍后处理"
+  },
+  "time": {
+    "just_now": "刚刚",
+    "minutes": "{{count}} 分钟",
+    "hours": "{{count}} 小时",
+    "days": "{{count}} 天"
+  }
+}
