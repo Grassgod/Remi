@@ -27,6 +27,8 @@ import {
   ListWorkspaceDocsResponseSchema,
   ListProjectDocRevisionsResponseSchema,
   ProjectDocResponseSchema,
+  PersonalAccessTokenListSchema,
+  SharedIssueBundleSchema,
   IssueSessionListSchema,
   IssueSessionTaskListSchema,
   RuntimeDirectoryScanRequestSchema,
@@ -99,6 +101,69 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("PersonalAccessTokenListSchema", () => {
+  const token = {
+    id: "pat_1",
+    name: "My CLI",
+    token_prefix: "mul_12345678",
+    expires_at: "2026-10-01T00:00:00.000Z",
+    last_used_at: null,
+    created_at: "2026-08-01T00:00:00.000Z",
+  };
+
+  it("accepts the snake_case API contract used by the settings UI", () => {
+    expect(PersonalAccessTokenListSchema.parse([token])).toEqual([token]);
+  });
+
+  it("rejects the old camelCase server shape instead of rendering Invalid Date", () => {
+    expect(PersonalAccessTokenListSchema.safeParse([{
+      id: token.id,
+      name: token.name,
+      tokenPrefix: token.token_prefix,
+      expiresAt: token.expires_at,
+      lastUsedAt: token.last_used_at,
+      createdAt: token.created_at,
+    }]).success).toBe(false);
+  });
+});
+
+describe("SharedIssueBundleSchema", () => {
+  const bundle = {
+    share: { expires_at: "2026-10-13T00:00:00.000Z", view_count: 1, last_viewed_at: null },
+    issue: { ...baseIssue, attachments: [] },
+    project: null,
+    parent_issue: null,
+    children: [],
+    child_progress: { total: 0, done: 0 },
+    dependencies: [],
+    timeline: [],
+    sessions: [],
+    session_results: [],
+    tasks: [],
+    issue_workspace: null,
+    usage: {
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_write_tokens: 0,
+      total_tokens: 0,
+      task_count: 0,
+    },
+    actors: [],
+  };
+
+  it("accepts a complete issue-scoped read bundle", () => {
+    expect(SharedIssueBundleSchema.safeParse(bundle).success).toBe(true);
+  });
+
+  it("rejects a malformed issue instead of exposing a partial shared page", () => {
+    expect(SharedIssueBundleSchema.safeParse({
+      ...bundle,
+      issue: { ...bundle.issue, title: null },
+    }).success).toBe(false);
   });
 });
 

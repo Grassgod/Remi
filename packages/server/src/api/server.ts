@@ -32,6 +32,7 @@ import { registerAutopilotRoutes } from "./routers/autopilots.js";
 import { registerLabelRoutes } from "./routers/labels.js";
 import { registerPinRoutes } from "./routers/pins.js";
 import { registerIssueRoutes } from "./routers/issues.js";
+import { registerIssueShareRoutes } from "./routers/issue-shares.js";
 import { registerInboxRoutes } from "./routers/inbox.js";
 import { registerCommentRoutes } from "./routers/comments.js";
 import { registerAttachmentRoutes } from "./routers/attachments.js";
@@ -107,6 +108,7 @@ export interface MultiremiApiOptions {
   store?: MultiremiStore;
   scheduler?: MultiremiScheduler | null;
   authToken?: string | null;
+  shareSecret?: string | null;
   hostname?: string;
   realtimeState?: MultiremiRealtimeState;
   webhookRateLimit?: Partial<WebhookRateLimitConfig> | false;
@@ -118,6 +120,10 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   const store = options.store ?? new MultiremiStore();
   const scheduler = options.scheduler ?? null;
   const authToken = options.authToken ?? process.env.MULTIREMI_TOKEN ?? "";
+  const shareSecret = options.shareSecret?.trim()
+    || process.env.MULTIREMI_SHARE_SECRET?.trim()
+    || authToken
+    || crypto.randomUUID();
   const realtimeState = options.realtimeState ?? { enabled: true, connections: 0 };
   const webhookRateLimiter = createWebhookRateLimiter(options.webhookRateLimit, DEFAULT_WEBHOOK_RATE_LIMIT);
   const webhookIpRateLimiter = createWebhookRateLimiter(options.webhookIpRateLimit, DEFAULT_WEBHOOK_IP_RATE_LIMIT);
@@ -127,6 +133,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     store,
     scheduler,
     authToken,
+    shareSecret,
     webhookRateLimiter,
     webhookIpRateLimiter,
     inspectGitRemoteRepository:
@@ -383,6 +390,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   registerPinRoutes(app, deps);
 
   registerIssueRoutes(app, deps);
+  registerIssueShareRoutes(app, deps);
 
 
   registerInboxRoutes(app, deps);

@@ -34,6 +34,7 @@ async function login(
     userId: user.id,
     name: `Login ${user.id}`,
     type: "pat",
+    purpose: "session",
     expiresInDays: 30,
   });
   return { userId: user.id, token: created.token };
@@ -228,21 +229,24 @@ describe("Multiremi multi-user auth", () => {
     const minted = await app.request("/api/tokens", {
       method: "POST",
       headers: { ...jsonAuth(b.token), "X-Workspace-Slug": workspace.slug },
-      body: JSON.stringify({ name: "Remi daemon 2026-07-06", expires_in_days: 365 }),
+      body: JSON.stringify({ name: "Remi daemon 2026-07-06", expires_in_days: 365, purpose: "cli" }),
     });
     expect(minted.status).toBe(201);
     const token = await minted.json();
     expect(token.token).toStartWith("mul_");
     // Bound to the requester and their workspace — never a user-less admin token,
     // even if the body tries to spoof another identity.
-    expect(token.userId).toBe(b.userId);
-    expect(token.workspaceId).toBe(workspace.id);
+    const storedToken = await store.verifyAccessToken(token.token);
+    expect(storedToken?.userId).toBe(b.userId);
+    expect(storedToken?.workspaceId).toBe(workspace.id);
+    expect(storedToken?.purpose).toBe("cli");
     const spoofed = await app.request("/api/tokens", {
       method: "POST",
       headers: { ...jsonAuth(b.token), "X-Workspace-Slug": workspace.slug },
       body: JSON.stringify({ name: "spoof", userId: "local" }),
     });
-    expect((await spoofed.json()).userId).toBe(b.userId);
+    const spoofedBody = await spoofed.json();
+    expect((await store.verifyAccessToken(spoofedBody.token))?.userId).toBe(b.userId);
 
     // Without any workspace context the default is still the local workspace,
     // which stays members-only.
@@ -252,6 +256,60 @@ describe("Multiremi multi-user auth", () => {
       body: JSON.stringify({ name: "no context" }),
     });
     expect(noContext.status).toBe(404);
+  });
+
+  it("personal token settings only expose and revoke the current user's active personal tokens", async () => {
+    const store = seedDeployment();
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+    const owner = await login(store, { externalId: OWNER_OPEN_ID, email: "owner@corp.com", name: "Owner" });
+    const member = await login(store, { externalId: "ou_member", email: "member@corp.com", name: "Member" });
+    store.createWorkspaceMember({
+      workspaceId: "local",
+      userId: member.userId,
+      name: "Member",
+      email: "member@corp.com",
+      role: "member",
+    });
+
+    const create = async (authToken: string, name: string, purpose?: "personal" | "cli") => {
+      const response = await app.request("/api/tokens", {
+        method: "POST",
+        headers: jsonAuth(authToken),
+        body: JSON.stringify({ name, expires_in_days: 90, ...(purpose ? { purpose } : {}) }),
+      });
+      expect(response.status).toBe(201);
+      return response.json();
+    };
+    const ownerPersonal = await create(owner.token, "Owner CLI");
+    const memberPersonal = await create(member.token, "Member CLI");
+    await create(owner.token, "Computer setup", "cli");
+
+    const ownerList = await (await app.request("/api/tokens", bearer(owner.token))).json();
+    expect(ownerList.map((token: { id: string }) => token.id)).toEqual([ownerPersonal.id]);
+    expect(ownerList[0]).toMatchObject({
+      token_prefix: expect.any(String),
+      created_at: expect.any(String),
+    });
+    expect(ownerList[0]).not.toHaveProperty("token");
+
+    const memberList = await (await app.request("/api/tokens", bearer(member.token))).json();
+    expect(memberList.map((token: { id: string }) => token.id)).toEqual([memberPersonal.id]);
+
+    const crossRevoke = await app.request(`/api/tokens/${memberPersonal.id}`, {
+      method: "DELETE",
+      ...bearer(owner.token),
+    });
+    expect(crossRevoke.status).toBe(404);
+    expect(store.getAccessToken(memberPersonal.id)?.revokedAt).toBeNull();
+
+    const legacyList = await app.request("/api/multiremi/tokens", bearer(member.token));
+    expect(legacyList.status).toBe(403);
+    const legacyRevoke = await app.request(`/api/multiremi/tokens/${ownerPersonal.id}`, {
+      method: "DELETE",
+      ...bearer(member.token),
+    });
+    expect(legacyRevoke.status).toBe(403);
+    expect(store.getAccessToken(ownerPersonal.id)?.revokedAt).toBeNull();
   });
 
   it("AC6: email-code login is disabled by default and enabled by flag; Feishu SSO stays reachable", async () => {

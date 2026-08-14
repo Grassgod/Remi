@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import { deleteCookie } from "hono/cookie";
+import { deleteCookie, getCookie } from "hono/cookie";
 import {
   AUTH_COOKIE_NAME,
   buildLarkAuthorizeUrl,
@@ -24,10 +24,16 @@ export function registerAuthRoutes(app: Hono, deps: RouterDeps): void {
       workspaceId: "local",
       name: "CLI token",
       type: "pat",
+      purpose: "cli",
     });
     return c.json({ token: token.token });
   });
-  app.post("/auth/logout", (c) => {
+  app.post("/auth/logout", async (c) => {
+    const rawToken = getCookie(c, AUTH_COOKIE_NAME);
+    if (rawToken) {
+      const token = await store.verifyAccessToken(rawToken, ["pat"]);
+      if (token?.purpose === "session") store.revokeAccessToken(token.id);
+    }
     deleteCookie(c, AUTH_COOKIE_NAME, { path: "/" });
     return c.json({ message: "logged out" });
   });

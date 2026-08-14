@@ -19,6 +19,7 @@ const EXCLUDED_PREFIXES = [
   "/workspaces/",
   "/auth/",
   "/invite/",
+  "/share/",
   "/pair/",
 ];
 

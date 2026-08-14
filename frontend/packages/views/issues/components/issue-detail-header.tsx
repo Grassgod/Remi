@@ -1,6 +1,7 @@
 "use client";
 
-import { Archive, CircleCheck, MoreHorizontal, PanelRight, Pin, PinOff } from "lucide-react";
+import { useState } from "react";
+import { Archive, CircleCheck, MoreHorizontal, PanelRight, Pin, PinOff, Share2 } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Tooltip,
@@ -15,6 +16,7 @@ import { BreadcrumbHeader, type BreadcrumbSegment } from "../../layout/breadcrum
 import { useT } from "../../i18n";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { IssueActionsDropdown } from "../actions";
+import { IssueShareDialog } from "./issue-share-dialog";
 
 interface IssueDetailHeaderProps {
   issue: Issue;
@@ -58,6 +60,7 @@ export function IssueDetailHeader({
 }: IssueDetailHeaderProps) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
+  const [shareOpen, setShareOpen] = useState(false);
 
   const segments: BreadcrumbSegment[] = parentIssue
     ? [{ href: paths.issueDetail(parentIssue.id), label: parentIssue.identifier }]
@@ -77,6 +80,7 @@ export function IssueDetailHeader({
       : [];
 
   return (
+    <>
     <BreadcrumbHeader
       segments={segments}
       leaf={
@@ -140,6 +144,21 @@ export function IssueDetailHeader({
           />
           <TooltipContent side="bottom">{isPinned ? t(($) => $.detail.unpin_tooltip) : t(($) => $.detail.pin_tooltip)}</TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-muted-foreground"
+                onClick={() => setShareOpen(true)}
+              >
+                <Share2 />
+              </Button>
+            }
+          />
+          <TooltipContent side="bottom">{t(($) => $.share.tooltip)}</TooltipContent>
+        </Tooltip>
         <IssueActionsDropdown
           issue={issue}
           align="end"
@@ -168,5 +187,7 @@ export function IssueDetailHeader({
         </>
       }
     />
+    <IssueShareDialog issueId={issue.id} open={shareOpen} onOpenChange={setShareOpen} />
+    </>
   );
 }

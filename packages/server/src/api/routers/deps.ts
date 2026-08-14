@@ -12,6 +12,7 @@ export interface RouterDeps {
   store: MultiremiStore;
   scheduler: MultiremiScheduler | null;
   authToken: string;
+  shareSecret: string;
   webhookRateLimiter: MemoryWebhookRateLimiter;
   webhookIpRateLimiter: MemoryWebhookRateLimiter;
   inspectGitRemoteRepository: GitRemoteInspector;
