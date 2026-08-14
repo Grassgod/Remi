@@ -3,6 +3,7 @@ import {
   denyCurrentUserWorkspaceAccess,
   isTaskTokenCreateInput,
   readJson,
+  requireWorkspaceAdmin,
   workspaceIdFromSlugHeader,
 } from "../helpers.js";
 import {
@@ -11,15 +12,28 @@ import {
 } from "../wire/index.js";
 import type {
   CreateAccessTokenInput,
+  MultiremiAccessToken,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
+
+function personalTokenResponse(token: MultiremiAccessToken & { token?: string }) {
+  return {
+    id: token.id,
+    name: token.name,
+    token_prefix: token.tokenPrefix,
+    expires_at: token.expiresAt,
+    last_used_at: token.lastUsedAt,
+    created_at: token.createdAt,
+    ...(token.token ? { token: token.token } : {}),
+  };
+}
 
 export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
   const { store } = deps;
 
   app.get("/api/multiremi/tokens", (c) => {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     const tokens = store.listAccessTokens(workspaceId);
     return c.json({ tokens, total: tokens.length });
@@ -28,12 +42,16 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJson<CreateAccessTokenInput>(c);
     if (isTaskTokenCreateInput(body)) return c.json({ error: "task tokens are minted by daemon task claim" }, 400);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
-    const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
     if (denied) return denied;
     return c.json({ token: await store.createAccessToken(body) }, 201);
   });
   app.delete("/api/multiremi/tokens/:id", (c) => {
-    const token = store.revokeAccessToken(c.req.param("id"));
+    const current = store.getAccessToken(c.req.param("id"));
+    if (!current) return c.json({ error: "token not found" }, 404);
+    const denied = requireWorkspaceAdmin(c, store, current.workspaceId);
+    if (denied) return denied;
+    const token = store.revokeAccessToken(current.id);
     return c.json({ token, ok: true });
   });
 
@@ -41,8 +59,16 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     const workspaceId = c.req.query("workspaceId") ?? c.req.query("workspace_id") ?? "local";
     const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
     if (denied) return denied;
-    const tokens = store.listAccessTokens(workspaceId);
-    return c.json(tokens);
+    const userId = authenticatedRequestUserId(c);
+    const tokens = userId
+      ? store.listPersonalAccessTokens(workspaceId, userId)
+      : store.listAccessTokens(workspaceId).filter((token) => (
+        token.type === "pat" &&
+        token.purpose === "personal" &&
+        !token.revokedAt &&
+        (!token.expiresAt || Date.parse(token.expiresAt) > Date.now())
+      ));
+    return c.json(tokens.map(personalTokenResponse));
   });
   app.post("/api/tokens", async (c) => {
     const body = await readJson<CreateAccessTokenInput>(c);
@@ -58,8 +84,11 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     // resolved workspace and their own user id, so they can't mint a user-less
     // "local" admin credential. Master token / open mode keeps body semantics.
     const userId = authenticatedRequestUserId(c);
-    const input = userId && userId !== "local" ? { ...body, workspaceId, userId } : body;
-    return c.json(await store.createAccessToken(input), 201);
+    const purpose = body.purpose === "cli" ? "cli" : "personal";
+    const input = userId
+      ? { ...body, workspaceId, userId, type: "pat", purpose }
+      : { ...body, workspaceId, type: "pat", purpose };
+    return c.json(personalTokenResponse(await store.createAccessToken(input)), 201);
   });
   app.post("/api/tokens/current/renew", async (c) => {
     const current = currentAccessToken(c);
@@ -92,7 +121,16 @@ export function registerTokenRoutes(app: Hono, deps: RouterDeps): void {
     }, 201);
   });
   app.delete("/api/tokens/:id", (c) => {
-    store.revokeAccessToken(c.req.param("id"));
+    const token = store.getAccessToken(c.req.param("id"));
+    if (!token) return c.json({ error: "token not found" }, 404);
+    const userId = authenticatedRequestUserId(c);
+    if (
+      userId &&
+      (token.userId !== userId || token.type !== "pat" || token.purpose !== "personal")
+    ) {
+      return c.json({ error: "token not found" }, 404);
+    }
+    store.revokeAccessToken(token.id);
     return c.body(null, 204);
   });
 }

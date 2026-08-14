@@ -1,4 +1,7 @@
-import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType, IssueWorkspace } from "./issue";
+import type { AgentTask, IssueUsageSummary } from "./agent";
+import type { TimelineEntry } from "./activity";
+import type { IssueSession, SessionEvent, SessionResult } from "./issue-session";
 import type { MemberRole } from "./workspace";
 import type { Project } from "./project";
 
@@ -190,10 +193,56 @@ export interface CreatePersonalAccessTokenRequest {
   name: string;
   expires_in_days?: number;
   workspace_id?: string;
+  purpose?: "personal" | "cli";
 }
 
 export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
   token: string;
+}
+
+export interface ManagedIssueShare {
+  token: string;
+  expires_at: string;
+  view_count: number;
+  last_viewed_at: string | null;
+  created_at: string;
+}
+
+export interface SharedIssueAttachment {
+  id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  url: string;
+  download_url: string;
+}
+
+export interface SharedIssueActor {
+  type: string;
+  id: string;
+  name: string;
+  avatar_url: string | null;
+}
+
+export interface SharedIssueBundle {
+  share: Omit<ManagedIssueShare, "token" | "created_at">;
+  issue: Issue & { attachments?: SharedIssueAttachment[] };
+  project: Project | null;
+  parent_issue: Issue | null;
+  children: Issue[];
+  child_progress: { total: number; done: number };
+  dependencies: Array<Record<string, unknown>>;
+  timeline: TimelineEntry[];
+  sessions: Array<IssueSession & {
+    events: SessionEvent[];
+    tasks: Array<AgentTask & { messages?: Array<Record<string, unknown>> }>;
+  }>;
+  session_results: SessionResult[];
+  tasks: Array<AgentTask & { messages?: Array<Record<string, unknown>> }>;
+  issue_workspace: IssueWorkspace | null;
+  usage: IssueUsageSummary;
+  actors: SharedIssueActor[];
 }
 
 // Pagination

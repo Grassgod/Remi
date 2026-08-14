@@ -3,6 +3,7 @@ import { runMigrations } from "@multiremi/store/migrations.js";
 import { daemonRuntimeId, isTerminalStatus } from "@multiremi/store/helpers.js";
 import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
+import { IssueSharesRepo } from "@multiremi/store/repos/issue-shares-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
 import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
@@ -117,6 +118,7 @@ import type {
   ListIssueCommentsResult,
   MultiremiIssueDependency,
   MultiremiIssue,
+  MultiremiIssueShare,
   MultiremiIssueSession,
   MultiremiIssueAssigneeGroup,
   MultiremiIssueSearchResult,
@@ -219,6 +221,7 @@ export class MultiremiStore {
   private ctx: StoreContext;
   private feedback: FeedbackRepo;
   private accessTokens: AccessTokensRepo;
+  private issueShares: IssueSharesRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private agents: AgentsSkillsRepo;
   private workspaces: WorkspacesRepo;
@@ -240,6 +243,7 @@ export class MultiremiStore {
     this.ctx = new StoreContext(this.db, () => this);
     this.feedback = new FeedbackRepo(this.db);
     this.accessTokens = new AccessTokensRepo(this.db);
+    this.issueShares = new IssueSharesRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
@@ -657,6 +661,10 @@ runMigrations(this.db);
     return this.accessTokens.listAccessTokens(workspaceId);
   }
 
+  listPersonalAccessTokens(workspaceId: string, userId: string): MultiremiAccessToken[] {
+    return this.accessTokens.listPersonalAccessTokens(workspaceId, userId);
+  }
+
   getAccessToken(id: string): MultiremiAccessToken | null {
     return this.accessTokens.getAccessToken(id);
   }
@@ -935,6 +943,30 @@ runMigrations(this.db);
 
   getIssueWithTasks(id: string): MultiremiIssueWithTasks | null {
     return this.issues.getIssueWithTasks(id);
+  }
+
+  getIssueShare(id: string): MultiremiIssueShare | null {
+    return this.issueShares.get(id);
+  }
+
+  getActiveIssueShare(issueId: string): MultiremiIssueShare | null {
+    return this.issueShares.getActiveForIssue(issueId);
+  }
+
+  ensureIssueShare(issueId: string, workspaceId: string, createdBy: string, days = 60): MultiremiIssueShare {
+    return this.issueShares.ensure(issueId, workspaceId, createdBy, days);
+  }
+
+  extendIssueShare(id: string, days = 60): MultiremiIssueShare | null {
+    return this.issueShares.extend(id, days);
+  }
+
+  revokeIssueShare(id: string): MultiremiIssueShare | null {
+    return this.issueShares.revoke(id);
+  }
+
+  recordIssueShareView(id: string): void {
+    return this.issueShares.recordView(id);
   }
 
   listIssues(input: ListIssuesInput = {}): MultiremiIssue[] {

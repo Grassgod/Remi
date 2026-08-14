@@ -200,6 +200,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
       .createPersonalAccessToken({
         name: `Remi daemon ${new Date().toISOString().slice(0, 10)}`,
         expires_in_days: 365,
+        purpose: "cli",
         ...(wsId ? { workspace_id: wsId } : {}),
       })
       .then((result) => {
@@ -209,7 +210,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [wsId]);
   const { setupCmd, installCmd } = daemonCommands(
     daemonServerUrl || browserOrigin,
     wsId,

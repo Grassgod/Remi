@@ -27,6 +27,8 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   "callback",
   "invite",
   "invitations",
+  // Hand-added: the generator source is not vendored in this repository.
+  "share",
   "verify",
   "reset",
   "password",

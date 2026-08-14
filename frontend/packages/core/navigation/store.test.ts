@@ -13,6 +13,7 @@ describe("useNavigationStore.lastPath excludes global paths", () => {
       "/signup",
       "/workspaces/new",
       "/invite/abc",
+      "/share/abc",
       "/auth/callback",
     ];
 

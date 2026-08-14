@@ -105,6 +105,7 @@ export async function localAuthResponse(
     userId: user.id,
     name: `Login for ${user.email}`,
     type: "pat",
+    purpose: "session",
     expiresInDays: 30,
   });
   return {

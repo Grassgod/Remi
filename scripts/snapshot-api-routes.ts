@@ -686,6 +686,7 @@ const ID_BY_COLLECTION: Record<string, keyof SeedRefs> = {
 };
 
 const BY_NAME: Record<string, keyof SeedRefs> = {
+  attachmentId: "attachmentId",
   chatSessionId: "chatSessionId",
   dependencyId: "dependencyId",
   deliveryId: "deliveryId",
@@ -987,6 +988,12 @@ flow("issues-native", async (rec, refs) => {
   await rec.json("POST", "/api/multiremi/issues/batch-update", { issueIds: [id], status: "done" });
   await rec.json("POST", "/api/multiremi/issues/batch-delete", { issueIds: [id] });
   await rec.call("DELETE", `/api/multiremi/issues/${refs.childIssueId}`);
+});
+
+flow("issue-shares", async (rec, refs) => {
+  await rec.call("POST", `/api/issues/${refs.issueId}/share`);
+  await rec.call("POST", `/api/issues/${refs.issueId}/share/extend`);
+  await rec.call("DELETE", `/api/issues/${refs.issueId}/share`);
 });
 
 flow("issue-relations-compat", async (rec, refs) => {

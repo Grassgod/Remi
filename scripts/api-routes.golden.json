@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 499,
+    "routeCount": 505,
     "routeCountByPrefix": {
       "native": 172,
-      "compat": 314,
+      "compat": 320,
       "root": 13
     },
-    "getRoutes": 220,
-    "getRoutesWithBody": 217,
+    "getRoutes": 223,
+    "getRoutesWithBody": 220,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 279,
-    "mutationRoutesCovered": 271,
+    "mutationRoutes": 282,
+    "mutationRoutesCovered": 274,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -33,6 +33,7 @@
       "issue-relations-compat",
       "issue-relations-native",
       "issue-sessions",
+      "issue-shares",
       "issues-compat",
       "issues-native",
       "labels",
@@ -75,6 +76,7 @@
     "DELETE /api/issues/:id/metadata/:key",
     "DELETE /api/issues/:id/reactions",
     "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
+    "DELETE /api/issues/:id/share",
     "DELETE /api/labels/:id",
     "DELETE /api/multiremi/agents/:id",
     "DELETE /api/multiremi/autopilots/:id",
@@ -186,6 +188,7 @@
     "GET /api/issues/:id/sessions/:sessionId/events",
     "GET /api/issues/:id/sessions/:sessionId/participants",
     "GET /api/issues/:id/sessions/:sessionId/tasks",
+    "GET /api/issues/:id/share",
     "GET /api/issues/:id/subscribers",
     "GET /api/issues/:id/task-runs",
     "GET /api/issues/:id/timeline",
@@ -304,6 +307,8 @@
     "GET /api/runtimes/:id/usage",
     "GET /api/runtimes/:id/usage/by-agent",
     "GET /api/runtimes/:id/usage/by-hour",
+    "GET /api/shares/:token",
+    "GET /api/shares/:token/attachments/:attachmentId/content",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -431,6 +436,8 @@
     "POST /api/issues/:id/sessions/:sessionId/participants",
     "POST /api/issues/:id/sessions/:sessionId/results",
     "POST /api/issues/:id/sessions/:sessionId/tasks",
+    "POST /api/issues/:id/share",
+    "POST /api/issues/:id/share/extend",
     "POST /api/issues/:id/squad-evaluated",
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
@@ -576,6 +583,7 @@
     "DELETE /api/issues/:id/metadata/:key",
     "DELETE /api/issues/:id/reactions",
     "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
+    "DELETE /api/issues/:id/share",
     "DELETE /api/labels/:id",
     "DELETE /api/multiremi/agents/:id",
     "DELETE /api/multiremi/autopilots/:id",
@@ -686,6 +694,7 @@
     "GET /api/issues/:id/sessions/:sessionId/events",
     "GET /api/issues/:id/sessions/:sessionId/participants",
     "GET /api/issues/:id/sessions/:sessionId/tasks",
+    "GET /api/issues/:id/share",
     "GET /api/issues/:id/subscribers",
     "GET /api/issues/:id/task-runs",
     "GET /api/issues/:id/timeline",
@@ -804,6 +813,8 @@
     "GET /api/runtimes/:id/usage",
     "GET /api/runtimes/:id/usage/by-agent",
     "GET /api/runtimes/:id/usage/by-hour",
+    "GET /api/shares/:token",
+    "GET /api/shares/:token/attachments/:attachmentId/content",
     "GET /api/skills",
     "GET /api/skills/:id",
     "GET /api/skills/:id/files",
@@ -928,6 +939,8 @@
     "POST /api/issues/:id/sessions/:sessionId/participants",
     "POST /api/issues/:id/sessions/:sessionId/results",
     "POST /api/issues/:id/sessions/:sessionId/tasks",
+    "POST /api/issues/:id/share",
+    "POST /api/issues/:id/share/extend",
     "POST /api/issues/:id/squad-evaluated",
     "POST /api/issues/:id/subscribe",
     "POST /api/issues/:id/tasks/:taskId/cancel",
@@ -1717,8 +1730,8 @@
       "status": 200,
       "body": {
         "ok": true,
-        "token": "mul_0000000000004000800000000000000200000000000040008000000000000003",
-        "access_token": "mul_0000000000004000800000000000000200000000000040008000000000000003",
+        "token": "mul_0000000000004000800000000000000300000000000040008000000000000004",
+        "access_token": "mul_0000000000004000800000000000000300000000000040008000000000000004",
         "token_type": "bearer",
         "user": {
           "id": "local",
@@ -1752,8 +1765,8 @@
       "status": 200,
       "body": {
         "ok": true,
-        "token": "mul_0000000000004000800000000000000400000000000040008000000000000005",
-        "access_token": "mul_0000000000004000800000000000000400000000000040008000000000000005",
+        "token": "mul_0000000000004000800000000000000500000000000040008000000000000006",
+        "access_token": "mul_0000000000004000800000000000000500000000000040008000000000000006",
         "token_type": "bearer",
         "user": {
           "id": "local",
@@ -7255,6 +7268,15 @@
       "body": []
     },
     {
+      "key": "get-sweep GET /api/issues/:id/share",
+      "route": "GET /api/issues/:id/share",
+      "path": "/api/issues/iss_snapshot/share",
+      "status": 200,
+      "body": {
+        "share": null
+      }
+    },
+    {
       "key": "get-sweep GET /api/issues/:id/subscribers",
       "route": "GET /api/issues/:id/subscribers",
       "path": "/api/issues/iss_snapshot/subscribers",
@@ -12518,6 +12540,7 @@
             "userId": "local",
             "name": "Snapshot token",
             "type": "pat",
+            "purpose": "personal",
             "tokenPrefix": "mul_00000000",
             "lastUsedAt": null,
             "expiresAt": null,
@@ -13117,6 +13140,24 @@
       ]
     },
     {
+      "key": "get-sweep GET /api/shares/:token",
+      "route": "GET /api/shares/:token",
+      "path": "/api/shares/awt_30x2827p9355qxjbfr",
+      "status": 401,
+      "body": {
+        "error": "login required"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/shares/:token/attachments/:attachmentId/content",
+      "route": "GET /api/shares/:token/attachments/:attachmentId/content",
+      "path": "/api/shares/awt_30x2827p9355qxjbfr/attachments/att_snapshot/content",
+      "status": 401,
+      "body": {
+        "error": "login required"
+      }
+    },
+    {
       "key": "get-sweep GET /api/skills",
       "route": "GET /api/skills",
       "path": "/api/skills",
@@ -13341,18 +13382,11 @@
       "body": [
         {
           "id": "tok_snapshot",
-          "workspaceId": "local",
-          "daemonId": null,
-          "taskId": null,
-          "agentId": null,
-          "userId": "local",
           "name": "Snapshot token",
-          "type": "pat",
-          "tokenPrefix": "mul_00000000",
-          "lastUsedAt": null,
-          "expiresAt": null,
-          "revokedAt": null,
-          "createdAt": "<timestamp>"
+          "token_prefix": "mul_00000000",
+          "expires_at": null,
+          "last_used_at": null,
+          "created_at": "<timestamp>"
         }
       ]
     },
@@ -14418,6 +14452,43 @@
       "key": "issue-sessions#006 DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
       "route": "DELETE /api/issues/:id/sessions/:sessionId/participants/:participantType/:participantId",
       "path": "/api/issues/iss_snapshot/sessions/ises_bbo9f1dxazyr/participants/agent/agt_snapshot",
+      "status": 204,
+      "body": ""
+    },
+    {
+      "key": "issue-shares#000 POST /api/issues/:id/share",
+      "route": "POST /api/issues/:id/share",
+      "path": "/api/issues/iss_snapshot/share",
+      "status": 201,
+      "body": {
+        "share": {
+          "token": "shr_bbo9f1dxazyryy6t.zZ8lt0SzhWB3U3u6IEbAb64GeSqQepZthsrYSK-BbRQ",
+          "expires_at": "<timestamp>",
+          "view_count": 0,
+          "last_viewed_at": null,
+          "created_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "issue-shares#001 POST /api/issues/:id/share/extend",
+      "route": "POST /api/issues/:id/share/extend",
+      "path": "/api/issues/iss_snapshot/share/extend",
+      "status": 200,
+      "body": {
+        "share": {
+          "token": "shr_bbo9f1dxazyryy6t.zZ8lt0SzhWB3U3u6IEbAb64GeSqQepZthsrYSK-BbRQ",
+          "expires_at": "<timestamp>",
+          "view_count": 0,
+          "last_viewed_at": null,
+          "created_at": "<timestamp>"
+        }
+      }
+    },
+    {
+      "key": "issue-shares#002 DELETE /api/issues/:id/share",
+      "route": "DELETE /api/issues/:id/share",
+      "path": "/api/issues/iss_snapshot/share",
       "status": 204,
       "body": ""
     },
@@ -16129,12 +16200,12 @@
         "serverUrl": "https://snapshot.invalid",
         "workspaceId": "local",
         "provider": "claude",
-        "token": "mdt_0000000000004000800000000000000200000000000040008000000000000003",
+        "token": "mdt_0000000000004000800000000000000300000000000040008000000000000004",
         "tokenId": "dtk_m21cp1q6gys4",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
         "installCommand": "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash",
-        "setupCommand": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000200000000000040008000000000000003 --provider claude",
+        "setupCommand": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000300000000000040008000000000000004 --provider claude",
         "daemonCommand": "multiremi daemon",
         "daemonStartCommand": "multiremi daemon start",
         "commands": [
@@ -16146,7 +16217,7 @@
           {
             "key": "setup",
             "label": "Configure this computer",
-            "command": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000200000000000040008000000000000003 --provider claude"
+            "command": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000300000000000040008000000000000004 --provider claude"
           },
           {
             "key": "daemon",
@@ -17037,19 +17108,12 @@
       "status": 201,
       "body": {
         "id": "pat_bbo9f1dxazyr",
-        "workspaceId": "local",
-        "daemonId": null,
-        "taskId": null,
-        "agentId": null,
-        "userId": "local",
         "name": "compat token",
-        "type": "pat",
-        "tokenPrefix": "mul_00000000",
-        "lastUsedAt": null,
-        "expiresAt": null,
-        "revokedAt": null,
-        "createdAt": "<timestamp>",
-        "token": "mul_0000000000004000800000000000000200000000000040008000000000000003"
+        "token_prefix": "mul_00000000",
+        "expires_at": null,
+        "last_used_at": null,
+        "created_at": "<timestamp>",
+        "token": "mul_0000000000004000800000000000000300000000000040008000000000000004"
       }
     },
     {
@@ -17066,13 +17130,14 @@
         "userId": "local",
         "name": "Renewed local token",
         "type": "pat",
+        "purpose": "personal",
         "tokenPrefix": "mul_00000000",
         "lastUsedAt": null,
         "expiresAt": "<timestamp>",
         "revokedAt": null,
         "createdAt": "<timestamp>",
-        "token": "mul_0000000000004000800000000000000400000000000040008000000000000005",
-        "access_token": "mul_0000000000004000800000000000000400000000000040008000000000000005",
+        "token": "mul_0000000000004000800000000000000500000000000040008000000000000006",
+        "access_token": "mul_0000000000004000800000000000000500000000000040008000000000000006",
         "token_type": "bearer"
       }
     },
@@ -17098,12 +17163,13 @@
           "userId": "local",
           "name": "native token",
           "type": "pat",
+          "purpose": "personal",
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
           "revokedAt": null,
           "createdAt": "<timestamp>",
-          "token": "mul_0000000000004000800000000000000600000000000040008000000000000007"
+          "token": "mul_0000000000004000800000000000000700000000000040008000000000000008"
         }
       }
     },
@@ -17122,6 +17188,7 @@
           "userId": "local",
           "name": "Snapshot token",
           "type": "pat",
+          "purpose": "personal",
           "tokenPrefix": "mul_00000000",
           "lastUsedAt": null,
           "expiresAt": null,
@@ -17137,7 +17204,7 @@
       "path": "/api/cli-token",
       "status": 200,
       "body": {
-        "token": "mul_0000000000004000800000000000000800000000000040008000000000000009"
+        "token": "mul_000000000000400080000000000000090000000000004000800000000000000a"
       }
     },
     {

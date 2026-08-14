@@ -12,7 +12,13 @@ describe("Multiremi API — authentication and token scoping", () => {
   it("accepts the multimira_auth cookie for GET requests only", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store, authToken: "root-secret" });
-    const login = await store.createAccessToken({ name: "Login", type: "pat", workspaceId: "local", userId: "local" });
+    const login = await store.createAccessToken({
+      name: "Login",
+      type: "pat",
+      purpose: "session",
+      workspaceId: "local",
+      userId: "local",
+    });
     const cookie = { Cookie: `multimira_auth=${login.token}` };
 
     expect((await app.request("/api/issues")).status).toBe(401);
@@ -52,6 +58,7 @@ describe("Multiremi API — authentication and token scoping", () => {
     // Logout clears the cookie.
     const logout = await app.request("/auth/logout", { method: "POST", headers: cookie });
     expect(logout.headers.get("set-cookie") ?? "").toContain("multimira_auth=;");
+    expect(await store.verifyAccessToken(login.token)).toBeNull();
   });
 
   it("protects APIs with bearer auth and scopes daemon tokens to daemon routes", async () => {
@@ -419,8 +426,8 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: { Authorization: "Bearer root-secret" },
     });
     const listedBody = await listed.json();
-    expect(listedBody.find((token: any) => token.id === patBody.token.id)?.lastUsedAt).toBeString();
-    expect(listedBody.find((token: any) => token.id === daemonBody.token.id)?.lastUsedAt).toBeString();
+    expect(listedBody.find((token: any) => token.id === patBody.token.id)?.last_used_at).toBeString();
+    expect(listedBody.find((token: any) => token.id === daemonBody.token.id)).toBeUndefined();
 
     const revoked = await app.request(`/api/tokens/${patBody.token.id}`, {
       method: "DELETE",

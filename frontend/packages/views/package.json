@@ -48,6 +48,7 @@
     "./lark": "./lark/index.ts",
     "./invite": "./invite/index.ts",
     "./invitations": "./invitations/index.ts",
+    "./share": "./share/index.ts",
     "./onboarding": "./onboarding/index.ts",
     "./platform": "./platform/index.ts",
     "./i18n": "./i18n/index.ts",

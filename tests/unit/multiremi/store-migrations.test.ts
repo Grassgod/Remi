@@ -54,10 +54,57 @@ describe("store migrations", () => {
       "multiremi_projects",
       "multiremi_chat_sessions",
       "multiremi_feedback",
+      "multiremi_access_tokens",
     ]) {
       expect(tables).toContain(table);
     }
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
+    expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
+  });
+
+  it("classifies legacy access tokens by their actual purpose", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_access_tokens (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        user_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'pat',
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        last_used_at TEXT,
+        expires_at TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+    const insert = database.prepare(
+      "INSERT INTO multiremi_access_tokens (id, name, type, token_hash, token_prefix, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    insert.run("pat_personal", "My CLI", "pat", "hash-1", "mul_personal", createdAt);
+    insert.run("pat_login", "Login for owner@example.com", "pat", "hash-2", "mul_login", createdAt);
+    insert.run("pat_setup", "Remi daemon 2026-01-01", "pat", "hash-3", "mul_setup", createdAt);
+    insert.run("daemon", "Laptop", "daemon", "hash-4", "mdt_daemon", createdAt);
+
+    migrate(database);
+
+    const rows = database.query(
+      "SELECT id, purpose FROM multiremi_access_tokens ORDER BY id",
+    ).all() as Array<{ id: string; purpose: string }>;
+    expect(rows).toEqual([
+      { id: "daemon", purpose: "daemon" },
+      { id: "pat_login", purpose: "session" },
+      { id: "pat_personal", purpose: "personal" },
+      { id: "pat_setup", purpose: "cli" },
+    ]);
+
+    database.run("UPDATE multiremi_access_tokens SET purpose = 'personal' WHERE id = 'pat_login'");
+    migrate(database);
+    expect(database.query(
+      "SELECT purpose FROM multiremi_access_tokens WHERE id = 'pat_login'",
+    ).get()).toEqual({ purpose: "personal" });
   });
 
   it("is idempotent across restarts and preserves rows", () => {

@@ -839,6 +839,19 @@ export interface MultiremiIssueWithTasks extends MultiremiIssue {
   dependencies: MultiremiIssueDependency[];
 }
 
+export interface MultiremiIssueShare {
+  id: string;
+  issueId: string;
+  workspaceId: string;
+  createdBy: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  viewCount: number;
+  lastViewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type MultiremiIssueWorkspaceStatus =
   | "preparing"
   | "ready"
@@ -2039,6 +2052,7 @@ export interface MultiremiWorkspaceInvitation {
 }
 
 export type MultiremiAccessTokenType = "pat" | "daemon" | "task";
+export type MultiremiAccessTokenPurpose = "personal" | "session" | "cli" | "daemon" | "task";
 
 export interface MultiremiAccessToken {
   id: string;
@@ -2049,6 +2063,7 @@ export interface MultiremiAccessToken {
   userId: string;
   name: string;
   type: MultiremiAccessTokenType;
+  purpose: MultiremiAccessTokenPurpose;
   tokenPrefix: string;
   lastUsedAt: string | null;
   expiresAt: string | null;
@@ -2122,6 +2137,7 @@ export interface CreateAccessTokenInput {
   agent_id?: string | null;
   name: string;
   type?: MultiremiAccessTokenType | string;
+  purpose?: MultiremiAccessTokenPurpose | string;
   expiresInDays?: number | null;
   expires_in_days?: number | null;
   userId?: string | null;

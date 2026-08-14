@@ -301,6 +301,7 @@ export function runMigrations(db: SqlDatabase): void {
       user_id TEXT NOT NULL DEFAULT 'local',
       name TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'pat',
+      purpose TEXT NOT NULL DEFAULT 'personal',
       token_hash TEXT NOT NULL UNIQUE,
       token_prefix TEXT NOT NULL,
       last_used_at TEXT,
@@ -311,6 +312,23 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_workspace ON multiremi_access_tokens(workspace_id, type);
     CREATE INDEX IF NOT EXISTS idx_multiremi_access_tokens_hash ON multiremi_access_tokens(token_hash);
+
+    CREATE TABLE IF NOT EXISTS multiremi_issue_shares (
+      id TEXT PRIMARY KEY,
+      issue_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      created_by TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      last_viewed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES multiremi_issues(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_issue_shares_issue
+      ON multiremi_issue_shares(issue_id, revoked_at, expires_at);
 
     CREATE TABLE IF NOT EXISTS multiremi_notification_preferences (
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -1082,6 +1100,19 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "user_id TEXT NOT NULL DEFAULT 'local'");
+  const accessTokenPurposeAdded = addColumnIfMissing(
+    db,
+    "multiremi_access_tokens",
+    "purpose TEXT NOT NULL DEFAULT 'personal'",
+  );
+  if (accessTokenPurposeAdded) {
+    db.run("UPDATE multiremi_access_tokens SET purpose = 'daemon' WHERE type = 'daemon'");
+    db.run("UPDATE multiremi_access_tokens SET purpose = 'task' WHERE type = 'task'");
+    db.run("UPDATE multiremi_access_tokens SET purpose = 'session' WHERE type = 'pat' AND name LIKE 'Login for %'");
+    db.run(
+      "UPDATE multiremi_access_tokens SET purpose = 'cli' WHERE type = 'pat' AND (name = 'CLI token' OR name = 'Multiremi daemon' OR name LIKE 'Remi daemon %')",
+    );
+  }
   addColumnIfMissing(db, "multiremi_issues", "assignee_type TEXT");
   addColumnIfMissing(db, "multiremi_issues", "assignee_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
@@ -1331,9 +1362,10 @@ function renameLegacyMulticaObjects(db: SqlDatabase): void {
   }
 }
 
-function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): void {
+function addColumnIfMissing(db: SqlDatabase, table: string, definition: string): boolean {
   try {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+    return true;
   } catch (err) {
     const message = String((err as Error).message ?? err).toLowerCase();
     // Idempotency: the column already exists. SQLite says "duplicate column name",
@@ -1343,6 +1375,7 @@ function addColumnIfMissing(db: SqlDatabase, table: string, definition: string):
       log.error(`addColumnIfMissing failed for ${table}.${definition}`, err);
       throw err;
     }
+    return false;
   }
 }
 
