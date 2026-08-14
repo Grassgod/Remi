@@ -2655,9 +2655,19 @@ function quickCreateTitle(prompt: string): string {
 }
 
 function quickCreateTaskPrompt(prompt: string, projectId: string | null): string {
+  const projectInstructions = projectId
+    ? [
+        `The user explicitly selected project ${projectId}.`,
+        "Keep the issue in that project; do not infer or move it to another project.",
+      ]
+    : [
+        "The user did not select a project.",
+        "Inspect the workspace's existing active projects, choose the best match for this request, and set the issue's project before finishing.",
+        "If the workspace has no active projects, leave the issue without a project; do not create a new project.",
+      ];
   return [
     "Create or refine a Multiremi issue from this quick-create request.",
-    projectId ? `Project ID: ${projectId}` : "Project ID: none",
+    ...projectInstructions,
     "",
     prompt,
   ].join("\n");

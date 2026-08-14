@@ -100,6 +100,9 @@ vi.mock("@multiremi/core/paths", () => ({
 
 vi.mock("@multiremi/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: vi.fn() }),
+  agentListOptions: () => ({ queryKey: ["agents"], queryFn: vi.fn() }),
+  squadListOptions: () => ({ queryKey: ["squads"], queryFn: vi.fn() }),
+  assigneeFrequencyOptions: () => ({ queryKey: ["assigneeFrequency"], queryFn: vi.fn() }),
 }));
 
 vi.mock("@multiremi/core/workspace/hooks", () => ({
@@ -139,6 +142,34 @@ vi.mock("../issues/components/priority-icon", () => ({
 
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: () => <span data-testid="actor-avatar" />,
+}));
+
+vi.mock("../issues/components/pickers/assignee-picker", () => ({
+  AssigneePicker: ({
+    onUpdate,
+    allowedTypes,
+    unassignedLabel,
+  }: {
+    onUpdate: (updates: { assignee_type: "agent" | "squad"; assignee_id: string }) => void;
+    allowedTypes?: string[];
+    unassignedLabel?: string;
+  }) => (
+    <div data-testid="default-executor-picker" data-allowed-types={allowedTypes?.join(",")}>
+      <span>{unassignedLabel}</span>
+      <button
+        type="button"
+        onClick={() => onUpdate({ assignee_type: "agent", assignee_id: "agent-build" })}
+      >
+        Pick build agent
+      </button>
+      <button
+        type="button"
+        onClick={() => onUpdate({ assignee_type: "squad", assignee_id: "squad-platform" })}
+      >
+        Pick platform squad
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@multiremi/ui/components/ui/dialog", () => ({
@@ -253,6 +284,8 @@ describe("CreateProjectModal", () => {
       title: "Platform",
       lead_type: "member",
       lead_id: "user-1",
+      default_assignee_type: null,
+      default_assignee_id: null,
     });
     expect(mockCreateProjectMutate.mock.calls[0]![0]).not.toHaveProperty("status");
     expect(mockCreateProjectMutate.mock.calls[0]![0]).not.toHaveProperty("priority");
@@ -266,6 +299,30 @@ describe("CreateProjectModal", () => {
         resource_ref: { url: codebaseRepoUrl },
       },
     ]);
+  });
+
+  it("submits the selected agent or squad as the default executor", async () => {
+    const user = userEvent.setup();
+    mockCreateProjectMutate.mockClear();
+    mockCreateProjectMutate.mockResolvedValue({ id: "new-project" });
+    renderWithI18n(<CreateProjectModal onClose={vi.fn()} />);
+
+    expect(screen.getByTestId("default-executor-picker")).toHaveAttribute(
+      "data-allowed-types",
+      "agent,squad",
+    );
+    expect(screen.getByText("Default executor")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("Project title"), "Platform");
+    await user.click(screen.getByRole("checkbox", { name: "api" }));
+    await user.click(screen.getByRole("button", { name: "Pick platform squad" }));
+    await user.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => expect(mockCreateProjectMutate).toHaveBeenCalledTimes(1));
+    expect(mockCreateProjectMutate.mock.calls[0]![0]).toMatchObject({
+      default_assignee_type: "squad",
+      default_assignee_id: "squad-platform",
+    });
   });
 
   it("does not expose local folders, fleet computers, project refs, or ad-hoc URLs", () => {

@@ -19,6 +19,8 @@ import {
 import { useT } from "../../../i18n";
 import { matchesPinyin } from "../../../editor/extensions/pinyin-match";
 
+const DEFAULT_ALLOWED_TYPES: IssueAssigneeType[] = ["member", "agent", "squad"];
+
 /**
  * Legacy boolean shape kept around for callers (e.g. `use-issue-actions.ts`)
  * that haven't migrated to the new `canAssignAgentToIssue` Decision API yet.
@@ -46,6 +48,8 @@ export function AssigneePicker({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   align,
+  allowedTypes = DEFAULT_ALLOWED_TYPES,
+  unassignedLabel,
 }: {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
@@ -55,6 +59,8 @@ export function AssigneePicker({
   open?: boolean;
   onOpenChange?: (v: boolean) => void;
   align?: "start" | "center" | "end";
+  allowedTypes?: IssueAssigneeType[];
+  unassignedLabel?: string;
 }) {
   const { t } = useT("issues");
   const [internalOpen, setInternalOpen] = useState(false);
@@ -68,6 +74,7 @@ export function AssigneePicker({
   const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const { data: frequency = [] } = useQuery(assigneeFrequencyOptions(wsId));
   const { getActorName } = useActorName();
+  const allowedTypeSet = useMemo(() => new Set(allowedTypes), [allowedTypes]);
 
   const currentMember = members.find((m) => m.user_id === user?.id);
   const memberRole = currentMember?.role;
@@ -85,13 +92,13 @@ export function AssigneePicker({
 
   const query = filter.trim().toLowerCase();
   const filteredMembers = members
-    .filter((m) => m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query))
+    .filter((m) => allowedTypeSet.has("member") && (m.name.toLowerCase().includes(query) || matchesPinyin(m.name, query)))
     .sort((a, b) => getFreq("member", b.user_id) - getFreq("member", a.user_id));
   const filteredAgents = agents
-    .filter((a) => !a.archived_at && (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)))
+    .filter((a) => allowedTypeSet.has("agent") && !a.archived_at && (a.name.toLowerCase().includes(query) || matchesPinyin(a.name, query)))
     .sort((a, b) => getFreq("agent", b.id) - getFreq("agent", a.id));
   const filteredSquads = squads
-    .filter((s) => !s.archived_at && (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)))
+    .filter((s) => allowedTypeSet.has("squad") && !s.archived_at && (s.name.toLowerCase().includes(query) || matchesPinyin(s.name, query)))
     .sort((a, b) => getFreq("squad", b.id) - getFreq("squad", a.id));
 
   const isSelected = (type: string, id: string) =>
@@ -100,7 +107,7 @@ export function AssigneePicker({
   const triggerLabel =
     assigneeType && assigneeId
       ? getActorName(assigneeType, assigneeId)
-      : t(($) => $.pickers.assignee.trigger_unassigned);
+      : (unassignedLabel ?? t(($) => $.pickers.assignee.trigger_unassigned));
 
   return (
     <PropertyPicker
@@ -122,7 +129,7 @@ export function AssigneePicker({
             <span className="truncate">{triggerLabel}</span>
           </>
         ) : (
-          <span className="text-muted-foreground">{t(($) => $.pickers.assignee.trigger_unassigned)}</span>
+          <span className="text-muted-foreground">{triggerLabel}</span>
         )
       }
     >
@@ -136,7 +143,7 @@ export function AssigneePicker({
           }}
         >
           <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-muted-foreground">{t(($) => $.pickers.assignee.trigger_unassigned)}</span>
+          <span className="text-muted-foreground">{triggerLabel}</span>
         </PickerItem>
       )}
 

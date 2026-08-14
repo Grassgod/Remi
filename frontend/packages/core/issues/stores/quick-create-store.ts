@@ -7,14 +7,14 @@ import { defaultStorage } from "../../platform/storage";
 
 export type QuickCreateActorType = "agent" | "squad";
 
-// Per-workspace memory of the last actor (agent or squad) and project the
-// user picked in the Quick Create modal. Defaulted to those values on next
-// open so frequent users skip the pickers entirely — without this, anyone
-// targeting a single project ends up retyping "in project A" on every
-// prompt. Persisted with the workspace-aware StateStorage so switching
-// workspaces shows the right default automatically. Per-user scoping comes
-// for free from localStorage being browser-profile-local — matches how
-// draft-store / issues-scope-store already namespace themselves.
+// Per-workspace memory of the last actor (agent or squad) the user picked in
+// the Quick Create modal. Project is intentionally not persisted: no project
+// means the creator agent should inspect the workspace and choose one, while a
+// project is only seeded from explicit context (for example, a project page).
+// Persisted with the workspace-aware StateStorage so switching workspaces
+// shows the right actor automatically. Per-user scoping comes for free from
+// localStorage being browser-profile-local — matches how draft-store /
+// issues-scope-store already namespace themselves.
 //
 // lastActorType + lastActorId replace the prior `lastAgentId` field once
 // squads became selectable. Users who had a persisted agent preference
@@ -24,8 +24,6 @@ interface QuickCreateState {
   lastActorType: QuickCreateActorType | null;
   lastActorId: string | null;
   setLastActor: (type: QuickCreateActorType | null, id: string | null) => void;
-  lastProjectId: string | null;
-  setLastProjectId: (id: string | null) => void;
   prompt: string;
   setPrompt: (prompt: string) => void;
   clearPrompt: () => void;
@@ -39,8 +37,6 @@ export const useQuickCreateStore = create<QuickCreateState>()(
       lastActorType: null,
       lastActorId: null,
       setLastActor: (type, id) => set({ lastActorType: type, lastActorId: id }),
-      lastProjectId: null,
-      setLastProjectId: (id) => set({ lastProjectId: id }),
       prompt: "",
       setPrompt: (prompt) => set({ prompt }),
       clearPrompt: () => set({ prompt: "" }),

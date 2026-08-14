@@ -19,7 +19,7 @@ import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multiremi/core/paths";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useActorName } from "@multiremi/core/workspace/hooks";
-import type { WorkspaceRepository } from "@multiremi/core/types";
+import type { IssueAssigneeType, WorkspaceRepository } from "@multiremi/core/types";
 import { cn } from "@multiremi/ui/lib/utils";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -31,6 +31,7 @@ import { EmojiPicker } from "@multiremi/ui/components/common/emoji-picker";
 import { ContentEditor, type ContentEditorRef, TitleEditor } from "../editor";
 import { ActorAvatar } from "../common/actor-avatar";
 import { RepositoryOptionRow } from "../repositories/repository-option-row";
+import { AssigneePicker } from "../issues/components/pickers/assignee-picker";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
@@ -84,6 +85,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [leadId, setLeadId] = useState<string | null>(
     draft.leadId === undefined ? userId : draft.leadId,
   );
+  const [defaultAssigneeType, setDefaultAssigneeType] = useState<"agent" | "squad" | null>(
+    draft.defaultAssigneeType ?? null,
+  );
+  const [defaultAssigneeId, setDefaultAssigneeId] = useState<string | null>(
+    draft.defaultAssigneeId ?? null,
+  );
   const [icon, setIcon] = useState<string | undefined>(draft.icon);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -115,6 +122,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const updateLead = (type: "member" | null, id: string | null) => {
     setLeadType(type); setLeadId(id);
     setDraft({ leadType: type, leadId: id });
+  };
+  const updateDefaultAssignee = (type: IssueAssigneeType | null, id: string | null) => {
+    if (type === "member") return;
+    setDefaultAssigneeType(type);
+    setDefaultAssigneeId(id);
+    setDraft({ defaultAssigneeType: type, defaultAssigneeId: id });
   };
   const updateIcon = (v: string | undefined) => { setIcon(v); setDraft({ icon: v }); };
 
@@ -148,6 +161,8 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         icon,
         lead_type: leadType,
         lead_id: leadId,
+        default_assignee_type: defaultAssigneeType,
+        default_assignee_id: defaultAssigneeId,
         // Server attaches these in the same transaction as the project.
         resources,
       });
@@ -416,6 +431,21 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
               </div>
             </PopoverContent>
           </Popover>
+
+          <AssigneePicker
+            assigneeType={defaultAssigneeType}
+            assigneeId={defaultAssigneeId}
+            allowedTypes={["agent", "squad"]}
+            unassignedLabel={t(($) => $.create_project.default_executor)}
+            onUpdate={(updates) =>
+              updateDefaultAssignee(
+                updates.assignee_type ?? null,
+                updates.assignee_id ?? null,
+              )
+            }
+            align="start"
+            triggerRender={<PillButton />}
+          />
 
           </div>
 

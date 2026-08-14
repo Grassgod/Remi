@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Check, ChevronRight, Maximize2, Minimize2, X as XIcon } from "lucide-react";
+import { Check, ChevronRight, Maximize2, Minimize2, X as XIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -18,6 +18,7 @@ import {
 } from "@multiremi/core/issues/stores/quick-create-store";
 import { useIssueDraftStore } from "@multiremi/core/issues/stores/draft-store";
 import { useCreateModeStore } from "@multiremi/core/issues/stores/create-mode-store";
+import { resolveAgentRuntimes } from "@multiremi/core/agents";
 import {
   runtimeListOptions,
   checkQuickCreateCliVersion,
@@ -48,6 +49,7 @@ import {
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
+import { CreateIssueModeSwitch } from "./create-issue-mode-switch";
 
 type ActorSelection =
   | { type: "agent"; id: string }
@@ -62,9 +64,10 @@ type ActorSelection =
 //
 // `onSwitchMode` is wired by the shell — the panel calls it with an optional
 // carry payload (currently `project_id`). The shared draft store carries the
-// description + agent across the agent→manual flip; project_id rides through
-// the same carry channel manual→agent uses, so the manual panel reads it
-// from `data?.project_id` without a parallel store.
+// description across the agent→manual flip; project_id rides through the same
+// carry channel manual→agent uses, so the manual panel reads it from
+// `data?.project_id` without a parallel store. The creator actor never becomes
+// the manual assignee implicitly — those are separate roles.
 export function AgentCreatePanel({
   onClose,
   onSwitchMode,
@@ -87,7 +90,7 @@ export function AgentCreatePanel({
   const userId = useAuthStore((s) => s.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [], isSuccess: agentsLoaded } = useQuery(agentListOptions(wsId));
-  const { data: squads = [], isSuccess: squadsLoaded } = useQuery(squadListOptions(wsId));
+  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   // Pull `isSuccess` so the stale-id sweep below can distinguish "still
   // loading" from "loaded as empty". Reading length alone treats both as
   // empty and incorrectly clears a valid persisted preference on every open.
@@ -130,8 +133,6 @@ export function AgentCreatePanel({
   const lastActorType = useQuickCreateStore((s) => s.lastActorType);
   const lastActorId = useQuickCreateStore((s) => s.lastActorId);
   const setLastActor = useQuickCreateStore((s) => s.setLastActor);
-  const lastProjectId = useQuickCreateStore((s) => s.lastProjectId);
-  const setLastProjectId = useQuickCreateStore((s) => s.setLastProjectId);
   const promptDraft = useQuickCreateStore((s) => s.prompt);
   const setPrompt = useQuickCreateStore((s) => s.setPrompt);
   const clearPrompt = useQuickCreateStore((s) => s.clearPrompt);
@@ -161,19 +162,16 @@ export function AgentCreatePanel({
   );
 
   const seedActor = useCallback((): ActorSelection | null => {
-    // Caller-provided seed wins (e.g. shell pre-seeds with `agent_id` /
-    // `squad_id`), then persisted preference, then first visible agent.
-    const dataAgent = data?.agent_id as string | undefined;
-    const dataSquad = data?.squad_id as string | undefined;
+    // The creator is independent from the issue's eventual executor. Reuse
+    // the last successful quick-create actor, then fall back to the first
+    // visible agent. Project context and manual assignees never seed it.
     return (
-      resolveActor("agent", dataAgent) ||
-      resolveActor("squad", dataSquad) ||
       resolveActor(lastActorType, lastActorId) ||
       (visibleAgents[0]
         ? ({ type: "agent", id: visibleAgents[0].id } as const)
         : null)
     );
-  }, [resolveActor, data?.agent_id, data?.squad_id, lastActorType, lastActorId, visibleAgents]);
+  }, [resolveActor, lastActorType, lastActorId, visibleAgents]);
 
   const [actor, setActor] = useState<ActorSelection | null>(() => seedActor());
 
@@ -196,14 +194,13 @@ export function AgentCreatePanel({
     return visibleSquads.find((s) => s.id === actor.id);
   }, [actor, visibleSquads]);
 
-  // Project selection — defaults to the last project the user picked in this
-  // workspace. `data?.project_id` lets the modal opener seed a one-shot
-  // override (e.g. a future "+ Issue" button on a project page); it does NOT
-  // replace the persisted default.
-  const [projectId, setProjectId] = useState<string | null>(() => {
-    const seed = (data?.project_id as string | undefined) ?? lastProjectId;
-    return seed ?? null;
-  });
+  // Project is optional and intentionally non-sticky. A contextual opener
+  // (project page, or manual -> agent mode switch) may seed it explicitly;
+  // otherwise null tells the creator agent to inspect existing projects and
+  // choose the best match.
+  const [projectId, setProjectId] = useState<string | null>(
+    () => (data?.project_id as string | undefined) ?? null,
+  );
 
   // Parent-issue context — seeded by `openCreateSubIssue` when the modal is
   // opened from the "Add sub issue" entry on an existing issue. We carry it
@@ -215,48 +212,16 @@ export function AgentCreatePanel({
   const parentIssueIdentifier =
     (data?.parent_issue_identifier as string | undefined) ?? undefined;
 
-  // Project default actor: a project can bind a default assignee (squad or
-  // agent) that issues created under it should route to. Member defaults
-  // don't apply here — the quick-create actor must be able to run the prompt.
-  const projectDefaultActor = useCallback(
-    (pid: string | null | undefined): ActorSelection | null => {
-      if (!pid) return null;
-      const project = projects.find((p) => p.id === pid);
-      if (!project?.default_assignee_type || !project.default_assignee_id) return null;
-      if (project.default_assignee_type === "member") return null;
-      return resolveActor(project.default_assignee_type, project.default_assignee_id);
-    },
-    [projects, resolveActor],
-  );
-
-  // Flips once the user picks an actor by hand this open — a manual pick
-  // always beats the project default.
-  const userPickedActorRef = useRef(false);
-  // One-shot on open: once every list has resolved, let the seeded project's
-  // bound default override the persisted last-actor seed. The explicit
-  // binding is configuration; last-actor is incidental history.
-  const appliedProjectDefaultRef = useRef(false);
-  useEffect(() => {
-    if (appliedProjectDefaultRef.current) return;
-    if (!projectsLoaded || !agentsLoaded || !squadsLoaded) return;
-    appliedProjectDefaultRef.current = true;
-    if (userPickedActorRef.current) return;
-    const def = projectDefaultActor(projectId);
-    if (def) setActor(def);
-  }, [projectsLoaded, agentsLoaded, squadsLoaded, projectDefaultActor, projectId]);
-
   // Stale-id sweep. Once the project list query has actually resolved
   // (`isSuccess` — distinct from "data is the empty default during loading"),
-  // a `projectId` that isn't in the list means the project was deleted in
-  // another session. Clear BOTH local state and the persisted preference;
-  // dropping only local state would leave the deleted UUID in `lastProjectId`,
-  // and the next open would re-seed it and submit the same dead value.
+  // a contextual `projectId` that isn't in the list means the project was
+  // deleted in another session. Clear it so the creator agent falls back to
+  // project inference instead of submitting a dead UUID.
   useEffect(() => {
     if (!projectsLoaded || projectId === null) return;
     if (projects.some((p) => p.id === projectId)) return;
     setProjectId(null);
-    if (lastProjectId === projectId) setLastProjectId(null);
-  }, [projectsLoaded, projects, projectId, lastProjectId, setLastProjectId]);
+  }, [projectsLoaded, projects, projectId]);
 
   // Daemon CLI version gate. The agent-create flow needs the runtime's
   // bundled remi CLI to be ≥ MIN_QUICK_CREATE_CLI_VERSION; older
@@ -270,16 +235,22 @@ export function AgentCreatePanel({
   const { data: runtimes = [], isSuccess: runtimesLoaded } = useQuery(
     runtimeListOptions(wsId),
   );
-  const selectedRuntime = useMemo(
-    () =>
-      selectedAgent?.runtime_id
-        ? runtimes.find((r) => r.id === selectedAgent.runtime_id)
-        : undefined,
-    [runtimes, selectedAgent?.runtime_id],
+  const candidateRuntimes = useMemo(
+    () => (selectedAgent ? resolveAgentRuntimes(selectedAgent, runtimes) : []),
+    [runtimes, selectedAgent],
   );
   const versionCheck = useMemo(
-    () => checkQuickCreateCliVersion(readRuntimeCliVersion(selectedRuntime?.metadata)),
-    [selectedRuntime?.metadata],
+    () => {
+      const checks = candidateRuntimes.map((runtime) =>
+        checkQuickCreateCliVersion(readRuntimeCliVersion(runtime.metadata)),
+      );
+      return (
+        checks.find((check) => check.state === "ok") ??
+        checks.find((check) => check.state === "too_old") ??
+        checkQuickCreateCliVersion(null)
+      );
+    },
+    [candidateRuntimes],
   );
   const versionBlocked = versionCheck.state !== "ok";
 
@@ -329,7 +300,6 @@ export function AgentCreatePanel({
         parent_issue_id: parentIssueId,
       });
       setLastActor(actor.type, actor.id);
-      setLastProjectId(projectId);
       clearPrompt();
       setLastMode("agent");
       toast.success(t(($) => $.create_issue.agent.toast_sent), {
@@ -392,22 +362,21 @@ export function AgentCreatePanel({
 
   // Switch to the manual form, carrying what the user typed over as the
   // description (markdown, including any pasted images) so they don't lose
-  // their work. The picked actor (agent or squad) becomes the default
-  // assignee candidate (still editable). We seed the shared issue-draft
-  // store directly because the manual panel reads its initial values from
-  // there. Persist the mode flip so the next `c` lands in manual.
+  // their work. Clear any draft assignee rather than copying the creator
+  // actor: once the manual panel mounts, an explicitly carried project can
+  // apply its own default executor. Persist the mode flip so the next `c`
+  // lands in manual.
   const switchToManual = () => {
     const md = editorRef.current?.getMarkdown() ?? "";
     useIssueDraftStore.getState().setDraft({
       description: md,
-      ...(actor
-        ? { assigneeType: actor.type, assigneeId: actor.id }
-        : {}),
+      assigneeType: undefined,
+      assigneeId: undefined,
     });
     setLastMode("manual");
     // Hand the picked project and the parent-issue context to the manual
-    // panel through the same `data` channel that already carries agent_id /
-    // parent_issue_id. The manual panel reads these on mount; this preserves
+    // panel through the same `data` channel that carries parent_issue_id. The
+    // manual panel reads these on mount; this preserves
     // the user's selection (and the sub-issue intent seeded by
     // openCreateSubIssue) across the mode flip without piping a third store
     // through.
@@ -439,10 +408,15 @@ export function AgentCreatePanel({
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-muted-foreground">{workspaceName}</span>
-            <ChevronRight className="size-3 text-muted-foreground/50" />
-            <span className="font-medium">{t(($) => $.create_issue.agent_breadcrumb)}</span>
+          <div className="flex min-w-0 items-center gap-2 text-xs">
+            <span className="hidden max-w-32 truncate text-muted-foreground sm:inline">{workspaceName}</span>
+            <ChevronRight className="hidden size-3 text-muted-foreground/50 sm:block" />
+            <CreateIssueModeSwitch
+              mode="agent"
+              onModeChange={(next) => {
+                if (next === "manual") switchToManual();
+              }}
+            />
           </div>
           {/* Native `title` instead of Base UI Tooltip — Tooltip opens on
               keyboard focus, and the dialog's focus trap briefly lands focus
@@ -482,7 +456,6 @@ export function AgentCreatePanel({
             selectedAgent={selectedAgent}
             selectedSquad={selectedSquad}
             onPick={(next) => {
-              userPickedActorRef.current = true;
               setActor(next);
               setError(null);
             }}
@@ -534,9 +507,9 @@ export function AgentCreatePanel({
         {/* Property toolbar — mirrors the manual panel's pill row so the
             project pill sits in the same place across both modes. Agent mode
             owns only the project (status / priority / assignee / due-date are
-            inferred from the prompt), so it's a single pill. The pick is
-            persisted per-workspace via useQuickCreateStore.lastProjectId so
-            users targeting one project skip retyping "in project X".
+            inferred from the prompt), so it's a single pill. A missing project
+            is meaningful: the creator agent inspects existing projects and
+            decides where the issue belongs.
             When the modal was opened from "Add sub issue" on an existing
             issue, a read-only chip on the same row tells the user that the
             new issue will be filed as a sub-issue of that parent — the agent
@@ -547,19 +520,7 @@ export function AgentCreatePanel({
         <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0 flex-wrap">
           <ProjectPicker
             projectId={projectId}
-            onUpdate={(u) => {
-              const next = u.project_id ?? null;
-              setProjectId(next);
-              // An explicit project pick re-applies that project's bound
-              // default actor (even over a manual pick — choosing the project
-              // is the newer intent). No default → keep the current actor.
-              const def = projectDefaultActor(next);
-              if (def) {
-                userPickedActorRef.current = false;
-                setActor(def);
-                setError(null);
-              }
-            }}
+            onUpdate={(u) => setProjectId(u.project_id ?? null)}
             triggerRender={<PillButton />}
             align="start"
           />
@@ -593,15 +554,6 @@ export function AgentCreatePanel({
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={switchToManual}
-              title={t(($) => $.create_issue.switch_to_manual_tooltip)}
-              className="flex shrink-0 items-center gap-1.5 text-xs px-2 py-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer"
-            >
-              <ArrowLeftRight className="size-3.5" />
-              {t(($) => $.create_issue.switch_to_manual)}
-            </button>
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
               <Switch
                 size="sm"

@@ -223,7 +223,7 @@ Issue 是**所有工作流的载体**：
 - 状态：`planned` / `in_progress` / `paused` / `completed` / `cancelled`
 - 优先级：urgent / high / medium / low / none
 - **Lead 负责人**：可以是 member 或 agent（跟 issue 的 assignee 一样是多态）
-- **默认执行者（default assignee）**：项目可以绑定一个默认执行者（member / agent / squad 干活组），与 Lead 负责人（汇报人，通常是真人）是两个独立概念。在创建 issue 弹窗里选中该项目后，assignee 会自动预填成这个默认值（手动改过则以手动选择为准）；agent 快速创建模式下同样会把执行者预填为绑定的 agent/squad。用于"某项目的活固定由某个干活组做"的场景，免去每次手选。
+- **默认执行者（default assignee）**：项目可以绑定一个默认执行者（member / agent / squad 干活组），与 Lead 负责人（汇报人，通常是真人）是两个独立概念。手动创建 issue 时选中项目，assignee 会自动预填成这个默认值（之后仍可手动修改）。通过智能体创建时，创建者保持为上次使用的 agent/squad，项目只作为可选归属上下文；未选择项目时，创建者会检查现有项目并判断 issue 的归属。创建者和执行者不能混为同一个选择器语义。
 - 详情页展示项目内的所有 issue
 - 支持搜索项目
 

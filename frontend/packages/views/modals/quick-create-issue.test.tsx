@@ -5,7 +5,6 @@ import userEvent from "@testing-library/user-event";
 
 const mockQuickCreateIssue = vi.hoisted(() => vi.fn());
 const mockSetLastActor = vi.hoisted(() => vi.fn());
-const mockSetLastProjectId = vi.hoisted(() => vi.fn());
 const mockSetPrompt = vi.hoisted(() => vi.fn());
 const mockClearPrompt = vi.hoisted(() => vi.fn());
 const mockSetKeepOpen = vi.hoisted(() => vi.fn());
@@ -16,8 +15,6 @@ const mockQuickCreateStore = {
   lastActorType: null as "agent" | "squad" | null,
   lastActorId: null as string | null,
   setLastActor: mockSetLastActor,
-  lastProjectId: null as string | null,
-  setLastProjectId: mockSetLastProjectId,
   prompt: "Persisted draft prompt",
   setPrompt: mockSetPrompt,
   clearPrompt: mockClearPrompt,
@@ -29,7 +26,14 @@ const mockQuickCreateStore = {
 // "loaded as empty" (the deleted-project case) and "still loading" without
 // re-mocking the whole module.
 const mockProjectsQuery = vi.hoisted(() => ({
-  data: [] as Array<{ id: string; title: string; icon: string | null }>,
+  data: [] as Array<{
+    id: string;
+    title: string;
+    icon: string | null;
+    archived_at: string | null;
+    default_assignee_type: "agent" | "squad" | "member" | null;
+    default_assignee_id: string | null;
+  }>,
   isSuccess: true,
 }));
 
@@ -45,17 +49,29 @@ vi.mock("@tanstack/react-query", () => ({
     // Workspace-scoped query keys carry the wsId as `queryKey[1]`; the
     // discriminator is at `queryKey[2]` (e.g. ["workspaces", wsId, "squads"]).
     if (queryKey[0] === "workspaces" && queryKey[2] === "squads") {
-      return { data: mockSquadsData.list };
+      return { data: mockSquadsData.list, isSuccess: true };
     }
     switch (queryKey[0]) {
       case "members":
         return { data: [{ user_id: "user-1", role: "admin" }] };
       case "agents":
         return {
-          data: [{ id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "runtime-1" }],
+          data: [
+            { id: "agent-1", name: "Bohan", archived_at: null, runtime_id: "", provider: "claude" },
+            { id: "agent-2", name: "Ada", archived_at: null, runtime_id: "", provider: "claude" },
+          ],
+          isSuccess: true,
         };
       case "runtimes":
-        return { data: [{ id: "runtime-1", metadata: { cli_version: "1.2.3" } }] };
+        return {
+          data: [{
+            id: "runtime-1",
+            provider: "claude",
+            visibility: "public",
+            metadata: { cli_version: "1.2.3" },
+          }],
+          isSuccess: true,
+        };
       case "projects":
         return mockProjectsQuery;
       default:
@@ -110,8 +126,13 @@ vi.mock("@multiremi/core/auth", () => ({
 
 vi.mock("@multiremi/core/runtimes", () => ({
   runtimeListOptions: () => ({ queryKey: ["runtimes"] }),
-  checkQuickCreateCliVersion: () => ({ state: "ok", min: "1.0.0" }),
-  readRuntimeCliVersion: () => "1.2.3",
+  checkQuickCreateCliVersion: (value?: string | null) => ({
+    state: value ? "ok" : "missing",
+    current: value ?? "",
+    min: "1.0.0",
+  }),
+  readRuntimeCliVersion: (metadata?: Record<string, unknown>) =>
+    typeof metadata?.cli_version === "string" ? metadata.cli_version : "",
   MIN_QUICK_CREATE_CLI_VERSION: "1.0.0",
 }));
 
@@ -133,7 +154,16 @@ vi.mock("../issues/components", () => ({
 }));
 
 vi.mock("../projects/components/project-picker", () => ({
-  ProjectPicker: () => <div data-testid="project-picker" />,
+  ProjectPicker: ({ onUpdate }: { onUpdate?: (u: { project_id?: string | null }) => void }) => (
+    <div data-testid="project-picker">
+      <button type="button" onClick={() => onUpdate?.({ project_id: "proj-a" })}>
+        Pick project A
+      </button>
+      <button type="button" onClick={() => onUpdate?.({ project_id: "proj-b" })}>
+        Pick project B
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("../common/pill-button", () => ({
@@ -280,7 +310,6 @@ describe("AgentCreatePanel", () => {
     vi.clearAllMocks();
     mockQuickCreateStore.lastActorType = null;
     mockQuickCreateStore.lastActorId = null;
-    mockQuickCreateStore.lastProjectId = null;
     mockQuickCreateStore.prompt = "Persisted draft prompt";
     mockQuickCreateStore.keepOpen = false;
     mockProjectsQuery.data = [];
@@ -316,7 +345,7 @@ describe("AgentCreatePanel", () => {
     await user.type(editor, "New agent prompt");
     expect(mockSetPrompt).toHaveBeenLastCalledWith("New agent prompt");
 
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
 
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
@@ -327,9 +356,6 @@ describe("AgentCreatePanel", () => {
     });
 
     expect(mockSetLastActor).toHaveBeenCalledWith("agent", "agent-1");
-    // No project picked → persisted project preference is cleared so the
-    // store stays in sync with the actual outgoing request.
-    expect(mockSetLastProjectId).toHaveBeenCalledWith(null);
     expect(mockClearPrompt).toHaveBeenCalled();
     expect(mockSetLastMode).toHaveBeenCalledWith("agent");
     expect(onClose).toHaveBeenCalled();
@@ -358,7 +384,7 @@ describe("AgentCreatePanel", () => {
     await user.clear(editor);
     await user.type(editor, "Investigate the regression");
 
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
 
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({
@@ -383,35 +409,100 @@ describe("AgentCreatePanel", () => {
     expect(screen.queryByRole("button", { name: /Orphan Squad/ })).toBeNull();
   });
 
-  // If the user's persisted `lastProjectId` points at a project that has
-  // been deleted (or moved to another workspace), the modal must not keep
-  // submitting that dead UUID. Once the projects query resolves and the id
-  // is missing, we clear BOTH local state and the persisted preference;
-  // dropping only local state would leave the next open re-seeding the same
-  // dead value and trigger the server's `project not found` rejection.
-  it("clears a stale persisted project once the projects list resolves without it", async () => {
-    mockQuickCreateStore.lastProjectId = "deleted-proj";
+  it("clears a stale contextual project once the projects list resolves without it", async () => {
     mockProjectsQuery.data = [];
     mockProjectsQuery.isSuccess = true;
+    const user = userEvent.setup();
 
+    renderPanel({
+      onClose: vi.fn(),
+      isExpanded: false,
+      setIsExpanded: vi.fn(),
+      data: { project_id: "deleted-proj" },
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
+    await waitFor(() => expect(mockQuickCreateIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: undefined }),
+    ));
+  });
+
+  it("keeps a contextual project while the projects list is still loading", async () => {
+    mockProjectsQuery.data = [];
+    mockProjectsQuery.isSuccess = false;
+    const user = userEvent.setup();
+
+    renderPanel({
+      onClose: vi.fn(),
+      isExpanded: false,
+      setIsExpanded: vi.fn(),
+      data: { project_id: "proj-1" },
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
+    await waitFor(() => expect(mockQuickCreateIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ project_id: "proj-1" }),
+    ));
+  });
+
+  it("keeps the last creator actor when the selected project has another default executor", async () => {
+    mockQuickCreateStore.lastActorType = "agent";
+    mockQuickCreateStore.lastActorId = "agent-2";
+    mockProjectsQuery.data = [
+      {
+        id: "proj-a",
+        title: "Project A",
+        icon: null,
+        archived_at: null,
+        default_assignee_type: "agent",
+        default_assignee_id: "agent-1",
+      },
+      {
+        id: "proj-b",
+        title: "Project B",
+        icon: null,
+        archived_at: null,
+        default_assignee_type: "agent",
+        default_assignee_id: "agent-2",
+      },
+    ];
+    const user = userEvent.setup();
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
+    expect(screen.getByRole("button", { name: "Ada" })).toHaveAttribute("data-selected", "true");
+    await user.click(screen.getByRole("button", { name: "Pick project A" }));
+    expect(screen.getByRole("button", { name: "Ada" })).toHaveAttribute("data-selected", "true");
+
+    const editor = screen.getByPlaceholderText(
+      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
+    );
+    await user.clear(editor);
+    await user.type(editor, "Create the issue");
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
+
     await waitFor(() => {
-      expect(mockSetLastProjectId).toHaveBeenCalledWith(null);
+      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
+        agent_id: "agent-2",
+        prompt: "Create the issue",
+        project_id: "proj-a",
+      });
     });
   });
 
-  // Mirror case: while the query is still loading, we must NOT preemptively
-  // clear the persisted preference — that would wipe a perfectly valid
-  // selection on every open before the list ever renders.
-  it("keeps the persisted project while the projects list is still loading", () => {
-    mockQuickCreateStore.lastProjectId = "proj-1";
-    mockProjectsQuery.data = [];
-    mockProjectsQuery.isSuccess = false;
+  it("accepts a pool-model agent through a provider-matching runtime", async () => {
+    const onSwitchMode = vi.fn();
 
-    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+    renderPanel({
+      onClose: vi.fn(),
+      onSwitchMode,
+      isExpanded: false,
+      setIsExpanded: vi.fn(),
+    });
 
-    expect(mockSetLastProjectId).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Let agent create \(/i })).toBeEnabled();
+    });
+    expect(onSwitchMode).not.toHaveBeenCalled();
   });
 
   // When the modal was opened from "Add sub issue" on an existing issue,
@@ -443,7 +534,7 @@ describe("AgentCreatePanel", () => {
     await user.clear(editor);
     await user.type(editor, "Investigate the regression");
 
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
+    await user.click(screen.getByRole("button", { name: /^Let agent create \(/i }));
 
     await waitFor(() => {
       expect(mockQuickCreateIssue).toHaveBeenCalledWith({

@@ -51,6 +51,30 @@ describe("Multiremi store — issues, comments, labels, and inbox", () => {
     expect(store.getTask(squadAssigned.task!.id)?.status).toBe("cancelled");
   });
 
+  it("tells the creator agent whether to keep or infer the issue project", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "PM", provider: "codex" });
+    const project = store.createProject({ title: "Web" });
+
+    const targeted = store.quickCreateIssue({
+      agentId: agent.id,
+      projectId: project.id,
+      prompt: "Fix the upload flow",
+    });
+    expect(targeted.issue.projectId).toBe(project.id);
+    expect(targeted.task.prompt).toContain(`explicitly selected project ${project.id}`);
+    expect(targeted.task.prompt).toContain("do not infer or move it to another project");
+
+    const inferred = store.quickCreateIssue({
+      agentId: agent.id,
+      prompt: "Investigate the mobile crash",
+    });
+    expect(inferred.issue.projectId).toBeNull();
+    expect(inferred.task.prompt).toContain("did not select a project");
+    expect(inferred.task.prompt).toContain("choose the best match");
+    expect(inferred.task.prompt).toContain("do not create a new project");
+  });
+
   it("aggregates assignee frequency from created issues and assignment activity", () => {
     const store = createStore();
     const alice = store.createWorkspaceMember({ name: "Alice", role: "member" });

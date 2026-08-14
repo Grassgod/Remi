@@ -8,6 +8,8 @@ interface ProjectDraft {
   description: string;
   leadType?: "member" | null;
   leadId?: string | null;
+  defaultAssigneeType?: "agent" | "squad" | null;
+  defaultAssigneeId?: string | null;
   icon?: string;
 }
 
@@ -16,6 +18,8 @@ const EMPTY_DRAFT: ProjectDraft = {
   description: "",
   leadType: undefined,
   leadId: undefined,
+  defaultAssigneeType: undefined,
+  defaultAssigneeId: undefined,
   icon: undefined,
 };
 

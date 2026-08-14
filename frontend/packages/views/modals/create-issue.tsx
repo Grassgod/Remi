@@ -6,7 +6,6 @@ import { useNavigation } from "../navigation";
 import {
   AlertTriangle,
   ArrowDown,
-  ArrowLeftRight,
   ArrowUp,
   CalendarClock,
   Check,
@@ -56,6 +55,7 @@ import {
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { PillButton } from "../common/pill-button";
 import { IssuePickerModal } from "./issue-picker-modal";
+import { CreateIssueModeSwitch } from "./create-issue-mode-switch";
 import { useT } from "../i18n";
 
 // ---------------------------------------------------------------------------
@@ -177,19 +177,29 @@ export function ManualCreatePanel({
   // "assigned agent/squad dispatches on create" behavior stays deliberate.
   const { data: projectsForDefaults = [] } = useQuery(projectListOptions(wsId));
   const autoAssignedRef = useRef(false);
+  // Project selection is a newer intent than a previous assignee pick. Keep
+  // this separate from the seeded project path so opening a prefilled modal
+  // still preserves a deliberate draft assignee, while clicking another
+  // project adopts that project's configured default.
+  const projectSelectionOverridesAssigneeRef = useRef(false);
   // Sentinel `null` ≠ "no project" (`undefined`): the first pass must still
   // process an absent project so the refs settle consistently.
   const defaultAppliedForProjectRef = useRef<string | undefined | null>(null);
   useEffect(() => {
-    if (defaultAppliedForProjectRef.current === (projectId ?? undefined)) return;
+    if (
+      defaultAppliedForProjectRef.current === (projectId ?? undefined) &&
+      !projectSelectionOverridesAssigneeRef.current
+    ) return;
     const project = projectId ? projectsForDefaults.find((p) => p.id === projectId) : undefined;
     // Wait for the project list before deciding — otherwise a seeded projectId
     // would be marked processed while its default is still unknown.
     if (projectId && !project) return;
     defaultAppliedForProjectRef.current = projectId ?? undefined;
+    const shouldOverride = projectSelectionOverridesAssigneeRef.current;
+    projectSelectionOverridesAssigneeRef.current = false;
     const defType = project?.default_assignee_type ?? null;
     const defId = project?.default_assignee_id ?? null;
-    if (defType && defId && (!assigneeId || autoAssignedRef.current)) {
+    if (defType && defId && (shouldOverride || !assigneeId || autoAssignedRef.current)) {
       autoAssignedRef.current = true;
       updateAssignee(defType, defId);
     } else if (autoAssignedRef.current && !(defType && defId)) {
@@ -202,6 +212,10 @@ export function ManualCreatePanel({
   const handleAssigneePicked = (type?: IssueAssigneeType, id?: string) => {
     autoAssignedRef.current = false;
     updateAssignee(type, id);
+  };
+  const handleProjectPicked = (id?: string) => {
+    projectSelectionOverridesAssigneeRef.current = true;
+    setProjectId(id);
   };
 
   const createIssueMutation = useCreateIssue();
@@ -382,12 +396,10 @@ export function ManualCreatePanel({
   // panel reads `data.prompt` on mount. Concatenate title + description so
   // nothing the user typed is lost — the agent derives a fresh title from
   // the combined text. Persist the mode flip so the next `c` lands in agent.
-  // Also forward the picked project so the agent panel pins the new issue
-  // to it; without this the agent panel would fall back to its persisted
-  // `lastProjectId`, silently routing the issue to the wrong project.
-  // Forward squad picks alongside agent picks so the agent panel honors
-  // the actor the user already chose — otherwise a squad selection silently
-  // falls back to the persisted actor / first visible agent on flip.
+  // Also forward the picked project so the creator agent gets the explicit
+  // target context. The manual assignee deliberately does NOT ride along:
+  // manual assignee means "who executes", while agent mode's actor means
+  // "who creates/refines the issue" and must come from its own last choice.
   // parent_issue_id rides through the same carry channel: the modal opener
   // (openCreateSubIssue) seeded it on the manual panel, and the agent panel
   // needs it so the new issue is still created as a sub-issue when the user
@@ -411,11 +423,6 @@ export function ManualCreatePanel({
       parentIssue?.identifier ?? (data?.parent_issue_identifier as string | undefined);
     onSwitchMode?.({
       prompt,
-      ...(assigneeId && assigneeType === "agent"
-        ? { agent_id: assigneeId }
-        : assigneeId && assigneeType === "squad"
-          ? { squad_id: assigneeId }
-          : {}),
       ...(projectId ? { project_id: projectId } : {}),
       ...(parentIssueId ? { parent_issue_id: parentIssueId } : {}),
       ...(carryParentIdentifier ? { parent_issue_identifier: carryParentIdentifier } : {}),
@@ -455,10 +462,15 @@ export function ManualCreatePanel({
 
             {/* Header */}
             <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-muted-foreground">{workspaceName}</span>
-                <ChevronRight className="size-3 text-muted-foreground/50" />
-                <span className="font-medium">{t(($) => $.create_issue.manual_breadcrumb)}</span>
+              <div className="flex min-w-0 items-center gap-2 text-xs">
+                <span className="hidden max-w-32 truncate text-muted-foreground sm:inline">{workspaceName}</span>
+                <ChevronRight className="hidden size-3 text-muted-foreground/50 sm:block" />
+                <CreateIssueModeSwitch
+                  mode="manual"
+                  onModeChange={(next) => {
+                    if (next === "agent") switchToAgent();
+                  }}
+                />
               </div>
               <div className="flex items-center gap-1">
                 <Tooltip>
@@ -563,7 +575,7 @@ export function ManualCreatePanel({
               {/* Project */}
               <ProjectPicker
                 projectId={projectId ?? null}
-                onUpdate={(u) => setProjectId(u.project_id ?? undefined)}
+                onUpdate={(u) => handleProjectPicked(u.project_id ?? undefined)}
                 triggerRender={<PillButton />}
                 align="start"
               />
@@ -721,15 +733,6 @@ export function ManualCreatePanel({
                 />
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={switchToAgent}
-                  title={t(($) => $.create_issue.switch_to_agent_tooltip)}
-                  className="border-beam group flex shrink-0 items-center gap-1.5 text-xs px-2 py-1 rounded-sm text-muted-foreground bg-brand/5 hover:bg-brand/10 hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <ArrowLeftRight className="size-3.5 text-brand/80 transition-transform duration-300 group-hover:rotate-180" />
-                  {t(($) => $.create_issue.switch_to_agent)}
-                </button>
                 <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
                   <Switch
                     size="sm"

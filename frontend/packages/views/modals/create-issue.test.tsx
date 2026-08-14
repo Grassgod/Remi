@@ -74,14 +74,15 @@ vi.mock("@multiremi/core/issues/queries", () => ({
   }),
 }));
 
-// Feeds the project-default-assignee prefill: one project that binds a squad,
-// one without a binding.
+// Feeds the project-default-assignee prefill: projects that bind different
+// actors plus one without a binding.
 vi.mock("@multiremi/core/projects/queries", () => ({
   projectListOptions: (wsId: string) => ({
     queryKey: ["projects", wsId],
     queryFn: () =>
       Promise.resolve([
         { id: "prj_squad", default_assignee_type: "squad", default_assignee_id: "sqd_ops", archived_at: null },
+        { id: "prj_agent", default_assignee_type: "agent", default_assignee_id: "agt_build", archived_at: null },
         { id: "prj_plain", default_assignee_type: null, default_assignee_id: null, archived_at: null },
       ]),
   }),
@@ -236,7 +237,7 @@ vi.mock("../issues/components", () => ({
 }));
 
 vi.mock("../projects/components/project-picker", () => ({
-  // Two fixed picks so tests can flip between the defaulted and plain project.
+  // Fixed picks so tests can flip between projects with different defaults.
   ProjectPicker: ({ onUpdate }: { onUpdate?: (u: { project_id?: string | null }) => void }) => (
     <div data-testid="project-picker">
       <button type="button" onClick={() => onUpdate?.({ project_id: "prj_squad" })}>
@@ -244,6 +245,9 @@ vi.mock("../projects/components/project-picker", () => ({
       </button>
       <button type="button" onClick={() => onUpdate?.({ project_id: "prj_plain" })}>
         Pick plain project
+      </button>
+      <button type="button" onClick={() => onUpdate?.({ project_id: "prj_agent" })}>
+        Pick agent project
       </button>
     </div>
   ),
@@ -456,10 +460,10 @@ describe("CreateIssueModal", () => {
     });
   });
 
-  // Manual → agent must also forward the picked squad. Without this branch
-  // the agent panel silently falls back to the persisted actor / first
-  // visible agent and the user loses the squad they just chose in manual.
-  it("forwards the picked squad when switching to agent mode", async () => {
+  // Manual assignee is the issue executor; agent-mode actor is the creator.
+  // Switching modes must not silently turn a project/default executor into
+  // the creator agent — agent mode restores its own persisted actor instead.
+  it("does not forward the manual assignee as the creator actor", async () => {
     mockDraftStore.draft.assigneeType = "squad";
     mockDraftStore.draft.assigneeId = "squad-1";
     const user = userEvent.setup();
@@ -481,15 +485,14 @@ describe("CreateIssueModal", () => {
 
     expect(onSwitchMode).toHaveBeenCalledTimes(1);
     const carry = onSwitchMode.mock.calls[0]?.[0];
-    expect(carry).toEqual(
-      expect.objectContaining({ prompt: "Refactor auth", squad_id: "squad-1" }),
-    );
+    expect(carry).toEqual(expect.objectContaining({ prompt: "Refactor auth" }));
     expect(carry).not.toHaveProperty("agent_id");
+    expect(carry).not.toHaveProperty("squad_id");
   });
 
   // Manual → agent must forward the picked project so the new modal pins to
   // the same target. Without this the agent panel re-seeds from its own
-  // persisted `lastProjectId` and silently routes the issue to a stale one.
+  // an empty project and ask the creator agent to infer one.
   // Reporter scenario: backend rejects same-titled create with a 409 +
   // structured duplicate body. The user should land on a duplicate toast
   // pointing at the existing issue, not a generic "create failed" message.
@@ -720,6 +723,22 @@ describe("CreateIssueModal", () => {
         assignee_type: "squad",
         assignee_id: "sqd_ops",
       }));
+    });
+  });
+
+  it("switches to the new project's default assignee", async () => {
+    const user = userEvent.setup();
+    renderModal(<CreateIssueModal onClose={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Pick squad project" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("sqd_ops");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Pick agent project" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeType).toBe("agent");
+      expect(screen.getByTestId("assignee-picker").dataset.assigneeId).toBe("agt_build");
     });
   });
 
