@@ -39,6 +39,7 @@ interface LoggedEnv {
   kind: "env";
   ANTHROPIC_API_KEY: string | null;
   ANTHROPIC_BASE_URL: string | null;
+  CODEX_HOME: string | null;
 }
 
 const CLAUDE_MODES: SessionModeState = {
@@ -125,6 +126,7 @@ interface FakeAgent {
   executable: string;
   requests(): LoggedRequest[];
   env(): LoggedEnv;
+  envs(): LoggedEnv[];
 }
 
 function fakeAgent(profile: AgentProfile): FakeAgent {
@@ -139,7 +141,7 @@ const readline = require("node:readline");
 const LOG = ${JSON.stringify(logPath)};
 const PROFILE = ${JSON.stringify(profile)};
 const log = (entry) => fs.appendFileSync(LOG, JSON.stringify(entry) + "\\n");
-log({ kind: "env", ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null, ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL ?? null });
+log({ kind: "env", ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? null, ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL ?? null, CODEX_HOME: process.env.CODEX_HOME ?? null });
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\\n");
 let sessionSeq = 0;
 let configOptions = PROFILE.configOptions;
@@ -182,6 +184,7 @@ rl.on("line", (line) => {
     executable,
     requests: () => entries().filter((e): e is LoggedRequest => e.kind === "request"),
     env: () => entries().find((e): e is LoggedEnv => e.kind === "env")!,
+    envs: () => entries().filter((e): e is LoggedEnv => e.kind === "env"),
   };
 }
 
@@ -296,6 +299,70 @@ describe("AcpProvider session/new payload", () => {
     // Both bridges still read this legacy key (acp-agent.js:4549,
     // codex index.js:27064-27070).
     expect(newSession.params._meta.additionalRoots).toEqual([extraDir]);
+  });
+
+  it("passes Claude native Plugin roots through session meta", async () => {
+    const agent = fakeAgent(claudeProfile());
+    const pluginDir = tempCwd();
+    const provider = new AcpProvider({
+      agentType: "claude",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await drain(provider.sendStream("hi", {
+      chatId: "c1",
+      pluginPaths: [pluginDir],
+      pluginFingerprint: "sha256:plugin-v1",
+    } as any));
+    await provider.close();
+
+    const [newSession] = only(agent.requests(), "session/new");
+    expect(newSession.params._meta).toEqual({
+      claudeCode: { options: { plugins: [{ type: "local", path: pluginDir }] } },
+    });
+  });
+
+  it("starts Codex ACP with the isolated CODEX_HOME and no plugin session meta", async () => {
+    const agent = fakeAgent(codexProfile());
+    const pluginDir = tempCwd();
+    const codexHome = tempCwd();
+    const provider = new AcpProvider({
+      agentType: "codex",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await drain(provider.sendStream("hi", {
+      chatId: "c1",
+      pluginPaths: [pluginDir],
+      pluginFingerprint: "sha256:plugin-v1",
+      codexHome,
+    } as any));
+    await provider.close();
+
+    expect(agent.env().CODEX_HOME).toBe(codexHome);
+    expect(only(agent.requests(), "session/new")[0]?.params._meta).toBeUndefined();
+  });
+
+  it("refuses Codex Plugins without an isolated CODEX_HOME", async () => {
+    const agent = fakeAgent(codexProfile());
+    const provider = new AcpProvider({
+      agentType: "codex",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await expect(drain(provider.sendStream("hi", {
+      chatId: "c1",
+      pluginPaths: [tempCwd()],
+      pluginFingerprint: "sha256:plugin-v1",
+    } as any))).rejects.toThrow("isolated CODEX_HOME");
+    expect(agent.requests()).toHaveLength(0);
+    await provider.close();
   });
 });
 
@@ -512,5 +579,31 @@ describe("AcpProvider warm session reuse", () => {
       "gpt-5.5", "low", "xhigh",
     ]);
     expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
+  });
+
+  it("recreates the ACP process/session when the Plugin fingerprint changes", async () => {
+    const agent = fakeAgent(claudeProfile());
+    const pluginDir = tempCwd();
+    const provider = new AcpProvider({
+      agentType: "claude",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await drain(provider.sendStream("one", {
+      chatId: "c1",
+      pluginPaths: [pluginDir],
+      pluginFingerprint: "sha256:v1",
+    } as any));
+    await drain(provider.sendStream("two", {
+      chatId: "c1",
+      pluginPaths: [pluginDir],
+      pluginFingerprint: "sha256:v2",
+    } as any));
+    await provider.close();
+
+    expect(only(agent.requests(), "session/new")).toHaveLength(2);
+    expect(agent.envs()).toHaveLength(2);
   });
 });

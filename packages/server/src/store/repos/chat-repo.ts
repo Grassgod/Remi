@@ -195,6 +195,7 @@ function toChatSession(row: Row): MultiremiChatSession {
     workDir: nullableString(row.work_dir),
     sessionRuntimeId: nullableString(row.session_runtime_id),
     sessionProvider: nullableString(row.session_provider),
+    sessionExecutionFingerprint: nullableString(row.session_execution_fingerprint),
     latestTaskId: nullableString(row.latest_task_id),
     unreadSince: nullableString(row.unread_since),
     hasUnread: Boolean(row.unread_since),

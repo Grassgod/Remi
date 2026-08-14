@@ -71,18 +71,39 @@ export class AgentsSkillsRepo {
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
+    const transaction = this.ctx.db.transaction(() => {
+      this.lockAgentRow(id);
+      const current = this.getAgent(id);
+      if (!current) throw new Error(`Agent not found: ${id}`);
+      const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+        ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
+        : current.workspaceId;
+      const workspaceIds = [...new Set([current.workspaceId, requestedWorkspaceId])].sort();
+      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      return this.updateAgentWithinPluginLock(id, input);
+    });
+    return transaction();
+  }
+
+  private updateAgentWithinPluginLock(id: string, input: UpdateAgentInput): MultiremiAgent {
     const current = this.getAgent(id);
     if (!current) throw new Error(`Agent not found: ${id}`);
     const now = nowIso();
     const workspaceId = hasAnyField(input, "workspaceId", "workspace_id")
       ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
       : current.workspaceId;
+    if (workspaceId !== current.workspaceId) {
+      this.ctx.agentPlugins().assertAgentPluginWorkspaceMoveAllowed(id, workspaceId);
+    }
     const ownerId = hasAnyField(input, "ownerId", "owner_id")
       ? cleanOptionalString(input.ownerId ?? input.owner_id) ?? "local"
       : current.ownerId;
     const visibility = hasAnyField(input, "visibility")
       ? normalizeAgentVisibility(input.visibility)
       : current.visibility;
+    if (input.provider !== undefined && input.provider !== current.provider) {
+      this.ctx.agentPlugins().assertAgentPluginProviderCompatible(id, input.provider);
+    }
     this.ctx.db.run(
       `UPDATE multiremi_agents SET
         workspace_id = ?,
@@ -156,12 +177,15 @@ export class AgentsSkillsRepo {
     const ownerChanged = (updated.ownerId ?? "local") !== (current.ownerId ?? "local");
     const workspaceChanged = updated.workspaceId !== current.workspaceId;
     if (providerChanged || ownerChanged || workspaceChanged) {
-      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged });
+      this.rescheduleAgentQueuedTasks(updated, { workspaceChanged, providerChanged });
     }
     return updated;
   }
 
-  private rescheduleAgentQueuedTasks(agent: MultiremiAgent, opts: { workspaceChanged: boolean }): void {
+  private rescheduleAgentQueuedTasks(
+    agent: MultiremiAgent,
+    opts: { workspaceChanged: boolean; providerChanged: boolean },
+  ): void {
     const now = nowIso();
     // A workspace move makes the agent's in-flight/queued tasks orphans: they
     // serve the OLD workspace's issues/chats/autopilots. Migrating their
@@ -178,6 +202,19 @@ export class AgentsSkillsRepo {
         .all(agent.id) as Row[];
       for (const row of active) this.ctx.tasks().cancelTask(String(row.id));
       return;
+    }
+    if (opts.providerChanged) {
+      // A frozen retry belongs to the provider and Plugin snapshot captured by
+      // its parent execution. It cannot be safely re-homed to a different
+      // provider using the Agent's now-mutated executable/config. Cancel work
+      // that has not started; an explicit rerun will resolve current settings.
+      const frozen = this.ctx.db.query(
+        `SELECT id FROM multiremi_tasks
+         WHERE agent_id = ?
+           AND execution_fingerprint IS NOT NULL
+           AND status IN ('queued', 'dispatched', 'waiting_local_directory')`,
+      ).all(agent.id) as Row[];
+      for (const row of frozen) this.ctx.tasks().cancelTask(String(row.id));
     }
     // Include tasks with only a session/work_dir (no runtime pin) — a chat
     // send can queue a task carrying the promoted provider session without a
@@ -211,11 +248,13 @@ export class AgentsSkillsRepo {
   }
 
   archiveAgent(id: string): MultiremiAgent {
-    const agent = this.getAgent(id);
-    if (!agent) throw new Error(`Agent not found: ${id}`);
     const now = nowIso();
     const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
     const tx = this.ctx.db.transaction(() => {
+      this.lockAgentRow(id);
+      const agent = this.getAgent(id);
+      if (!agent) throw new Error(`Agent not found: ${id}`);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(agent.workspaceId);
       affectedProjects.push(...this.ctx.db.query(
         `SELECT id, workspace_id FROM multiremi_projects
          WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
@@ -227,6 +266,7 @@ export class AgentsSkillsRepo {
          WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
         [now, id],
       );
+      this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(agent.workspaceId);
     });
     tx();
     this.publishClearedProjectDefaults(affectedProjects, now);
@@ -256,11 +296,23 @@ export class AgentsSkillsRepo {
   }
 
   restoreAgent(id: string): MultiremiAgent {
-    const row = this.ctx.db.query("SELECT id FROM multiremi_agents WHERE id = ?").get(id) as Row | null;
-    if (!row) throw new Error(`Agent not found: ${id}`);
     const now = nowIso();
-    this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+    this.ctx.db.transaction(() => {
+      this.lockAgentRow(id);
+      const row = this.ctx.db.query("SELECT id, workspace_id FROM multiremi_agents WHERE id = ?").get(id) as Row | null;
+      if (!row) throw new Error(`Agent not found: ${id}`);
+      const workspaceId = String(row.workspace_id ?? "local");
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+      this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(workspaceId);
+    })();
     return this.getAgent(id)!;
+  }
+
+  private lockAgentRow(id: string): void {
+    // PostgreSQL takes a row lock for this no-op UPDATE; SQLite serializes the
+    // containing write transaction. Read workspace_id only after this point.
+    this.ctx.db.run("UPDATE multiremi_agents SET updated_at = updated_at WHERE id = ?", [id]);
   }
 
   cancelAgentTasks(agentId: string): number {

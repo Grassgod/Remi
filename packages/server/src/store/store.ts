@@ -5,6 +5,7 @@ import { FeedbackRepo } from "@multiremi/store/repos/feedback-repo.js";
 import { AccessTokensRepo } from "@multiremi/store/repos/access-tokens-repo.js";
 import { CloudRuntimeNodesRepo } from "@multiremi/store/repos/cloud-runtime-nodes-repo.js";
 import { AgentsSkillsRepo } from "@multiremi/store/repos/agents-skills-repo.js";
+import { AgentPluginsRepo } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { GitHubRepo } from "@multiremi/store/repos/github-repo.js";
 import { UsageRepo } from "@multiremi/store/repos/usage-repo.js";
 import { SquadsRepo } from "@multiremi/store/repos/squads-repo.js";
@@ -60,6 +61,8 @@ import type {
   AssignIssueResult,
   CreateAccessTokenInput,
   CreateAgentInput,
+  CreateAgentPluginBindingInput,
+  CreateAgentPluginVersionInput,
   CreateAutopilotInput,
   CreateAutopilotTriggerInput,
   CreateCloudRuntimeNodeInput,
@@ -81,6 +84,7 @@ import type {
   CreateRuntimeLocalSkillImportInput,
   CreateSessionTaskInput,
   CreateSkillInput,
+  ImportAgentPluginInput,
   CreateSquadInput,
   CreateTaskHumanRequestInput,
   CreateTaskInput,
@@ -98,6 +102,11 @@ import type {
   MultiremiCreatedAccessToken,
   MultiremiAccessTokenType,
   MultiremiAgent,
+  MultiremiAgentPlugin,
+  MultiremiAgentPluginBinding,
+  MultiremiAgentPluginRuntimeDesiredSnapshot,
+  MultiremiAgentPluginRuntimeState,
+  MultiremiAgentPluginVersion,
   MultiremiAnalyticsEvent,
   MultiremiAgentActivityBucket,
   MultiremiAgentRunCount,
@@ -174,6 +183,7 @@ import type {
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
+  MultiremiTaskPluginSnapshotEntry,
   MultiremiTimelineEntry,
   MultiremiSubscriptionReason,
   MultiremiUsageByAgent,
@@ -184,6 +194,7 @@ import type {
   MultiremiWorkspaceInvitation,
   MultiremiWorkspaceMember,
   RegisterRuntimeInput,
+  ReportAgentPluginRuntimeStateInput,
   ReportIssueWorkspaceInput,
   ReorderPinnedItemInput,
   RemoveSquadMemberInput,
@@ -194,6 +205,8 @@ import type {
   TaskMessageInput,
   TaskUsageEntry,
   UpdateAgentInput,
+  UpdateAgentPluginBindingInput,
+  UpdateAgentPluginInput,
   UpdateAutopilotInput,
   UpdateAutopilotTriggerInput,
   UpdateChatSessionInput,
@@ -221,6 +234,7 @@ export class MultiremiStore {
   private accessTokens: AccessTokensRepo;
   private cloudNodes: CloudRuntimeNodesRepo;
   private agents: AgentsSkillsRepo;
+  private agentPlugins: AgentPluginsRepo;
   private workspaces: WorkspacesRepo;
   private github: GitHubRepo;
   private usage: UsageRepo;
@@ -242,6 +256,7 @@ export class MultiremiStore {
     this.accessTokens = new AccessTokensRepo(this.db);
     this.cloudNodes = new CloudRuntimeNodesRepo(this.db);
     this.agents = new AgentsSkillsRepo(this.ctx);
+    this.agentPlugins = new AgentPluginsRepo(this.ctx);
     this.workspaces = new WorkspacesRepo(this.ctx);
     this.github = new GitHubRepo(this.ctx);
     this.usage = new UsageRepo(this.ctx);
@@ -370,6 +385,136 @@ runMigrations(this.db);
 
   setAgentSkills(agentId: string, input: SetAgentSkillsInput | string[]): MultiremiSkill[] {
     return this.agents.setAgentSkills(agentId, input);
+  }
+
+  /** Internal cross-domain primitive; callers must already own a DB transaction. */
+  lockAgentPluginWorkspace(workspaceId: string): void {
+    return this.agentPlugins.lockAgentPluginWorkspace(workspaceId);
+  }
+
+  assertAgentPluginWorkspaceMoveAllowed(agentId: string, targetWorkspaceId: string): void {
+    return this.agentPlugins.assertAgentPluginWorkspaceMoveAllowed(agentId, targetWorkspaceId);
+  }
+
+  reconcileAgentPluginDesiredStateWithinLock(workspaceId: string): void {
+    return this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
+  }
+
+  listAgentPlugins(
+    workspaceId = "local",
+    options: { provider?: string | null; includeArchived?: boolean } = {},
+  ): MultiremiAgentPlugin[] {
+    return this.agentPlugins.listAgentPlugins(workspaceId, options);
+  }
+
+  getAgentPlugin(id: string, options: { includeArchived?: boolean } = {}): MultiremiAgentPlugin | null {
+    return this.agentPlugins.getAgentPlugin(id, options);
+  }
+
+  importAgentPlugin(input: ImportAgentPluginInput): MultiremiAgentPlugin {
+    return this.agentPlugins.importAgentPlugin(input);
+  }
+
+  createAgentPluginVersion(pluginId: string, input: CreateAgentPluginVersionInput): MultiremiAgentPluginVersion {
+    return this.agentPlugins.createAgentPluginVersion(pluginId, input);
+  }
+
+  updateAgentPlugin(id: string, input: UpdateAgentPluginInput): MultiremiAgentPlugin {
+    return this.agentPlugins.updateAgentPlugin(id, input);
+  }
+
+  archiveAgentPlugin(id: string): MultiremiAgentPlugin {
+    return this.agentPlugins.archiveAgentPlugin(id);
+  }
+
+  restoreAgentPlugin(id: string): MultiremiAgentPlugin {
+    return this.agentPlugins.restoreAgentPlugin(id);
+  }
+
+  listAgentPluginVersions(pluginId: string): MultiremiAgentPluginVersion[] {
+    return this.agentPlugins.listAgentPluginVersions(pluginId);
+  }
+
+  getAgentPluginVersion(id: string): MultiremiAgentPluginVersion | null {
+    return this.agentPlugins.getAgentPluginVersion(id);
+  }
+
+  activateAgentPluginVersion(pluginId: string, versionId: string): MultiremiAgentPlugin {
+    return this.agentPlugins.activateAgentPluginVersion(pluginId, versionId);
+  }
+
+  rollbackAgentPluginVersion(pluginId: string, versionId?: string | null): MultiremiAgentPlugin {
+    return this.agentPlugins.rollbackAgentPluginVersion(pluginId, versionId);
+  }
+
+  listAgentPluginBindings(agentId: string): MultiremiAgentPluginBinding[] {
+    return this.agentPlugins.listAgentPluginBindings(agentId);
+  }
+
+  createAgentPluginBinding(agentId: string, input: CreateAgentPluginBindingInput): MultiremiAgentPluginBinding {
+    return this.agentPlugins.createAgentPluginBinding(agentId, input);
+  }
+
+  updateAgentPluginBinding(
+    agentId: string,
+    bindingId: string,
+    input: UpdateAgentPluginBindingInput,
+  ): MultiremiAgentPluginBinding {
+    return this.agentPlugins.updateAgentPluginBinding(agentId, bindingId, input);
+  }
+
+  deleteAgentPluginBinding(agentId: string, bindingId: string): boolean {
+    return this.agentPlugins.deleteAgentPluginBinding(agentId, bindingId);
+  }
+
+  resolveAgentPluginSnapshot(agentId: string): MultiremiTaskPluginSnapshotEntry[] {
+    return this.agentPlugins.resolveAgentPluginSnapshot(agentId);
+  }
+
+  getAgentPluginCapabilityRevision(agentId: string): string {
+    return this.agentPlugins.getAgentPluginCapabilityRevision(agentId);
+  }
+
+  runtimeHasReadyAgentPlugins(runtimeId: string, agentId: string): boolean {
+    return this.agentPlugins.runtimeHasReadyAgentPlugins(runtimeId, agentId);
+  }
+
+  assertAgentPluginProviderCompatible(agentId: string, provider: string): void {
+    return this.agentPlugins.assertAgentPluginProviderCompatible(agentId, provider);
+  }
+
+  listAgentPluginRuntimeStates(
+    options: { workspaceId?: string; pluginId?: string; runtimeId?: string; includeHistorical?: boolean } = {},
+  ): MultiremiAgentPluginRuntimeState[] {
+    return this.agentPlugins.listAgentPluginRuntimeStates(options);
+  }
+
+  getRuntimeAgentPluginDesiredSnapshot(runtimeId: string): MultiremiAgentPluginRuntimeDesiredSnapshot {
+    return this.agentPlugins.getRuntimeAgentPluginDesiredSnapshot(runtimeId);
+  }
+
+  reportAgentPluginRuntimeState(
+    runtimeId: string,
+    versionId: string,
+    input: ReportAgentPluginRuntimeStateInput,
+  ): MultiremiAgentPluginRuntimeState {
+    return this.agentPlugins.reportAgentPluginRuntimeState(runtimeId, versionId, input);
+  }
+
+  retryAgentPluginRuntime(
+    pluginId: string,
+    runtimeId?: string | null,
+    versionId?: string | null,
+  ): MultiremiAgentPluginRuntimeState[] {
+    return this.agentPlugins.retryAgentPluginRuntime(pluginId, runtimeId, versionId);
+  }
+
+  getAgentPluginArtifactByDigest(digest: string, workspaceId?: string | null) {
+    return this.agentPlugins.getAgentPluginArtifactByDigest(digest, workspaceId);
+  }
+
+  reconcileAgentPluginDesiredState(workspaceId: string): void {
+    return this.agentPlugins.reconcileAgentPluginDesiredState(workspaceId);
   }
 
   ensureDefaultAgent(
@@ -659,6 +804,10 @@ runMigrations(this.db);
 
   getAccessToken(id: string): MultiremiAccessToken | null {
     return this.accessTokens.getAccessToken(id);
+  }
+
+  bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
+    return this.accessTokens.bindDaemonAccessToken(id, daemonId);
   }
 
   revokeAccessToken(id: string): MultiremiAccessToken | null {

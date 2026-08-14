@@ -1,7 +1,9 @@
 // Tasks domain (task lifecycle, claiming/dispatch, task messages, human requests, usage and the
 // terminal-state fan-out into issues/sessions/autopilots), extracted verbatim from MultiremiStore
 // (the facade delegates every public method here).
+import { createHash } from "node:crypto";
 import { createId, nowIso } from "@multiremi/ids.js";
+import { canonicalJson } from "@multiremi/agent-plugins/import.js";
 import {
   cleanOptionalString,
   daemonRuntimeId,
@@ -37,6 +39,7 @@ import type {
   MultiremiTaskHumanRequestKind,
   MultiremiTaskHumanRequestStatus,
   MultiremiTaskMessage,
+  MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
@@ -66,6 +69,8 @@ const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
+class AgentPluginReadinessChangedError extends Error {}
+
 function runtimeSupportsIssueWorkspaces(runtime: MultiremiRuntime): boolean {
   const rawVersion = runtime.metadata.cli_version ?? runtime.metadata.cliVersion;
   if (typeof rawVersion !== "string" || !rawVersion.trim()) return true;
@@ -93,6 +98,13 @@ export class TasksRepo {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
+    const inheritedPluginSnapshot = taskPluginSnapshotInput(input);
+    const inheritedExecutionFingerprint = cleanOptionalString(
+      input.executionFingerprint ?? input.execution_fingerprint,
+    );
+    const currentPluginSnapshot = inheritedPluginSnapshot ?? this.ctx.agentPlugins().resolveAgentPluginSnapshot(agent.id);
+    const expectedExecutionFingerprint = inheritedExecutionFingerprint
+      ?? this.ctx.agentPlugins().getAgentPluginCapabilityRevision(agent.id);
     const triggerCommentId = cleanOptionalString(input.triggerCommentId ?? input.trigger_comment_id);
     const triggerComment = triggerCommentId ? this.ctx.getRawIssueComment(triggerCommentId) : null;
     if (triggerCommentId && !triggerComment) throw new Error(`Comment not found: ${triggerCommentId}`);
@@ -136,7 +148,13 @@ export class TasksRepo {
     // wrong machine (it would run in a scratch checkout of the wrong repo) or
     // carry another machine's provider session. An explicit runtimeId is only
     // honoured when there is no strong affinity to respect.
-    const affinity = this.resolveTaskAffinity(agent, input.resetProviderSession ? null : chatSession, issue);
+    const affinity = this.resolveTaskAffinity(
+      agent,
+      input.resetProviderSession ? null : chatSession,
+      issue,
+      expectedExecutionFingerprint,
+      currentPluginSnapshot.length > 0,
+    );
     if (affinity.runtimeId) runtimeId = affinity.runtimeId;
     if (!input.resetProviderSession) inheritChatSession = affinity.inheritChatSession;
 
@@ -154,6 +172,11 @@ export class TasksRepo {
         !input.resetProviderSession
         && !!issueLane.providerSessionId
         && issueLane.provider === agent.provider
+        && executionFingerprintResumable(
+          issueLane.executionFingerprint,
+          expectedExecutionFingerprint,
+          currentPluginSnapshot.length > 0,
+        )
         && laneRuntime != null
         && this.ctx.runtimes().runtimeCanRunAgent(laneRuntime, agent);
       const runtimeConflict = Boolean(affinity.runtimeId && issueLane.runtimeId && affinity.runtimeId !== issueLane.runtimeId);
@@ -176,8 +199,9 @@ export class TasksRepo {
         id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, assignment_event_id,
+        provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         input.agentId,
@@ -200,6 +224,9 @@ export class TasksRepo {
         maxAttempts,
         cleanOptionalString(input.parentTaskId ?? input.parent_task_id),
         cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id),
+        cleanOptionalString(input.provider),
+        toJson(inheritedPluginSnapshot ?? []),
+        inheritedExecutionFingerprint,
         // The inheritChatSession gate applies only to a task that HAS a chat
         // session: when false the promoted session belongs to a machine we
         // can't return to (engine switched / runtime gone) — dropped, even if a
@@ -239,6 +266,7 @@ export class TasksRepo {
         now,
       ],
     );
+    if (inheritedPluginSnapshot) this.replaceTaskPluginSnapshotIndex(id, inheritedPluginSnapshot, now);
     if (issueSession) {
       this.ctx.issueSessions().addSessionParticipant(issueSession.id, {
         participantType: "agent",
@@ -284,6 +312,7 @@ export class TasksRepo {
        SET provider_session_id = NULL,
            runtime_id = NULL,
            provider = NULL,
+           execution_fingerprint = NULL,
            work_dir = NULL,
            cursor_seq = 0,
            generation = generation + 1,
@@ -306,6 +335,8 @@ export class TasksRepo {
     agent: MultiremiAgent,
     chatSession: MultiremiChatSession | null,
     issue: MultiremiIssue | null,
+    executionFingerprint: string,
+    hasPlugins: boolean,
   ): { runtimeId: string | null; inheritChatSession: boolean } {
     // local_directory affinity is checked FIRST and outranks session affinity:
     // the directory only exists on that daemon (a hard data constraint), while
@@ -328,7 +359,12 @@ export class TasksRepo {
         const dirRuntimeId = runtime ? runtime.id : daemonRuntimeId(daemonId, agent.provider);
         // Inherit the session only if it was produced on THIS directory machine
         // AND by the agent's current engine (see sessionResumable).
-        const inheritChatSession = this.sessionResumable(chatSession, agent) && chatSession?.sessionRuntimeId === dirRuntimeId;
+        const inheritChatSession = this.sessionResumable(
+          chatSession,
+          agent,
+          executionFingerprint,
+          hasPlugins,
+        ) && chatSession?.sessionRuntimeId === dirRuntimeId;
         return { runtimeId: dirRuntimeId, inheritChatSession };
       }
     }
@@ -337,7 +373,7 @@ export class TasksRepo {
       // machine can still run this agent AND the session's recorded engine
       // matches the agent's current one. Otherwise abandon the session and
       // re-pool (the claim predicate would reject a stale/foreign pin forever).
-      if (this.sessionResumable(chatSession, agent) && chatSession.sessionRuntimeId) {
+      if (this.sessionResumable(chatSession, agent, executionFingerprint, hasPlugins) && chatSession.sessionRuntimeId) {
         const runtime = this.ctx.runtimes().getRuntime(chatSession.sessionRuntimeId);
         if (runtime && this.ctx.runtimes().runtimeCanRunAgent(runtime, agent)) {
           return { runtimeId: runtime.id, inheritChatSession: true };
@@ -356,8 +392,19 @@ export class TasksRepo {
    * before this metadata existed (null session_provider) are treated as
    * non-resumable to stay safe.
    */
-  private sessionResumable(chatSession: MultiremiChatSession | null, agent: MultiremiAgent): boolean {
-    return !!chatSession?.sessionId && chatSession.sessionProvider === agent.provider;
+  private sessionResumable(
+    chatSession: MultiremiChatSession | null,
+    agent: MultiremiAgent,
+    executionFingerprint: string,
+    hasPlugins: boolean,
+  ): boolean {
+    return !!chatSession?.sessionId
+      && chatSession.sessionProvider === agent.provider
+      && executionFingerprintResumable(
+        chatSession.sessionExecutionFingerprint,
+        executionFingerprint,
+        hasPlugins,
+      );
   }
 
   getTask(id: string): MultiremiTask | null {
@@ -539,15 +586,27 @@ export class TasksRepo {
         "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
         [runtime.workspaceId ?? "local"],
       );
+      // Plugin bindings/version activation and Agent provider updates use the
+      // same workspace lock. Holding it through claim + snapshot prevents a
+      // mutable capability change from slipping between dispatch and freeze.
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(runtime.workspaceId ?? "local");
       this.ctx.runtimes().heartbeatRuntime(runtimeId, { claimPending: false });
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
-      if (stale) return this.snapshotTaskProvider(stale, runtime);
+      if (stale) return this.snapshotTaskExecution(stale, runtime);
 
       const claimed = this.claimNextTaskForRuntime(runtime);
-      return claimed ? this.snapshotTaskProvider(claimed, runtime) : null;
+      return claimed ? this.snapshotTaskExecution(claimed, runtime) : null;
     });
-    return tx();
+    try {
+      return tx();
+    } catch (error) {
+      // A Plugin binding/version may change between the claim candidate SQL
+      // and the exact snapshot read under PostgreSQL READ COMMITTED. Rolling
+      // the transaction back leaves the task queued for the next reconcile.
+      if (error instanceof AgentPluginReadinessChangedError) return null;
+      throw error;
+    }
   }
 
   /**
@@ -556,13 +615,133 @@ export class TasksRepo {
    * provider is right now. The promoted session's engine (session_provider)
    * comes from this snapshot, not the agent's later-mutable provider.
    */
-  private snapshotTaskProvider(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
-    const provider = runtime.provider !== "any" ? runtime.provider : (task.agent?.provider ?? null);
-    if (provider && task.provider !== provider) {
-      this.ctx.db.run("UPDATE multiremi_tasks SET provider = ? WHERE id = ?", [provider, task.id]);
-      return { ...task, provider };
+  private snapshotTaskExecution(task: MultiremiTaskWithAgent, runtime: MultiremiRuntime): MultiremiTaskWithAgent {
+    // Serialize the final snapshot with provider/archival mutations. If an
+    // Agent update committed first we observe it below; if it starts later it
+    // waits until this claim commits, then its rescheduler can cancel/re-home
+    // the now-frozen dispatched task.
+    this.ctx.db.run(
+      "UPDATE multiremi_agents SET updated_at = updated_at WHERE id = ?",
+      [task.agentId],
+    );
+    const currentAgent = this.ctx.agents().getAgent(task.agentId);
+    if (!currentAgent || currentAgent.archivedAt) {
+      throw new AgentPluginReadinessChangedError("claimed Agent is no longer executable");
     }
-    return task;
+    const provider = runtime.provider !== "any" ? runtime.provider : currentAgent.provider;
+    if (runtime.provider !== "any" && runtime.provider !== currentAgent.provider) {
+      throw new AgentPluginReadinessChangedError("Agent provider changed during task claim");
+    }
+    if (task.executionFingerprint && task.provider && task.provider !== currentAgent.provider) {
+      throw new AgentPluginReadinessChangedError("frozen task provider no longer matches Agent provider");
+    }
+    // A stale dispatch and an automatic infrastructure retry already own an
+    // immutable snapshot. Never resolve mutable Agent bindings again.
+    if (task.executionFingerprint) {
+      if (provider && !task.provider) {
+        this.ctx.db.run("UPDATE multiremi_tasks SET provider = ? WHERE id = ?", [provider, task.id]);
+        return { ...task, provider };
+      }
+      return task;
+    }
+
+    const pluginSnapshot = this.ctx.agentPlugins().resolveAgentPluginSnapshot(currentAgent.id);
+    const executionFingerprint = createHash("sha256")
+      .update(canonicalJson(pluginSnapshot))
+      .digest("hex");
+    if (!this.runtimeHasReadyPluginSnapshot(runtime.id, pluginSnapshot)) {
+      throw new AgentPluginReadinessChangedError("Agent Plugin readiness changed during task claim");
+    }
+    let keepProviderSession = true;
+    if (task.sessionId && task.chatSessionId) {
+      const chat = this.ctx.chat().getChatSession(task.chatSessionId);
+      keepProviderSession = executionFingerprintResumable(
+        chat?.sessionExecutionFingerprint ?? null,
+        executionFingerprint,
+        pluginSnapshot.length > 0,
+      );
+    } else if (task.sessionId && task.issueSessionId) {
+      const lane = this.ctx.issueSessions().getSessionAgentLane(task.issueSessionId, task.agentId);
+      keepProviderSession = executionFingerprintResumable(
+        lane?.executionFingerprint ?? null,
+        executionFingerprint,
+        pluginSnapshot.length > 0,
+      );
+    }
+    this.ctx.db.run(
+      `UPDATE multiremi_tasks
+       SET provider = ?, plugin_snapshot = ?, execution_fingerprint = ?,
+           session_id = CASE WHEN ? = 1 THEN session_id ELSE NULL END,
+           work_dir = CASE WHEN ? = 1 THEN work_dir ELSE NULL END,
+           updated_at = ?
+       WHERE id = ?`,
+      [
+        provider,
+        toJson(pluginSnapshot),
+        executionFingerprint,
+        keepProviderSession ? 1 : 0,
+        keepProviderSession ? 1 : 0,
+        nowIso(),
+        task.id,
+      ],
+    );
+    this.replaceTaskPluginSnapshotIndex(task.id, pluginSnapshot);
+    return this.getTaskWithAgent(task.id)!;
+  }
+
+  private replaceTaskPluginSnapshotIndex(
+    taskId: string,
+    snapshot: MultiremiTaskPluginSnapshotEntry[],
+    createdAt = nowIso(),
+  ): void {
+    this.ctx.db.run("DELETE FROM multiremi_task_plugin_snapshots WHERE task_id = ?", [taskId]);
+    for (const entry of snapshot) {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_task_plugin_snapshots (
+           task_id, binding_id, plugin_id, version_id, provider, digest, artifact_url, snapshot, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          taskId,
+          entry.bindingId,
+          entry.pluginId,
+          entry.versionId,
+          entry.provider,
+          entry.digest,
+          entry.artifactUrl,
+          toJson(entry),
+          createdAt,
+        ],
+      );
+    }
+  }
+
+  private runtimeHasReadyTaskPlugins(runtimeId: string, task: MultiremiTask): boolean {
+    if (!task.executionFingerprint) {
+      return this.ctx.agentPlugins().runtimeHasReadyAgentPlugins(runtimeId, task.agentId);
+    }
+    return this.runtimeHasReadyPluginSnapshot(runtimeId, task.pluginSnapshot);
+  }
+
+  private runtimeHasReadyPluginSnapshot(
+    runtimeId: string,
+    snapshot: MultiremiTaskPluginSnapshotEntry[],
+  ): boolean {
+    for (const entry of snapshot) {
+      const row = this.ctx.db.query(
+        `SELECT s.status, s.desired, s.observed_digest, v.artifact_digest
+         FROM multiremi_agent_plugin_versions v
+         LEFT JOIN multiremi_agent_plugin_runtime_states s
+           ON s.runtime_id = ? AND s.plugin_version_id = v.id
+         WHERE v.id = ?`,
+      ).get(runtimeId, entry.versionId) as Row | null;
+      if (!row
+        || Number(row.desired) !== 1
+        || row.status !== "ready"
+        || row.observed_digest !== row.artifact_digest) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private reclaimStaleDispatchedTaskForRuntime(runtimeId: string): MultiremiTaskWithAgent | null {
@@ -598,6 +777,7 @@ export class TasksRepo {
       && !task.agent.archivedAt
       && runtime != null
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
+      && this.runtimeHasReadyTaskPlugins(runtime.id, task)
       && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime));
     if (task && !eligible) {
       const now = nowIso();
@@ -662,6 +842,8 @@ export class TasksRepo {
       runtime.provider,
       runtime.visibility,
       runtime.ownerId,
+      runtime.id,
+      runtime.id,
     ];
     // Ownership guard: a private runtime only executes its owner's agents — a
     // claim hands the runtime the agent's custom_env / mcp_config. Owner match
@@ -714,6 +896,50 @@ export class TasksRepo {
            AND (a.runtime_id IS NULL OR a.runtime_id = ?)
            AND (? = 'any' OR a.provider = ?)
            AND (? = 'public' OR COALESCE(CAST(? AS TEXT), 'local') = COALESCE(a.owner_id, 'local'))
+           AND NOT EXISTS (
+             SELECT 1
+             FROM multiremi_task_plugin_snapshots task_plugin
+             JOIN multiremi_agent_plugin_versions task_plugin_version
+               ON task_plugin_version.id = task_plugin.version_id
+             LEFT JOIN multiremi_agent_plugin_runtime_states task_plugin_state
+               ON task_plugin_state.runtime_id = ?
+              AND task_plugin_state.plugin_version_id = task_plugin.version_id
+              AND task_plugin_state.desired = 1
+             WHERE task_plugin.task_id = t.id
+               AND (
+                 task_plugin_state.id IS NULL
+                 OR task_plugin_state.status <> 'ready'
+                 OR task_plugin_state.observed_digest IS NULL
+                 OR task_plugin_state.observed_digest <> task_plugin_version.artifact_digest
+               )
+           )
+           AND (
+             EXISTS (SELECT 1 FROM multiremi_task_plugin_snapshots frozen_plugin WHERE frozen_plugin.task_id = t.id)
+             OR NOT EXISTS (
+               SELECT 1
+               FROM multiremi_agent_plugin_bindings agent_plugin
+               JOIN multiremi_agent_plugins plugin ON plugin.id = agent_plugin.plugin_id
+               LEFT JOIN multiremi_agent_plugin_versions plugin_version
+                 ON plugin_version.id = CASE
+                   WHEN agent_plugin.version_policy = 'pinned' THEN agent_plugin.version_id
+                   ELSE plugin.active_version_id
+                 END
+               LEFT JOIN multiremi_agent_plugin_runtime_states plugin_state
+                 ON plugin_state.runtime_id = ?
+                AND plugin_state.plugin_version_id = plugin_version.id
+                AND plugin_state.desired = 1
+               WHERE agent_plugin.agent_id = a.id
+                 AND agent_plugin.enabled = 1
+                 AND plugin.archived_at IS NULL
+                 AND (
+                   plugin_version.id IS NULL
+                   OR plugin_state.id IS NULL
+                   OR plugin_state.status <> 'ready'
+                   OR plugin_state.observed_digest IS NULL
+                   OR plugin_state.observed_digest <> plugin_version.artifact_digest
+                 )
+             )
+           )
            AND (
              SELECT COUNT(*)
              FROM multiremi_tasks running
@@ -1131,9 +1357,18 @@ export class TasksRepo {
       && parent.provider === agent.provider
       && this.ctx.runtimes().runtimeCanRunAgent(parentRuntime, agent);
     const resumeSafe = !RESUME_UNSAFE_FAILURE_REASONS.has(parent.failureReason) && parentRuntimeUsable;
+    // If the Agent changed provider before this failure was reported, the old
+    // provider/plugin snapshot can no longer be executed with the Agent's
+    // current native config. Treat this as a fresh retry. When the retry was
+    // already created before a later provider change, updateAgent cancels it
+    // atomically instead, so neither ordering can mix providers.
+    const inheritExecutionSnapshot = agent != null && parent.provider === agent.provider;
     if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
     const retry = this.createTask({
       agentId: parent.agentId,
+      provider: inheritExecutionSnapshot ? parent.provider : null,
+      pluginSnapshot: inheritExecutionSnapshot ? parent.pluginSnapshot : undefined,
+      executionFingerprint: inheritExecutionSnapshot ? parent.executionFingerprint : null,
       // Resume-safe failures must go back to the machine holding the session;
       // once the session is abandoned, any pool machine may pick up the retry.
       runtimeId: resumeSafe ? parent.runtimeId : null,
@@ -1242,6 +1477,7 @@ export class TasksRepo {
              work_dir = CASE WHEN ? = 1 THEN ? ELSE work_dir END,
              session_runtime_id = CASE WHEN ? = 1 THEN ? ELSE session_runtime_id END,
              session_provider = CASE WHEN ? = 1 THEN ? ELSE session_provider END,
+             session_execution_fingerprint = CASE WHEN ? = 1 THEN ? ELSE session_execution_fingerprint END,
              latest_task_id = ?,
              unread_since = COALESCE(unread_since, ?),
              updated_at = ?
@@ -1251,6 +1487,7 @@ export class TasksRepo {
           promoteSession ? 1 : 0, task.workDir ?? null,
           promoteSession ? 1 : 0, task.runtimeId ?? null,
           promoteSession ? 1 : 0, sessionProvider,
+          promoteSession ? 1 : 0, task.executionFingerprint,
           task.id, now, now, task.chatSessionId,
         ],
       );
@@ -1348,6 +1585,7 @@ export class TasksRepo {
       SET provider_session_id = ?,
           runtime_id = ?,
           provider = ?,
+          execution_fingerprint = ?,
           work_dir = ?,
           cursor_seq = ?,
           last_task_id = ?,
@@ -1357,6 +1595,7 @@ export class TasksRepo {
       task.sessionId,
       task.runtimeId,
       task.provider,
+      task.executionFingerprint,
       task.workDir,
       cursorSeq,
       task.id,
@@ -1559,6 +1798,23 @@ function normalizeTriggerSummary(value: unknown): string | null {
   return `${chars.slice(0, TRIGGER_SUMMARY_MAX_LENGTH).join("")}\u2026`;
 }
 
+function taskPluginSnapshotInput(input: CreateTaskInput): MultiremiTaskPluginSnapshotEntry[] | null {
+  const value = input.pluginSnapshot ?? input.plugin_snapshot;
+  return Array.isArray(value) ? value.map((entry) => ({ ...entry, config: { ...entry.config } })) : null;
+}
+
+function executionFingerprintResumable(
+  storedFingerprint: string | null | undefined,
+  expectedFingerprint: string,
+  hasPlugins: boolean,
+): boolean {
+  const stored = cleanOptionalString(storedFingerprint);
+  // Sessions created before Plugin fingerprints existed remain compatible only
+  // while the Agent still has no Plugins. Once capabilities are attached we
+  // fail closed and start a fresh provider session.
+  return stored ? stored === expectedFingerprint : !hasPlugins;
+}
+
 function outcomeTime(task: MultiremiTask): number {
   return Date.parse(task.completedAt ?? task.failedAt ?? task.updatedAt ?? task.createdAt);
 }
@@ -1585,6 +1841,10 @@ function toTask(row: Row): MultiremiTask {
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
     provider: nullableString(row.provider),
+    pluginSnapshot: parseJson<MultiremiTaskPluginSnapshotEntry[]>(row.plugin_snapshot, []),
+    plugin_snapshot: parseJson<MultiremiTaskPluginSnapshotEntry[]>(row.plugin_snapshot, []),
+    executionFingerprint: nullableString(row.execution_fingerprint),
+    execution_fingerprint: nullableString(row.execution_fingerprint),
     issueId: nullableString(row.issue_id),
     issueSessionId: nullableString(row.issue_session_id),
     issue_session_id: nullableString(row.issue_session_id),

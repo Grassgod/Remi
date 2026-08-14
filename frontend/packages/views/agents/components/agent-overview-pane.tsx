@@ -8,6 +8,7 @@ import {
   KeyRound,
   ListTodo,
   Plug,
+  Puzzle,
   Terminal,
   Webhook,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import {
 import { ActivityTab } from "./tabs/activity-tab";
 import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
+import { PluginsTab } from "./tabs/plugins-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
@@ -47,16 +49,18 @@ export type DetailTab =
   | "tasks"
   | "instructions"
   | "skills"
+  | "plugins"
   | "env"
   | "custom_args"
   | "mcp_config"
   | "integrations";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "plugins" | "environment" | "custom_args" | "mcp_config" | "integrations"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
   skills: "skills",
+  plugins: "plugins",
   env: "environment",
   custom_args: "custom_args",
   mcp_config: "mcp_config",
@@ -71,6 +75,7 @@ const detailTabs: {
   { id: "tasks", icon: ListTodo },
   { id: "instructions", icon: FileText },
   { id: "skills", icon: BookOpenText },
+  { id: "plugins", icon: Puzzle },
   { id: "env", icon: KeyRound },
   { id: "custom_args", icon: Terminal },
   { id: "mcp_config", icon: Plug },
@@ -81,6 +86,7 @@ interface AgentOverviewPaneProps {
   agent: Agent;
   runtimes: AgentRuntime[];
   onUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
+  canEdit?: boolean;
   /**
    * One-shot request from a sibling (the inspector's compact Lark status
    * row) to focus a specific tab. Routed through the same `requestTabChange`
@@ -117,6 +123,7 @@ export function AgentOverviewPane({
   agent,
   runtimes,
   onUpdate,
+  canEdit = false,
   navIntent,
   onNavIntentHandled,
 }: AgentOverviewPaneProps) {
@@ -140,6 +147,8 @@ export function AgentOverviewPane({
   const engineRuntime = engine
     ? runtimes.find((r) => r.provider === engine) ?? null
     : null;
+  const pluginProvider =
+    engine === "claude" || engine === "codex" ? engine : null;
 
   // Cached per-workspace and shared with the inspector's bind button, so this
   // is at most one extra GET per workspace. We only read `configured` to
@@ -163,10 +172,11 @@ export function AgentOverviewPane({
     const showMcp = engine ? providerSupportsMcpConfig(engine) : true;
     return detailTabs.filter((tab) => {
       if (tab.id === "mcp_config") return showMcp;
+      if (tab.id === "plugins") return pluginProvider !== null;
       if (tab.id === "integrations") return larkConfigured;
       return true;
     });
-  }, [engine, larkConfigured]);
+  }, [engine, larkConfigured, pluginProvider]);
 
   // If the active tab disappears (e.g. user just switched the agent's
   // runtime to one that doesn't read mcp_config), fall back to Activity
@@ -259,6 +269,17 @@ export function AgentOverviewPane({
       <TabsContent value="skills" className="min-h-0 flex-1 overflow-y-auto">
         <TabContent>
           <SkillsTab agent={agent} />
+        </TabContent>
+      </TabsContent>
+      <TabsContent value="plugins" className="min-h-0 flex-1 overflow-y-auto">
+        <TabContent>
+          {pluginProvider && (
+            <PluginsTab
+              agent={agent}
+              provider={pluginProvider}
+              canEdit={canEdit}
+            />
+          )}
         </TabContent>
       </TabsContent>
       <TabsContent value="env" className="min-h-0 flex-1 overflow-y-auto">

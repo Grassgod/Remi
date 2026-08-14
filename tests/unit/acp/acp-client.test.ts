@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,9 +18,8 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "acp-client-test-"));
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate() && Date.now() < deadline) {
+async function waitFor(predicate: () => boolean, attempts = 150): Promise<void> {
+  for (let attempt = 0; attempt < attempts && !predicate(); attempt++) {
     await new Promise((r) => setTimeout(r, 20));
   }
 }
@@ -61,7 +60,90 @@ describe("AcpClient process death", () => {
     // stop() after unexpected death must be a no-op, not throw.
     await client.stop();
   });
+
+  it("stops a launcher and the native child that inherits its stdio", async () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    const childPidPath = join(dir, "child.pid");
+    const childPath = join(dir, "stubborn-child.js");
+    writeFileSync(
+      childPath,
+      `const { writeFileSync } = require("node:fs");\nprocess.on("SIGTERM", () => {});\nwriteFileSync(process.argv[2], String(process.pid));\nsetInterval(() => {}, 1_000);\n`,
+    );
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, [${JSON.stringify(childPath)}, ${JSON.stringify(childPidPath)}], { stdio: "inherit" });
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1_000);
+`,
+      "js",
+    );
+    const client = new AcpClient({ executable });
+    await client.start();
+    await waitFor(() => existsSync(childPidPath));
+    const childPid = Number(readFileSync(childPidPath, "utf8"));
+    expect(processIsAlive(childPid)).toBe(true);
+
+    await client.stop();
+    await waitFor(() => !processIsAlive(childPid));
+    expect(processIsAlive(childPid)).toBe(false);
+  });
+
+  it("kills an inherited native child when its launcher crashes", async () => {
+    if (process.platform === "win32") return;
+    const dir = tempDir();
+    const childPidPath = join(dir, "child.pid");
+    const childPath = join(dir, "stubborn-child.js");
+    writeFileSync(
+      childPath,
+      `const { writeFileSync } = require("node:fs");\nprocess.on("SIGTERM", () => {});\nwriteFileSync(process.argv[2], String(process.pid));\nsetInterval(() => {}, 1_000);\n`,
+    );
+    const executable = fakeAgent(
+      `#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+spawn(process.execPath, [${JSON.stringify(childPath)}, ${JSON.stringify(childPidPath)}], { stdio: "inherit" });
+setTimeout(() => process.exit(1), 100);
+`,
+      "js",
+    );
+    const client = new AcpClient({ executable });
+    let childPid = 0;
+    try {
+      await client.start();
+      await waitFor(() => existsSync(childPidPath));
+      childPid = Number(readFileSync(childPidPath, "utf8"));
+      expect(processIsAlive(childPid)).toBe(true);
+
+      await waitFor(() => !client.alive);
+      await waitFor(() => !processIsAlive(childPid));
+      expect(client.alive).toBe(false);
+      expect(processIsAlive(childPid)).toBe(false);
+    } finally {
+      if (childPid > 0 && processIsAlive(childPid)) {
+        try { process.kill(childPid, "SIGKILL"); } catch {}
+      }
+      await client.stop();
+    }
+  });
 });
+
+function processIsAlive(pid: number): boolean {
+  if (process.platform === "linux") {
+    try {
+      // kill(pid, 0) also succeeds for a zombie. A zombie has stopped running
+      // and only awaits adoption/reaping, so it satisfies this lifecycle test.
+      const state = readFileSync(`/proc/${pid}/stat`, "utf8").split(" ")[2];
+      if (state === "Z") return false;
+    } catch {}
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe("AcpClient elicitation", () => {
   it("answers elicitation/create via the registered handler", async () => {

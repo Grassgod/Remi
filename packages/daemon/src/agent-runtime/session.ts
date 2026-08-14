@@ -100,6 +100,8 @@ export class AgentSession {
 
   private buildSendOptions(): SendOptions {
     const c = this.config;
+    // Agent Plugin fields are an ACP-local extension while the public Provider
+    // contract remains compatible with non-ACP providers.
     return {
       systemPrompt: c.systemPrompt,
       context: c.context,
@@ -114,7 +116,10 @@ export class AgentSession {
       permissionMode: c.permissionMode,
       traceId: c.traceId,
       signal: c.signal,
-    };
+      pluginPaths: c.pluginPaths,
+      pluginFingerprint: c.pluginFingerprint,
+      codexHome: c.codexHome,
+    } as SendOptions;
   }
 
   private accumulateText(

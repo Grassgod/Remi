@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multiremi/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { detail, deletePin, pins } = vi.hoisted(() => ({
+const { detail, deletePin, pathname, pins } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
+  pathname: { current: "/acme/issues" },
   pins: {
     current: [
       {
@@ -43,7 +44,23 @@ vi.mock("@multiremi/ui/components/ui/sidebar", () => ({
   SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SidebarMenuButton: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  SidebarMenuButton: ({
+    children,
+    render,
+    isActive,
+  }: {
+    children: React.ReactNode;
+    render?: React.ReactElement<{ href?: string }>;
+    isActive?: boolean;
+  }) => (
+    <button
+      type="button"
+      data-active={isActive ? "true" : "false"}
+      data-href={render?.props.href}
+    >
+      {children}
+    </button>
+  ),
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarRail: () => null,
 }));
@@ -70,7 +87,7 @@ vi.mock("../auth", () => ({ useLogout: () => vi.fn() }));
 vi.mock("../issues/components/status-icon", () => ({ StatusIcon: () => <span /> }));
 vi.mock("../navigation", () => ({
   AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
-  useNavigation: () => ({ pathname: "/acme/issues", push: vi.fn() }),
+  useNavigation: () => ({ pathname: pathname.current, push: vi.fn() }),
 }));
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
@@ -95,6 +112,7 @@ vi.mock("@multiremi/core/paths", () => ({
     squads: () => "/acme/squads",
     usage: () => "/acme/usage",
     runtimes: () => "/acme/runtimes",
+    plugins: () => "/acme/plugins",
     skills: () => "/acme/skills",
     settings: () => "/acme/settings",
     issueDetail: (id: string) => `/acme/issues/${id}`,
@@ -142,6 +160,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 describe("PinRow", () => {
   beforeEach(() => {
     deletePin.mockReset();
+    pathname.current = "/acme/issues";
     detail.current = { isPending: false, isError: false, data: null, error: null };
   });
 
@@ -161,5 +180,36 @@ describe("PinRow", () => {
     detail.current = { isPending: false, isError: false, data: { identifier: "MUL-123", title: "Keep this pin", status: "todo" }, error: null };
     render(<AppSidebar />);
     expect(await screen.findByText("MUL-123 Keep this pin")).toBeInTheDocument();
+  });
+});
+
+describe("plugin navigation", () => {
+  beforeEach(() => {
+    pathname.current = "/acme/issues";
+  });
+
+  it("links to the workspace plugins page", () => {
+    const { container } = render(<AppSidebar />);
+    const pluginsButton = container.querySelector(
+      'button[data-href="/acme/plugins"]',
+    );
+
+    expect(pluginsButton).toHaveAttribute(
+      "data-href",
+      "/acme/plugins",
+    );
+  });
+
+  it("stays active on plugin detail routes", () => {
+    pathname.current = "/acme/plugins/plugin-1";
+    const { container } = render(<AppSidebar />);
+    const pluginsButton = container.querySelector(
+      'button[data-href="/acme/plugins"]',
+    );
+
+    expect(pluginsButton).toHaveAttribute(
+      "data-active",
+      "true",
+    );
   });
 });

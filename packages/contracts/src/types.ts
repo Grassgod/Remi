@@ -226,6 +226,261 @@ export interface SetAgentSkillsInput {
   skill_ids?: string[];
 }
 
+// Agent Plugins are provider-native packages. Claude and Codex share this management
+// envelope, but their manifests, artifacts and runtime loaders are deliberately not interchangeable.
+export type MultiremiAgentPluginProvider = "claude" | "codex";
+
+export type MultiremiAgentPluginSourceType = "manifest" | "git" | "marketplace" | "zip" | "runtime";
+
+export type MultiremiAgentPluginVersionPolicy = "follow_active" | "pinned";
+
+export type MultiremiAgentPluginRuntimeStatus =
+  | "pending"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "preflight"
+  | "ready"
+  | "retry_scheduled"
+  | "setup_required"
+  | "blocked";
+
+export type MultiremiAgentPluginDesiredReason = "active_binding" | "pinned_binding" | "candidate" | "task_snapshot";
+
+export interface MultiremiAgentPluginArtifactFile {
+  path: string;
+  encoding: "utf8" | "base64";
+  content?: string;
+  size: number;
+  digest: string;
+  executable?: boolean;
+}
+
+export interface MultiremiAgentPluginVersion {
+  id: string;
+  pluginId: string;
+  version: string;
+  manifestPath: string;
+  manifest: Record<string, unknown>;
+  files: MultiremiAgentPluginArtifactFile[];
+  artifactDigest: string;
+  artifactUrl: string;
+  artifactSize: number;
+  sourceRevision: string | null;
+  requirements: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export interface MultiremiAgentPluginRuntimeSummary {
+  desired: number;
+  ready: number;
+  pending: number;
+  retrying: number;
+  setupRequired: number;
+  blocked: number;
+  offline: number;
+}
+
+export interface MultiremiAgentPlugin {
+  id: string;
+  workspaceId: string;
+  provider: MultiremiAgentPluginProvider;
+  name: string;
+  description: string;
+  sourceType: MultiremiAgentPluginSourceType;
+  sourceUrl: string | null;
+  sourceRef: string | null;
+  activeVersionId: string | null;
+  candidateVersionId: string | null;
+  activeVersion: MultiremiAgentPluginVersion | null;
+  candidateVersion: MultiremiAgentPluginVersion | null;
+  bindingCount: number;
+  runtimeSummary: MultiremiAgentPluginRuntimeSummary;
+  createdBy: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImportAgentPluginInput {
+  id?: string;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  provider: MultiremiAgentPluginProvider | string;
+  name?: string | null;
+  description?: string | null;
+  version?: string | null;
+  manifestPath?: string | null;
+  manifest_path?: string | null;
+  manifest: Record<string, unknown>;
+  files?: Array<{
+    path: string;
+    content?: string;
+    encoding?: "utf8" | "base64";
+    executable?: boolean;
+  }>;
+  sourceType?: MultiremiAgentPluginSourceType | string | null;
+  source_type?: MultiremiAgentPluginSourceType | string | null;
+  sourceUrl?: string | null;
+  source_url?: string | null;
+  sourceRef?: string | null;
+  source_ref?: string | null;
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  requirements?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  activate?: boolean;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface CreateAgentPluginVersionInput {
+  version?: string | null;
+  manifestPath?: string | null;
+  manifest_path?: string | null;
+  manifest: Record<string, unknown>;
+  files?: ImportAgentPluginInput["files"];
+  sourceRevision?: string | null;
+  source_revision?: string | null;
+  requirements?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+  activate?: boolean;
+  createdBy?: string | null;
+  created_by?: string | null;
+}
+
+export interface UpdateAgentPluginInput {
+  name?: string | null;
+  description?: string | null;
+  sourceUrl?: string | null;
+  source_url?: string | null;
+  sourceRef?: string | null;
+  source_ref?: string | null;
+}
+
+export interface MultiremiAgentPluginBinding {
+  id: string;
+  agentId: string;
+  pluginId: string;
+  versionPolicy: MultiremiAgentPluginVersionPolicy;
+  versionId: string | null;
+  resolvedVersionId: string | null;
+  connectionId: string | null;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  plugin: MultiremiAgentPlugin;
+  resolvedVersion: MultiremiAgentPluginVersion | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAgentPluginBindingInput {
+  pluginId?: string;
+  plugin_id?: string;
+  versionPolicy?: MultiremiAgentPluginVersionPolicy | string;
+  version_policy?: MultiremiAgentPluginVersionPolicy | string;
+  versionId?: string | null;
+  version_id?: string | null;
+  connectionId?: string | null;
+  connection_id?: string | null;
+  config?: Record<string, unknown> | null;
+  enabled?: boolean;
+}
+
+export interface UpdateAgentPluginBindingInput {
+  versionPolicy?: MultiremiAgentPluginVersionPolicy | string;
+  version_policy?: MultiremiAgentPluginVersionPolicy | string;
+  versionId?: string | null;
+  version_id?: string | null;
+  connectionId?: string | null;
+  connection_id?: string | null;
+  config?: Record<string, unknown> | null;
+  enabled?: boolean;
+}
+
+export interface MultiremiTaskPluginSnapshotEntry {
+  bindingId: string;
+  pluginId: string;
+  versionId: string;
+  name: string;
+  provider: MultiremiAgentPluginProvider;
+  version: string;
+  digest: string;
+  artifactUrl: string;
+  sourceRevision: string | null;
+  config: Record<string, unknown>;
+  connectionId: string | null;
+}
+
+export interface MultiremiAgentPluginRuntimeState {
+  id: string;
+  workspaceId: string;
+  runtimeId: string;
+  pluginId: string;
+  pluginVersionId: string;
+  desired: boolean;
+  desiredReason: MultiremiAgentPluginDesiredReason;
+  status: MultiremiAgentPluginRuntimeStatus;
+  observedDigest: string | null;
+  retryCount: number;
+  retryGeneration: number;
+  nextRetryAt: string | null;
+  lastErrorCode: string | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  lastReadyAt: string | null;
+  plugin: MultiremiAgentPlugin;
+  version: MultiremiAgentPluginVersion;
+  runtime: MultiremiRuntime;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MultiremiAgentPluginRuntimeDesired {
+  stateId: string;
+  pluginId: string;
+  versionId: string;
+  name: string;
+  provider: MultiremiAgentPluginProvider;
+  version: string;
+  digest: string;
+  artifactUrl: string;
+  sourceRevision: string | null;
+  requirements: Record<string, unknown>;
+  desiredReason: MultiremiAgentPluginDesiredReason;
+  status: MultiremiAgentPluginRuntimeStatus;
+  observedDigest: string | null;
+  retryCount: number;
+  retryGeneration: number;
+  nextRetryAt: string | null;
+  lastErrorCode: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface MultiremiAgentPluginRuntimeDesiredSnapshot {
+  runtimeId: string;
+  revision: string;
+  plugins: MultiremiAgentPluginRuntimeDesired[];
+}
+
+export interface ReportAgentPluginRuntimeStateInput {
+  status: MultiremiAgentPluginRuntimeStatus | string;
+  attempts?: number;
+  retryGeneration?: number;
+  retry_generation?: number;
+  observedDigest?: string | null;
+  observed_digest?: string | null;
+  nextRetryAt?: string | null;
+  next_retry_at?: string | null;
+  lastErrorCode?: string | null;
+  last_error_code?: string | null;
+  lastError?: string | null;
+  last_error?: string | null;
+}
+
 // ─── Runtimes & daemon ───────────────────────────────────────────────────────────────────────────
 
 export type MultiremiRuntimeStatus = "online" | "offline";
@@ -612,6 +867,16 @@ export interface MultiremiTask {
    *  the wire — it's a server-internal scheduling field the daemon doesn't
    *  receive, so a claim-response task may omit it. */
   provider?: string | null;
+  /** Immutable provider-native Plugin set resolved when the task is claimed.
+   * Infrastructure retries carry this snapshot forward; a user-created rerun
+   * starts empty and resolves the Agent's current bindings on its own claim. */
+  pluginSnapshot: MultiremiTaskPluginSnapshotEntry[];
+  plugin_snapshot?: MultiremiTaskPluginSnapshotEntry[];
+  /** Stable hash of the exact Plugin versions, binding config and connection
+   * references used by this execution. Provider sessions only resume when it
+   * still matches. Null until a normal queued task is claimed. */
+  executionFingerprint: string | null;
+  execution_fingerprint?: string | null;
   issueId: string | null;
   issueSessionId: string | null;
   issue_session_id?: string | null;
@@ -751,6 +1016,12 @@ export interface CreateTaskInput {
   agentId: string;
   runtimeId?: string | null;
   runtime_id?: string | null;
+  /** Server-internal execution snapshot fields used by automatic retries. */
+  provider?: string | null;
+  pluginSnapshot?: MultiremiTaskPluginSnapshotEntry[];
+  plugin_snapshot?: MultiremiTaskPluginSnapshotEntry[];
+  executionFingerprint?: string | null;
+  execution_fingerprint?: string | null;
   issueId?: string | null;
   issueSessionId?: string | null;
   issue_session_id?: string | null;
@@ -1282,6 +1553,8 @@ export interface MultiremiSessionAgentLane {
   runtimeId: string | null;
   runtime_id?: string | null;
   provider: string | null;
+  executionFingerprint: string | null;
+  execution_fingerprint?: string | null;
   workDir: string | null;
   work_dir?: string | null;
   cursorSeq: number;
@@ -2195,6 +2468,8 @@ export interface MultiremiChatSession {
    *  specific to it, so a follow-up only resumes when the agent's current
    *  provider still matches. */
   sessionProvider: string | null;
+  /** Plugin execution fingerprint paired atomically with sessionId. */
+  sessionExecutionFingerprint: string | null;
   latestTaskId: string | null;
   unreadSince: string | null;
   hasUnread: boolean;

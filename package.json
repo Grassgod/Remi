@@ -40,6 +40,7 @@
     "test:frontend": "bun run --filter '@multiremi/*' test",
     "typecheck:frontend": "bun run --filter '@multiremi/*' typecheck",
     "smoke:multiremi:acp": "bun run tests/integration/smoke-multiremi-acp.ts",
+    "smoke:multiremi:agent-plugin": "bun run tests/integration/smoke-multiremi-agent-plugin.ts",
     "e2e:multiremi": "bun run tests/integration/e2e-multiremi.ts",
     "e2e:frontend": "bun run tests/integration/e2e-frontend-ours.ts",
     "e2e:acp": "bun run tests/integration/acp-e2e.ts",

@@ -70,7 +70,7 @@ interface Harness {
  * AskUserQuestion elicitation — mid-stream, exactly where a real ACP agent
  * would. The returned promise resolves when the daemon's one-shot run ends.
  */
-function startHarness(options: { humanRequestTimeoutMs?: number; withElicitation?: boolean } = {}): Harness {
+async function startHarness(options: { humanRequestTimeoutMs?: number; withElicitation?: boolean } = {}): Promise<Harness> {
   db = new Database(":memory:");
   workDir = mkdtempSync(join(tmpdir(), "multiremi-approval-e2e-"));
   const store = new MultiremiStore(db);
@@ -78,6 +78,12 @@ function startHarness(options: { humanRequestTimeoutMs?: number; withElicitation
   const task = store.createTask({ agentId: agent.id, prompt: "Do something dangerous" });
   const server = startMultiremiServer({ store, scheduler: null, hostname: "127.0.0.1", port: 0 });
   const baseUrl = `http://127.0.0.1:${server.port}`;
+  const daemonToken = await store.createAccessToken({
+    name: "Approval E2E daemon",
+    type: "daemon",
+    workspaceId: "local",
+    daemonId: "daemon-approval",
+  });
 
   const outcomes: PermissionOutcome[] = [];
   const elicitationResults: unknown[] = [];
@@ -111,6 +117,7 @@ function startHarness(options: { humanRequestTimeoutMs?: number; withElicitation
 
   const daemon = new MultiremiDaemon({
     serverUrl: baseUrl,
+    token: daemonToken.token,
     daemonId: "daemon-approval",
     runtimeName: "approval-runtime",
     provider: "claude",
@@ -152,7 +159,7 @@ async function respond(baseUrl: string, taskId: string, requestId: string, body:
 
 describe("Multiremi approval routing e2e", () => {
   it("routes a permission request to a human and honors the approval", async () => {
-    const h = startHarness();
+    const h = await startHarness();
     try {
       // Agent hits the permission gate → request row appears, task parks.
       const pending = await waitFor(
@@ -196,7 +203,7 @@ describe("Multiremi approval routing e2e", () => {
   });
 
   it("routes AskUserQuestion to a human and folds answers back", async () => {
-    const h = startHarness({ withElicitation: true });
+    const h = await startHarness({ withElicitation: true });
     try {
       const permission = await waitFor(
         () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.kind === "permission" && r.status === "pending"),
@@ -232,7 +239,7 @@ describe("Multiremi approval routing e2e", () => {
   });
 
   it("expires an unanswered permission request and denies conservatively", async () => {
-    const h = startHarness({ humanRequestTimeoutMs: 500 });
+    const h = await startHarness({ humanRequestTimeoutMs: 500 });
     try {
       const pending = await waitFor(
         () => h.store.listTaskHumanRequests(h.taskId).find((r) => r.status === "pending"),

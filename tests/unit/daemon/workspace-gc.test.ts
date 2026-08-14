@@ -15,6 +15,8 @@ describe("Issue workspace GC", () => {
   it("cleans a v2 Issue root and reports the cleaned state", async () => {
     const root = tempRoot();
     const workspace = issueWorkspace(root, "MUL-28", "iss_clean");
+    mkdirSync(join(workspace, ".remi-runtime", "plugins", "abc"), { recursive: true });
+    writeFileSync(join(workspace, ".remi-runtime", "plugins", "abc", "SKILL.md"), "# Plugin\n", { mode: 0o444 });
     const cleaned: string[] = [];
     const result = await runWorkspaceGcOnce({
       root,

@@ -183,6 +183,50 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     }
   });
 
+  it("reports Agent Plugin Runtime state without untyped nullable parameters (PG)", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({
+      name: "rt-plugin-state-pg",
+      provider: "claude",
+      workspaceId: ws,
+    });
+    const agent = store.createAgent({ name: "Plugin PG", provider: "claude", workspaceId: ws });
+    const plugin = store.importAgentPlugin({
+      workspaceId: ws,
+      provider: "claude",
+      manifest: { name: "plugin-state-pg", version: "1.0.0" },
+      files: [{ path: "skills/plugin-state/SKILL.md", content: "# Plugin state\n" }],
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+
+    // The omitted attempts value used to become `$3 IS NOT NULL`. Postgres
+    // cannot infer a type for that independent placeholder and rejected the
+    // whole report even though SQLite accepted it.
+    const setup = store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "setup_required",
+      lastErrorCode: "dependency_missing",
+      lastError: "dependency missing",
+      nextRetryAt: "2026-08-14T12:00:00.000Z",
+    });
+    expect(setup).toMatchObject({ status: "setup_required", retryCount: 1 });
+
+    const [retried] = store.retryAgentPluginRuntime(plugin.id, runtime.id);
+    const ready = store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      attempts: 2,
+      retryGeneration: retried!.retryGeneration,
+      observedDigest: plugin.activeVersion!.artifactDigest,
+    });
+    expect(ready).toMatchObject({ status: "ready", retryCount: 2 });
+
+    // Import, binding and desired-state reconciliation all take the same
+    // workspace lock. Claiming must consume the frozen snapshot without
+    // attempting to open a nested transaction on Postgres.
+    const task = store.createTask({ agentId: agent.id, prompt: "Use the PG Plugin" });
+    const claimed = store.claimTask(runtime.id);
+    expect(claimed).toMatchObject({ id: task.id, pluginSnapshot: [{ pluginId: plugin.id }] });
+  });
+
   it("creates and lists projects scoped to a workspace", () => {
     const ws = freshWorkspace();
     const a = store.createProject({ title: "Alpha", workspaceId: ws });

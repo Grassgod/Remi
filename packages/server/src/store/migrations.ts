@@ -76,6 +76,76 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_multiremi_agent_skills_agent ON multiremi_agent_skills(agent_id);
     CREATE INDEX IF NOT EXISTS idx_multiremi_agent_skills_skill ON multiremi_agent_skills(skill_id);
 
+    CREATE TABLE IF NOT EXISTS multiremi_agent_plugins (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      provider TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL DEFAULT 'manifest',
+      source_url TEXT,
+      source_ref TEXT,
+      active_version_id TEXT,
+      candidate_version_id TEXT,
+      created_by TEXT,
+      archived_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(workspace_id, provider, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_versions (
+      id TEXT PRIMARY KEY,
+      plugin_id TEXT NOT NULL,
+      version TEXT NOT NULL,
+      manifest_path TEXT NOT NULL,
+      manifest TEXT NOT NULL DEFAULT '{}',
+      artifact_files TEXT NOT NULL DEFAULT '[]',
+      artifact_json TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL,
+      artifact_size INTEGER NOT NULL DEFAULT 0,
+      source_revision TEXT,
+      requirements TEXT NOT NULL DEFAULT '{}',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(plugin_id, version),
+      FOREIGN KEY(plugin_id) REFERENCES multiremi_agent_plugins(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_bindings (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      version_policy TEXT NOT NULL DEFAULT 'follow_active',
+      version_id TEXT,
+      connection_id TEXT,
+      config TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(agent_id, plugin_id),
+      FOREIGN KEY(agent_id) REFERENCES multiremi_agents(id) ON DELETE CASCADE,
+      FOREIGN KEY(plugin_id) REFERENCES multiremi_agent_plugins(id) ON DELETE CASCADE,
+      FOREIGN KEY(version_id) REFERENCES multiremi_agent_plugin_versions(id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugins_workspace
+      ON multiremi_agent_plugins(workspace_id, provider, archived_at, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_versions_plugin
+      ON multiremi_agent_plugin_versions(plugin_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_versions_digest
+      ON multiremi_agent_plugin_versions(artifact_digest);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_bindings_agent
+      ON multiremi_agent_plugin_bindings(agent_id, enabled, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_bindings_plugin
+      ON multiremi_agent_plugin_bindings(plugin_id, enabled, updated_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_workspace_locks (
+      workspace_id TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_runtimes (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -94,6 +164,36 @@ export function runMigrations(db: SqlDatabase): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_runtime_states (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL DEFAULT 'local',
+      runtime_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      plugin_version_id TEXT NOT NULL,
+      desired INTEGER NOT NULL DEFAULT 1,
+      desired_reason TEXT NOT NULL DEFAULT 'active_binding',
+      status TEXT NOT NULL DEFAULT 'pending',
+      observed_digest TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      retry_generation INTEGER NOT NULL DEFAULT 0,
+      next_retry_at TEXT,
+      last_error_code TEXT,
+      last_error TEXT,
+      last_attempt_at TEXT,
+      last_ready_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(runtime_id, plugin_version_id),
+      FOREIGN KEY(runtime_id) REFERENCES multiremi_runtimes(id) ON DELETE CASCADE,
+      FOREIGN KEY(plugin_id) REFERENCES multiremi_agent_plugins(id) ON DELETE CASCADE,
+      FOREIGN KEY(plugin_version_id) REFERENCES multiremi_agent_plugin_versions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_runtime_desired
+      ON multiremi_agent_plugin_runtime_states(runtime_id, desired, status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_multiremi_agent_plugin_runtime_plugin
+      ON multiremi_agent_plugin_runtime_states(plugin_id, plugin_version_id, desired, status);
 
     CREATE TABLE IF NOT EXISTS multiremi_cloud_runtime_nodes (
       id TEXT PRIMARY KEY,
@@ -998,6 +1098,28 @@ export function runMigrations(db: SqlDatabase): void {
     -- added by an upgrade migration on pre-existing DBs.
     CREATE INDEX IF NOT EXISTS idx_multiremi_tasks_workspace ON multiremi_tasks(workspace_id);
 
+    -- Normalized execution snapshot rows make exact Plugin readiness usable in
+    -- the cross-database task-claim query. 'multiremi_tasks.plugin_snapshot'
+    -- remains the canonical wire payload; these rows are its scheduling index.
+    CREATE TABLE IF NOT EXISTS multiremi_task_plugin_snapshots (
+      task_id TEXT NOT NULL,
+      binding_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      version_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      artifact_url TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY(task_id, binding_id),
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY(plugin_id) REFERENCES multiremi_agent_plugins(id) ON DELETE RESTRICT,
+      FOREIGN KEY(version_id) REFERENCES multiremi_agent_plugin_versions(id) ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_task_plugin_snapshots_version
+      ON multiremi_task_plugin_snapshots(version_id, task_id);
+
     CREATE TABLE IF NOT EXISTS multiremi_task_messages (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -1113,6 +1235,7 @@ export function runMigrations(db: SqlDatabase): void {
   // don't have to (mis)infer them from "the latest task with a runtime_id".
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_chat_sessions", "session_provider TEXT");
+  addColumnIfMissing(db, "multiremi_chat_sessions", "session_execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
@@ -1135,6 +1258,9 @@ export function runMigrations(db: SqlDatabase): void {
   // agent's provider can change mid-run, so the promoted session's engine must
   // come from this snapshot, not the agent's current provider.
   addColumnIfMissing(db, "multiremi_tasks", "provider TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "plugin_snapshot TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_tasks", "execution_fingerprint TEXT");
+  addColumnIfMissing(db, "multiremi_session_agent_lanes", "execution_fingerprint TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_type TEXT NOT NULL DEFAULT 'member'");
   addColumnIfMissing(db, "multiremi_inbox_items", "recipient_id TEXT");
   addColumnIfMissing(db, "multiremi_inbox_items", "severity TEXT NOT NULL DEFAULT 'info'");

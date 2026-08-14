@@ -420,6 +420,50 @@ export function denyDaemonTokenRuntimeWorkspace(
   return denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
 }
 
+/**
+ * Strict authority boundary for Runtime-observed state. Unlike the legacy
+ * daemon route guard, this surface is never available to a human JWT/PAT,
+ * master token, task token, or auth-disabled anonymous caller.
+ *
+ * Legacy unbound tokens must first be atomically bound by a Runtime registration;
+ * observed state itself never accepts a workspace-wide daemon credential.
+ */
+export function denyDaemonRuntimeObservedStateAccess(
+  c: Context,
+  store: MultiremiStore,
+  runtimeId: string,
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") {
+    return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+  }
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+  const workspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local");
+  if (workspaceDenied) return workspaceDenied;
+  const tokenDaemonId = cleanString(token.daemonId);
+  const runtimeDaemonId = cleanString(runtime.daemonId);
+  if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
+    return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+  }
+  return null;
+}
+
+/** Bind a legacy token on first registration, or reject an identity switch. */
+export function bindDaemonTokenIdentityOrDeny(
+  c: Context,
+  store: MultiremiStore,
+  daemonId?: string | null,
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
+  const normalizedDaemonId = cleanString(daemonId);
+  if (!normalizedDaemonId || !store.bindDaemonAccessToken(token.id, normalizedDaemonId)) {
+    return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+  }
+  return null;
+}
+
 export function denyDaemonTokenTaskWorkspace(
   c: Context,
   store: MultiremiStore,

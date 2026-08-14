@@ -69,6 +69,23 @@ export class AccessTokensRepo {
     return row ? toAccessToken(row) : null;
   }
 
+  /** Atomically claim an unbound daemon token for its first registered daemon. */
+  bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
+    const normalizedDaemonId = cleanOptionalString(daemonId);
+    if (!normalizedDaemonId) return null;
+    const current = this.getAccessToken(id);
+    if (!current || current.type !== "daemon") return null;
+    if (current.daemonId && current.daemonId !== normalizedDaemonId) return null;
+    if (!current.daemonId) {
+      this.db.run(
+        "UPDATE multiremi_access_tokens SET daemon_id = ? WHERE id = ? AND type = 'daemon' AND daemon_id IS NULL",
+        [normalizedDaemonId, id],
+      );
+    }
+    const bound = this.getAccessToken(id);
+    return bound?.daemonId === normalizedDaemonId ? bound : null;
+  }
+
   revokeAccessToken(id: string): MultiremiAccessToken | null {
     const current = this.getAccessToken(id);
     if (!current) return null;

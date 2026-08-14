@@ -8,6 +8,7 @@ import type { MemoryStore } from "@memory/store.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import type { LocalPathLocker } from "./workspace/ephemeral.js";
 import type { AcpMcpServer } from "./mcp/ephemeral.js";
+import type { PreparedAgentPluginRuntime } from "./agent-plugins/types.js";
 
 // ── AgentSessionConfig ───────────────────────────────────
 
@@ -31,6 +32,12 @@ export interface AgentSessionConfig {
   traceId?: string;
   signal?: AbortSignal;
   recovery?: RecoveryConfig;
+  /** Provider-native Agent Plugin roots prepared for this execution. */
+  pluginPaths?: string[];
+  /** Immutable Plugin-set fingerprint; ACP session reuse requires an exact match. */
+  pluginFingerprint?: string;
+  /** Isolated Codex process home prepared beside the Issue worktrees. */
+  codexHome?: string;
 }
 
 export interface RecoveryConfig {
@@ -65,6 +72,8 @@ export interface EphemeralContext {
   signal: AbortSignal;
   /** "ask" surfaces permission prompts to a human via the server; default is self-approved. */
   approvalMode?: "auto" | "ask";
+  /** Async cache/materialization result prepared before synchronous assembly. */
+  pluginRuntime?: PreparedAgentPluginRuntime;
 }
 
 export interface EphemeralDaemonOptions {

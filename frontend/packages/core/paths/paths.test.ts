@@ -23,6 +23,8 @@ describe("paths.workspace(slug)", () => {
     expect(ws.inbox()).toBe("/acme/inbox");
     expect(ws.myIssues()).toBe("/acme/my-issues");
     expect(ws.runtimes()).toBe("/acme/runtimes");
+    expect(ws.plugins()).toBe("/acme/plugins");
+    expect(ws.pluginDetail("plugin_123")).toBe("/acme/plugins/plugin_123");
     expect(ws.skills()).toBe("/acme/skills");
     expect(ws.skillDetail("skl_123")).toBe("/acme/skills/skl_123");
     expect(ws.squads()).toBe("/acme/squads");
@@ -33,6 +35,9 @@ describe("paths.workspace(slug)", () => {
 
   it("URL-encodes special characters in ids", () => {
     expect(ws.issueDetail("id with space")).toBe("/acme/issues/id%20with%20space");
+    expect(ws.pluginDetail("plugin with space")).toBe(
+      "/acme/plugins/plugin%20with%20space",
+    );
   });
 
   it("URL-encodes a non-ASCII wiki slug", () => {

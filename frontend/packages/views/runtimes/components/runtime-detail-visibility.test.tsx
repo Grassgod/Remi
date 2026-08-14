@@ -8,9 +8,15 @@ import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import enAgents from "../../locales/en/agents.json";
+import enPlugins from "../../locales/en/plugins.json";
 
 const TEST_RESOURCES = {
-  en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
+  en: {
+    common: enCommon,
+    runtimes: enRuntimes,
+    agents: enAgents,
+    plugins: enPlugins,
+  },
 };
 
 const mockUpdateRuntime = vi.hoisted(() => vi.fn());
@@ -96,6 +102,9 @@ vi.mock("@multiremi/core/runtimes/mutations", () => ({
 vi.mock("./provider-logo", () => ({ ProviderLogo: () => null }));
 vi.mock("./update-section", () => ({ UpdateSection: () => null }));
 vi.mock("./usage-section", () => ({ UsageSection: () => null }));
+vi.mock("./runtime-plugins-tab", () => ({
+  RuntimePluginsTab: () => <div>runtime-plugins-tab</div>,
+}));
 vi.mock("./shared", () => ({ HealthBadge: () => null }));
 vi.mock("../../agents/presence", () => ({
   availabilityConfig: { offline: { dotClass: "", textClass: "" } },
@@ -164,5 +173,19 @@ describe("RuntimeDetail visibility section", () => {
     expect(screen.getByText("Public")).toBeInTheDocument();
     // The editor's "Private" choice button must not render in read-only mode.
     expect(screen.queryByText("Private")).not.toBeInTheDocument();
+  });
+
+  it("switches from Overview to the reciprocal Plugins tab", () => {
+    renderDetail(makeRuntime({ owner_id: "user-me" }));
+
+    expect(screen.getByRole("tab", { name: /^Overview$/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /^Plugins$/i }));
+
+    expect(screen.getByRole("tabpanel")).toHaveTextContent(
+      "runtime-plugins-tab",
+    );
   });
 });

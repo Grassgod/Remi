@@ -1,6 +1,7 @@
 import type { Context, Hono } from "hono";
 import { refreshStaleGatewayModels } from "@multiremi/relay/discovery.js";
 import {
+  bindDaemonTokenIdentityOrDeny,
   daemonLocalSkillImportReportBody,
   daemonLocalSkillListReportBody,
   denyCurrentUserWorkspaceAccess,
@@ -73,6 +74,10 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const provider = validateMultiremiRuntimeProvider(body.provider);
     if ("error" in provider) return c.json({ error: provider.error }, provider.status);
+    if (currentAccessToken(c)?.type === "daemon") {
+      const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, body.daemonId ?? body.daemon_id);
+      if (identityDenied) return identityDenied;
+    }
     return c.json({ runtime: store.registerRuntime(body) }, 201);
   });
   app.get("/api/multiremi/runtimes/:id", (c) => {

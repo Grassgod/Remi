@@ -62,6 +62,7 @@ type PendingRequest = {
 };
 
 const slog = createLogger("acp-client");
+const ACP_PROCESS_STOP_GRACE_MS = 1_000;
 
 export class AcpClient {
   private _process: ReturnType<typeof Bun.spawn> | null = null;
@@ -127,6 +128,9 @@ export class AcpClient {
       stderr: "pipe",
       cwd,
       env,
+      // npm ACP launchers commonly spawn a native child. A dedicated POSIX
+      // process group lets stop() terminate the wrapper and child together.
+      detached: process.platform !== "win32",
     });
 
     const proc = this._process;
@@ -152,7 +156,7 @@ export class AcpClient {
     this._log("agent died:", reason);
     slog.warn(`ACP agent died unexpectedly (${reason}); rejecting ${this._pending.size} in-flight request(s)`);
 
-    try { this._process.kill(); } catch {}
+    signalProcessTree(this._process, "SIGKILL");
     this._process = null;
     this._reader = null;
     this._readLoopRunning = false;
@@ -170,10 +174,9 @@ export class AcpClient {
 
   async stop(): Promise<void> {
     if (!this._process) return;
+    const proc = this._process;
+    const reader = this._reader;
     this._readLoopRunning = false;
-
-    try { (this._process.stdin as any).end(); } catch {}
-    this._process.kill();
     this._process = null;
     this._reader = null;
     this._initialized = false;
@@ -185,6 +188,16 @@ export class AcpClient {
       pending.reject(new Error("ACP client stopped"));
     }
     this._pending.clear();
+
+    try { (proc.stdin as any).end(); } catch {}
+    signalProcessTree(proc, "SIGTERM");
+    const exited = await waitForProcessExit(proc, ACP_PROCESS_STOP_GRACE_MS);
+    // The npm launcher can exit after SIGTERM while a native child keeps the
+    // inherited stdio open. Always sweep the dedicated process group once the
+    // graceful window closes, even when Bun has already reaped the wrapper.
+    signalProcessTree(proc, "SIGKILL");
+    if (!exited && !(await waitForProcessExit(proc, ACP_PROCESS_STOP_GRACE_MS))) proc.unref();
+    await reader?.cancel().catch(() => {});
   }
 
   get alive(): boolean {
@@ -560,6 +573,32 @@ export class AcpClient {
     await this._request("session/close", params);
     if (this._serverSessionId === sessionId) this._serverSessionId = null;
   }
+}
+
+function signalProcessTree(
+  proc: ReturnType<typeof Bun.spawn>,
+  signal: NodeJS.Signals,
+): void {
+  if (process.platform !== "win32" && proc.pid > 0) {
+    try {
+      process.kill(-proc.pid, signal);
+      return;
+    } catch {}
+  }
+  try { proc.kill(signal); } catch {}
+}
+
+async function waitForProcessExit(proc: ReturnType<typeof Bun.spawn>, timeoutMs: number): Promise<boolean> {
+  if (proc.exitCode !== null) return true;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const result = await Promise.race([
+    proc.exited.then(() => true, () => true),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  return result;
 }
 
 // ── Resolve ACP executable ───────────────────────────────────────
