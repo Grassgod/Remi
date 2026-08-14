@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronRight, Maximize2, Minimize2, X as XIcon } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronRight, Maximize2, Minimize2, X as XIcon } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -49,7 +49,6 @@ import {
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { useT } from "../i18n";
 import { matchesPinyin } from "../editor/extensions/pinyin-match";
-import { CreateIssueModeSwitch } from "./create-issue-mode-switch";
 
 type ActorSelection =
   | { type: "agent"; id: string }
@@ -408,15 +407,10 @@ export function AgentCreatePanel({
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-          <div className="flex min-w-0 items-center gap-2 text-xs">
+          <div className="flex min-w-0 items-center gap-1.5 text-xs">
             <span className="hidden max-w-32 truncate text-muted-foreground sm:inline">{workspaceName}</span>
             <ChevronRight className="hidden size-3 text-muted-foreground/50 sm:block" />
-            <CreateIssueModeSwitch
-              mode="agent"
-              onModeChange={(next) => {
-                if (next === "manual") switchToManual();
-              }}
-            />
+            <span className="font-medium">{t(($) => $.create_issue.agent_breadcrumb)}</span>
           </div>
           {/* Native `title` instead of Base UI Tooltip — Tooltip opens on
               keyboard focus, and the dialog's focus trap briefly lands focus
@@ -442,25 +436,6 @@ export function AgentCreatePanel({
               <XIcon className="size-4" />
             </button>
           </div>
-        </div>
-
-        {/* Actor picker — agents and squads in one searchable list. Squads
-            route to their leader agent on the backend; the leader runs the
-            quick-create flow with the squad's Operating Protocol layered
-            on top, so a squad pick is "ask this squad to file the issue". */}
-        <div className="px-5 pt-1 pb-2 shrink-0">
-          <ActorPicker
-            actor={actor}
-            visibleAgents={visibleAgents}
-            visibleSquads={visibleSquads}
-            selectedAgent={selectedAgent}
-            selectedSquad={selectedSquad}
-            onPick={(next) => {
-              setActor(next);
-              setError(null);
-            }}
-            t={t}
-          />
         </div>
 
         {selectedAgent && versionBlocked && (
@@ -504,12 +479,11 @@ export function AgentCreatePanel({
           <div className="px-5 pb-2 text-xs text-destructive">{error}</div>
         )}
 
-        {/* Property toolbar — mirrors the manual panel's pill row so the
-            project pill sits in the same place across both modes. Agent mode
-            owns only the project (status / priority / assignee / due-date are
-            inferred from the prompt), so it's a single pill. A missing project
-            is meaningful: the creator agent inspects existing projects and
-            decides where the issue belongs.
+        {/* Property toolbar — creator and project are the two explicit inputs
+            for agent creation. The creator is remembered as soon as it is
+            picked, even if the dialog is closed without submitting. A missing
+            project is meaningful: the creator agent inspects existing projects
+            and decides where the issue belongs.
             When the modal was opened from "Add sub issue" on an existing
             issue, a read-only chip on the same row tells the user that the
             new issue will be filed as a sub-issue of that parent — the agent
@@ -518,6 +492,19 @@ export function AgentCreatePanel({
             it non-editable: changing the parent is a `Set parent` action on
             the parent itself, not a knob in the quick-create flow. */}
         <div className="flex items-center gap-1.5 px-4 pb-2 shrink-0 flex-wrap">
+          <ActorPicker
+            actor={actor}
+            visibleAgents={visibleAgents}
+            visibleSquads={visibleSquads}
+            selectedAgent={selectedAgent}
+            selectedSquad={selectedSquad}
+            onPick={(next) => {
+              setActor(next);
+              setLastActor(next.type, next.id);
+              setError(null);
+            }}
+            t={t}
+          />
           <ProjectPicker
             projectId={projectId}
             onUpdate={(u) => setProjectId(u.project_id ?? null)}
@@ -554,6 +541,15 @@ export function AgentCreatePanel({
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={switchToManual}
+              title={t(($) => $.create_issue.switch_to_manual_tooltip)}
+              className="flex shrink-0 items-center gap-1.5 rounded-sm px-2 py-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:bg-accent/60 hover:text-foreground"
+            >
+              <ArrowLeftRight className="size-3.5" />
+              {t(($) => $.create_issue.switch_to_manual)}
+            </button>
             <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
               <Switch
                 size="sm"
@@ -583,10 +579,10 @@ export function AgentCreatePanel({
   );
 }
 
-// ActorPicker — the "Created by" trigger + searchable popover listing
+// ActorPicker — the "Created by" property pill + searchable popover listing
 // agents and squads. Lives in this file (not under issues/components/pickers)
-// because it composes the generic PropertyPicker with a quick-create-shaped
-// trigger styled to match the modal header row — promoting it would invite
+// because it composes the generic PropertyPicker with a quick-create-specific
+// trigger — promoting it would invite
 // reuse pressure on a UI that's deliberately tuned for this one surface.
 function ActorPicker({
   actor,
@@ -637,17 +633,18 @@ function ActorPicker({
       searchable
       searchPlaceholder={t(($) => $.create_issue.agent.search_placeholder)}
       onSearchChange={setFilter}
+      triggerRender={<PillButton />}
       trigger={
-        <span className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
-          <span>{t(($) => $.create_issue.agent.created_by)}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="text-muted-foreground">{t(($) => $.create_issue.agent.created_by)}</span>
           {displayActor && displayLabel ? (
-            <span className="flex items-center gap-1.5 text-foreground">
+            <span className="flex min-w-0 items-center gap-1.5 text-foreground">
               <ActorAvatar
                 actorType={displayActor.type}
                 actorId={displayActor.id}
                 size={16}
               />
-              {displayLabel}
+              <span className="max-w-28 truncate">{displayLabel}</span>
             </span>
           ) : (
             <span>{t(($) => $.create_issue.agent.pick_an_agent)}</span>

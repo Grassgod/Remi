@@ -377,6 +377,7 @@ describe("AgentCreatePanel", () => {
     // The picker mock renders both sections inline as buttons; click the
     // squad row directly.
     await user.click(screen.getByRole("button", { name: /Frontend Squad/ }));
+    expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
 
     const editor = screen.getByPlaceholderText(
       'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
@@ -394,6 +395,17 @@ describe("AgentCreatePanel", () => {
       });
     });
     expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
+  });
+
+  it("remembers a picked creator before the issue is submitted", async () => {
+    const user = userEvent.setup();
+
+    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
+
+    await user.click(screen.getByRole("button", { name: "Ada" }));
+
+    expect(mockSetLastActor).toHaveBeenCalledWith("agent", "agent-2");
+    expect(mockQuickCreateIssue).not.toHaveBeenCalled();
   });
 
   // Squads whose leader agent isn't visible (archived, private, etc.) must

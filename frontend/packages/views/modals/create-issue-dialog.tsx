@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { cn } from "@multiremi/ui/lib/utils";
 import { Dialog, DialogContent } from "@multiremi/ui/components/ui/dialog";
 import {
   useCreateModeStore,
@@ -9,6 +8,17 @@ import {
 } from "@multiremi/core/issues/stores/create-mode-store";
 import { AgentCreatePanel } from "./quick-create-issue";
 import { ManualCreatePanel, manualDialogContentClass } from "./create-issue";
+
+export function createIssueDialogContentClass(
+  mode: CreateMode,
+  isExpanded: boolean,
+  backlogHintIssueId: string | null,
+) {
+  return manualDialogContentClass(
+    isExpanded,
+    mode === "manual" ? backlogHintIssueId : null,
+  );
+}
 
 /**
  * Shell that owns the single `<Dialog>` AND `<DialogContent>` for the
@@ -52,24 +62,14 @@ export function CreateIssueDialog({
     setMode(next);
   };
 
-  const className =
-    mode === "agent"
-      ? cn(
-          "p-0 gap-0 flex flex-col overflow-hidden",
-          "!top-1/2 !left-1/2 !-translate-x-1/2 !-translate-y-1/2",
-          // Smooth size transition when switching modes — the manual mode
-          // uses the same easing.
-          "!transition-all !duration-300 !ease-out",
-          // Expanded matches manual's expanded footprint so toggling expand
-          // mid-flow (or after a mode switch) lands the user on the same
-          // visual size. Collapsed keeps the slim, content-driven default
-          // — pasted screenshots still scroll inside instead of pushing the
-          // dialog past the viewport.
-          isExpanded
-            ? "!max-w-4xl !w-full !h-5/6"
-            : "!max-w-xl !w-full !max-h-[80vh]",
-        )
-      : manualDialogContentClass(isExpanded, backlogHintIssueId);
+  // Both creation modes share one footprint so switching only changes the
+  // form content, not the surrounding dialog. The backlog hint remains a
+  // manual-only compact state.
+  const className = createIssueDialogContentClass(
+    mode,
+    isExpanded,
+    backlogHintIssueId,
+  );
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>

@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigation } from "../navigation";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   ArrowDown,
   ArrowUp,
   CalendarClock,
@@ -55,7 +56,6 @@ import {
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
 import { PillButton } from "../common/pill-button";
 import { IssuePickerModal } from "./issue-picker-modal";
-import { CreateIssueModeSwitch } from "./create-issue-mode-switch";
 import { useT } from "../i18n";
 
 // ---------------------------------------------------------------------------
@@ -462,15 +462,10 @@ export function ManualCreatePanel({
 
             {/* Header */}
             <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
-              <div className="flex min-w-0 items-center gap-2 text-xs">
+              <div className="flex min-w-0 items-center gap-1.5 text-xs">
                 <span className="hidden max-w-32 truncate text-muted-foreground sm:inline">{workspaceName}</span>
                 <ChevronRight className="hidden size-3 text-muted-foreground/50 sm:block" />
-                <CreateIssueModeSwitch
-                  mode="manual"
-                  onModeChange={(next) => {
-                    if (next === "agent") switchToAgent();
-                  }}
-                />
+                <span className="font-medium">{t(($) => $.create_issue.manual_breadcrumb)}</span>
               </div>
               <div className="flex items-center gap-1">
                 <Tooltip>
@@ -733,6 +728,15 @@ export function ManualCreatePanel({
                 />
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={switchToAgent}
+                  title={t(($) => $.create_issue.switch_to_agent_tooltip)}
+                  className="border-beam group flex shrink-0 items-center gap-1.5 rounded-sm bg-brand/5 px-2 py-1 text-xs text-muted-foreground transition-colors cursor-pointer hover:bg-brand/10 hover:text-foreground"
+                >
+                  <ArrowLeftRight className="size-3.5 text-brand/80 transition-transform duration-300 group-hover:rotate-180" />
+                  {t(($) => $.create_issue.switch_to_agent)}
+                </button>
                 <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
                   <Switch
                     size="sm"
