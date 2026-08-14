@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runWorkspaceGcOnce, type WorkspaceGcClient } from "@daemon/agent-runtime/workspace/gc.js";
@@ -85,6 +85,32 @@ describe("Issue workspace GC", () => {
 
     expect(result).toEqual({ cleaned: 0, orphaned: 0, skipped: 1 });
     expect(existsSync(workspace)).toBe(true);
+  });
+
+  it("cleans read-only intake project views without sweeping shared snapshots", async () => {
+    const root = tempRoot();
+    const workspace = issueWorkspace(root, "MUL-44", "iss_intake");
+    const project = join(workspace, "projects", "Remi");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "project.json"), "{}\n", { mode: 0o444 });
+    chmodSync(project, 0o555);
+    chmodSync(join(workspace, "projects"), 0o555);
+    const snapshot = join(root, ".snapshots", "local", "repo", "abc123");
+    mkdirSync(snapshot, { recursive: true });
+    writeFileSync(join(snapshot, "README.md"), "shared\n");
+
+    const result = await runWorkspaceGcOnce({
+      root,
+      ttlMs: 0,
+      orphanTtlMs: 0,
+      runtimeId: "rt_1",
+      client: gcClient(),
+      now: Date.now() + 1_000,
+    });
+
+    expect(result).toEqual({ cleaned: 1, orphaned: 0, skipped: 0 });
+    expect(existsSync(workspace)).toBe(false);
+    expect(existsSync(join(snapshot, "README.md"))).toBe(true);
   });
 });
 

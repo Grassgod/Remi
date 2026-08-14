@@ -55,6 +55,8 @@ export const issueKeys = {
     [...issueKeys.projectGanttAll(wsId), projectId] as const,
   detail: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "detail", id] as const,
+  generated: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "generated", id] as const,
   workspace: (issueId: string) => ["issues", "workspace", issueId] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
@@ -376,6 +378,13 @@ export function issueDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.detail(wsId, id),
     queryFn: () => api.getIssue(id),
+  });
+}
+
+export function generatedIssuesOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.generated(wsId, id),
+    queryFn: () => api.listGeneratedIssues(id),
   });
 }
 

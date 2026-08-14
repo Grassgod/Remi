@@ -43,6 +43,7 @@ import type {
   MultiremiIssueComment,
   MultiremiIssueDependency,
   MultiremiIssueDependencyType,
+  MultiremiIssueKind,
   MultiremiIssuePriority,
   MultiremiIssueReaction,
   MultiremiIssueSearchResult,
@@ -121,6 +122,16 @@ export class IssuesRepo {
       if (project.workspaceId !== workspaceId) throw new Error("Project belongs to another workspace");
     }
 
+    const issueKind = normalizeIssueKind(input.issueKind ?? input.issue_kind);
+    const sourceIssueId = cleanOptionalString(input.sourceIssueId ?? input.source_issue_id) ?? null;
+    if (sourceIssueId) {
+      const sourceIssue = this.getIssue(sourceIssueId);
+      if (!sourceIssue) throw new Error(`Source issue not found: ${sourceIssueId}`);
+      if (sourceIssue.workspaceId !== workspaceId) throw new Error("Source issue belongs to another workspace");
+      if (sourceIssue.issueKind !== "intake") throw new Error("Source issue must be an intake issue");
+      if (issueKind !== "execution") throw new Error("Only execution issues can have a source issue");
+    }
+
     let assigneeType = input.assigneeType ?? input.assignee_type ?? null;
     let assigneeId = input.assigneeId ?? input.assignee_id ?? null;
     if (assigneeType || assigneeId) {
@@ -143,9 +154,9 @@ export class IssuesRepo {
     this.ctx.db.run(
       `INSERT INTO multiremi_issues (
         id, issue_number, issue_key, title, description, status, priority, workspace_id, project_id,
-        parent_issue_id, assignee_type, assignee_id, position, start_date, due_date,
+        parent_issue_id, issue_kind, source_issue_id, assignee_type, assignee_id, position, start_date, due_date,
         acceptance_criteria, context_refs, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         issueNumber,
@@ -157,6 +168,8 @@ export class IssuesRepo {
         workspaceId,
         projectId,
         parentIssueId,
+        issueKind,
+        sourceIssueId,
         assigneeType,
         assigneeId,
         position,
@@ -177,8 +190,18 @@ export class IssuesRepo {
       actorId: createdBy,
       type: "issue_created",
       body: input.title,
-      data: { projectId, parentIssueId, priority, startDate, dueDate },
+      data: { projectId, parentIssueId, issueKind, sourceIssueId, priority, startDate, dueDate },
     });
+    if (sourceIssueId) {
+      this.ctx.db.run("UPDATE multiremi_issues SET updated_at = ? WHERE id = ?", [now, sourceIssueId]);
+      this.ctx.appendIssueActivity(sourceIssueId, {
+        actorType: "agent",
+        actorId: null,
+        type: "issue_generated",
+        body: input.title,
+        data: { issueId: id, issueKey, projectId },
+      });
+    }
     if (createdBy) {
       const creator = this.ctx.workspaces().findWorkspaceMemberForUser(createdBy, workspaceId);
       if (creator) this.addIssueSubscriber(id, creator.id, "created");
@@ -189,6 +212,27 @@ export class IssuesRepo {
 
   getIssue(id: string): MultiremiIssue | null {
     const row = this.ctx.db.query("SELECT * FROM multiremi_issues WHERE id = ?").get(id) as Row | null;
+    return row ? this.hydrateIssue(toIssue(row)) : null;
+  }
+
+  listGeneratedIssues(sourceIssueId: string): MultiremiIssue[] {
+    const source = this.getIssue(sourceIssueId);
+    if (!source) throw new Error(`Issue not found: ${sourceIssueId}`);
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_issues WHERE source_issue_id = ? ORDER BY created_at ASC, id ASC",
+    ).all(sourceIssueId) as Row[];
+    return this.hydrateIssues(rows.map((row) => toIssue(row)));
+  }
+
+  findGeneratedIssueByTitle(sourceIssueId: string, title: string): MultiremiIssue | null {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) return null;
+    const row = this.ctx.db.query(
+      `SELECT * FROM multiremi_issues
+       WHERE source_issue_id = ? AND lower(title) = lower(?)
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`,
+    ).get(sourceIssueId, normalizedTitle) as Row | null;
     return row ? this.hydrateIssue(toIssue(row)) : null;
   }
 
@@ -906,6 +950,7 @@ export class IssuesRepo {
       const project = this.ctx.projects().getProject(projectId);
       if (!project) throw new Error(`Project not found: ${projectId}`);
       if (project.workspaceId !== workspaceId) throw new Error("Project belongs to another workspace");
+      if (project.archivedAt) throw new Error("Project is archived");
     }
 
     const requestedAssigneeType: MultiremiAssigneeType = squadId ? "squad" : "agent";
@@ -925,11 +970,13 @@ export class IssuesRepo {
       assigneeType,
       assigneeId,
       status: "todo",
+      issueKind: "intake",
       createdBy: input.requesterId ?? input.requester_id ?? null,
       contextRefs: [{ type: "quick_create", prompt }],
     });
     const task = this.ctx.tasks().createTask({
       agentId: taskAgent.id,
+      taskKind: "quick_create",
       issueId: issue.id,
       workspaceId,
       prompt: quickCreateTaskPrompt(prompt, projectId),
@@ -2666,7 +2713,10 @@ function quickCreateTaskPrompt(prompt: string, projectId: string | null): string
         "If the workspace has no active projects, leave the issue without a project; do not create a new project.",
       ];
   return [
-    "Create or refine a Multiremi issue from this quick-create request.",
+    "Create one or more new execution issues for the actual work described by this intake request.",
+    "Do not treat this intake issue as the execution issue, and do not implement the requested code here.",
+    "Create each execution issue with `remi issue create`; the server will link it back to this intake issue.",
+    "Read the available project snapshots and exported knowledge under `projects/<project>/` before deciding.",
     ...projectInstructions,
     "",
     prompt,
@@ -2677,6 +2727,12 @@ function normalizeIssuePosition(value: number | null | undefined): number {
   const position = Number(value ?? 0);
   if (!Number.isFinite(position)) throw new Error("position must be a finite number");
   return position;
+}
+
+function normalizeIssueKind(value: string | null | undefined): MultiremiIssueKind {
+  const kind = String(value ?? "execution").trim().toLowerCase();
+  if (kind === "execution" || kind === "intake") return kind;
+  throw new Error(`Unsupported issue kind: ${value}`);
 }
 
 function normalizeIssueDate(value: string | null | undefined, field: string): string | null {
@@ -2718,6 +2774,8 @@ function toIssue(row: Row): MultiremiIssue {
     workspaceId: String(row.workspace_id ?? "local"),
     projectId: nullableString(row.project_id),
     parentIssueId: nullableString(row.parent_issue_id),
+    issueKind: normalizeIssueKind(nullableString(row.issue_kind)),
+    sourceIssueId: nullableString(row.source_issue_id),
     assigneeType: nullableString(row.assignee_type) as MultiremiIssue["assigneeType"],
     assigneeId: nullableString(row.assignee_id),
     position: Number(row.position ?? 0),

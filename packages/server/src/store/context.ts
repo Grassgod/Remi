@@ -41,6 +41,7 @@ import type {
   MultiremiAssigneeType,
   MultiremiAutopilot,
   MultiremiProject,
+  MultiremiProjectDoc,
   MultiremiProjectResource,
   MultiremiRuntime,
   MultiremiSessionEvent,
@@ -162,6 +163,7 @@ export interface IssuesSurface {
   getIssueComment(id: string): MultiremiIssueComment | null;
   linkAttachmentsToChatMessage(chatSessionId: string, chatMessageId: string, attachmentIds: string[]): void;
   listIssues(input?: ListIssuesInput): MultiremiIssue[];
+  listGeneratedIssues(sourceIssueId: string): MultiremiIssue[];
   updateIssue(id: string, input: UpdateIssueInput): MultiremiIssue;
 }
 
@@ -221,7 +223,9 @@ export interface SquadsSurface {
 
 export interface ProjectsSurface {
   getProject(id: string): MultiremiProject | null;
+  listProjects(workspaceId?: string | null): MultiremiProject[];
   getProjectDocsIndex(projectId: string): MultiremiProjectDocsIndex;
+  listProjectDocs(projectId: string, input?: { kind?: string | null }): MultiremiProjectDoc[];
   listProjectResources(projectId: string): MultiremiProjectResource[];
 }
 

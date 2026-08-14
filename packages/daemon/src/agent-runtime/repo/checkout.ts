@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, rmSync, writeFileSync, type Dirent } from "node:fs";
+import { existsSync, mkdirSync, statSync, appendFileSync, chmodSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
@@ -33,6 +33,20 @@ export interface MultiremiWorktreeResult {
   created: boolean;
   base_ref: string;
   baseRef: string;
+}
+
+export interface MultiremiSnapshotParams {
+  workspaceId: string;
+  repoUrl: string;
+  snapshotsRoot: string;
+  ref?: string;
+}
+
+export interface MultiremiSnapshotResult {
+  path: string;
+  commit: string;
+  baseRef: string;
+  created: boolean;
 }
 
 export interface MultiremiRepoCacheOptions {
@@ -123,6 +137,60 @@ export class MultiremiRepoCache {
     }
 
     return this.withRepoLock(barePath, () => this.createWorktreeLocked(barePath, params));
+  }
+
+  createSnapshot(params: MultiremiSnapshotParams): MultiremiSnapshotResult {
+    const barePath = this.barePath(params.workspaceId, params.repoUrl);
+    if (!isBareRepo(barePath)) {
+      throw new Error(`repo not found in cache: ${params.repoUrl} (workspace: ${params.workspaceId})`);
+    }
+    return this.withRepoLock(barePath, () => {
+      // Intake workspaces promise a fresh view for every round. A failed fetch
+      // must fail preparation instead of silently presenting an old commit as
+      // current.
+      gitFetch(barePath);
+      const baseRef = resolveBaseRef(barePath, params.ref);
+      const commit = git(barePath, ["rev-parse", `${baseRef}^{commit}`]);
+      const repoRoot = join(
+        params.snapshotsRoot,
+        safePathPart(params.workspaceId),
+        bareDirName(params.repoUrl),
+      );
+      const snapshotPath = join(repoRoot, commit);
+      if (existsSync(snapshotPath)) {
+        return { path: snapshotPath, commit, baseRef, created: false };
+      }
+
+      mkdirSync(repoRoot, { recursive: true });
+      const temporaryPath = join(repoRoot, `.${commit}.tmp-${process.pid}-${Date.now()}`);
+      mkdirSync(temporaryPath, { recursive: true });
+      try {
+        const archive = spawnSync("git", ["--git-dir", barePath, "archive", "--format=tar", commit], {
+          encoding: null,
+          env: gitEnv(),
+          maxBuffer: 1024 * 1024 * 1024,
+        });
+        if (archive.status !== 0 || !archive.stdout) {
+          const error = String(archive.stderr ?? "").trim();
+          throw new Error(`git archive failed${error ? `: ${error}` : ""}`);
+        }
+        const extracted = spawnSync("tar", ["-xf", "-", "-C", temporaryPath], {
+          input: archive.stdout,
+          encoding: null,
+          maxBuffer: 1024 * 1024 * 1024,
+        });
+        if (extracted.status !== 0) {
+          const error = String(extracted.stderr ?? "").trim();
+          throw new Error(`snapshot extraction failed${error ? `: ${error}` : ""}`);
+        }
+        makeTreeReadOnly(temporaryPath);
+        renameSync(temporaryPath, snapshotPath);
+      } catch (error) {
+        rmSync(temporaryPath, { recursive: true, force: true });
+        throw error;
+      }
+      return { path: snapshotPath, commit, baseRef, created: true };
+    });
   }
 
   pruneWorktrees(): number {
@@ -232,6 +300,20 @@ function safeReadDir(path: string): Dirent[] {
   } catch {
     return [];
   }
+}
+
+function makeTreeReadOnly(root: string): void {
+  for (const entry of safeReadDir(root)) {
+    const path = join(root, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      makeTreeReadOnly(path);
+      chmodSync(path, 0o555);
+    } else {
+      chmodSync(path, 0o444);
+    }
+  }
+  chmodSync(root, 0o555);
 }
 
 function git(cwd: string | null, args: string[], options: { allowFailure?: boolean } = {}): string {

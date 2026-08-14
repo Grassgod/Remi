@@ -348,9 +348,30 @@ describe("Multiremi API — issue endpoints", () => {
   it("serves quick-create issue compatibility endpoints", async () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Quick Codex", provider: "codex" });
+    const executor = store.createAgent({ name: "Project executor", provider: "claude" });
     const leader = store.createAgent({ name: "Squad Lead", provider: "claude" });
     const squad = store.createSquad({ name: "Quick squad", leaderId: leader.id });
-    const project = store.createProject({ title: "Quick project" });
+    const project = store.createProject({
+      title: "Quick project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: executor.id,
+    });
+    store.createProjectResource(project.id, {
+      resourceType: "github_repo",
+      resourceRef: { url: "git@example.test:team/quick-project.git" },
+    });
+    store.createProjectResource(project.id, {
+      resourceType: "local_directory",
+      resourceRef: { local_path: "/tmp/legacy-project", daemon_id: "daemon-legacy" },
+    });
+    const archivedProject = store.createProject({
+      title: "Archived project",
+      resources: [{
+        resourceType: "github_repo",
+        resourceRef: { url: "git@example.test:team/archived.git" },
+      }],
+    });
+    store.archiveProject(archivedProject.id);
     const app = createMultiremiApp({ store });
 
     const created = await app.request("/api/issues/quick-create", {
@@ -366,14 +387,82 @@ describe("Multiremi API — issue endpoints", () => {
     expect(created.status).toBe(202);
     const createdBody = await created.json();
     expect(createdBody.task_id).toStartWith("tsk_");
+    expect(createdBody.issue).toMatchObject({
+      identifier: expect.any(String),
+      issue_kind: "intake",
+      source_issue_id: null,
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: agent.id,
+    });
     const task = store.getTask(createdBody.task_id)!;
     expect(task.agentId).toBe(agent.id);
+    expect(task.runtimeId).toBeNull();
     expect(task.issueId).toBeString();
     const issue = store.getIssue(task.issueId!)!;
     expect(issue.title).toBe("Create an issue for improving onboarding screenshots");
     expect(issue.projectId).toBe(project.id);
+    expect(issue.issueKind).toBe("intake");
+    expect(issue.sourceIssueId).toBeNull();
     expect(issue.assigneeType).toBe("agent");
     expect(issue.contextRefs[0]).toEqual({ type: "quick_create", prompt: "Create an issue for improving onboarding screenshots" });
+    expect(task.prompt).toContain("Create one or more new execution issues");
+
+    const taskToken = await store.createTaskAccessToken(task, "local");
+    const generated = await app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${taskToken.token}`,
+      },
+      body: JSON.stringify({
+        title: "Improve onboarding screenshots",
+        description: "Refresh screenshots and add coverage.",
+        project_id: project.id,
+      }),
+    });
+    expect(generated.status).toBe(201);
+    const generatedBody = await generated.json();
+    expect(generatedBody).toMatchObject({
+      issue_kind: "execution",
+      source_issue_id: issue.id,
+      project_id: project.id,
+      assignee_type: "agent",
+      assignee_id: executor.id,
+      status: "todo",
+    });
+    expect(store.listGeneratedIssues(issue.id).map((entry) => entry.id)).toEqual([generatedBody.id]);
+    expect(store.listTasksForIssue(generatedBody.id)).toHaveLength(1);
+    const linked = await app.request(`/api/issues/${issue.id}/generated-issues`);
+    expect(linked.status).toBe(200);
+    expect(await linked.json()).toMatchObject({
+      total: 1,
+      issues: [{ id: generatedBody.id, source_issue_id: issue.id }],
+    });
+    const duplicate = await app.request("/api/issues", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${taskToken.token}`,
+      },
+      body: JSON.stringify({ title: "Improve onboarding screenshots", project_id: project.id }),
+    });
+    expect(duplicate.status).toBe(200);
+    expect((await duplicate.json()).id).toBe(generatedBody.id);
+    expect(store.listGeneratedIssues(issue.id)).toHaveLength(1);
+    expect(store.listTasksForIssue(generatedBody.id)).toHaveLength(1);
+    const runtime = store.registerRuntime({
+      id: "rt_quick_create",
+      name: "Quick create runtime",
+      provider: "any",
+      workspaceId: "local",
+      maxConcurrency: 2,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    store.completeTask(task.id, { output: "Created MUL execution issue." });
+    expect(store.getIssue(issue.id)?.status).toBe("done");
+    expect(store.getIssue(generatedBody.id)?.status).toBe("todo");
 
     const camelAgentQuickCreate = await app.request("/api/issues/quick-create", {
       method: "POST",
@@ -402,6 +491,10 @@ describe("Multiremi API — issue endpoints", () => {
     const camelProjectQuickIssue = store.getIssue(camelProjectQuickTask.issueId!)!;
     expect(camelProjectQuickIssue.workspaceId).toBe("local");
     expect(camelProjectQuickIssue.projectId).toBeNull();
+    const unscopedTask = store.getTaskWithAgent(camelProjectQuickTask.id)!;
+    expect(unscopedTask.projectContexts.map((context) => context.project.id)).toEqual([project.id]);
+    expect(unscopedTask.projectContexts[0]!.resources.every((resource) => resource.resourceType !== "local_directory")).toBe(true);
+    expect(unscopedTask.repos.map((repo) => repo.url)).toEqual(["git@example.test:team/quick-project.git"]);
 
     const squadCreated = await app.request("/api/multiremi/issues/quick-create", {
       method: "POST",

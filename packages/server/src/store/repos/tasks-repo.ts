@@ -39,6 +39,7 @@ import type {
   MultiremiTaskHumanRequestKind,
   MultiremiTaskHumanRequestStatus,
   MultiremiTaskMessage,
+  MultiremiTaskProjectContext,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
@@ -194,16 +195,18 @@ export class TasksRepo {
     const attempt = normalizePositiveInt(input.attempt, 1);
     const maxAttempts = Math.max(attempt, normalizePositiveInt(input.maxAttempts, 3));
     const triggerSummary = normalizeTriggerSummary(input.triggerSummary ?? input.trigger_summary ?? triggerComment?.body ?? null);
+    const taskKind = input.taskKind ?? input.task_kind ?? "direct";
     this.ctx.db.run(
       `INSERT INTO multiremi_tasks (
-        id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
+        id, task_kind, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
         trigger_comment_id, trigger_summary, workspace_id, status, priority, prompt,
         attempt, max_attempts, parent_task_id, assignment_event_id,
         provider, plugin_snapshot, execution_fingerprint,
         session_id, work_dir, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        taskKind,
         input.agentId,
         runtimeId,
         issueId,
@@ -344,7 +347,7 @@ export class TasksRepo {
     // A task carrying both a chat session and a directory issue must go to the
     // directory's machine; the session is only inherited if that machine is
     // also where the session lives.
-    if (issue?.projectId) {
+    if (issue?.projectId && issue.issueKind !== "intake") {
       for (const resource of this.ctx.projects().listProjectResources(issue.projectId)) {
         if (resource.resourceType !== "local_directory") continue;
         const daemonId = String(resource.resourceRef.daemonId ?? resource.resourceRef.daemon_id ?? "").trim();
@@ -431,6 +434,9 @@ export class TasksRepo {
     const issue = task.issueId ? this.ctx.issues().getIssue(task.issueId) : null;
     const project = issue?.projectId ? this.ctx.projects().getProject(issue.projectId) : null;
     const projectResources = project ? this.ctx.projects().listProjectResources(project.id) : [];
+    const projectContexts = issue?.issueKind === "intake"
+      ? this.resolveIntakeProjectContexts(task.workspaceId, project)
+      : [];
     return {
       ...task,
       agent: this.ctx.agents().getAgent(task.agentId),
@@ -438,8 +444,47 @@ export class TasksRepo {
       project,
       projectResources,
       projectDocs: project ? this.ctx.projects().getProjectDocsIndex(project.id) : null,
-      repos: this.resolveTaskRepos(task.workspaceId, projectResources),
+      projectContexts,
+      repos: projectContexts.length
+        ? normalizeRepos(projectContexts.flatMap((context) => context.repos))
+        : this.resolveTaskRepos(task.workspaceId, projectResources),
     };
+  }
+
+  private resolveIntakeProjectContexts(
+    workspaceId: string,
+    selectedProject: MultiremiTaskProjectContext["project"] | null,
+  ): MultiremiTaskProjectContext[] {
+    const projects = this.ctx.projects().listProjects(workspaceId);
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    const roots = selectedProject ? [selectedProject] : projects.filter((project) => !project.archivedAt);
+    const ordered: MultiremiTaskProjectContext["project"][] = [];
+    const visited = new Set<string>();
+    const visit = (project: MultiremiTaskProjectContext["project"], depth: number): void => {
+      if (visited.has(project.id) || project.archivedAt || depth > PROJECT_REF_MAX_DEPTH) return;
+      visited.add(project.id);
+      ordered.push(project);
+      for (const resource of this.ctx.projects().listProjectResources(project.id)) {
+        if (resource.resourceType !== "project_ref") continue;
+        const targetId = String(resource.resourceRef.projectId ?? resource.resourceRef.project_id ?? "").trim();
+        const target = byId.get(targetId);
+        if (target) visit(target, depth + 1);
+      }
+    };
+    for (const project of roots) visit(project, 0);
+    return ordered.map((project) => {
+      const resources = this.ctx.projects().listProjectResources(project.id)
+        .filter((resource) => resource.resourceType !== "local_directory");
+      const refs = resources
+        .filter((resource) => resource.resourceType === "github_repo")
+        .map((resource) => resource.resourceRef);
+      return {
+        project,
+        resources,
+        docs: this.ctx.projects().listProjectDocs(project.id),
+        repos: normalizeRepos(refs),
+      };
+    });
   }
 
   getTaskTriggerMetadata(task: MultiremiTask): MultiremiTaskTriggerMetadata | null {
@@ -1366,6 +1411,7 @@ export class TasksRepo {
     if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
     const retry = this.createTask({
       agentId: parent.agentId,
+      taskKind: parent.taskKind,
       provider: inheritExecutionSnapshot ? parent.provider : null,
       pluginSnapshot: inheritExecutionSnapshot ? parent.pluginSnapshot : undefined,
       executionFingerprint: inheritExecutionSnapshot ? parent.executionFingerprint : null,
@@ -1673,8 +1719,14 @@ export class TasksRepo {
     const remainingStatus = this.issueStatusForRemainingTasks(task.issueId);
     if (remainingStatus) return remainingStatus;
 
-    if (status === "completed") return "in_review";
     const issue = this.ctx.issues().getIssue(task.issueId);
+    if (issue?.issueKind === "intake") {
+      if (status === "failed") return "blocked";
+      if (status === "completed") {
+        return this.ctx.issues().listGeneratedIssues(task.issueId).length > 0 ? "done" : "in_review";
+      }
+    }
+    if (status === "completed") return "in_review";
     if (
       (issue?.status === "in_progress" || issue?.status === "in_review") &&
       !this.hasActiveTaskForIssue(task.issueId)
@@ -1838,6 +1890,7 @@ function toTask(row: Row): MultiremiTask {
   const taskResult = normalizeStoredTaskResult(row.result);
   return {
     id: String(row.id),
+    taskKind: row.task_kind === "quick_create" ? "quick_create" : "direct",
     agentId: String(row.agent_id),
     runtimeId: nullableString(row.runtime_id),
     provider: nullableString(row.provider),

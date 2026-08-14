@@ -10,7 +10,7 @@
  * unchanged).
  */
 
-import { readFileSync, readdirSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, type Dirent, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -68,7 +68,7 @@ export async function runWorkspaceGcOnce(options: RunWorkspaceGcOnceOptions): Pr
 
   const workspaces = safeReadDir(root) ?? [];
   for (const workspace of workspaces) {
-    if (!workspace.isDirectory() || workspace.name === ".repos") continue;
+    if (!workspace.isDirectory() || workspace.name === ".repos" || workspace.name === ".snapshots") continue;
     const workspaceDir = join(root, workspace.name);
     if (readGcMeta(workspaceDir)) {
       await collectWorkspaceGcDecision(root, workspaceDir, options, summary);
@@ -232,7 +232,23 @@ function removeGcWorkDir(root: string, taskDir: string): void {
   if (!rel || rel === "." || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) {
     throw new Error(`refusing to GC path outside workspace root: ${taskDir}`);
   }
+  makeTreeWritable(dirPath);
   rmSync(dirPath, { recursive: true, force: true });
+}
+
+function makeTreeWritable(path: string): void {
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      chmodSync(path, 0o755);
+      for (const entry of readdirSync(path)) makeTreeWritable(join(path, entry));
+    } else {
+      chmodSync(path, 0o644);
+    }
+  } catch {
+    // Deletion below remains the source of truth for surfacing failures.
+  }
 }
 
 function safeStat(path: string): Stats | null {

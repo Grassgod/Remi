@@ -1,0 +1,95 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
+import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
+import type { AgentTask } from "@daemon/contracts/types.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length) {
+    const dir = tempDirs.pop()!;
+    try {
+      execFileSync("chmod", ["-R", "u+w", dir], { stdio: "ignore" });
+    } catch {
+      // The directory may already be gone.
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("intake workspace", () => {
+  it("materializes project-scoped knowledge and links immutable repo snapshots", () => {
+    const source = createRepo();
+    const sameNameSource = createRepo();
+    const cache = new MultiremiRepoCache(tempDir("intake-cache-"));
+    cache.sync("local", [{ url: source }, { url: sameNameSource }]);
+    const workDir = tempDir("intake-workspace-");
+    const snapshotsRoot = tempDir("intake-snapshots-");
+    const task = {
+      id: "tsk_intake",
+      workspaceId: "local",
+      issueId: "iss_intake",
+      issue: { id: "iss_intake", key: "MUL-44", title: "Triage request" },
+      projectContexts: [{
+        project: { id: "prj_remi", title: "Remi", description: "Remi project" },
+        resources: [],
+        docs: [
+          { id: "doc_wiki", kind: "wiki", slug: "architecture", title: "Architecture", summary: null, body: "# Architecture\n\nUse Bun.", tags: [], pinned: false, updatedAt: "2026-08-15T00:00:00.000Z" },
+          { id: "doc_memory", kind: "memory", slug: "release-rule", title: "Release rule", summary: null, body: "Tags are immutable.", tags: [], pinned: true, updatedAt: "2026-08-15T00:00:00.000Z" },
+        ],
+        repos: [{ url: source }, { url: sameNameSource }],
+      }],
+    } as unknown as AgentTask;
+
+    const prepared = prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
+
+    const projectRoot = join(workDir, "projects", "Remi");
+    const repoLink = join(projectRoot, "repos", "repo");
+    expect(prepared.repos).toHaveLength(2);
+    expect(prepared.repos[0]).toMatchObject({ branchName: "", status: "ready", dirty: false });
+    expect(readdirSync(join(projectRoot, "repos")).sort()).toEqual([
+      "repo",
+      expect.stringMatching(/^repo-[a-f0-9]{8}$/),
+    ]);
+    expect(lstatSync(repoLink).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(repoLink, "README.md"), "utf8")).toBe("intake snapshot\n");
+    expect(existsSync(join(repoLink, ".git"))).toBe(false);
+    expect(readFileSync(join(projectRoot, "knowledge", "wiki", "architecture.md"), "utf8")).toContain("Use Bun.");
+    expect(readFileSync(join(projectRoot, "knowledge", "memory", "release-rule.md"), "utf8")).toBe("Tags are immutable.\n");
+    expect(JSON.parse(readFileSync(join(workDir, "manifest.json"), "utf8"))).toMatchObject({
+      mode: "intake",
+      issue_key: "MUL-44",
+      projects: [{ id: "prj_remi", directory: "Remi" }],
+    });
+    expect(JSON.parse(readFileSync(join(workDir, ".multiremi", "workspace.json"), "utf8"))).toMatchObject({
+      kind: "intake",
+      read_only: true,
+    });
+  });
+});
+
+function createRepo(): string {
+  const dir = join(tempDir("intake-source-"), "repo");
+  mkdirSync(dir);
+  execFileSync("git", ["init", "-b", "main", dir], { env: gitEnv(), stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "intake@example.test"], { cwd: dir, env: gitEnv(), stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Intake Test"], { cwd: dir, env: gitEnv(), stdio: "pipe" });
+  writeFileSync(join(dir, "README.md"), "intake snapshot\n");
+  execFileSync("git", ["add", "README.md"], { cwd: dir, env: gitEnv(), stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, env: gitEnv(), stdio: "pipe" });
+  return dir;
+}
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function gitEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+}

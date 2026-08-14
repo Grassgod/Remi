@@ -88,6 +88,39 @@ describe("Multiremi API — daemon endpoints", () => {
     expect(store.getIssueWorkspace(issue.id)?.runtimeId).toBe(nextRuntime.id);
   });
 
+  it("accepts a branchless read-only workspace for an intake issue", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ id: "rt_intake_workspace", name: "claude (devbox)", provider: "claude" });
+    const agent = store.createAgent({ name: "Intake PM", provider: "claude" });
+    const issue = store.createIssue({ title: "Triage request", workspaceId: "local", issueKind: "intake" });
+    const task = store.createTask({ agentId: agent.id, issueId: issue.id, taskKind: "quick_create", prompt: "triage" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const app = createMultiremiApp({ store });
+
+    const report = await app.request(`/api/daemon/tasks/${task.id}/workspace`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runtime_id: runtime.id,
+        root_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}`,
+        branch_name: "",
+        status: "ready",
+        repos: [{
+          repo_url: "git@example.test:team/remi.git",
+          repo_name: "remi",
+          worktree_path: `/home/dev/.remi/multiremi/workspaces/${issue.key}/projects/Remi/repos/remi`,
+          branch_name: "",
+          base_ref: "abc123",
+          status: "ready",
+          dirty: false,
+        }],
+      }),
+    });
+
+    expect(report.status).toBe(200);
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ branchName: "", status: "ready" });
+  });
+
   it("serves Multiremi daemon install commands and mints daemon tokens", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });

@@ -385,6 +385,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
   if (!raw) return null;
   const normalized = {
     ...raw,
+    taskKind: raw.task_kind === "quick_create" || raw.kind === "quick_create" ? "quick_create" : "direct",
     agentId: stringOrNull(raw.agent_id ?? raw.agentId) ?? "",
     runtimeId: stringOrNull(raw.runtime_id ?? raw.runtimeId),
     issueId: stringOrNull(raw.issue_id ?? raw.issueId),
@@ -453,6 +454,7 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     project: normalizeDaemonClaimProject(raw.project),
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
     projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
+    projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
     repos: Array.isArray(raw.repos) ? raw.repos : [],
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
@@ -490,6 +492,8 @@ function normalizeDaemonClaimIssue(raw: any): MultiremiTaskWithAgent["issue"] {
     workspaceId: stringOrNull(raw.workspace_id ?? raw.workspaceId) ?? "",
     projectId: stringOrNull(raw.project_id ?? raw.projectId),
     parentIssueId: stringOrNull(raw.parent_issue_id ?? raw.parentIssueId),
+    issueKind: raw.issue_kind === "intake" || raw.issueKind === "intake" ? "intake" : "execution",
+    sourceIssueId: stringOrNull(raw.source_issue_id ?? raw.sourceIssueId),
     assigneeType: stringOrNull(raw.assignee_type ?? raw.assigneeType) as any,
     assigneeId: stringOrNull(raw.assignee_id ?? raw.assigneeId),
     startDate: stringOrNull(raw.start_date ?? raw.startDate),
@@ -553,6 +557,39 @@ function normalizeDaemonClaimProjectDocEntries(raw: any): MultiremiProjectDocInd
     sourceIssueId: stringOrNull(entry.source_issue_id ?? entry.sourceIssueId),
     updatedAt: stringOrNull(entry.updated_at ?? entry.updatedAt) ?? "",
   }));
+}
+
+function normalizeDaemonClaimProjectContexts(raw: any): MultiremiTaskWithAgent["projectContexts"] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((context) => {
+    const project = normalizeDaemonClaimProject(context?.project);
+    if (!project) return [];
+    const docs = Array.isArray(context.docs)
+      ? context.docs.map((doc: any) => ({
+          ...doc,
+          projectId: stringOrNull(doc.project_id ?? doc.projectId) ?? project.id,
+          workspaceId: stringOrNull(doc.workspace_id ?? doc.workspaceId) ?? project.workspaceId,
+          summary: stringOrNull(doc.summary),
+          tags: Array.isArray(doc.tags) ? doc.tags : [],
+          pinned: doc.pinned === true || Number(doc.pinned) === 1,
+          refs: Array.isArray(doc.refs) ? doc.refs : [],
+          sourceTaskId: stringOrNull(doc.source_task_id ?? doc.sourceTaskId),
+          sourceIssueId: stringOrNull(doc.source_issue_id ?? doc.sourceIssueId),
+          authorType: stringOrNull(doc.author_type ?? doc.authorType) as any,
+          authorId: stringOrNull(doc.author_id ?? doc.authorId),
+          updatedByType: stringOrNull(doc.updated_by_type ?? doc.updatedByType) as any,
+          updatedById: stringOrNull(doc.updated_by_id ?? doc.updatedById),
+          createdAt: stringOrNull(doc.created_at ?? doc.createdAt) ?? "",
+          updatedAt: stringOrNull(doc.updated_at ?? doc.updatedAt) ?? "",
+        }))
+      : [];
+    return [{
+      project,
+      resources: normalizeDaemonClaimProjectResources(context.resources),
+      docs,
+      repos: Array.isArray(context.repos) ? context.repos : [],
+    }];
+  });
 }
 
 function stringOrNull(value: unknown): string | null {

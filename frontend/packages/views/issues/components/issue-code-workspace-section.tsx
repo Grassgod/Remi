@@ -7,7 +7,13 @@ import { issueWorkspaceOptions } from "@multiremi/core/issues/queries";
 import type { IssueWorkspaceStatus } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 
-export function IssueCodeWorkspaceSection({ issueId }: { issueId: string }) {
+export function IssueCodeWorkspaceSection({
+  issueId,
+  issueKind,
+}: {
+  issueId: string;
+  issueKind?: "execution" | "intake";
+}) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(true);
   const { data: workspace } = useQuery(issueWorkspaceOptions(issueId));
@@ -31,9 +37,15 @@ export function IssueCodeWorkspaceSection({ issueId }: { issueId: string }) {
           <WorkspaceRow icon={<StatusIcon status={workspace.status} />} label={t(($) => $.detail.workspace_status_label)}>
             <span>{statusLabel}</span>
           </WorkspaceRow>
-          <WorkspaceRow icon={<GitBranch className="size-3.5" />} label={t(($) => $.detail.workspace_branch)}>
-            <CopyValue value={workspace.branch_name} onCopy={copy} />
-          </WorkspaceRow>
+          {issueKind === "intake" ? (
+            <WorkspaceRow icon={<FolderGit2 className="size-3.5" />} label={t(($) => $.detail.workspace_mode)}>
+              <span className="text-muted-foreground">{t(($) => $.detail.workspace_read_only_snapshot)}</span>
+            </WorkspaceRow>
+          ) : (
+            <WorkspaceRow icon={<GitBranch className="size-3.5" />} label={t(($) => $.detail.workspace_branch)}>
+              <CopyValue value={workspace.branch_name} onCopy={copy} />
+            </WorkspaceRow>
+          )}
           <WorkspaceRow icon={<Server className="size-3.5" />} label={t(($) => $.detail.workspace_runtime)}>
             <span className={workspace.runtime_status === "offline" ? "text-destructive" : "truncate text-muted-foreground"}>
               {workspace.runtime_name ?? workspace.runtime_id ?? t(($) => $.detail.workspace_unknown)}

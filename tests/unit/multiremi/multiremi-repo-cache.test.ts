@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "@multiremi/repo-cache.js";
@@ -8,7 +8,15 @@ import { MultiremiRepoCache, multiremiRepoCacheLockPath } from "@multiremi/repo-
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  while (tempDirs.length) {
+    const dir = tempDirs.pop()!;
+    try {
+      execFileSync("chmod", ["-R", "u+w", dir], { stdio: "ignore" });
+    } catch {
+      // The directory may already be gone.
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("Multiremi repo cache", () => {
@@ -95,6 +103,51 @@ describe("Multiremi repo cache", () => {
       reuseExisting: true,
     })).toThrow(/refusing to switch a persistent workspace/);
     expect(readFileSync(join(first.path, "wip.txt"), "utf8")).toBe("keep me\n");
+  });
+
+  it("creates immutable commit snapshots without git metadata and reuses them by commit", () => {
+    const source = createRepo("main", "snapshot v1");
+    const cacheRoot = tempDir("multiremi-repo-snapshot-");
+    const snapshotsRoot = tempDir("multiremi-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    cache.sync("local", [{ url: source }]);
+
+    const first = cache.createSnapshot({
+      workspaceId: "local",
+      repoUrl: source,
+      snapshotsRoot,
+    });
+    const reused = cache.createSnapshot({
+      workspaceId: "local",
+      repoUrl: source,
+      snapshotsRoot,
+    });
+
+    expect(reused).toMatchObject({
+      path: first.path,
+      commit: first.commit,
+      baseRef: first.baseRef,
+      created: false,
+    });
+    expect(readFileSync(join(first.path, "README.md"), "utf8")).toBe("snapshot v1\n");
+    expect(existsSync(join(first.path, ".git"))).toBe(false);
+    expect(statSync(first.path).mode & 0o222).toBe(0);
+    expect(statSync(join(first.path, "README.md")).mode & 0o222).toBe(0);
+
+    writeFileSync(join(source, "README.md"), "snapshot v2\n");
+    git(source, ["add", "README.md"]);
+    git(source, ["commit", "-m", "snapshot v2"]);
+    cache.sync("local", [{ url: source }]);
+
+    const second = cache.createSnapshot({
+      workspaceId: "local",
+      repoUrl: source,
+      snapshotsRoot,
+    });
+    expect(second.commit).not.toBe(first.commit);
+    expect(second.path).not.toBe(first.path);
+    expect(readFileSync(join(second.path, "README.md"), "utf8")).toBe("snapshot v2\n");
+    expect(readFileSync(join(first.path, "README.md"), "utf8")).toBe("snapshot v1\n");
   });
 
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {

@@ -30,6 +30,7 @@ import {
   writeProjectResourceContext,
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { prepareIntakeWorkspace } from "@daemon/agent-runtime/workspace/intake.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexConfig, syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
@@ -926,6 +927,55 @@ export class MultiremiDaemon {
     return { checkouts, repos: workspaceRepos };
   }
 
+  private async prepareTaskWorkspace(
+    task: MultiremiTaskWithAgent,
+    resolvedWorkDir: ResolvedTaskWorkDir,
+  ): Promise<PreparedIssueWorkspace> {
+    if (task.issue?.issueKind !== "intake") {
+      return this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+    }
+    if (!task.issueId || !resolvedWorkDir.ensureDir || resolvedWorkDir.localDirectory) {
+      throw new Error("Intake tasks require a daemon-owned issue workspace");
+    }
+    const runtimeId = task.runtimeId ?? this.options.runtimeId;
+    if (runtimeId) {
+      await this.client.reportIssueWorkspace(task.id, {
+        runtimeId,
+        rootPath: resolvedWorkDir.workDir,
+        branchName: "",
+        status: "preparing",
+        repos: [],
+      });
+    }
+    let prepared: PreparedIssueWorkspace;
+    try {
+      prepared = prepareIntakeWorkspace(resolvedWorkDir.workDir, task, this.repoCache, {
+        snapshotsRoot: join(this.options.workspacesRoot, ".snapshots"),
+      });
+    } catch (error) {
+      if (runtimeId) {
+        await this.client.reportIssueWorkspace(task.id, {
+          runtimeId,
+          rootPath: resolvedWorkDir.workDir,
+          branchName: "",
+          status: "error",
+          repos: [],
+        }).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (runtimeId) {
+      await this.client.reportIssueWorkspace(task.id, {
+        runtimeId,
+        rootPath: resolvedWorkDir.workDir,
+        branchName: "",
+        status: "in_use",
+        repos: prepared.repos,
+      });
+    }
+    return prepared;
+  }
+
   private async reportIssueWorkspaceAfterRun(
     task: MultiremiTaskWithAgent,
     rootPath: string,
@@ -933,6 +983,16 @@ export class MultiremiDaemon {
   ): Promise<void> {
     const runtimeId = task.runtimeId ?? this.options.runtimeId;
     if (!task.issueId || !runtimeId) return;
+    if (task.issue?.issueKind === "intake") {
+      await this.client.reportIssueWorkspace(task.id, {
+        runtimeId,
+        rootPath,
+        branchName: "",
+        status: "ready",
+        repos: workspaceRepos,
+      });
+      return;
+    }
     const branchName = `agent/${task.issue?.key ?? task.id}`;
     const repos: MultiremiIssueWorkspaceRepo[] = workspaceRepos.map((repo) => {
       if (repo.status === "error") return repo;
@@ -1103,7 +1163,7 @@ export class MultiremiDaemon {
     // machine-local path on a pool machine that shouldn't have it.
     if (resolvedWorkDir.ensureDir) mkdirSync(workDir, { recursive: true });
     await this.registerTaskRepos(task.workspaceId, task.repos ?? []);
-    const preparedWorkspace = await this.autoCheckoutTaskRepos(task, resolvedWorkDir);
+    const preparedWorkspace = await this.prepareTaskWorkspace(task, resolvedWorkDir);
     try {
       writeTaskContext(workDir, task);
       writeTaskGcContext(workDir, task, { localDirectory: resolvedWorkDir.localDirectory });

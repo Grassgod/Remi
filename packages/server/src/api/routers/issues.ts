@@ -255,10 +255,15 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     const body = await readJsonStrict<CreateIssueWithTaskInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     if (!String(body.title ?? "").trim()) return c.json({ error: "title is required" }, 400);
-    const issueInput = withIssueCreateRequestContext(c, body);
-    const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
-    if (denied) return denied;
     try {
+      const issueInput = withIssueCreateRequestContext(c, body, store);
+      const denied = denyCurrentUserWorkspaceAccess(c, store, issueInput.workspace_id ?? "local");
+      if (denied) return denied;
+      const sourceIssueId = issueInput.source_issue_id ?? null;
+      if (sourceIssueId) {
+        const existing = store.findGeneratedIssueByTitle(sourceIssueId, issueInput.title);
+        if (existing) return c.json(issueCompatibilityResponse(existing), 200);
+      }
       const issue = store.createIssue(issueInput);
       let response = issueCompatibilityResponse(issue);
       publishIssueCreated(c, store, issue, response);
@@ -304,7 +309,18 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const result = safeQuickCreateIssue(store, input);
     if ("error" in result) return c.json({ error: result.error }, 400);
-    return c.json({ task_id: result.task.id }, 202);
+    return c.json({
+      task_id: result.task.id,
+      issue: issueCompatibilityResponse(result.issue),
+    }, 202);
+  });
+  app.get("/api/issues/:id/generated-issues", (c) => {
+    const source = issueFromParam(store, c, "id", "compat");
+    if (!source) return c.json({ error: "issue not found" }, 404);
+    const denied = denyCurrentUserWorkspaceAccess(c, store, source.workspaceId);
+    if (denied) return denied;
+    const issues = store.listGeneratedIssues(source.id).map((issue) => issueCompatibilityResponse(issue));
+    return c.json({ issues, total: issues.length });
   });
   app.get("/api/multiremi/issues/:id", (c) => {
     const issueRef = issueFromParam(store, c);

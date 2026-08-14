@@ -25,11 +25,11 @@ export class IssueWorkspacesRepo {
 
   report(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
     const issue = this.ctx.db.query(
-      "SELECT issue_key, workspace_id FROM multiremi_issues WHERE id = ?",
+      "SELECT issue_key, issue_kind, workspace_id FROM multiremi_issues WHERE id = ?",
     ).get(input.issueId) as Row | null;
     if (!issue) throw new Error(`Issue not found: ${input.issueId}`);
     const issueKey = String(issue.issue_key ?? input.issueId);
-    const expectedBranch = `agent/${issueKey}`;
+    const expectedBranch = issue.issue_kind === "intake" ? "" : `agent/${issueKey}`;
     if (input.branchName !== expectedBranch) {
       throw new Error(`issue workspace branch must be ${expectedBranch}`);
     }

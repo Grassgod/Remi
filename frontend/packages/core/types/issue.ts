@@ -46,6 +46,8 @@ export interface Issue {
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;
+  issue_kind?: "execution" | "intake";
+  source_issue_id?: string | null;
   project_id: string | null;
   position: number;
   // Calendar days as date-only "YYYY-MM-DD" (no time, no timezone). Use the

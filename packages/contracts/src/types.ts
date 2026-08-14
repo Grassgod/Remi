@@ -921,6 +921,7 @@ export interface CreateTaskHumanRequestInput {
 
 export interface MultiremiTask {
   id: string;
+  taskKind: "direct" | "quick_create";
   agentId: string;
   runtimeId: string | null;
   /** Engine the task executed under, snapshotted at claim time (the agent's
@@ -1040,6 +1041,14 @@ export interface MultiremiTaskWithAgent extends MultiremiTask {
   project: MultiremiProject | null;
   projectResources: MultiremiProjectResource[];
   projectDocs: MultiremiProjectDocsIndex | null;
+  projectContexts: MultiremiTaskProjectContext[];
+  repos: MultiremiRepoData[];
+}
+
+export interface MultiremiTaskProjectContext {
+  project: MultiremiProject;
+  resources: MultiremiProjectResource[];
+  docs: MultiremiProjectDoc[];
   repos: MultiremiRepoData[];
 }
 
@@ -1074,6 +1083,8 @@ export interface TaskUsageEntry {
 
 export interface CreateTaskInput {
   id?: string;
+  taskKind?: "direct" | "quick_create";
+  task_kind?: "direct" | "quick_create";
   agentId: string;
   runtimeId?: string | null;
   runtime_id?: string | null;
@@ -1137,6 +1148,8 @@ export type MultiremiIssueDependencyType = "blocks" | "blocked_by" | "related";
 
 export type MultiremiAssigneeType = "agent" | "member" | "squad";
 
+export type MultiremiIssueKind = "execution" | "intake";
+
 export interface MultiremiIssue {
   id: string;
   key: string;
@@ -1148,6 +1161,8 @@ export interface MultiremiIssue {
   workspaceId: string;
   projectId: string | null;
   parentIssueId: string | null;
+  issueKind: MultiremiIssueKind;
+  sourceIssueId: string | null;
   assigneeType: MultiremiAssigneeType | null;
   assigneeId: string | null;
   position: number;
@@ -1391,6 +1406,10 @@ export interface CreateIssueInput {
   project_id?: string | null;
   parentIssueId?: string | null;
   parent_issue_id?: string | null;
+  issueKind?: MultiremiIssueKind | string;
+  issue_kind?: MultiremiIssueKind | string;
+  sourceIssueId?: string | null;
+  source_issue_id?: string | null;
   assigneeType?: MultiremiAssigneeType | null;
   assignee_type?: MultiremiAssigneeType | null;
   assigneeId?: string | null;

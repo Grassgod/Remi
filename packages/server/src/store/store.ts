@@ -1201,6 +1201,14 @@ runMigrations(this.db);
     return this.issues.quickCreateIssue(input);
   }
 
+  listGeneratedIssues(sourceIssueId: string): MultiremiIssue[] {
+    return this.issues.listGeneratedIssues(sourceIssueId);
+  }
+
+  findGeneratedIssueByTitle(sourceIssueId: string, title: string): MultiremiIssue | null {
+    return this.issues.findGeneratedIssueByTitle(sourceIssueId, title);
+  }
+
   createIssueComment(issueId: string, input: CreateIssueCommentInput): MultiremiIssueComment {
     return this.issues.createIssueComment(issueId, input);
   }

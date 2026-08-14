@@ -44,6 +44,8 @@ export function issueCompatibilityResponse(
     creator_type: "member",
     creator_id: issue.createdBy ?? "local",
     parent_issue_id: issue.parentIssueId,
+    issue_kind: issue.issueKind,
+    source_issue_id: issue.sourceIssueId,
     project_id: issue.projectId,
     position: issue.position,
     start_date: issue.startDate,
@@ -233,6 +235,16 @@ export function issueErrorResponse(c: Context, err: unknown): Response | null {
   if (err.message === "Circular issue parent relationship detected") return c.json({ error: "circular parent relationship detected" }, 400);
   if (err.message.startsWith("Project not found:")) return c.json({ error: "project not found in this workspace" }, 400);
   if (err.message === "Project belongs to another workspace") return c.json({ error: "project not found in this workspace" }, 400);
+  if (
+    err.message === "Project is archived" ||
+    err.message.startsWith("Project is not active in this workspace:") ||
+    err.message === "Generated issues must stay in the intake project's scope" ||
+    err.message === "project_id is required when active projects are available" ||
+    err.message === "Source issue must be an intake issue" ||
+    err.message === "Source issue belongs to another workspace"
+  ) {
+    return c.json({ error: err.message }, 400);
+  }
   if (
     err.message.includes("must be a valid date") ||
     err.message.includes("priority must be one of") ||

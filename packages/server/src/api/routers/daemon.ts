@@ -297,7 +297,7 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (!runtimeId || runtimeId !== task.runtimeId) return c.json({ error: "runtime_id does not own task" }, 403);
     const denied = denyDaemonTokenRuntimeWorkspace(c, store, runtimeId);
     if (denied) return denied;
-    if (!body.root_path?.trim() || !body.branch_name?.trim() || !body.status) {
+    if (!body.root_path?.trim() || typeof body.branch_name !== "string" || !body.status) {
       return c.json({ error: "root_path, branch_name and status are required" }, 400);
     }
     const repos: MultiremiIssueWorkspaceRepo[] = (body.repos ?? []).map((repo) => ({

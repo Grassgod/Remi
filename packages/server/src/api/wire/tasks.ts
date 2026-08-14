@@ -15,6 +15,7 @@ import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
 import {
   projectCompatibilityResponse,
+  projectDocCompatibilityResponse,
   projectDocIndexEntryCompatibilityResponse,
   projectResourceCompatibilityResponse,
 } from "./projects.js";
@@ -187,7 +188,10 @@ export function taskCompatibilityResponse(task: MultiremiTask, triggerMetadata: 
   return response;
 }
 
-export function daemonTaskWireResponse(task: MultiremiTask, triggerMetadata: MultiremiTaskTriggerMetadata | null = null): Record<string, unknown> {
+export function daemonTaskWireResponse(
+  task: MultiremiTask & { issue?: MultiremiTaskWithAgent["issue"] },
+  triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
+): Record<string, unknown> {
   const response: Record<string, unknown> = {
     id: task.id,
     agent_id: task.agentId,
@@ -293,6 +297,17 @@ export function daemonTaskClaimResponse(
       wiki: task.projectDocs.wiki.map(projectDocIndexEntryCompatibilityResponse),
       schema: task.projectDocs.schema,
     };
+  }
+  if (task.projectContexts.length) {
+    response.project_contexts = task.projectContexts.map((context) => ({
+      project: projectCompatibilityResponse(context.project),
+      resources: context.resources.map(projectResourceCompatibilityResponse),
+      docs: context.docs.map(projectDocCompatibilityResponse),
+      repos: context.repos.map((repo) => ({
+        url: repo.url,
+        ...(repo.description ? { description: repo.description } : {}),
+      })),
+    }));
   }
   if (task.repos.length) {
     response.repos = task.repos.map((repo) => ({
@@ -404,10 +419,12 @@ export function daemonTaskMessageWireResponse(message: MultiremiTaskMessage, tas
   return response;
 }
 
-function daemonTaskKind(task: MultiremiTask): "chat" | "autopilot" | "quick_create" | "comment" | "direct" {
+function daemonTaskKind(
+  task: MultiremiTask & { issue?: MultiremiTaskWithAgent["issue"] },
+): "chat" | "autopilot" | "quick_create" | "comment" | "direct" {
   if (task.chatSessionId) return "chat";
   if (task.autopilotRunId) return "autopilot";
-  if (!task.issueId) return "quick_create";
+  if (task.taskKind === "quick_create" || !task.issueId || task.issue?.issueKind === "intake") return "quick_create";
   if (task.triggerCommentId) return "comment";
   return "direct";
 }

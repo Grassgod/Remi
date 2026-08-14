@@ -60,6 +60,9 @@ describe("store migrations", () => {
     }
     expect(tables.some((name) => name.startsWith("multica_"))).toBe(false);
     expect(columnNames(database, "multiremi_access_tokens")).toContain("purpose");
+    expect(columnNames(database, "multiremi_tasks")).toContain("task_kind");
+    expect(columnNames(database, "multiremi_issues")).toEqual(expect.arrayContaining(["issue_kind", "source_issue_id"]));
+    expect(columnNames(database, "multiremi_agent_plugin_bindings")).not.toContain("task_kind");
   });
 
   it("classifies legacy access tokens by their actual purpose", () => {

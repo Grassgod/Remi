@@ -102,7 +102,11 @@ export function issueSubscriberTarget(
   return { userType, userId };
 }
 
-export function withIssueCreateRequestContext(c: Context, input: CreateIssueWithTaskInput): CreateIssueWithTaskInput {
+export function withIssueCreateRequestContext(
+  c: Context,
+  input: CreateIssueWithTaskInput,
+  store?: MultiremiStore,
+): CreateIssueWithTaskInput {
   const workspaceId = cleanString(input.workspace_id) ??
     cleanString(c.req.query("workspace_id")) ??
     currentAccessToken(c)?.workspaceId ??
@@ -125,6 +129,39 @@ export function withIssueCreateRequestContext(c: Context, input: CreateIssueWith
   if (hasRequestField(input, "due_date")) out.due_date = input.due_date ?? null;
   if (hasRequestField(input, "acceptance_criteria")) out.acceptance_criteria = input.acceptance_criteria ?? [];
   if (hasRequestField(input, "context_refs")) out.context_refs = input.context_refs ?? [];
+
+  const taskToken = currentTaskAccessToken(c);
+  const task = taskToken?.taskId && store ? store.getTask(taskToken.taskId) : null;
+  const intakeIssue = task?.issueId && store ? store.getIssue(task.issueId) : null;
+  if (intakeIssue?.issueKind === "intake") {
+    out.workspace_id = intakeIssue.workspaceId;
+    const requestedProjectId = cleanString(input.project_id);
+    const selectedProjectId = intakeIssue.projectId;
+    const projectId = selectedProjectId ?? requestedProjectId ?? null;
+    if (selectedProjectId && requestedProjectId && requestedProjectId !== selectedProjectId) {
+      throw new Error("Generated issues must stay in the intake project's scope");
+    }
+    if (projectId) {
+      const project = store!.getProject(projectId);
+      if (!project || project.workspaceId !== intakeIssue.workspaceId || project.archivedAt) {
+        throw new Error(`Project is not active in this workspace: ${projectId}`);
+      }
+      out.project_id = projectId;
+      if (!hasRequestField(input, "assignee_type") && project.defaultAssigneeType && project.defaultAssigneeId) {
+        out.assignee_type = project.defaultAssigneeType;
+        out.assignee_id = project.defaultAssigneeId;
+      }
+    } else if (store!.listProjects(intakeIssue.workspaceId).some((project) => !project.archivedAt)) {
+      throw new Error("project_id is required when active projects are available");
+    }
+    out.status = "todo";
+    out.issue_kind = "execution";
+    out.source_issue_id = intakeIssue.id;
+    out.context_refs = [
+      ...(out.context_refs ?? []),
+      { type: "generated_from", issueId: intakeIssue.id, taskId: task!.id },
+    ];
+  }
   return out;
 }
 

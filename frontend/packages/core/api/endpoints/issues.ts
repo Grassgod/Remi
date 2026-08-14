@@ -123,10 +123,17 @@ export class IssuesEndpoints {
     prompt: string;
     project_id?: string | null;
     parent_issue_id?: string | null;
-  }): Promise<{ task_id: string }> {
+  }): Promise<{ task_id: string; issue: Issue }> {
     return this.http.fetch("/api/issues/quick-create", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async listGeneratedIssues(id: string): Promise<{ issues: Issue[]; total: number }> {
+    const raw = await this.http.fetch<unknown>(`/api/issues/${id}/generated-issues`);
+    return parseWithFallback(raw, ListIssuesResponseSchema, EMPTY_LIST_ISSUES_RESPONSE, {
+      endpoint: "GET /api/issues/:id/generated-issues",
     });
   }
 

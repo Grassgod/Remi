@@ -76,6 +76,8 @@ export interface AgentTaskIssue {
   title: string;
   description: string | null;
   metadata: Record<string, string | number | boolean>;
+  issueKind?: "execution" | "intake";
+  sourceIssueId?: string | null;
 }
 
 export interface AgentTaskIssueSession {
@@ -149,6 +151,25 @@ export interface AgentTaskProjectDocsIndex {
   schema?: string | null;
 }
 
+export interface AgentTaskProjectDoc {
+  id: string;
+  kind: "wiki" | "memory";
+  slug: string;
+  title: string;
+  summary: string | null;
+  body: string;
+  tags: string[];
+  pinned: boolean;
+  updatedAt: string;
+}
+
+export interface AgentTaskProjectContext {
+  project: AgentTaskProject;
+  resources: AgentTaskProjectResource[];
+  docs: AgentTaskProjectDoc[];
+  repos: AgentTaskRepo[];
+}
+
 /** Repo available to a task. */
 export interface AgentTaskRepo {
   url: string;
@@ -190,6 +211,8 @@ export interface AgentTask {
   projectResources: AgentTaskProjectResource[];
   projectDocs?: AgentTaskProjectDocsIndex | null;
   project_docs?: AgentTaskProjectDocsIndex | null;
+  projectContexts?: AgentTaskProjectContext[];
+  project_contexts?: AgentTaskProjectContext[];
   repos: AgentTaskRepo[];
 
   /** Exact immutable Agent Plugin versions frozen for this execution. */

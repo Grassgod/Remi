@@ -505,6 +505,8 @@ export function runMigrations(db: SqlDatabase): void {
       workspace_id TEXT NOT NULL DEFAULT 'local',
       project_id TEXT,
       parent_issue_id TEXT,
+      issue_kind TEXT NOT NULL DEFAULT 'execution',
+      source_issue_id TEXT,
       assignee_type TEXT,
       assignee_id TEXT,
       position REAL NOT NULL DEFAULT 0,
@@ -1067,6 +1069,7 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE TABLE IF NOT EXISTS multiremi_tasks (
       id TEXT PRIMARY KEY,
+      task_kind TEXT NOT NULL DEFAULT 'direct',
       agent_id TEXT NOT NULL,
       runtime_id TEXT,
       issue_id TEXT,
@@ -1244,6 +1247,8 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_issues", "issue_key TEXT");
   addColumnIfMissing(db, "multiremi_issues", "priority TEXT NOT NULL DEFAULT 'none'");
   addColumnIfMissing(db, "multiremi_issues", "parent_issue_id TEXT");
+  addColumnIfMissing(db, "multiremi_issues", "issue_kind TEXT NOT NULL DEFAULT 'execution'");
+  addColumnIfMissing(db, "multiremi_issues", "source_issue_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "position REAL NOT NULL DEFAULT 0");
   addColumnIfMissing(db, "multiremi_issues", "start_date TEXT");
   addColumnIfMissing(db, "multiremi_issues", "due_date TEXT");
@@ -1272,6 +1277,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_chat_messages", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_chat_messages", "elapsed_ms INTEGER");
   addColumnIfMissing(db, "multiremi_tasks", "chat_session_id TEXT");
+  addColumnIfMissing(db, "multiremi_tasks", "task_kind TEXT NOT NULL DEFAULT 'direct'");
   addColumnIfMissing(db, "multiremi_tasks", "wait_reason TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "failure_reason TEXT");
   addColumnIfMissing(db, "multiremi_tasks", "attempt INTEGER NOT NULL DEFAULT 1");
@@ -1314,6 +1320,7 @@ export function runMigrations(db: SqlDatabase): void {
   // created under the project so users stop re-picking the same squad each time.
   addColumnIfMissing(db, "multiremi_projects", "default_assignee_type TEXT");
   addColumnIfMissing(db, "multiremi_projects", "default_assignee_id TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_issues_source ON multiremi_issues(source_issue_id, created_at)");
   db.run(
     "UPDATE multiremi_projects SET archived_at = updated_at WHERE archived_at IS NULL AND status IN ('completed', 'cancelled')",
   );

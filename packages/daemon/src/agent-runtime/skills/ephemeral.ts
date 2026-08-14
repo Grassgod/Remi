@@ -32,6 +32,13 @@ export function writeTaskContext(workDir: string, task: AgentTask): void {
       id: task.project.id,
       title: task.project.title,
     } : null,
+    project_contexts: (task.projectContexts ?? task.project_contexts ?? []).map((context) => ({
+      id: context.project.id,
+      title: context.project.title,
+      directory: context.project.title,
+      repos: context.repos.map((repo) => repo.url),
+      docs: context.docs.map((doc) => ({ kind: doc.kind, slug: doc.slug, title: doc.title })),
+    })),
     repos: task.repos.map((repo) => ({
       url: repo.url,
       ...(repo.description ? { description: repo.description } : {}),

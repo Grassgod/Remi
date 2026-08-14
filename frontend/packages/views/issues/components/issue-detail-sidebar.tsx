@@ -1,9 +1,9 @@
 "use client";
 
-import { CalendarClock, CalendarDays, CheckCircle2, ChevronRight, Plus, Tag } from "lucide-react";
+import { Bot, CalendarClock, CalendarDays, CheckCircle2, ChevronRight, ListTree, Plus, Tag } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
-import { issueKeys } from "@multiremi/core/issues/queries";
+import { issueDetailOptions, issueKeys } from "@multiremi/core/issues/queries";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Popover, PopoverTrigger, PopoverContent } from "@multiremi/ui/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -243,7 +243,9 @@ export function IssueDetailSidebar({
         </div>}
       </div>
 
-      <IssueCodeWorkspaceSection issueId={issueId} />
+      <IssueCodeWorkspaceSection issueId={issueId} issueKind={issue.issue_kind} />
+
+      <IssueCreationRelationSection issue={issue} />
 
       {/* Parent issue — standalone section, only when the issue has a
           parent. Setting a parent is reachable via the issue actions menu;
@@ -409,6 +411,54 @@ export function IssueDetailSidebar({
           </Dialog>
         </>
       )}
+    </div>
+  );
+}
+
+function IssueCreationRelationSection({ issue }: { issue: Issue }) {
+  const { t } = useT("issues");
+  const wsId = issue.workspace_id;
+  const paths = useWorkspacePaths();
+  const isIntake = issue.issue_kind === "intake";
+  const { data: generated } = useQuery({
+    queryKey: ["issues", wsId, "generated", issue.id],
+    queryFn: () => api.listGeneratedIssues(issue.id),
+    enabled: isIntake,
+    refetchInterval: isIntake && issue.status !== "done" ? 5_000 : false,
+  });
+  const { data: source } = useQuery({
+    ...issueDetailOptions(wsId, issue.source_issue_id ?? ""),
+    enabled: Boolean(issue.source_issue_id),
+  });
+  if (!isIntake && !issue.source_issue_id) return null;
+
+  const linkedIssues = isIntake ? generated?.issues ?? [] : source ? [source] : [];
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-1 px-2 py-1 text-xs font-medium">
+        {isIntake ? <ListTree className="size-3.5 text-muted-foreground" /> : <Bot className="size-3.5 text-muted-foreground" />}
+        {isIntake
+          ? t(($) => $.detail.section_generated_issues, { count: linkedIssues.length })
+          : t(($) => $.detail.section_source_intake)}
+      </div>
+      <div className="space-y-1 pl-2">
+        {linkedIssues.map((linked) => (
+          <AppLink
+            key={linked.id}
+            href={paths.issueDetail(linked.id)}
+            className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-accent/50"
+          >
+            <StatusIcon status={linked.status} className="size-3.5 shrink-0" />
+            <span className="shrink-0 text-muted-foreground">{linked.identifier}</span>
+            <span className="truncate">{linked.title}</span>
+          </AppLink>
+        ))}
+        {isIntake && linkedIssues.length === 0 && (
+          <div className="px-2 py-1 text-xs text-muted-foreground">
+            {t(($) => $.detail.generated_issues_empty)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

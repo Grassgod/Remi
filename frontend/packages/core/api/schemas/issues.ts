@@ -23,6 +23,8 @@ export const IssueSchema = z.object({
   creator_type: z.string(),
   creator_id: z.string(),
   parent_issue_id: z.string().nullable(),
+  issue_kind: z.enum(["execution", "intake"]).default("execution"),
+  source_issue_id: z.string().nullable().default(null),
   project_id: z.string().nullable(),
   position: z.number(),
   start_date: z.string().nullable(),

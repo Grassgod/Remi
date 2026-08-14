@@ -60,4 +60,33 @@ describe("IssueCodeWorkspaceSection", () => {
     expect(screen.getByTitle(WORKSPACE.root_path)).toBeInTheDocument();
     expect(screen.getByTitle(WORKSPACE.repos[0]!.worktree_path)).toBeInTheDocument();
   });
+
+  it("labels intake directories as read-only snapshots instead of showing an empty branch", async () => {
+    const intakeWorkspace: IssueWorkspace = {
+      ...WORKSPACE,
+      issue_id: "issue-44",
+      issue_key: "MUL-44",
+      root_path: "/data00/home/user/.remi/multiremi/workspaces/MUL-44",
+      branch_name: "",
+      repos: [{
+        ...WORKSPACE.repos[0]!,
+        worktree_path: "/data00/home/user/.remi/multiremi/workspaces/MUL-44/projects/Remi/repos/1passport",
+        branch_name: "",
+        base_ref: "abc123",
+      }],
+    };
+    mockApiObj.getIssueWorkspace.mockResolvedValue({ workspace: intakeWorkspace });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider resources={TEST_RESOURCES} locale="en">
+          <IssueCodeWorkspaceSection issueId="issue-44" issueKind="intake" />
+        </I18nProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Read-only project snapshot")).toBeInTheDocument();
+    expect(screen.getByText("./projects/Remi/repos/1passport")).toBeInTheDocument();
+    expect(screen.queryByText("Branch")).not.toBeInTheDocument();
+  });
 });
