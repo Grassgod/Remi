@@ -20,12 +20,12 @@ export function registerInboxRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/inbox/:id/archive", (c) => {
     return c.json({ item: store.archiveInboxItem(c.req.param("id")) });
   });
-  app.get("/api/inbox", (c) => c.json(store.listInboxItems(compatibilityInboxMemberId(c)).map(inboxCompatibilityResponse)));
-  app.get("/api/inbox/unread-count", (c) => c.json({ count: store.countUnreadInboxItems(compatibilityInboxMemberId(c)) }));
-  app.post("/api/inbox/mark-all-read", (c) => c.json({ count: store.markAllInboxItemsRead(compatibilityInboxMemberId(c)) }));
-  app.post("/api/inbox/archive-all", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c), "all") }));
-  app.post("/api/inbox/archive-all-read", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c), "read") }));
-  app.post("/api/inbox/archive-completed", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c), "completed") }));
+  app.get("/api/inbox", (c) => c.json(store.listInboxItems(compatibilityInboxMemberId(c, store)).map(inboxCompatibilityResponse)));
+  app.get("/api/inbox/unread-count", (c) => c.json({ count: store.countUnreadInboxItems(compatibilityInboxMemberId(c, store)) }));
+  app.post("/api/inbox/mark-all-read", (c) => c.json({ count: store.markAllInboxItemsRead(compatibilityInboxMemberId(c, store)) }));
+  app.post("/api/inbox/archive-all", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c, store), "all") }));
+  app.post("/api/inbox/archive-all-read", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c, store), "read") }));
+  app.post("/api/inbox/archive-completed", (c) => c.json({ count: store.archiveAllInboxItems(compatibilityInboxMemberId(c, store), "completed") }));
   app.post("/api/inbox/:id/read", (c) => c.json(inboxCompatibilityResponse(store.markInboxItemRead(c.req.param("id")))));
   app.post("/api/inbox/:id/archive", (c) => c.json(inboxCompatibilityResponse(store.archiveInboxItem(c.req.param("id")))));
 }

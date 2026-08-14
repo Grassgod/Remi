@@ -294,4 +294,35 @@ describe("Multiremi API — pins, search, and inbox", () => {
     const afterArchive = await app.request(`/api/multiremi/inbox?memberId=${encodeURIComponent(bob.id)}`);
     expect((await afterArchive.json()).items).toHaveLength(0);
   });
+
+  // Regression (MUL-38): the web client authenticates as a USER id, but inbox
+  // rows are keyed by member-table ids. The compat routes must resolve the
+  // user id to the member id — querying with the raw user id used to return a
+  // permanently empty inbox while notifications piled up.
+  it("resolves a user id to the member id on the compat inbox routes", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const reviewer = store.createWorkspaceMember({ name: "Reviewer", userId: "user-rev" });
+    const author = store.createWorkspaceMember({ name: "Author", userId: "user-author" });
+    const issue = store.createIssue({ title: "Inbox identity", createdBy: reviewer.id });
+    store.createIssueComment(issue.id, { authorType: "member", authorId: author.id, body: "ping subscribers" });
+
+    // Sanity: the notification row exists under the member id.
+    const byMemberId = await app.request(`/api/inbox?member_id=${encodeURIComponent(reviewer.id)}`);
+    expect(await byMemberId.json()).toHaveLength(1);
+
+    // A user id must find the same rows instead of silently matching nothing.
+    const byUserId = await app.request("/api/inbox?member_id=user-rev");
+    const items = await byUserId.json();
+    expect(items).toHaveLength(1);
+    expect(items[0].type).toBe("comment_created");
+
+    const count = await app.request("/api/inbox/unread-count?member_id=user-rev");
+    expect((await count.json()).count).toBe(1);
+
+    const markAll = await app.request("/api/inbox/mark-all-read?member_id=user-rev", { method: "POST" });
+    expect((await markAll.json()).count).toBe(1);
+    const afterRead = await app.request("/api/inbox/unread-count?member_id=user-rev");
+    expect((await afterRead.json()).count).toBe(0);
+  });
 });

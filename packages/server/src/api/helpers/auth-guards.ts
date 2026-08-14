@@ -190,10 +190,20 @@ export function compatibilityUserId(c: Context): string {
     "local";
 }
 
-export function compatibilityInboxMemberId(c: Context): string {
-  return authenticatedRequestUserId(c) ??
+export function compatibilityInboxMemberId(c: Context, store: MultiremiStore): string {
+  const raw = authenticatedRequestUserId(c) ??
     cleanString(c.req.query("member_id")) ??
     "local";
+  // Inbox rows are keyed by member-table ids (mem_<ws>_<user>) — every
+  // createInboxItem writer passes a member id — while auth yields the USER id.
+  // Querying with the raw user id silently returns an empty inbox (MUL-38: 151
+  // unread notifications invisible in the web UI). Accept an exact member id
+  // untouched; otherwise resolve the user's membership, scoped to the request's
+  // workspace when the slug header names one.
+  if (store.getWorkspaceMember(raw)) return raw;
+  const workspaceId = workspaceIdFromSlugHeader(c, store);
+  const membership = store.listWorkspaceMembers(workspaceId).find((member) => member.userId === raw);
+  return membership?.id ?? raw;
 }
 
 export function denyCurrentUserRuntimeWorkspaceAccess(c: Context, store: MultiremiStore, runtime: MultiremiRuntime): Response | null {
