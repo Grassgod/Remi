@@ -3,11 +3,13 @@ import { parseWithFallback } from "../api/schema";
 import {
   AgentPluginBindingListSchema,
   AgentPluginDetailSchema,
+  AgentPluginRepositoryInspectionResponseSchema,
   AgentPluginListSchema,
   AgentPluginRuntimeStateListSchema,
   AgentPluginVersionListSchema,
   CreateAgentPluginVersionResultSchema,
   EMPTY_AGENT_PLUGIN_DETAIL,
+  EMPTY_AGENT_PLUGIN_REPOSITORY_INSPECTION,
   EMPTY_AGENT_PLUGIN_LIST,
   EMPTY_AGENT_PLUGIN_RUNTIME_STATE_LIST,
   EMPTY_AGENT_PLUGIN_VERSION_LIST,
@@ -107,6 +109,14 @@ describe("agent plugin response schemas", () => {
   });
 
   it("degrades malformed list and detail responses", () => {
+    expect(
+      parseWithFallback(
+        { inspection: { sourceUrl: 42, candidates: null } },
+        AgentPluginRepositoryInspectionResponseSchema,
+        EMPTY_AGENT_PLUGIN_REPOSITORY_INSPECTION,
+        { endpoint: "test plugin repository inspection" },
+      ),
+    ).toBeNull();
     expect(
       parseWithFallback(
         { plugins: "not-an-array" },

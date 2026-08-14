@@ -18,10 +18,17 @@ import {
 } from "../wire/index.js";
 import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { AgentPluginValidationError } from "@multiremi/agent-plugins/import.js";
+import {
+  AgentPluginGitImportError,
+  type ResolvedAgentPluginGitSource,
+} from "@multiremi/agent-plugins/git-import.js";
 import type {
   CreateAgentPluginBindingInput,
   CreateAgentPluginVersionInput,
   ImportAgentPluginInput,
+  ImportAgentPluginFromGitInput,
+  ImportAgentPluginRequest,
+  InspectAgentPluginRepositoryInput,
   ReportAgentPluginRuntimeStateInput,
   UpdateAgentPluginBindingInput,
   UpdateAgentPluginInput,
@@ -46,20 +53,56 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
 
-  app.post("/api/multiremi/agent-plugins/import", async (c) => {
-    const body = await readJsonStrict<ImportAgentPluginInput>(c);
+  app.post("/api/multiremi/agent-plugins/inspect", async (c) => {
+    const body = await readJsonStrict<InspectAgentPluginRepositoryInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const workspaceId = requestedWorkspaceId(c, body);
     const denied = requireWorkspaceManager(c, deps, workspaceId);
     if (denied) return denied;
     try {
-      const plugin = store.importAgentPlugin({
-        ...body,
-        workspaceId,
-        workspace_id: workspaceId,
-        createdBy: currentRequestUserId(c),
-        created_by: currentRequestUserId(c),
+      const resolved = await deps.resolveAgentPluginGitSource({
+        sourceUrl: requiredString(body.sourceUrl ?? body.source_url, "source_url"),
+        sourceRef: body.sourceRef ?? body.source_ref,
+        sourceSubdir: body.sourceSubdir ?? body.source_subdir,
       });
+      return c.json({ inspection: repositoryInspectionResponse(resolved) });
+    } catch (error) {
+      return pluginErrorResponse(c, error);
+    }
+  });
+
+  app.post("/api/multiremi/agent-plugins/import", async (c) => {
+    const body = await readJsonStrict<ImportAgentPluginRequest>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const target = body.id ? store.getAgentPlugin(body.id) : null;
+    if (body.id && !target) {
+      return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
+    }
+    const workspaceId = requestedWorkspaceId(c, body, target?.workspaceId ?? "local");
+    const denied = requireWorkspaceManager(c, deps, target?.workspaceId ?? workspaceId);
+    if (denied) {
+      if (target && denied.status === 404) {
+        return c.json({ error: "plugin not found", code: "plugin_not_found" }, 404);
+      }
+      return denied;
+    }
+    if (target && target.workspaceId !== workspaceId) {
+      return c.json({
+        error: "plugin and import source must belong to the same workspace",
+        code: "workspace_mismatch",
+      }, 400);
+    }
+    try {
+      const input: ImportAgentPluginInput = isGitImportRequest(body)
+        ? await gitImportInput(c, deps, workspaceId, body)
+        : {
+            ...body,
+            workspaceId,
+            workspace_id: workspaceId,
+            createdBy: currentRequestUserId(c),
+            created_by: currentRequestUserId(c),
+          };
+      const plugin = store.importAgentPlugin(input);
       publishWorkspaceEvent(c, store, "agent_plugin:imported", workspaceId, { plugin });
       return c.json({ plugin }, 201);
     } catch (error) {
@@ -338,14 +381,163 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 }
 
-function requestedWorkspaceId(c: Context, input: { workspaceId?: string | null; workspace_id?: string | null } = {}): string {
+function repositoryInspectionResponse(resolved: ResolvedAgentPluginGitSource) {
+  return {
+    sourceUrl: resolved.sourceUrl,
+    sourceRef: resolved.sourceRef,
+    defaultBranch: resolved.defaultBranch,
+    branches: resolved.branches,
+    sourceRevision: resolved.sourceRevision,
+    candidates: resolved.candidates.map((candidate) => ({
+      provider: candidate.provider,
+      name: candidate.name,
+      description: candidate.description,
+      version: candidate.version,
+      sourceSubdir: candidate.pluginSubdir,
+      manifestPath: candidate.manifestPath,
+      manifest: candidate.manifest,
+      fileCount: candidate.fileCount,
+      artifactSize: candidate.artifactSize,
+    })),
+  };
+}
+
+function isGitImportRequest(
+  input: ImportAgentPluginRequest,
+): input is ImportAgentPluginFromGitInput {
+  return "mode" in input && input.mode === "git";
+}
+
+async function gitImportInput(
+  c: Context,
+  deps: RouterDeps,
+  workspaceId: string,
+  input: ImportAgentPluginFromGitInput,
+): Promise<ImportAgentPluginInput> {
+  const target = input.id ? deps.store.getAgentPlugin(input.id) : null;
+  if (input.id && !target) {
+    throw new AgentPluginStoreError("plugin not found", "plugin_not_found", 404);
+  }
+  if (target && target.workspaceId !== workspaceId) {
+    throw new AgentPluginValidationError(
+      "plugin and import source must belong to the same workspace",
+      "workspace_mismatch",
+    );
+  }
+
+  const rawSubdir = input.sourceSubdir ?? input.source_subdir;
+  const selectedSubdir = rawSubdir === undefined || rawSubdir === null
+    ? target
+      ? (target.sourceSubdir ?? "")
+      : undefined
+    : String(rawSubdir).trim().replace(/\/$/, "");
+  const selectedProvider = input.provider ?? target?.provider ?? null;
+  const selectedManifestPath = String(
+    input.manifestPath ?? input.manifest_path ?? "",
+  ).trim() || null;
+  const resolved = await deps.resolveAgentPluginGitSource({
+    sourceUrl: requiredString(
+      input.sourceUrl ?? input.source_url ?? target?.sourceUrl,
+      "source_url",
+    ),
+    sourceRef: input.sourceRef ?? input.source_ref ?? target?.sourceRef,
+    sourceSubdir: selectedSubdir,
+    provider: selectedProvider,
+    manifestPath: selectedManifestPath,
+    includeFiles: true,
+    exactSourceSubdir: true,
+  });
+  const expectedRevision = String(
+    input.expectedRevision ?? input.expected_revision ?? "",
+  ).trim().toLowerCase();
+  if (expectedRevision && expectedRevision !== resolved.sourceRevision) {
+    throw new AgentPluginGitImportError(
+      "Plugin repository changed after inspection; read it again before importing",
+      "plugin_git_revision_changed",
+      409,
+    );
+  }
+
+  const matchingCandidates = resolved.candidates.filter((item) => (
+    (selectedSubdir === null || selectedSubdir === undefined || item.pluginSubdir === selectedSubdir)
+    && (!selectedProvider || item.provider === selectedProvider)
+    && (!selectedManifestPath || item.manifestPath === selectedManifestPath)
+  ));
+  const candidate = matchingCandidates.length === 1 ? matchingCandidates[0] : null;
+  if (!candidate) {
+    throw new AgentPluginGitImportError(
+      matchingCandidates.length > 1
+        ? "select one Plugin from the repository before importing"
+        : "the selected Plugin was not found in the repository",
+      matchingCandidates.length > 1
+        ? "plugin_selection_required"
+        : "plugin_manifest_not_found",
+    );
+  }
+  if (target && target.provider !== candidate.provider) {
+    throw new AgentPluginValidationError(
+      `${candidate.provider} plugin cannot update ${target.provider} plugin`,
+      "provider_mismatch",
+    );
+  }
+
+  return {
+    ...(target
+      ? {
+          id: target.id,
+          name: target.name,
+          description: target.description,
+        }
+      : {}),
+    workspaceId,
+    workspace_id: workspaceId,
+    provider: candidate.provider,
+    version: candidate.version,
+    manifestPath: candidate.manifestPath,
+    manifest: candidate.manifest,
+    files: candidate.files ?? [],
+    sourceType: "git",
+    sourceUrl: resolved.sourceUrl,
+    sourceRef: resolved.sourceRef,
+    sourceSubdir: candidate.pluginSubdir,
+    sourceRevision: resolved.sourceRevision,
+    requirements:
+      input.requirements ?? target?.activeVersion?.requirements ?? {},
+    metadata: {
+      source_default_branch: resolved.defaultBranch,
+      source_url: resolved.sourceUrl,
+      source_ref: resolved.sourceRef,
+      source_subdir: candidate.pluginSubdir,
+      source_manifest_path: candidate.manifestPath,
+      source_provider: candidate.provider,
+    },
+    activate: input.activate,
+    createdBy: currentRequestUserId(c),
+    created_by: currentRequestUserId(c),
+  };
+}
+
+function requiredString(value: unknown, field: string): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (normalized) return normalized;
+  throw new AgentPluginGitImportError(
+    `${field} is required`,
+    `missing_${field}`,
+  );
+}
+
+function requestedWorkspaceId(
+  c: Context,
+  input: { workspaceId?: string | null; workspace_id?: string | null } = {},
+  fallback = "local",
+): string {
   return String(
     input.workspaceId
       ?? input.workspace_id
       ?? c.req.query("workspace_id")
       ?? c.req.query("workspaceId")
-      ?? "local",
-  ).trim() || "local";
+      ?? fallback,
+  ).trim() || fallback;
 }
 
 function requireWorkspaceManager(c: Context, deps: RouterDeps, workspaceId: string): Response | null {
@@ -379,6 +571,14 @@ function unsupportedBindingConfiguration(
 }
 
 function pluginErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof AgentPluginGitImportError) {
+    const body = { error: error.message, code: error.code };
+    if (error.status === 409) return c.json(body, 409);
+    if (error.status === 502) return c.json(body, 502);
+    if (error.status === 503) return c.json(body, 503);
+    if (error.status === 504) return c.json(body, 504);
+    return c.json(body, 400);
+  }
   if (error instanceof AgentPluginValidationError) {
     return c.json({ error: error.message, code: error.code }, 400);
   }

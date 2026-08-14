@@ -2,11 +2,372 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
+import type { ResolveAgentPluginGitSourceInput } from "@multiremi/agent-plugins/git-import.js";
 import { createStore, mockFetch, resetMultiremiTestEnv, signTestJwt } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — agent plugins", () => {
+  it("inspects and imports a Git Plugin source as an immutable artifact", async () => {
+    const store = createStore();
+    const resolverCalls: ResolveAgentPluginGitSourceInput[] = [];
+    const resolveAgentPluginGitSource = async (input: ResolveAgentPluginGitSourceInput) => {
+      resolverCalls.push(input);
+      return {
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: "main",
+        defaultBranch: "main",
+        branches: ["develop", "main"],
+        sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+        candidates: [{
+          provider: "claude" as const,
+          name: "review-tools",
+          description: "Review code",
+          version: "1.2.0",
+          pluginSubdir: "plugins/review",
+          manifestPath: ".claude-plugin/plugin.json",
+          manifest: { name: "review-tools", version: "1.2.0" },
+          fileCount: 2,
+          artifactSize: 48,
+          ...(input.includeFiles === true
+            ? {
+                files: [{
+                  path: "skills/review/SKILL.md",
+                  content: Buffer.from("# Review\n").toString("base64"),
+                  encoding: "base64" as const,
+                }],
+              }
+            : {}),
+        }],
+      };
+    };
+    const app = createMultiremiApp({
+      store,
+      resolveAgentPluginGitSource,
+    });
+
+    const inspected = await app.request("/api/multiremi/agent-plugins/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: "local",
+        source_url: "https://example.com/plugins.git",
+      }),
+    });
+    expect(inspected.status).toBe(200);
+    expect(await inspected.json()).toMatchObject({
+      inspection: {
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: "main",
+        defaultBranch: "main",
+        sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+        candidates: [{
+          provider: "claude",
+          name: "review-tools",
+          sourceSubdir: "plugins/review",
+          version: "1.2.0",
+        }],
+      },
+    });
+
+    const imported = await app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "git",
+        workspace_id: "local",
+        source_url: "https://example.com/plugins.git",
+        source_ref: "main",
+        source_subdir: "plugins/review",
+        provider: "claude",
+        manifest_path: ".claude-plugin/plugin.json",
+        expected_revision: "1234567890abcdef1234567890abcdef12345678",
+      }),
+    });
+    expect(imported.status).toBe(201);
+    const plugin = (await imported.json()).plugin;
+    expect(plugin).toMatchObject({
+      provider: "claude",
+      sourceType: "git",
+      sourceUrl: "https://example.com/plugins.git",
+      sourceRef: "main",
+      sourceSubdir: "plugins/review",
+      activeVersion: {
+        version: "1.2.0",
+        sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+        metadata: {
+          source_url: "https://example.com/plugins.git",
+          source_ref: "main",
+          source_subdir: "plugins/review",
+          source_manifest_path: ".claude-plugin/plugin.json",
+          source_provider: "claude",
+        },
+      },
+    });
+    expect(store.getAgentPluginArtifactByDigest(plugin.activeVersion.artifactDigest)?.artifact)
+      .toMatchObject({
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: "skills/review/SKILL.md" }),
+        ]),
+      });
+    expect(resolverCalls).toEqual([
+      {
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: undefined,
+        sourceSubdir: undefined,
+      },
+      {
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: "main",
+        sourceSubdir: "plugins/review",
+        provider: "claude",
+        manifestPath: ".claude-plugin/plugin.json",
+        includeFiles: true,
+        exactSourceSubdir: true,
+      },
+    ]);
+  });
+
+  it("selects provider manifests precisely when they share a repository directory", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({
+      store,
+      resolveAgentPluginGitSource: async () => ({
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: "main",
+        defaultBranch: "main",
+        branches: ["main"],
+        sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+        candidates: [
+          {
+            provider: "claude" as const,
+            name: "shared-claude",
+            description: "",
+            version: "1.0.0",
+            pluginSubdir: "",
+            manifestPath: ".claude-plugin/plugin.json",
+            manifest: { name: "shared-claude", version: "1.0.0" },
+            fileCount: 1,
+            artifactSize: 48,
+            files: [],
+          },
+          {
+            provider: "codex" as const,
+            name: "shared-codex",
+            description: "",
+            version: "2.0.0",
+            pluginSubdir: "",
+            manifestPath: ".codex-plugin/plugin.json",
+            manifest: { name: "shared-codex", version: "2.0.0" },
+            fileCount: 1,
+            artifactSize: 48,
+            files: [],
+          },
+        ],
+      }),
+    });
+
+    const ambiguous = await app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "git",
+        source_url: "https://example.com/plugins.git",
+        source_subdir: "",
+      }),
+    });
+    expect(ambiguous.status).toBe(400);
+    expect(await ambiguous.json()).toMatchObject({ code: "plugin_selection_required" });
+
+    const imported = await app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "git",
+        source_url: "https://example.com/plugins.git",
+        source_subdir: "",
+        provider: "codex",
+        manifest_path: ".codex-plugin/plugin.json",
+      }),
+    });
+    expect(imported.status).toBe(201);
+    expect((await imported.json()).plugin).toMatchObject({
+      provider: "codex",
+      name: "shared-codex",
+      sourceSubdir: null,
+    });
+  });
+
+  it("inherits the stored Git source identity when importing a new version", async () => {
+    const store = createStore();
+    const plugin = store.importAgentPlugin({
+      workspaceId: "local",
+      provider: "claude",
+      manifest: { name: "review-tools", version: "1.0.0" },
+      sourceType: "git",
+      sourceUrl: "https://example.com/plugins.git",
+      sourceRef: "release",
+      sourceSubdir: "plugins/review",
+    });
+    const resolverCalls: ResolveAgentPluginGitSourceInput[] = [];
+    const app = createMultiremiApp({
+      store,
+      resolveAgentPluginGitSource: async (input) => {
+        resolverCalls.push(input);
+        return {
+          sourceUrl: "https://example.com/plugins.git",
+          sourceRef: "release",
+          defaultBranch: "main",
+          branches: ["main", "release"],
+          sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+          candidates: [{
+            provider: "claude" as const,
+            name: "review-tools",
+            description: "",
+            version: "2.0.0",
+            pluginSubdir: "plugins/review",
+            manifestPath: ".claude-plugin/plugin.json",
+            manifest: { name: "review-tools", version: "2.0.0" },
+            fileCount: 1,
+            artifactSize: 48,
+            files: [],
+          }],
+        };
+      },
+    });
+
+    const response = await app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "git", id: plugin.id }),
+    });
+    expect(response.status).toBe(201);
+    expect(resolverCalls).toEqual([{
+      sourceUrl: "https://example.com/plugins.git",
+      sourceRef: "release",
+      sourceSubdir: "plugins/review",
+      provider: "claude",
+      manifestPath: null,
+      includeFiles: true,
+      exactSourceSubdir: true,
+    }]);
+  });
+
+  it("does not reveal cross-workspace Plugin ids through Git version imports", async () => {
+    const store = createStore();
+    const owner = store.getOrCreateUser({
+      externalId: "plugin-owner",
+      email: "plugin-owner@example.com",
+      name: "Plugin Owner",
+    });
+    const caller = store.getOrCreateUser({
+      externalId: "plugin-caller",
+      email: "plugin-caller@example.com",
+      name: "Plugin Caller",
+    });
+    const privateWorkspace = store.createWorkspace({
+      id: "ws_plugin_private",
+      name: "Plugin Private",
+      slug: "plugin-private",
+    }, owner.id);
+    const callerWorkspace = store.createWorkspace({
+      id: "ws_plugin_caller",
+      name: "Plugin Caller",
+      slug: "plugin-caller",
+    }, caller.id);
+    const plugin = store.importAgentPlugin({
+      workspaceId: privateWorkspace.id,
+      provider: "claude",
+      manifest: { name: "private-tools", version: "1.0.0" },
+    });
+    const token = await store.createAccessToken({
+      name: "Plugin caller",
+      type: "pat",
+      workspaceId: callerWorkspace.id,
+      userId: caller.id,
+    });
+    let resolverCalls = 0;
+    const app = createMultiremiApp({
+      store,
+      authToken: "root-secret",
+      resolveAgentPluginGitSource: async () => {
+        resolverCalls += 1;
+        throw new Error("resolver must not run");
+      },
+    });
+    const request = (id: string) => app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mode: "git",
+        id,
+        workspace_id: callerWorkspace.id,
+        source_url: "https://example.com/plugins.git",
+      }),
+    });
+
+    const known = await request(plugin.id);
+    const unknown = await request("apl_does_not_exist");
+    expect(known.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(await known.json()).toEqual({
+      error: "plugin not found",
+      code: "plugin_not_found",
+    });
+    expect(await unknown.json()).toEqual({
+      error: "plugin not found",
+      code: "plugin_not_found",
+    });
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("rejects a Git import when the branch changes after inspection", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({
+      store,
+      resolveAgentPluginGitSource: async () => ({
+        sourceUrl: "https://example.com/plugins.git",
+        sourceRef: "main",
+        defaultBranch: "main",
+        branches: ["main"],
+        sourceRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        candidates: [{
+          provider: "claude",
+          name: "review-tools",
+          description: "",
+          version: "1.0.0",
+          pluginSubdir: "",
+          manifestPath: ".claude-plugin/plugin.json",
+          manifest: { name: "review-tools", version: "1.0.0" },
+          fileCount: 1,
+          artifactSize: 48,
+          files: [],
+        }],
+      }),
+    });
+
+    const response = await app.request("/api/multiremi/agent-plugins/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "git",
+        source_url: "https://example.com/plugins.git",
+        source_subdir: "",
+        expected_revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "Plugin repository changed after inspection; read it again before importing",
+      code: "plugin_git_revision_changed",
+    });
+    expect(store.listAgentPlugins()).toEqual([]);
+  });
+
   it("keeps duplicate Runtime state reports idempotent", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({

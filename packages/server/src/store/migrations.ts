@@ -85,6 +85,7 @@ export function runMigrations(db: SqlDatabase): void {
       source_type TEXT NOT NULL DEFAULT 'manifest',
       source_url TEXT,
       source_ref TEXT,
+      source_subdir TEXT,
       active_version_id TEXT,
       candidate_version_id TEXT,
       created_by TEXT,
@@ -1210,6 +1211,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "archived_at TEXT");
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
+  addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "legacy_daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "runtime_mode TEXT NOT NULL DEFAULT 'local'");

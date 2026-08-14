@@ -3,6 +3,7 @@ import type {
   AgentPlugin,
   AgentPluginBinding,
   AgentPluginRuntimeState,
+  AgentPluginRepositoryInspection,
   AgentPluginVersion,
   CreateAgentPluginVersionResult,
 } from "./types";
@@ -71,6 +72,7 @@ export const AgentPluginSchema = z
     sourceType: z.string().default("manifest"),
     sourceUrl: z.string().nullable().default(null),
     sourceRef: z.string().nullable().default(null),
+    sourceSubdir: z.string().nullable().default(null),
     activeVersionId: z.string().nullable().default(null),
     candidateVersionId: z.string().nullable().default(null),
     activeVersion: AgentPluginVersionSchema.nullable().default(null),
@@ -106,6 +108,41 @@ export const AgentPluginDetailSchema = z.union([
     .object({ plugin: AgentPluginSchema.nullable().default(null) })
     .loose()
     .transform((value) => value.plugin),
+]);
+
+export const AgentPluginRepositoryCandidateSchema = z
+  .object({
+    provider: z.enum(["claude", "codex"]),
+    name: z.string().min(1),
+    description: z.string().default(""),
+    version: z.string().min(1),
+    sourceSubdir: z.string(),
+    manifestPath: z.string().min(1),
+    manifest: UnknownRecordSchema,
+    fileCount: z.number().int().nonnegative(),
+    artifactSize: z.number().int().nonnegative(),
+  })
+  .loose();
+
+export const AgentPluginRepositoryInspectionSchema = z
+  .object({
+    sourceUrl: z.string(),
+    sourceRef: z.string().min(1),
+    defaultBranch: z.string(),
+    branches: z.array(z.string()),
+    sourceRevision: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i),
+    candidates: z.array(AgentPluginRepositoryCandidateSchema).min(1),
+  })
+  .loose();
+
+export const AgentPluginRepositoryInspectionResponseSchema = z.union([
+  AgentPluginRepositoryInspectionSchema.nullable(),
+  z
+    .object({
+      inspection: AgentPluginRepositoryInspectionSchema.nullable().default(null),
+    })
+    .loose()
+    .transform((value) => value.inspection),
 ]);
 
 export const CreateAgentPluginVersionResultSchema = z
@@ -219,6 +256,9 @@ export const AgentPluginRuntimeStateListSchema = z.union([
 
 export const EMPTY_AGENT_PLUGIN_LIST: AgentPlugin[] = [];
 export const EMPTY_AGENT_PLUGIN_DETAIL: AgentPlugin | null = null;
+export const EMPTY_AGENT_PLUGIN_REPOSITORY_INSPECTION:
+  | AgentPluginRepositoryInspection
+  | null = null;
 export const EMPTY_AGENT_PLUGIN_VERSION_LIST: AgentPluginVersion[] = [];
 export const EMPTY_CREATE_AGENT_PLUGIN_VERSION_RESULT:
   | CreateAgentPluginVersionResult

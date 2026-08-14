@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronsUpDown, GitBranch, LoaderCircle } from "lucide-react";
+import { ChevronsUpDown, GitBranch, GitCommitHorizontal, LoaderCircle } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Command,
@@ -32,6 +32,9 @@ interface BranchPickerProps {
   compact?: boolean;
   triggerClassName?: string;
   contentClassName?: string;
+  allowCustomValue?: boolean;
+  customValueHeading?: string;
+  searchPlaceholder?: string;
   onOpenChange?: (open: boolean) => void;
   onValueChange: (value: string) => void | Promise<void>;
 }
@@ -48,6 +51,9 @@ export function BranchPicker({
   compact = false,
   triggerClassName,
   contentClassName,
+  allowCustomValue = false,
+  customValueHeading,
+  searchPlaceholder,
   onOpenChange,
   onValueChange,
 }: BranchPickerProps) {
@@ -57,13 +63,23 @@ export function BranchPicker({
 
   const uniqueBranches = useMemo(() => {
     const values = new Set(branches);
-    if (value) values.add(value);
     if (remoteDefaultBranch) values.add(remoteDefaultBranch);
+    if (!allowCustomValue && value) values.add(value);
     return [...values].sort((left, right) => left.localeCompare(right));
-  }, [branches, remoteDefaultBranch, value]);
+  }, [allowCustomValue, branches, remoteDefaultBranch, value]);
   const otherBranches = remoteDefaultBranch
     ? uniqueBranches.filter((branch) => branch !== remoteDefaultBranch)
     : uniqueBranches;
+  const customValue = search.trim();
+  const showCustomValue = allowCustomValue
+    && customValue.length > 0
+    && !uniqueBranches.includes(customValue);
+  const currentCustomValue = allowCustomValue
+    && value
+    && !uniqueBranches.includes(value)
+    ? value
+    : "";
+  const displayedCustomValue = showCustomValue ? customValue : currentCustomValue;
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
@@ -129,17 +145,36 @@ export function BranchPicker({
             autoFocus
             value={search}
             onValueChange={setSearch}
-            placeholder={t(($) => $.branch_picker.search_placeholder)}
+            placeholder={searchPlaceholder ?? t(($) => $.branch_picker.search_placeholder)}
           />
           <CommandList className="max-h-72">
             {loading ? (
-              <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
+              <div
+                className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
                 <LoaderCircle className="size-4 animate-spin" />
                 {t(($) => $.branch_picker.loading)}
               </div>
             ) : (
               <>
                 <CommandEmpty>{t(($) => $.branch_picker.empty)}</CommandEmpty>
+                {displayedCustomValue && (
+                  <CommandGroup heading={customValueHeading}>
+                    <CommandItem
+                      value={`custom ${displayedCustomValue}`}
+                      data-checked={displayedCustomValue === value}
+                      onSelect={() => void handleSelect(displayedCustomValue)}
+                    >
+                      <GitCommitHorizontal className="size-3.5 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-mono" title={displayedCustomValue}>
+                        {displayedCustomValue}
+                      </span>
+                    </CommandItem>
+                  </CommandGroup>
+                )}
+                {displayedCustomValue && uniqueBranches.length > 0 && <CommandSeparator />}
                 {remoteDefaultBranch && (
                   <CommandGroup heading={t(($) => $.branch_picker.remote_default)}>
                     <CommandItem

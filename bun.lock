@@ -325,6 +325,9 @@
     "packages/server": {
       "name": "@multiremi/server",
       "version": "0.1.0",
+      "dependencies": {
+        "ipaddr.js": "1.9.1",
+      },
     },
     "packages/shared": {
       "name": "@multiremi/shared",

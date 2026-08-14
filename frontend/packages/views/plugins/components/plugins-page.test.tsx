@@ -31,6 +31,11 @@ vi.mock("@multiremi/core/plugins", () => ({
     queryFn: () => Promise.resolve(fixture.states.get(pluginId) ?? []),
   }),
   useImportAgentPlugin: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useInspectAgentPluginRepository: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+    reset: vi.fn(),
+  }),
   useRetryAgentPluginRuntime: () => ({
     mutateAsync: vi.fn(),
     isPending: false,

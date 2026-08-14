@@ -2,6 +2,7 @@ import type { MultiremiScheduler } from "@multiremi/scheduler.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { MemoryWebhookRateLimiter } from "../helpers.js";
 import type { GitRemoteInspector } from "../helpers/repositories.js";
+import type { AgentPluginGitSourceResolver } from "@multiremi/agent-plugins/git-import.js";
 
 /**
  * The values `createMultiremiApp` closes over. Domain routers receive them
@@ -16,4 +17,5 @@ export interface RouterDeps {
   webhookRateLimiter: MemoryWebhookRateLimiter;
   webhookIpRateLimiter: MemoryWebhookRateLimiter;
   inspectGitRemoteRepository: GitRemoteInspector;
+  resolveAgentPluginGitSource: AgentPluginGitSourceResolver;
 }

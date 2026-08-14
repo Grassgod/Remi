@@ -6,5 +6,7 @@
   "exports": {
     "./*": "./src/*"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ipaddr.js": "1.9.1"
+  }
 }

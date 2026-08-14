@@ -1,12 +1,17 @@
 import type {
   CreateAgentPluginBindingInput as ContractCreateAgentPluginBindingInput,
   CreateAgentPluginVersionInput as ContractCreateAgentPluginVersionInput,
+  ImportAgentPluginFromGitInput as ContractImportAgentPluginFromGitInput,
   ImportAgentPluginInput as ContractImportAgentPluginInput,
+  ImportAgentPluginRequest as ContractImportAgentPluginRequest,
+  InspectAgentPluginRepositoryInput as ContractInspectAgentPluginRepositoryInput,
   MultiremiAgentPlugin as ContractAgentPlugin,
   MultiremiAgentPluginArtifactFile as ContractAgentPluginArtifactFile,
   MultiremiAgentPluginBinding as ContractAgentPluginBinding,
   MultiremiAgentPluginDesiredReason as ContractAgentPluginDesiredReason,
   MultiremiAgentPluginProvider as ContractAgentPluginProvider,
+  MultiremiAgentPluginRepositoryCandidate as ContractAgentPluginRepositoryCandidate,
+  MultiremiAgentPluginRepositoryInspection as ContractAgentPluginRepositoryInspection,
   MultiremiAgentPluginRuntimeState as ContractAgentPluginRuntimeState,
   MultiremiAgentPluginRuntimeStatus as ContractAgentPluginRuntimeStatus,
   MultiremiAgentPluginRuntimeSummary as ContractAgentPluginRuntimeSummary,
@@ -30,6 +35,14 @@ export type AgentPlugin = ContractAgentPlugin;
 export type AgentPluginBinding = ContractAgentPluginBinding;
 export type AgentPluginRuntimeState = ContractAgentPluginRuntimeState;
 export type ImportAgentPluginInput = ContractImportAgentPluginInput;
+export type ImportAgentPluginFromGitInput = ContractImportAgentPluginFromGitInput;
+export type ImportAgentPluginRequest = ContractImportAgentPluginRequest;
+export type InspectAgentPluginRepositoryInput =
+  ContractInspectAgentPluginRepositoryInput;
+export type AgentPluginRepositoryCandidate =
+  ContractAgentPluginRepositoryCandidate;
+export type AgentPluginRepositoryInspection =
+  ContractAgentPluginRepositoryInspection;
 export type CreateAgentPluginVersionInput =
   ContractCreateAgentPluginVersionInput;
 export type CreateAgentPluginBindingInput =

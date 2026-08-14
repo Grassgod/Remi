@@ -19,6 +19,7 @@ function claudePluginInput(version = "1.0.0", content = "# Lark\n") {
     ],
     sourceType: "git" as const,
     sourceUrl: "https://example.com/lark-plugin.git",
+    sourceSubdir: "plugins/lark",
     sourceRevision: `commit-${version}`,
   };
 }
@@ -29,6 +30,7 @@ describe("AgentPluginsRepo", () => {
     const plugin = store.importAgentPlugin(claudePluginInput());
 
     expect(plugin.provider).toBe("claude");
+    expect(plugin.sourceSubdir).toBe("plugins/lark");
     expect(plugin.activeVersion?.version).toBe("1.0.0");
     expect(plugin.candidateVersion).toBeNull();
     expect(plugin.activeVersion?.manifestPath).toBe(".claude-plugin/plugin.json");
@@ -83,6 +85,28 @@ describe("AgentPluginsRepo", () => {
       provider: "claude",
       manifest: { name: "not-semver", version: "main" },
     })).toThrow("valid SemVer");
+    expect(() => store.importAgentPlugin({
+      provider: "codex",
+      manifest: { name: "missing-version" },
+    })).toThrow("must declare a version");
+  });
+
+  it("derives stable Claude versions when the native manifest omits one", () => {
+    const store = createStore();
+    const local = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "local-version" },
+      files: [{ path: "skills/local/SKILL.md", content: "# Local\n" }],
+    });
+    expect(local.activeVersion?.version).toMatch(/^0\.0\.0\+local\.[0-9a-f]{12}$/);
+
+    const git = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "git-version" },
+      sourceType: "git",
+      sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+    });
+    expect(git.activeVersion?.version).toBe("0.0.0+git.1234567890ab");
   });
 
   it("enforces provider-specific bindings and creates a stable task snapshot", () => {

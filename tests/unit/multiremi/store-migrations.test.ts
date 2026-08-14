@@ -124,6 +124,56 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
+  it("adds Plugin source subdirectories without losing existing catalog rows", () => {
+    const database = freshDb();
+    database.exec(`
+      CREATE TABLE multiremi_agent_plugins (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        source_type TEXT NOT NULL DEFAULT 'manifest',
+        source_url TEXT,
+        source_ref TEXT,
+        active_version_id TEXT,
+        candidate_version_id TEXT,
+        created_by TEXT,
+        archived_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(workspace_id, provider, name)
+      )
+    `);
+    database.run(
+      `INSERT INTO multiremi_agent_plugins (
+         id, provider, name, source_type, source_url, source_ref, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "apl_existing",
+        "claude",
+        "Existing",
+        "git",
+        "https://example.com/plugins.git",
+        "main",
+        "2026-08-01T00:00:00.000Z",
+        "2026-08-01T00:00:00.000Z",
+      ],
+    );
+
+    migrate(database);
+
+    expect(columnNames(database, "multiremi_agent_plugins")).toContain("source_subdir");
+    expect(database.query(
+      "SELECT name, source_url, source_ref, source_subdir FROM multiremi_agent_plugins WHERE id = ?",
+    ).get("apl_existing")).toEqual({
+      name: "Existing",
+      source_url: "https://example.com/plugins.git",
+      source_ref: "main",
+      source_subdir: null,
+    });
+  });
+
   it("backfills archived_at for legacy completed and cancelled projects", () => {
     const database = freshDb();
     database.exec(`

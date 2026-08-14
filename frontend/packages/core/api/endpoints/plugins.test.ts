@@ -64,6 +64,56 @@ describe("PluginsEndpoints", () => {
     });
   });
 
+  it("inspects a Plugin repository and parses candidate defaults", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        inspection: {
+          sourceUrl: "https://example.test/plugins.git",
+          sourceRef: "main",
+          defaultBranch: "main",
+          branches: ["main"],
+          sourceRevision: "1234567890abcdef1234567890abcdef12345678",
+          candidates: [{
+            provider: "claude",
+            name: "Review tools",
+            description: "Review code",
+            version: "1.0.0",
+            sourceSubdir: "plugins/review",
+            manifestPath: ".claude-plugin/plugin.json",
+            manifest: { name: "Review tools", version: "1.0.0" },
+            fileCount: 2,
+            artifactSize: 128,
+          }],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const endpoints = new PluginsEndpoints(
+      new HttpClient("https://api.example.test"),
+    );
+    const input = {
+      workspaceId: "workspace-1",
+      sourceUrl: "https://example.test/plugins.git",
+    };
+
+    await expect(endpoints.inspectAgentPluginRepository(input)).resolves.toMatchObject({
+      sourceRef: "main",
+      candidates: [{
+        provider: "claude",
+        name: "Review tools",
+        version: "1.0.0",
+        manifest: { name: "Review tools", version: "1.0.0" },
+      }],
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/multiremi/agent-plugins/inspect",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  });
+
   it("lists, creates, activates, and rolls back plugin versions", async () => {
     const plugin = { id: "plugin/1", provider: "claude" };
     const version = { id: "version/2", pluginId: "plugin/1" };

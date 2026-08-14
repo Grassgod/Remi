@@ -4,7 +4,8 @@ import { agentPluginKeys } from "./queries";
 import type {
   CreateAgentPluginBindingInput,
   CreateAgentPluginVersionInput,
-  ImportAgentPluginInput,
+  ImportAgentPluginRequest,
+  InspectAgentPluginRepositoryInput,
   RetryAgentPluginRuntimeInput,
   UpdateAgentPluginBindingInput,
 } from "./types";
@@ -19,7 +20,7 @@ function invalidateAgentPluginQueries(
 export function useImportAgentPlugin(wsId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: ImportAgentPluginInput) =>
+    mutationFn: (input: ImportAgentPluginRequest) =>
       api.importAgentPlugin({
         ...input,
         workspaceId: wsId,
@@ -28,6 +29,17 @@ export function useImportAgentPlugin(wsId: string) {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
     },
+  });
+}
+
+export function useInspectAgentPluginRepository(wsId: string) {
+  return useMutation({
+    mutationFn: (input: InspectAgentPluginRepositoryInput) =>
+      api.inspectAgentPluginRepository({
+        ...input,
+        workspaceId: wsId,
+        workspace_id: wsId,
+      }),
   });
 }
 

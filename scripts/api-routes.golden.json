@@ -1,9 +1,9 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 525,
+    "routeCount": 526,
     "routeCountByPrefix": {
-      "native": 189,
+      "native": 190,
       "compat": 323,
       "root": 13
     },
@@ -14,7 +14,7 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 294,
+    "mutationRoutes": 295,
     "mutationRoutesCovered": 274,
     "flows": [
       "agents-compat",
@@ -470,6 +470,7 @@
     "POST /api/multiremi/agent-plugins/:id/runtimes/retry",
     "POST /api/multiremi/agent-plugins/:id/versions",
     "POST /api/multiremi/agent-plugins/import",
+    "POST /api/multiremi/agent-plugins/inspect",
     "POST /api/multiremi/agents",
     "POST /api/multiremi/agents/:id/plugins",
     "POST /api/multiremi/agents/default",

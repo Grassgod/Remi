@@ -3,26 +3,29 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
-  ChevronDown,
+  ChevronRight,
   FolderOpen,
+  GitBranch,
   Loader2,
   Puzzle,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "@multiremi/core/api/client";
 import type {
   AgentPlugin,
   AgentPluginProvider,
-  ImportAgentPluginInput,
+  AgentPluginRepositoryCandidate,
+  AgentPluginRepositoryInspection,
+  ImportAgentPluginRequest,
 } from "@multiremi/core/plugins";
-import { useImportAgentPlugin } from "@multiremi/core/plugins";
+import {
+  useImportAgentPlugin,
+  useInspectAgentPluginRepository,
+} from "@multiremi/core/plugins";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Badge } from "@multiremi/ui/components/ui/badge";
 import { Button } from "@multiremi/ui/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@multiremi/ui/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +37,21 @@ import {
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Label } from "@multiremi/ui/components/ui/label";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multiremi/ui/components/ui/select";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@multiremi/ui/components/ui/tabs";
 import { useT } from "../../i18n";
+import { BranchPicker } from "../../repositories/branch-picker";
 import {
   parsePluginDirectory,
   PluginDirectoryError,
@@ -44,16 +61,7 @@ import {
 const SEMVER_PATTERN =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
-function parseRecord(text: string): Record<string, unknown> | null {
-  try {
-    const value = JSON.parse(text) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
+type ImportMode = "repository" | "directory";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -64,6 +72,34 @@ function formatBytes(bytes: number): string {
   );
   const value = bytes / 1024 ** index;
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function manifestVersion(directory: ParsedPluginDirectory): string {
+  return typeof directory.manifest.version === "string"
+    ? directory.manifest.version.trim()
+    : "";
+}
+
+function candidateKey(candidate: AgentPluginRepositoryCandidate): string {
+  return JSON.stringify([
+    candidate.provider,
+    candidate.sourceSubdir,
+    candidate.manifestPath,
+  ]);
+}
+
+function requirementsJson(plugin?: AgentPlugin): string {
+  return JSON.stringify(plugin?.activeVersion?.requirements ?? {}, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function apiErrorCode(cause: unknown): string {
+  return cause instanceof ApiError && isRecord(cause.body)
+    ? String(cause.body.code ?? "")
+    : "";
 }
 
 export function PluginImportDialog({
@@ -82,37 +118,65 @@ export function PluginImportDialog({
   const { t } = useT("plugins");
   const wsId = useWorkspaceId();
   const inputRef = useRef<HTMLInputElement>(null);
+  const sourceUrlRef = useRef(targetPlugin?.sourceUrl ?? "");
+  const inspectRequestRef = useRef(0);
+  const directoryRequestRef = useRef(0);
+  const previousTargetIdRef = useRef(targetPlugin?.id);
   const mutation = useImportAgentPlugin(wsId);
+  const inspectMutation = useInspectAgentPluginRepository(wsId);
+  const [mode, setMode] = useState<ImportMode>("repository");
   const [directory, setDirectory] = useState<ParsedPluginDirectory | null>(null);
-  const [version, setVersion] = useState("0.1.0");
   const [sourceUrl, setSourceUrl] = useState(targetPlugin?.sourceUrl ?? "");
   const [sourceRef, setSourceRef] = useState(targetPlugin?.sourceRef ?? "");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [remoteDefaultBranch, setRemoteDefaultBranch] = useState("");
+  const [inspection, setInspection] =
+    useState<AgentPluginRepositoryInspection | null>(null);
+  const [selectedCandidateKey, setSelectedCandidateKey] = useState("");
   const [requirementsText, setRequirementsText] = useState(
-    JSON.stringify(targetPlugin?.activeVersion?.requirements ?? {}, null, 2),
+    requirementsJson(targetPlugin),
   );
   const [isReading, setIsReading] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [canUseDefaultBranch, setCanUseDefaultBranch] = useState(false);
 
   const reset = () => {
+    inspectRequestRef.current += 1;
+    directoryRequestRef.current += 1;
+    setMode("repository");
     setDirectory(null);
-    setVersion("0.1.0");
-    setSourceUrl(targetPlugin?.sourceUrl ?? "");
+    setIsReading(false);
+    const nextUrl = targetPlugin?.sourceUrl ?? "";
+    setSourceUrl(nextUrl);
+    sourceUrlRef.current = nextUrl;
     setSourceRef(targetPlugin?.sourceRef ?? "");
-    setRequirementsText(
-      JSON.stringify(targetPlugin?.activeVersion?.requirements ?? {}, null, 2),
-    );
+    setBranches([]);
+    setRemoteDefaultBranch("");
+    setInspection(null);
+    setSelectedCandidateKey("");
+    setRequirementsText(requirementsJson(targetPlugin));
     setFieldError(null);
+    setCanUseDefaultBranch(false);
+    inspectMutation.reset();
     if (inputRef.current) inputRef.current.value = "";
   };
 
   useEffect(() => {
-    if (!open) reset();
-  // Reset only when the dialog closes; target metadata is captured by reset.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    const targetChanged = previousTargetIdRef.current !== targetPlugin?.id;
+    if (!open || targetChanged) reset();
+    previousTargetIdRef.current = targetPlugin?.id;
+    // Reset when the dialog closes or switches to another target Plugin.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, targetPlugin?.id]);
 
   const providerLabel = t(($) => $.provider[provider]);
-  const isPending = mutation.isPending || isReading;
+  const isPending = mutation.isPending || inspectMutation.isPending || isReading;
+  const compatibleCandidates = (inspection?.candidates ?? []).filter(
+    (candidate) => !targetPlugin || candidate.provider === targetPlugin.provider,
+  );
+  const selectedCandidate = compatibleCandidates.find(
+    (candidate) => candidateKey(candidate) === selectedCandidateKey,
+  ) ?? null;
 
   const directoryErrorMessage = (cause: unknown): string => {
     if (!(cause instanceof PluginDirectoryError)) {
@@ -136,15 +200,138 @@ export function PluginImportDialog({
     }
   };
 
+  const repositoryErrorMessage = (cause: unknown): string => {
+    const code = apiErrorCode(cause);
+    switch (code) {
+      case "plugin_manifest_not_found":
+        return t(($) => $.import.errors.manifest_missing);
+      case "plugin_manifest_invalid":
+      case "plugin_manifest_path_invalid":
+        return t(($) => $.import.errors.invalid_manifest);
+      case "plugin_version_missing":
+        return t(($) => $.import.errors.missing_codex_version);
+      case "plugin_version_invalid":
+        return t(($) => $.import.errors.invalid_version);
+      case "plugin_artifact_too_large":
+      case "plugin_git_output_too_large":
+        return t(($) => $.import.errors.artifact_too_large);
+      case "plugin_git_revision_changed":
+        return t(($) => $.import.errors.repository_changed);
+      case "plugin_git_ref_not_found":
+      case "plugin_git_ref_invalid":
+        return t(($) => $.import.errors.source_ref_unavailable);
+      case "plugin_selection_required":
+        return t(($) => $.import.errors.plugin_selection_required);
+      case "plugin_git_url_invalid":
+        return t(($) => $.import.errors.invalid_repository_url);
+      default:
+        return t(($) => $.import.errors.repository_read_failed);
+    }
+  };
+
+  const clearInspection = () => {
+    inspectRequestRef.current += 1;
+    setInspection(null);
+    setSelectedCandidateKey("");
+    setCanUseDefaultBranch(false);
+  };
+
+  const handleSourceUrlChange = (nextUrl: string) => {
+    setSourceUrl(nextUrl);
+    sourceUrlRef.current = nextUrl;
+    setSourceRef("");
+    setBranches([]);
+    setRemoteDefaultBranch("");
+    clearInspection();
+    setFieldError(null);
+  };
+
+  const inspectRepository = async (nextRef = sourceRef) => {
+    const normalizedUrl = sourceUrl.trim();
+    const normalizedRef = nextRef.trim();
+    if (!normalizedUrl || inspectMutation.isPending) return;
+    const requestId = ++inspectRequestRef.current;
+    setFieldError(null);
+    setCanUseDefaultBranch(false);
+    try {
+      const response = await inspectMutation.mutateAsync({
+        sourceUrl: normalizedUrl,
+        sourceRef: normalizedRef || null,
+      });
+      if (
+        requestId !== inspectRequestRef.current
+        || sourceUrlRef.current.trim() !== normalizedUrl
+      ) return;
+      if (!response) {
+        setInspection(null);
+        setFieldError(t(($) => $.import.errors.repository_read_failed));
+        return;
+      }
+      const candidates = response.candidates.filter(
+        (candidate) => !targetPlugin || candidate.provider === targetPlugin.provider,
+      );
+      if (candidates.length === 0) {
+        setInspection(null);
+        setFieldError(
+          targetPlugin
+            ? t(($) => $.import.errors.provider_mismatch, {
+                provider: t(($) => $.provider[targetPlugin.provider]),
+              })
+            : t(($) => $.import.errors.manifest_missing),
+        );
+        return;
+      }
+      setInspection(response);
+      setBranches(response.branches);
+      setRemoteDefaultBranch(response.defaultBranch);
+      setSourceRef(response.sourceRef);
+      const preferred = targetPlugin
+        ? candidates.find((candidate) => (
+            candidate.provider === targetPlugin.provider
+            && candidate.sourceSubdir === (targetPlugin.sourceSubdir ?? "")
+          )) ?? null
+        : candidates.length === 1
+          ? candidates[0]
+          : null;
+      setSelectedCandidateKey(preferred ? candidateKey(preferred) : "");
+    } catch (cause) {
+      if (requestId !== inspectRequestRef.current) return;
+      setInspection(null);
+      const code = apiErrorCode(cause);
+      setCanUseDefaultBranch(Boolean(normalizedRef) && (
+        code === "plugin_git_ref_not_found" || code === "plugin_git_ref_invalid"
+      ));
+      setFieldError(repositoryErrorMessage(cause));
+    }
+  };
+
+  const handleRefChange = async (nextRef: string) => {
+    setSourceRef(nextRef);
+    setInspection(null);
+    setSelectedCandidateKey("");
+    await inspectRepository(nextRef);
+  };
+
+  const handleUseDefaultBranch = async () => {
+    setSourceRef("");
+    setBranches([]);
+    setRemoteDefaultBranch("");
+    clearInspection();
+    await inspectRepository("");
+  };
+
   const handleDirectoryChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
+    const input = event.currentTarget;
+    const requestId = ++directoryRequestRef.current;
     setIsReading(true);
     setFieldError(null);
     try {
       const parsed = await parsePluginDirectory(files);
+      if (requestId !== directoryRequestRef.current) return;
       if (targetPlugin && parsed.provider !== targetPlugin.provider) {
         setDirectory(null);
         setFieldError(
@@ -154,65 +341,92 @@ export function PluginImportDialog({
         );
         return;
       }
+      const version = manifestVersion(parsed);
+      if (version && !SEMVER_PATTERN.test(version)) {
+        setDirectory(null);
+        setFieldError(t(($) => $.import.errors.invalid_version));
+        return;
+      }
+      if (!version && parsed.provider === "codex") {
+        setDirectory(null);
+        setFieldError(t(($) => $.import.errors.missing_codex_version));
+        return;
+      }
       setDirectory(parsed);
-      const manifestVersion =
-        typeof parsed.manifest.version === "string"
-          ? parsed.manifest.version.trim()
-          : "";
-      setVersion(
-        SEMVER_PATTERN.test(manifestVersion) ? manifestVersion : "0.1.0",
-      );
     } catch (cause) {
+      if (requestId !== directoryRequestRef.current) return;
       setDirectory(null);
       setFieldError(directoryErrorMessage(cause));
     } finally {
-      setIsReading(false);
-      event.target.value = "";
+      if (requestId === directoryRequestRef.current) setIsReading(false);
+      input.value = "";
     }
   };
 
   const handleOpenChange = (next: boolean) => {
-    if (!next && !isPending) reset();
+    if (!next && isPending) return;
+    if (!next) reset();
     onOpenChange(next);
   };
 
   const handleImport = async () => {
-    if (!directory) return;
-    const normalizedVersion = version.trim();
-    if (!SEMVER_PATTERN.test(normalizedVersion)) {
-      setFieldError(t(($) => $.import.errors.invalid_version));
-      return;
-    }
-    const requirements = parseRecord(requirementsText);
-    if (!requirements) {
+    let requirements: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(requirementsText.trim() || "{}");
+      if (!isRecord(parsed)) throw new Error("invalid requirements");
+      requirements = parsed;
+    } catch {
       setFieldError(t(($) => $.import.errors.invalid_requirements));
       return;
     }
-    setFieldError(null);
-    const input: ImportAgentPluginInput = {
-      ...(targetPlugin
-        ? {
-            id: targetPlugin.id,
-            name: targetPlugin.name,
-            description: targetPlugin.description,
-          }
-        : {}),
-      workspaceId: wsId,
-      provider: directory.provider,
-      version: normalizedVersion,
-      manifestPath: directory.manifestPath,
-      manifest: directory.manifest,
-      files: directory.files,
-      sourceType: targetPlugin?.sourceType ?? "manifest",
-      sourceUrl: sourceUrl.trim() || null,
-      sourceRef: sourceRef.trim() || null,
-      sourceRevision: sourceRef.trim() || null,
-      requirements,
-      activate: !targetPlugin,
-    };
 
+    let input: ImportAgentPluginRequest;
+    if (mode === "repository") {
+      if (!inspection || !selectedCandidate) return;
+      input = {
+        mode: "git",
+        ...(targetPlugin ? { id: targetPlugin.id } : {}),
+        workspaceId: wsId,
+        sourceUrl: inspection.sourceUrl,
+        sourceRef: inspection.sourceRef,
+        sourceSubdir: selectedCandidate.sourceSubdir,
+        provider: selectedCandidate.provider,
+        manifestPath: selectedCandidate.manifestPath,
+        expectedRevision: inspection.sourceRevision,
+        requirements,
+        activate: !targetPlugin,
+      };
+    } else {
+      if (!directory) return;
+      input = {
+        ...(targetPlugin
+          ? {
+              id: targetPlugin.id,
+              name: targetPlugin.name,
+              description: targetPlugin.description,
+            }
+          : {}),
+        workspaceId: wsId,
+        provider: directory.provider,
+        manifestPath: directory.manifestPath,
+        manifest: directory.manifest,
+        files: directory.files,
+        sourceType: targetPlugin?.sourceType ?? "manifest",
+        sourceUrl: targetPlugin?.sourceUrl ?? null,
+        sourceRef: targetPlugin?.sourceRef ?? null,
+        sourceSubdir: targetPlugin?.sourceSubdir ?? null,
+        requirements,
+        activate: !targetPlugin,
+      };
+    }
+
+    setFieldError(null);
     try {
       const plugin = await mutation.mutateAsync(input);
+      if (!plugin) {
+        toast.error(t(($) => $.import.failed_toast));
+        return;
+      }
       toast.success(
         targetPlugin
           ? t(($) => $.import.version_success_toast)
@@ -220,22 +434,47 @@ export function PluginImportDialog({
       );
       reset();
       onOpenChange(false);
-      if (plugin) onImported?.(plugin);
+      onImported?.(plugin);
     } catch (cause) {
       toast.error(
-        cause instanceof Error && cause.message
-          ? cause.message
-          : t(($) => $.import.failed_toast),
+        mode === "repository"
+          ? repositoryErrorMessage(cause)
+          : cause instanceof Error && cause.message
+            ? cause.message
+            : t(($) => $.import.failed_toast),
       );
     }
   };
 
-  const detectedProvider = directory?.provider ?? provider;
-  const detectedName = String(directory?.manifest.name ?? "");
+  const renderCandidate = (candidate: AgentPluginRepositoryCandidate) => (
+    <PluginSummary
+      name={candidate.name}
+      version={candidate.version}
+      manifestPath={
+        candidate.sourceSubdir
+          ? `${candidate.sourceSubdir}/${candidate.manifestPath}`
+          : candidate.manifestPath
+      }
+      fileCount={candidate.fileCount}
+      totalBytes={candidate.artifactSize}
+      revision={inspection?.sourceRevision ?? null}
+      providerName={t(($) => $.provider[candidate.provider])}
+      automaticVersionLabel={t(($) => $.import.automatic_version)}
+      summaryLabel={t(($) => $.import.folder_summary, {
+        count: candidate.fileCount,
+        size: formatBytes(candidate.artifactSize),
+      })}
+    />
+  );
+
+  const localVersion = directory ? manifestVersion(directory) : "";
+  const canSubmit = mode === "repository"
+    ? Boolean(inspection && selectedCandidate)
+    : Boolean(directory);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[min(90vh,720px)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[min(90vh,760px)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-sm">
             {targetPlugin
@@ -244,160 +483,244 @@ export function PluginImportDialog({
           </DialogTitle>
           <DialogDescription className="text-xs">
             {targetPlugin
-              ? t(($) => $.import.version_description, {
-                  provider: providerLabel,
-                })
+              ? t(($) => $.import.version_description, { provider: providerLabel })
               : t(($) => $.import.description)}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            className="sr-only"
-            aria-label={t(($) => $.import.folder_label)}
-            onChange={(event) => void handleDirectoryChange(event)}
-            {...({ webkitdirectory: "", directory: "" } as Record<
-              string,
-              string
-            >)}
-          />
+        <Tabs
+          value={mode}
+          onValueChange={(value) => {
+            setMode(value as ImportMode);
+            setFieldError(null);
+          }}
+          className="gap-4"
+        >
+          <TabsList className="grid w-full grid-cols-2" aria-label={t(($) => $.import.source_label)}>
+            <TabsTrigger value="repository">
+              <GitBranch className="size-3.5" />
+              {t(($) => $.import.repository_tab)}
+            </TabsTrigger>
+            <TabsTrigger value="directory">
+              <FolderOpen className="size-3.5" />
+              {t(($) => $.import.directory_tab)}
+            </TabsTrigger>
+          </TabsList>
 
-          <button
-            type="button"
-            className="flex w-full flex-col items-center justify-center rounded-md border border-dashed px-5 py-8 text-center transition-colors hover:border-foreground/30 hover:bg-muted/30 disabled:pointer-events-none disabled:opacity-50"
-            disabled={isPending}
-            onClick={() => inputRef.current?.click()}
+          <TabsContent
+            value="repository"
+            className="space-y-4"
+            aria-busy={inspectMutation.isPending}
           >
-            {isReading ? (
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            ) : directory ? (
-              <CheckCircle2 className="h-6 w-6 text-success" />
-            ) : (
-              <FolderOpen className="h-6 w-6 text-muted-foreground" />
-            )}
-            <span className="mt-3 text-sm font-medium">
-              {directory
-                ? t(($) => $.import.change_folder_action)
-                : t(($) => $.import.choose_folder_action)}
-            </span>
-            <span className="mt-1 text-xs text-muted-foreground">
-              {t(($) => $.import.folder_hint)}
-            </span>
-          </button>
-
-          {directory && (
-            <div className="rounded-md border px-3 py-3">
-              <div className="flex min-w-0 items-start gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-                  <Puzzle className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="truncate text-sm font-medium">
-                      {detectedName || directory.folderName}
-                    </span>
-                    <Badge variant="outline" className="capitalize">
-                      {t(($) => $.provider[detectedProvider])}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-                    {directory.manifestPath}
-                  </p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {t(($) => $.import.folder_summary, {
-                      count: directory.fileCount,
-                      size: formatBytes(directory.totalBytes),
-                    })}
-                  </p>
-                </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="plugin-source-url">
+                {t(($) => $.import.repository_url_label)}
+              </Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="plugin-source-url"
+                  value={sourceUrl}
+                  onChange={(event) => handleSourceUrlChange(event.target.value)}
+                  placeholder={t(($) => $.import.repository_url_placeholder)}
+                  autoFocus
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void inspectRepository();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={!sourceUrl.trim() || inspectMutation.isPending}
+                  onClick={() => void inspectRepository()}
+                >
+                  {inspectMutation.isPending ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <RefreshCw />
+                  )}
+                  {inspectMutation.isPending
+                    ? t(($) => $.import.inspecting_action)
+                    : t(($) => $.import.inspect_action)}
+                </Button>
               </div>
             </div>
-          )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="plugin-import-version">
-              {t(($) => $.import.version_label)}
+            {(branches.length > 0 || sourceRef) && (
+              <div className="space-y-1.5">
+                <Label htmlFor="plugin-source-ref">
+                  {t(($) => $.import.source_ref_label)}
+                </Label>
+                <BranchPicker
+                  id="plugin-source-ref"
+                  value={sourceRef}
+                  branches={branches}
+                  remoteDefaultBranch={remoteDefaultBranch}
+                  onValueChange={handleRefChange}
+                  disabled={inspectMutation.isPending}
+                  loading={inspectMutation.isPending}
+                  allowCustomValue
+                  customValueHeading={t(($) => $.import.custom_ref_heading)}
+                  searchPlaceholder={t(($) => $.import.source_ref_search_placeholder)}
+                  ariaLabel={t(($) => $.import.source_ref_label)}
+                  placeholder={t(($) => $.import.source_ref_placeholder)}
+                  triggerClassName="w-full"
+                  contentClassName="w-[var(--anchor-width)]"
+                />
+              </div>
+            )}
+
+            {(compatibleCandidates.length > 1
+              || Boolean(targetPlugin && inspection && !selectedCandidate)) && (
+              <div className="space-y-1.5">
+                <Label htmlFor="plugin-source-subdir">
+                  {t(($) => $.import.plugin_label)}
+                </Label>
+                <Select
+                  value={selectedCandidateKey}
+                  onValueChange={(value) => setSelectedCandidateKey(value ?? "")}
+                >
+                  <SelectTrigger
+                    id="plugin-source-subdir"
+                    aria-label={t(($) => $.import.plugin_label)}
+                    className="w-full"
+                  >
+                    <SelectValue placeholder={t(($) => $.import.plugin_placeholder)} />
+                  </SelectTrigger>
+                  <SelectContent align="start">
+                    {compatibleCandidates.map((candidate) => (
+                      <SelectItem
+                        key={candidateKey(candidate)}
+                        value={candidateKey(candidate)}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{candidate.name}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {t(($) => $.provider[candidate.provider])}
+                        </span>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {candidate.sourceSubdir || "."}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {selectedCandidate && renderCandidate(selectedCandidate)}
+          </TabsContent>
+
+          <TabsContent value="directory" className="space-y-4">
+            <input
+              ref={inputRef}
+              type="file"
+              multiple
+              className="sr-only"
+              aria-label={t(($) => $.import.folder_label)}
+              onChange={(event) => void handleDirectoryChange(event)}
+              {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            />
+
+            <button
+              type="button"
+              className="flex w-full flex-col items-center justify-center rounded-md border border-dashed px-5 py-8 text-center transition-colors hover:border-foreground/30 hover:bg-muted/30 disabled:pointer-events-none disabled:opacity-50"
+              disabled={isPending}
+              onClick={() => inputRef.current?.click()}
+            >
+              {isReading ? (
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              ) : directory ? (
+                <CheckCircle2 className="h-6 w-6 text-success" />
+              ) : (
+                <FolderOpen className="h-6 w-6 text-muted-foreground" />
+              )}
+              <span className="mt-3 text-sm font-medium">
+                {directory
+                  ? t(($) => $.import.change_folder_action)
+                  : t(($) => $.import.choose_folder_action)}
+              </span>
+              <span className="mt-1 text-xs text-muted-foreground">
+                {t(($) => $.import.folder_hint)}
+              </span>
+            </button>
+
+            {directory && (
+              <PluginSummary
+                name={String(directory.manifest.name ?? directory.folderName)}
+                version={localVersion}
+                manifestPath={directory.manifestPath}
+                fileCount={directory.fileCount}
+                totalBytes={directory.totalBytes}
+                providerName={t(($) => $.provider[directory.provider])}
+                automaticVersionLabel={t(($) => $.import.automatic_version)}
+                summaryLabel={t(($) => $.import.folder_summary, {
+                  count: directory.fileCount,
+                  size: formatBytes(directory.totalBytes),
+                })}
+              />
+            )}
+          </TabsContent>
+        </Tabs>
+
+        <details className="group rounded-md border border-dashed">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <ChevronRight
+              className="size-3.5 transition-transform group-open:rotate-90"
+              aria-hidden
+            />
+            {t(($) => $.import.advanced_title)}
+          </summary>
+          <div className="space-y-1.5 border-t px-3 py-3">
+            <Label htmlFor="plugin-runtime-requirements">
+              {t(($) => $.import.requirements_label)}
             </Label>
-            <Input
-              id="plugin-import-version"
-              value={version}
-              onChange={(event) => setVersion(event.target.value)}
-              placeholder="0.1.0"
+            <Textarea
+              id="plugin-runtime-requirements"
+              value={requirementsText}
+              onChange={(event) => {
+                setRequirementsText(event.target.value);
+                setFieldError(null);
+              }}
+              className="min-h-24 font-mono text-xs"
               spellCheck={false}
-              className="font-mono"
-              aria-invalid={
-                Boolean(version.trim()) && !SEMVER_PATTERN.test(version.trim())
-              }
             />
             <p className="text-[11px] text-muted-foreground">
-              {t(($) => $.import.version_hint)}
+              {t(($) => $.import.requirements_hint)}
             </p>
           </div>
+        </details>
 
-          <Collapsible>
-            <CollapsibleTrigger className="group flex w-full items-center justify-between rounded-md py-1 text-xs font-medium">
-              {t(($) => $.import.advanced_title)}
-              <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-data-panel-open:rotate-180" />
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="plugin-source-url">
-                    {t(($) => $.import.source_url_label)}
-                  </Label>
-                  <Input
-                    id="plugin-source-url"
-                    value={sourceUrl}
-                    onChange={(event) => setSourceUrl(event.target.value)}
-                    placeholder={t(($) => $.import.source_url_placeholder)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="plugin-source-ref">
-                    {t(($) => $.import.source_ref_label)}
-                  </Label>
-                  <Input
-                    id="plugin-source-ref"
-                    value={sourceRef}
-                    onChange={(event) => setSourceRef(event.target.value)}
-                    placeholder={t(($) => $.import.source_ref_placeholder)}
-                  />
-                </div>
-              </div>
-              <div className="mt-3 space-y-1.5">
-                <Label htmlFor="plugin-requirements">
-                  {t(($) => $.import.requirements_label)}
-                </Label>
-                <Textarea
-                  id="plugin-requirements"
-                  value={requirementsText}
-                  onChange={(event) => setRequirementsText(event.target.value)}
-                  placeholder={'{"binaries":["lark-cli"]}'}
-                  spellCheck={false}
-                  className="min-h-24 resize-y font-mono text-xs"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  {t(($) => $.import.requirements_hint)}
-                </p>
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+        {targetPlugin && canSubmit && (
+          <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+            {t(($) => $.import.candidate_notice)}
+          </p>
+        )}
 
-          {targetPlugin && directory && (
-            <p className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-              {t(($) => $.import.candidate_notice)}
-            </p>
-          )}
-
-          {fieldError && (
-            <p role="alert" className="text-xs text-destructive">
+        {fieldError && (
+          <div className="flex items-center justify-between gap-3">
+            <p role="alert" className="min-w-0 text-xs text-destructive">
               {fieldError}
             </p>
-          )}
-        </div>
+            {mode === "repository" && canUseDefaultBranch && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={inspectMutation.isPending}
+                onClick={() => void handleUseDefaultBranch()}
+              >
+                <GitBranch />
+                {t(($) => $.import.use_default_branch_action)}
+              </Button>
+            )}
+          </div>
+        )}
 
         <DialogFooter>
           <Button
@@ -410,7 +733,7 @@ export function PluginImportDialog({
           </Button>
           <Button
             type="button"
-            disabled={isPending || !directory}
+            disabled={isPending || !canSubmit}
             onClick={() => void handleImport()}
           >
             {mutation.isPending && <Loader2 className="animate-spin" />}
@@ -423,5 +746,57 @@ export function PluginImportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PluginSummary({
+  name,
+  version,
+  manifestPath,
+  summaryLabel,
+  revision,
+  providerName,
+  automaticVersionLabel,
+}: {
+  name: string;
+  version: string;
+  manifestPath: string;
+  fileCount: number;
+  totalBytes: number;
+  summaryLabel: string;
+  revision?: string | null;
+  providerName: string;
+  automaticVersionLabel: string;
+}) {
+  return (
+    <div
+      className="rounded-md border px-3 py-3"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Puzzle className="h-4 w-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-medium">{name}</span>
+            <Badge variant="outline" className="capitalize">
+              {providerName}
+            </Badge>
+            <Badge variant="secondary" className="font-mono font-normal">
+              {version || automaticVersionLabel}
+            </Badge>
+          </div>
+          <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+            {manifestPath}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {summaryLabel}
+            {revision ? ` · ${revision.slice(0, 12)}` : ""}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

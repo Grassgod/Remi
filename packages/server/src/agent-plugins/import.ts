@@ -50,7 +50,7 @@ export function normalizeAgentPluginSourceType(value: unknown): MultiremiAgentPl
 }
 
 export function buildAgentPluginArtifact(
-  raw: Pick<ImportAgentPluginInput, "provider" | "name" | "description" | "version" | "manifestPath" | "manifest_path" | "manifest" | "files" | "sourceType" | "source_type">,
+  raw: Pick<ImportAgentPluginInput, "provider" | "name" | "description" | "version" | "manifestPath" | "manifest_path" | "manifest" | "files" | "sourceType" | "source_type" | "sourceRevision" | "source_revision">,
 ): NormalizedAgentPluginArtifact {
   const provider = normalizeAgentPluginProvider(raw.provider);
   if (!isRecord(raw.manifest)) {
@@ -68,11 +68,6 @@ export function buildAgentPluginArtifact(
 
   const name = cleanString(raw.name) ?? cleanString(manifest.name);
   if (!name) throw new AgentPluginValidationError("plugin name is required", "missing_name");
-  const version = cleanString(raw.version) ?? cleanString(manifest.version);
-  if (!version) throw new AgentPluginValidationError("plugin version is required", "missing_version");
-  if (!SEMVER_PATTERN.test(version)) {
-    throw new AgentPluginValidationError("plugin version must be valid SemVer", "invalid_version");
-  }
   const description = cleanString(raw.description) ?? cleanString(manifest.description) ?? "";
   const sourceType = normalizeAgentPluginSourceType(raw.sourceType ?? raw.source_type);
 
@@ -121,6 +116,19 @@ export function buildAgentPluginArtifact(
   }
   const artifact = canonicalClone({ provider, manifestPath, manifest, files });
   const artifactJson = canonicalJson(artifact);
+  const artifactDigest = sha256(Buffer.from(artifactJson, "utf8"));
+  const declaredVersion = cleanString(raw.version) ?? cleanString(manifest.version);
+  if (declaredVersion && !SEMVER_PATTERN.test(declaredVersion)) {
+    throw new AgentPluginValidationError("plugin version must be valid SemVer", "invalid_version");
+  }
+  if (!declaredVersion && provider === "codex") {
+    throw new AgentPluginValidationError("codex plugin manifest must declare a version", "missing_version");
+  }
+  const sourceRevision = cleanString(raw.sourceRevision ?? raw.source_revision);
+  const generatedVersion = sourceRevision && /^[0-9a-f]{7,64}$/i.test(sourceRevision)
+    ? `0.0.0+git.${sourceRevision.slice(0, 12).toLowerCase()}`
+    : `0.0.0+local.${artifactDigest.slice(0, 12)}`;
+  const version = declaredVersion ?? generatedVersion;
   return {
     provider,
     name,
@@ -129,7 +137,7 @@ export function buildAgentPluginArtifact(
     manifestPath,
     manifest,
     files,
-    artifactDigest: sha256(Buffer.from(artifactJson, "utf8")),
+    artifactDigest,
     artifactSize,
     artifactJson,
     sourceType,

@@ -4,6 +4,7 @@ import {
   AgentPluginBindingDetailSchema,
   AgentPluginBindingListSchema,
   AgentPluginDetailSchema,
+  AgentPluginRepositoryInspectionResponseSchema,
   AgentPluginListSchema,
   AgentPluginRuntimeStateListSchema,
   AgentPluginVersionListSchema,
@@ -11,6 +12,7 @@ import {
   EMPTY_AGENT_PLUGIN_BINDING,
   EMPTY_AGENT_PLUGIN_BINDING_LIST,
   EMPTY_AGENT_PLUGIN_DETAIL,
+  EMPTY_AGENT_PLUGIN_REPOSITORY_INSPECTION,
   EMPTY_AGENT_PLUGIN_LIST,
   EMPTY_AGENT_PLUGIN_RUNTIME_STATE_LIST,
   EMPTY_AGENT_PLUGIN_VERSION_LIST,
@@ -21,11 +23,13 @@ import {
   type AgentPlugin,
   type AgentPluginBinding,
   type AgentPluginRuntimeState,
+  type AgentPluginRepositoryInspection,
   type AgentPluginVersion,
   type CreateAgentPluginBindingInput,
   type CreateAgentPluginVersionInput,
   type CreateAgentPluginVersionResult,
-  type ImportAgentPluginInput,
+  type ImportAgentPluginRequest,
+  type InspectAgentPluginRepositoryInput,
   type UpdateAgentPluginBindingInput,
 } from "../../plugins/types";
 
@@ -54,7 +58,22 @@ export class PluginsEndpoints {
     );
   }
 
-  async importAgentPlugin(input: ImportAgentPluginInput): Promise<AgentPlugin | null> {
+  async inspectAgentPluginRepository(
+    input: InspectAgentPluginRepositoryInput,
+  ): Promise<AgentPluginRepositoryInspection | null> {
+    const raw = await this.http.fetch<unknown>(
+      `${AGENT_PLUGINS_API_BASE}/inspect`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    return parseWithFallback<AgentPluginRepositoryInspection | null>(
+      raw,
+      AgentPluginRepositoryInspectionResponseSchema,
+      EMPTY_AGENT_PLUGIN_REPOSITORY_INSPECTION,
+      { endpoint: "POST /api/multiremi/agent-plugins/inspect" },
+    );
+  }
+
+  async importAgentPlugin(input: ImportAgentPluginRequest): Promise<AgentPlugin | null> {
     const raw = await this.http.fetch<unknown>(`${AGENT_PLUGINS_API_BASE}/import`, {
       method: "POST",
       body: JSON.stringify(input),

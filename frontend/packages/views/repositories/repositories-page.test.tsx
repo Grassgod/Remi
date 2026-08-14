@@ -201,6 +201,28 @@ describe("RepositoriesPage", () => {
     }));
   });
 
+  it("keeps a stored default branch visible when remote inspection omits it", async () => {
+    const user = userEvent.setup();
+    mockInspect.mockResolvedValue({
+      metadata: {
+        url: githubUrl,
+        name: "web",
+        default_branch: "develop",
+        branches: ["develop"],
+      },
+    });
+    renderWithI18n(<RepositoriesPage />);
+
+    await user.click(screen.getByRole("combobox", {
+      name: "Default branch for web",
+    }));
+
+    expect(await screen.findByRole("option", { name: "main" })).toHaveAttribute(
+      "data-checked",
+      "true",
+    );
+  });
+
   it("adds and clears repository descriptions from the table", async () => {
     const user = userEvent.setup();
     mockUpdate.mockResolvedValue({ repository: repositories[1] });

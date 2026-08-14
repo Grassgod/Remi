@@ -10,6 +10,7 @@ import type { ApiClient } from "../api/client";
 import {
   useActivateAgentPluginVersion,
   useCreateAgentPluginVersion,
+  useInspectAgentPluginRepository,
   useRetryAgentPluginRuntime,
   useRollbackAgentPluginVersion,
 } from "./mutations";
@@ -31,6 +32,7 @@ describe("agent plugin version mutations", () => {
   const activateAgentPluginVersion = vi.fn();
   const rollbackAgentPluginVersion = vi.fn();
   const retryAgentPluginRuntime = vi.fn();
+  const inspectAgentPluginRepository = vi.fn();
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -40,11 +42,13 @@ describe("agent plugin version mutations", () => {
     activateAgentPluginVersion.mockResolvedValue(null);
     rollbackAgentPluginVersion.mockResolvedValue(null);
     retryAgentPluginRuntime.mockResolvedValue([]);
+    inspectAgentPluginRepository.mockResolvedValue(null);
     setApiInstance({
       createAgentPluginVersion,
       activateAgentPluginVersion,
       rollbackAgentPluginVersion,
       retryAgentPluginRuntime,
+      inspectAgentPluginRepository,
     } as unknown as ApiClient);
   });
 
@@ -107,5 +111,27 @@ describe("agent plugin version mutations", () => {
         queryKey: agentPluginKeys.all("workspace-1"),
       });
     }
+  });
+
+  it("adds the workspace boundary when inspecting a repository", async () => {
+    const wrapper = createWrapper(queryClient);
+    const inspect = renderHook(
+      () => useInspectAgentPluginRepository("workspace-1"),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await inspect.result.current.mutateAsync({
+        sourceUrl: "https://example.test/plugins.git",
+        sourceRef: "main",
+      });
+    });
+
+    expect(inspectAgentPluginRepository).toHaveBeenCalledWith({
+      sourceUrl: "https://example.test/plugins.git",
+      sourceRef: "main",
+      workspaceId: "workspace-1",
+      workspace_id: "workspace-1",
+    });
   });
 });

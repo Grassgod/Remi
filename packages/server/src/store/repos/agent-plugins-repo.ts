@@ -117,9 +117,9 @@ export class AgentPluginsRepo {
           const pluginId = requestedId ?? createId("apl");
           this.ctx.db.run(
             `INSERT INTO multiremi_agent_plugins (
-               id, workspace_id, provider, name, description, source_type, source_url, source_ref,
+               id, workspace_id, provider, name, description, source_type, source_url, source_ref, source_subdir,
                active_version_id, candidate_version_id, created_by, archived_at, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?)`,
             [
               pluginId,
               workspaceId,
@@ -129,6 +129,7 @@ export class AgentPluginsRepo {
               artifact.sourceType,
               cleanString(input.sourceUrl ?? input.source_url),
               cleanString(input.sourceRef ?? input.source_ref),
+              cleanString(input.sourceSubdir ?? input.source_subdir),
               cleanString(input.createdBy ?? input.created_by),
               now,
               now,
@@ -138,13 +139,14 @@ export class AgentPluginsRepo {
         } else {
           this.ctx.db.run(
             `UPDATE multiremi_agent_plugins
-             SET description = ?, source_type = ?, source_url = ?, source_ref = ?, archived_at = NULL, updated_at = ?
+             SET description = ?, source_type = ?, source_url = ?, source_ref = ?, source_subdir = ?, archived_at = NULL, updated_at = ?
              WHERE id = ?`,
             [
               artifact.description,
               artifact.sourceType,
               cleanString(input.sourceUrl ?? input.source_url),
               cleanString(input.sourceRef ?? input.source_ref),
+              cleanString(input.sourceSubdir ?? input.source_subdir),
               now,
               String(pluginRow.id),
             ],
@@ -235,11 +237,14 @@ export class AgentPluginsRepo {
     const sourceRef = hasEither(input, "sourceRef", "source_ref")
       ? cleanString(input.sourceRef ?? input.source_ref)
       : plugin.sourceRef;
+    const sourceSubdir = hasEither(input, "sourceSubdir", "source_subdir")
+      ? cleanString(input.sourceSubdir ?? input.source_subdir)
+      : plugin.sourceSubdir;
     try {
       this.ctx.db.run(
         `UPDATE multiremi_agent_plugins
-         SET name = ?, description = ?, source_url = ?, source_ref = ?, updated_at = ? WHERE id = ?`,
-        [name, description, sourceUrl, sourceRef, nowIso(), id],
+         SET name = ?, description = ?, source_url = ?, source_ref = ?, source_subdir = ?, updated_at = ? WHERE id = ?`,
+        [name, description, sourceUrl, sourceRef, sourceSubdir, nowIso(), id],
       );
     } catch (error) {
       if (isUniqueError(error)) throw conflict("a plugin with this provider and name already exists", "plugin_name_conflict");
@@ -1041,6 +1046,7 @@ export class AgentPluginsRepo {
       sourceType: normalizeSourceTypeFromRow(row.source_type),
       sourceUrl: cleanString(row.source_url),
       sourceRef: cleanString(row.source_ref),
+      sourceSubdir: cleanString(row.source_subdir),
       activeVersionId,
       candidateVersionId,
       activeVersion: activeVersionId ? this.getAgentPluginVersion(activeVersionId) : null,

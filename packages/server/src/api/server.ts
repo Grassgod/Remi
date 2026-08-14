@@ -47,6 +47,10 @@ import type {
   CreateFeedbackInput,
 } from "@multiremi/contracts/types.js";
 import {
+  resolveAgentPluginGitSource,
+  type AgentPluginGitSourceResolver,
+} from "@multiremi/agent-plugins/git-import.js";
+import {
   AUTH_COOKIE_NAME,
   DEFAULT_WEBHOOK_IP_RATE_LIMIT,
   DEFAULT_WEBHOOK_RATE_LIMIT,
@@ -114,6 +118,7 @@ export interface MultiremiApiOptions {
   webhookRateLimit?: Partial<WebhookRateLimitConfig> | false;
   webhookIpRateLimit?: Partial<WebhookRateLimitConfig> | false;
   inspectGitRemoteRepository?: GitRemoteInspector;
+  resolveAgentPluginGitSource?: AgentPluginGitSourceResolver;
 }
 
 export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
@@ -138,6 +143,8 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
     webhookIpRateLimiter,
     inspectGitRemoteRepository:
       options.inspectGitRemoteRepository ?? inspectGitRemoteRepository,
+    resolveAgentPluginGitSource:
+      options.resolveAgentPluginGitSource ?? resolveAgentPluginGitSource,
   };
 
   app.use("*", cors());

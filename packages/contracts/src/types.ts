@@ -292,6 +292,7 @@ export interface MultiremiAgentPlugin {
   sourceType: MultiremiAgentPluginSourceType;
   sourceUrl: string | null;
   sourceRef: string | null;
+  sourceSubdir: string | null;
   activeVersionId: string | null;
   candidateVersionId: string | null;
   activeVersion: MultiremiAgentPluginVersion | null;
@@ -327,6 +328,8 @@ export interface ImportAgentPluginInput {
   source_url?: string | null;
   sourceRef?: string | null;
   source_ref?: string | null;
+  sourceSubdir?: string | null;
+  source_subdir?: string | null;
   sourceRevision?: string | null;
   source_revision?: string | null;
   requirements?: Record<string, unknown> | null;
@@ -335,6 +338,62 @@ export interface ImportAgentPluginInput {
   createdBy?: string | null;
   created_by?: string | null;
 }
+
+export interface InspectAgentPluginRepositoryInput {
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  sourceUrl?: string | null;
+  source_url?: string | null;
+  sourceRef?: string | null;
+  source_ref?: string | null;
+  sourceSubdir?: string | null;
+  source_subdir?: string | null;
+}
+
+export interface MultiremiAgentPluginRepositoryCandidate {
+  provider: MultiremiAgentPluginProvider;
+  name: string;
+  description: string;
+  version: string;
+  sourceSubdir: string;
+  manifestPath: string;
+  manifest: Record<string, unknown>;
+  fileCount: number;
+  artifactSize: number;
+}
+
+export interface MultiremiAgentPluginRepositoryInspection {
+  sourceUrl: string;
+  sourceRef: string;
+  defaultBranch: string;
+  branches: string[];
+  sourceRevision: string;
+  candidates: MultiremiAgentPluginRepositoryCandidate[];
+}
+
+export interface ImportAgentPluginFromGitInput {
+  mode: "git";
+  id?: string;
+  provider?: MultiremiAgentPluginProvider | null;
+  workspaceId?: string | null;
+  workspace_id?: string | null;
+  sourceUrl?: string | null;
+  source_url?: string | null;
+  sourceRef?: string | null;
+  source_ref?: string | null;
+  sourceSubdir?: string | null;
+  source_subdir?: string | null;
+  manifestPath?: string | null;
+  manifest_path?: string | null;
+  expectedRevision?: string | null;
+  expected_revision?: string | null;
+  requirements?: Record<string, unknown> | null;
+  activate?: boolean;
+}
+
+export type ImportAgentPluginRequest =
+  | ImportAgentPluginInput
+  | ImportAgentPluginFromGitInput;
 
 export interface CreateAgentPluginVersionInput {
   version?: string | null;
@@ -358,6 +417,8 @@ export interface UpdateAgentPluginInput {
   source_url?: string | null;
   sourceRef?: string | null;
   source_ref?: string | null;
+  sourceSubdir?: string | null;
+  source_subdir?: string | null;
 }
 
 export interface MultiremiAgentPluginBinding {
