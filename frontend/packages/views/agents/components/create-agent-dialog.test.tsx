@@ -3,7 +3,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { Agent, FleetModelsResponse } from "@multiremi/core/types";
+import type {
+  Agent,
+  FleetModelsResponse,
+  RuntimeModel,
+  RuntimeModelThinkingLevel,
+} from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multiremi/core/paths";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
@@ -36,10 +41,48 @@ vi.mock("@multiremi/core/api", () => ({
   },
 }));
 
-// ModelDropdown owns its own fleet query; the dialog only needs it as a
-// stand-in here, so swap it out.
 vi.mock("./model-dropdown", () => ({
-  ModelDropdown: () => null,
+  ModelDropdown: ({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+  }) => (
+    <input
+      aria-label="Model"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
+
+vi.mock("./inspector/thinking-picker", () => ({
+  ThinkingPicker: ({
+    value,
+    levels,
+    onChange,
+  }: {
+    value: string;
+    levels: RuntimeModelThinkingLevel[];
+    onChange: (value: string) => void;
+  }) => (
+    <select
+      aria-label="Reasoning effort"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">Follow runtime default</option>
+      {levels.map((level) => (
+        <option key={level.value} value={level.value}>
+          {level.label}
+        </option>
+      ))}
+      {value && !levels.some((level) => level.value === value) && (
+        <option value={value}>{value}</option>
+      )}
+    </select>
+  ),
 }));
 
 // Provider logos pull in SVGs that don't matter for these assertions.
@@ -53,12 +96,36 @@ vi.mock("sonner", () => ({
 
 import { CreateAgentDialog } from "./create-agent-dialog";
 
-function fleetWithCapacity(counts: Record<string, number>): FleetModelsResponse {
+const CLAUDE_MODELS: RuntimeModel[] = [
+  {
+    id: "claude-sonnet",
+    label: "Sonnet",
+    default: true,
+    thinking: {
+      supported_levels: [
+        { value: "low", label: "Low" },
+        { value: "high", label: "High" },
+      ],
+    },
+  },
+  {
+    id: "claude-haiku",
+    label: "Haiku",
+    thinking: {
+      supported_levels: [{ value: "low", label: "Low" }],
+    },
+  },
+];
+
+function fleetWithCapacity(
+  counts: Record<string, number>,
+  models: Record<string, RuntimeModel[]> = {},
+): FleetModelsResponse {
   return {
     providers: Object.entries(counts).map(([provider, online]) => ({
       provider,
       online_runtime_count: online,
-      models: [],
+      models: models[provider] ?? [],
     })),
   };
 }
@@ -195,5 +262,98 @@ describe("CreateAgentDialog (pool model)", () => {
       target: { value: "Named" },
     });
     expect(createButton().disabled).toBe(false);
+  });
+
+  it("creates with a model-supported reasoning effort", async () => {
+    mockListFleetModels.mockResolvedValue(
+      fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }),
+    );
+    const { onCreate } = renderDialog();
+
+    const effort = await screen.findByRole("combobox", {
+      name: "Reasoning effort",
+    });
+    expect((effort as HTMLSelectElement).value).toBe("");
+    fireEvent.change(effort, { target: { value: "high" } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Deep Research" },
+    });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).toMatchObject({
+      model: undefined,
+      thinking_level: "high",
+    });
+  });
+
+  it("does not infer effort capabilities from the first model when no default is declared", async () => {
+    const modelsWithoutDefault = CLAUDE_MODELS.map((entry) => ({
+      ...entry,
+      default: undefined,
+    }));
+    mockListFleetModels.mockResolvedValue(
+      fleetWithCapacity(
+        { claude: 2, codex: 1 },
+        { claude: modelsWithoutDefault },
+      ),
+    );
+    renderDialog();
+
+    await waitFor(() => expect(mockListFleetModels).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort" }),
+    ).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "claude-sonnet" },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort" }),
+    ).toBeInTheDocument();
+  });
+
+  it("falls back to the runtime default when the next model does not support the selected effort", async () => {
+    mockListFleetModels.mockResolvedValue(
+      fleetWithCapacity({ claude: 2, codex: 1 }, { claude: CLAUDE_MODELS }),
+    );
+    const { onCreate } = renderDialog();
+
+    const effort = await screen.findByRole("combobox", {
+      name: "Reasoning effort",
+    });
+    fireEvent.change(effort, { target: { value: "high" } });
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "claude-haiku" },
+    });
+    expect((effort as HTMLSelectElement).value).toBe("");
+
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\./i), {
+      target: { value: "Fast Agent" },
+    });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0].model).toBe("claude-haiku");
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
+  });
+
+  it("shows a duplicated orphan effort and lets the user explicitly clear it", async () => {
+    const { onCreate } = renderDialog(
+      makeTemplate({
+        model: "claude-retired",
+        thinking_level: "xhigh",
+      }),
+    );
+
+    const effort = await screen.findByRole("combobox", {
+      name: "Reasoning effort",
+    });
+    expect((effort as HTMLSelectElement).value).toBe("xhigh");
+    fireEvent.change(effort, { target: { value: "" } });
+    fireEvent.click(createButton());
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]?.[0]).not.toHaveProperty("thinking_level");
   });
 });

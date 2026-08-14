@@ -7,6 +7,146 @@ import { createStore, db, metricValue, resetMultiremiTestEnv } from "./helpers.j
 afterEach(resetMultiremiTestEnv);
 
 describe("Multiremi API — runtimes and runtime request queues", () => {
+  it("accepts runtime model snapshots only from the bound daemon identity", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_daemon_models",
+      name: "Daemon models runtime",
+      provider: "claude",
+      daemonId: "daemon-models",
+      workspaceId: "local",
+      models: [{ id: "old-model", label: "Old model", provider: "anthropic", default: true }],
+    });
+    const daemon = await store.createAccessToken({
+      name: "Bound daemon",
+      type: "daemon",
+      daemonId: "daemon-models",
+      workspaceId: "local",
+    });
+    const wrongDaemon = await store.createAccessToken({
+      name: "Wrong daemon",
+      type: "daemon",
+      daemonId: "daemon-other",
+      workspaceId: "local",
+    });
+    const unboundDaemon = await store.createAccessToken({
+      name: "Unbound daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const remoteDaemon = await store.createAccessToken({
+      name: "Remote daemon",
+      type: "daemon",
+      daemonId: "daemon-models",
+      workspaceId: "remote",
+    });
+    const pat = await store.createAccessToken({
+      name: "Local PAT",
+      type: "pat",
+      workspaceId: "local",
+      userId: "local",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-model-secret" });
+    const path = `/api/daemon/runtimes/${runtime.id}/models`;
+    const body = JSON.stringify({
+      models: [{
+        id: "claude-live",
+        label: "Claude Live",
+        provider: "anthropic",
+        default: true,
+        thinking: {
+          supportedLevels: [{ value: "xhigh", label: "Extra high" }],
+          defaultLevel: "xhigh",
+        },
+      }],
+    });
+
+    for (const [label, token] of [
+      ["wrong daemon", wrongDaemon.token],
+      ["unbound daemon", unboundDaemon.token],
+      ["cross-workspace daemon", remoteDaemon.token],
+      ["PAT", pat.token],
+      ["master token", "root-model-secret"],
+    ] as const) {
+      const denied = await app.request(path, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body,
+      });
+      expect(denied.status, label).toBe(403);
+    }
+    expect(store.listRuntimeModels(runtime.id).map((model) => model.id)).toEqual(["old-model"]);
+
+    const request = store.createRuntimeModelListRequest(runtime.id);
+    const deniedClaim = await app.request(`${path}/claim`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${wrongDaemon.token}` },
+    });
+    expect(deniedClaim.status).toBe(403);
+    expect(store.getRuntimeModelListRequest(runtime.id, request.id)?.status).toBe("pending");
+
+    const claimed = await app.request(`${path}/claim`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${daemon.token}` },
+    });
+    expect(claimed.status).toBe(200);
+    expect(store.getRuntimeModelListRequest(runtime.id, request.id)?.status).toBe("running");
+
+    const deniedResult = await app.request(`${path}/${request.id}/result`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${wrongDaemon.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        models: [{ id: "hijacked-model", label: "Hijacked model", provider: "anthropic" }],
+      }),
+    });
+    expect(deniedResult.status).toBe(403);
+    expect(store.listRuntimeModels(runtime.id).map((model) => model.id)).toEqual(["old-model"]);
+
+    const cleanupResult = await app.request(`${path}/${request.id}/result`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "failed", error: "test cleanup" }),
+    });
+    expect(cleanupResult.status).toBe(200);
+
+    const takeover = await app.request("/api/multiremi/runtimes", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${wrongDaemon.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: runtime.id,
+        name: "Taken over runtime",
+        provider: "claude",
+        daemon_id: "daemon-other",
+        workspace_id: "local",
+      }),
+    });
+    expect(takeover.status).toBe(403);
+    expect(store.getRuntime(runtime.id)?.daemonId).toBe("daemon-models");
+
+    const invalid = await app.request(path, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(invalid.status).toBe(400);
+
+    const accepted = await app.request(path, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${daemon.token}`, "Content-Type": "application/json" },
+      body,
+    });
+    expect(accepted.status).toBe(200);
+    expect((await accepted.json()).models[0]).toMatchObject({
+      id: "claude-live",
+      thinking: {
+        supportedLevels: [{ value: "xhigh", label: "Extra high" }],
+        defaultLevel: "xhigh",
+      },
+    });
+    expect(store.listRuntimeModels(runtime.id).map((model) => model.id)).toEqual(["claude-live"]);
+  });
+
   it("serves runtime metadata updates and usage endpoints", async () => {
     const store = createStore();
     const member = store.createWorkspaceMember({ name: "Ada", workspaceId: "local" });
@@ -396,7 +536,23 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
   it("serves runtime model list request flow", async () => {
     const store = createStore();
-    store.registerRuntime({ id: "rt_models_flow", name: "Models runtime", provider: "codex" });
+    store.registerRuntime({
+      id: "rt_models_flow",
+      name: "Models runtime",
+      provider: "codex",
+      daemonId: "daemon-models-flow",
+      workspaceId: "local",
+    });
+    const daemonToken = await store.createAccessToken({
+      name: "Models flow daemon",
+      type: "daemon",
+      daemonId: "daemon-models-flow",
+      workspaceId: "local",
+    });
+    const daemonHeaders = {
+      Authorization: `Bearer ${daemonToken.token}`,
+      "Content-Type": "application/json",
+    };
     const app = createMultiremiApp({ store });
 
     const nativeInvalidCatalogWrite = await app.request("/api/multiremi/runtimes/rt_models_flow/models", {
@@ -421,14 +577,17 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(createdBody.id).toStartWith("rml_");
     expect(createdBody.status).toBe("pending");
 
-    const claimed = await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", { method: "POST" });
+    const claimed = await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", {
+      method: "POST",
+      headers: daemonHeaders,
+    });
     const claimedBody = await claimed.json();
     expect(claimedBody.request.id).toBe(createdBody.id);
     expect(claimedBody.request.status).toBe("running");
 
     const reported = await app.request(`/api/daemon/runtimes/rt_models_flow/models/${createdBody.id}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: JSON.stringify({
         status: "completed",
         supported: true,
@@ -470,7 +629,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const failedBody = await failed.json();
     await app.request(`/api/daemon/runtimes/rt_models_flow/models/${failedBody.id}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: JSON.stringify({ status: "failed", error: "provider not available" }),
     });
     const failedDetail = await app.request(`/api/multiremi/runtimes/rt_models_flow/models/${failedBody.id}`);
@@ -480,7 +639,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
     const missingModelReport = await app.request("/api/daemon/runtimes/rt_models_flow/models/rml_missing/result", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: "{",
     });
     expect(missingModelReport.status).toBe(404);
@@ -489,7 +648,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const invalidJsonModelRequest = store.createRuntimeModelListRequest("rt_models_flow");
     const invalidJsonModelReport = await app.request(`/api/daemon/runtimes/rt_models_flow/models/${invalidJsonModelRequest.id}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: "{",
     });
     expect(invalidJsonModelReport.status).toBe(400);
@@ -497,7 +656,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(store.getRuntimeModelListRequest("rt_models_flow", invalidJsonModelRequest.id)?.status).toBe("pending");
     const cleanupInvalidJsonModelRequest = await app.request(`/api/daemon/runtimes/rt_models_flow/models/${invalidJsonModelRequest.id}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: JSON.stringify({ status: "failed", error: "invalid json test cleanup" }),
     });
     expect(cleanupInvalidJsonModelRequest.status).toBe(200);
@@ -515,10 +674,16 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(stalePendingBody.error).toBe("daemon did not respond within 30 seconds");
     expect(stalePendingBody.created_at).toBe(oldPendingAt);
     expect(stalePendingBody.createdAt).toBeUndefined();
-    expect((await (await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", { method: "POST" })).json()).request).toBeNull();
+    expect((await (await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", {
+      method: "POST",
+      headers: daemonHeaders,
+    })).json()).request).toBeNull();
 
     const staleRunning = store.createRuntimeModelListRequest("rt_models_flow");
-    await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", { method: "POST" });
+    await app.request("/api/daemon/runtimes/rt_models_flow/models/claim", {
+      method: "POST",
+      headers: daemonHeaders,
+    });
     const oldRunningAt = new Date(Date.now() - 61_000).toISOString();
     db!.run("UPDATE multiremi_runtime_model_list_requests SET run_started_at = ?, updated_at = ? WHERE id = ?", [
       oldRunningAt,
@@ -532,7 +697,7 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
 
     const lateModelReport = await app.request(`/api/daemon/runtimes/rt_models_flow/models/${staleRunning.id}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: daemonHeaders,
       body: JSON.stringify({ status: "completed", models: [{ id: "late-model", label: "Late Model" }] }),
     });
     expect(lateModelReport.status).toBe(200);

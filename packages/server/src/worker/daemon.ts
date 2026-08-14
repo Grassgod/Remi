@@ -2,7 +2,16 @@ import { mkdirSync } from "node:fs";
 import { cpus, homedir, hostname } from "node:os";
 import { basename, join } from "node:path";
 import { createLogger } from "@shared/logger.js";
-import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider, createAdapter } from "@acp/index.js";
+import {
+  AcpProvider,
+  type AcpModelCapability,
+  type AcpProviderOptions,
+  bridgeVersion,
+  agentCliVersion,
+  reinstallBridge,
+  type ProvisionProvider,
+  createAdapter,
+} from "@acp/index.js";
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
@@ -93,6 +102,9 @@ export { browseRuntimeDirectory, scanRuntimeDirectories };
 
 const log = createLogger("multiremi-daemon");
 const HUMAN_REQUEST_POLL_MS = 2000;
+const RUNTIME_MODEL_PROBE_TIMEOUT_MS = 30_000;
+const RUNTIME_MODEL_RETRY_BASE_MS = 5_000;
+const RUNTIME_MODEL_RETRY_MAX_MS = 5 * 60_000;
 
 function readResponseOptionId(response: Record<string, unknown> | null): string | null {
   if (!response) return null;
@@ -150,6 +162,10 @@ export interface MultiremiDaemonOptions {
   pluginCacheRoot?: string;
   /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
   agentPluginProviderPreflight?: MultiremiAgentPluginProviderPreflight;
+  /** Initial retry delay for Runtime model discovery/reporting. */
+  runtimeModelRetryBaseMs?: number;
+  /** Maximum retry delay for Runtime model discovery/reporting. */
+  runtimeModelRetryMaxMs?: number;
 }
 
 interface RunSummary {
@@ -166,6 +182,7 @@ interface PreparedIssueWorkspace {
 
 export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastResponse"> & {
   close?: () => Promise<void> | void;
+  discoverModelCapabilities?: () => Promise<AcpModelCapability[]>;
   setPermissionHandler?: (handler: (params: RequestPermissionParams) => Promise<PermissionOutcome>) => void;
   setElicitationHandler?: (handler: (params: ElicitationCreateParams) => Promise<ElicitationResult>) => void;
 };
@@ -240,6 +257,15 @@ export class MultiremiDaemon {
   private readonly agentPluginCache: AgentPluginCache;
   private readonly agentPluginReconciler: AgentPluginRuntimeReconciler;
   private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
+  private runtimeModels: MultiremiRuntimeModel[] | null = null;
+  private runtimeRegistrationGeneration = 0;
+  private runtimeModelReportedGeneration = 0;
+  private runtimeModelProbe: Promise<MultiremiRuntimeModel[]> | null = null;
+  private runtimeModelProbeAbort: AbortController | null = null;
+  private runtimeModelRefreshTask: Promise<void> | null = null;
+  private runtimeModelRefreshAbort: AbortController | null = null;
+  private runtimeModelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private runtimeModelRetryWake: (() => void) | null = null;
 
   constructor(options: MultiremiDaemonOptions) {
     const workspacesRoot = options.workspacesRoot ?? process.env.MULTIREMI_WORKSPACES_ROOT ?? join(homedir(), ".remi", "multiremi", "workspaces");
@@ -247,6 +273,16 @@ export class MultiremiDaemon {
     const deviceName = options.deviceName ?? process.env.MULTIREMI_DEVICE_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}`;
     const runtimeId = options.runtimeId ?? process.env.MULTIREMI_RUNTIME_ID ?? null;
     const daemonId = options.daemonId ?? process.env.MULTIREMI_DAEMON_ID ?? runtimeId ?? deviceName;
+    const runtimeModelRetryBaseMs = Math.max(
+      1,
+      options.runtimeModelRetryBaseMs
+        ?? numberEnv(process.env.MULTIREMI_RUNTIME_MODEL_RETRY_BASE_MS, RUNTIME_MODEL_RETRY_BASE_MS),
+    );
+    const runtimeModelRetryMaxMs = Math.max(
+      runtimeModelRetryBaseMs,
+      options.runtimeModelRetryMaxMs
+        ?? numberEnv(process.env.MULTIREMI_RUNTIME_MODEL_RETRY_MAX_MS, RUNTIME_MODEL_RETRY_MAX_MS),
+    );
     this.explicitRuntimeId = Boolean(runtimeId);
     this.options = {
       token: options.token ?? process.env.MULTIREMI_TOKEN ?? null,
@@ -273,6 +309,8 @@ export class MultiremiDaemon {
       pluginCacheRoot: options.pluginCacheRoot
         ?? process.env.MULTIREMI_PLUGIN_CACHE_ROOT
         ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
+      runtimeModelRetryBaseMs,
+      runtimeModelRetryMaxMs,
       serverUrl: options.serverUrl,
     };
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
@@ -310,6 +348,11 @@ export class MultiremiDaemon {
     try {
       await this.registerCurrentRuntime();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
+      // One-shot mode is primarily used for a single queued task (and tests), so
+      // avoid paying for a second ACP process unless a model-list request exists.
+      if (!this.options.once) {
+        this.startRuntimeModelRefresh();
+      }
       await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
@@ -368,6 +411,9 @@ export class MultiremiDaemon {
       }
     } finally {
       this.ready = false;
+      this.cancelRuntimeModelRefresh();
+      const modelRefresh = this.runtimeModelRefreshTask;
+      if (modelRefresh) await Promise.allSettled([modelRefresh]);
       // Running tasks depend on the repo-checkout server, so let any in-flight
       // tasks drain before tearing it (and the GC loop) down.
       await Promise.allSettled([...this.inflight]);
@@ -400,11 +446,13 @@ export class MultiremiDaemon {
       if (!runtime) throw new Error("daemon register returned no runtimes");
       this.options.runtimeId = runtime.id;
       this.syncWorkspaceRepos(response);
+      this.runtimeRegistrationGeneration++;
       log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
       return this.options.runtimeId;
     }
     const runtime = await this.client.registerRuntime(this.currentRuntimeRegistrationInput());
     this.options.runtimeId = runtime.runtime.id;
+    this.runtimeRegistrationGeneration++;
     log.info(`Runtime registered: ${this.options.runtimeId} (${this.options.provider})`);
     return this.options.runtimeId;
   }
@@ -448,7 +496,7 @@ export class MultiremiDaemon {
         launched_by: this.options.launchedBy ?? "manual",
       },
       deviceInfo: `${this.options.runtimeName} · ${multiremiVersion}`,
-      models: defaultRuntimeModels(this.options.provider),
+      ...(this.runtimeModels ? { models: this.runtimeModels } : {}),
     };
   }
 
@@ -482,7 +530,7 @@ export class MultiremiDaemon {
   private async handleRuntimeGone(runtimeId: string, entryAtMs: number): Promise<boolean> {
     const workspaceId = this.options.workspaceId;
     if (!workspaceId) {
-      this.stopped = true;
+      this.stop();
       return false;
     }
     if (this.runtimeGoneInflight.has(runtimeId)) return false;
@@ -501,6 +549,7 @@ export class MultiremiDaemon {
         log.warn(`Re-register after runtime_gone failed for ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
+      if (this.runtimeModels || !this.options.once) this.startRuntimeModelRefresh();
       await this.refreshWorkspaceRepos(workspaceId);
       try {
         await this.client.recoverOrphans(newRuntimeId);
@@ -585,11 +634,171 @@ export class MultiremiDaemon {
   }
 
   private async handleRuntimeModelList(runtimeId: string, requestId: string): Promise<void> {
-    await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
-      status: "completed",
-      supported: true,
-      models: defaultRuntimeModels(this.options.provider),
+    try {
+      const models = await this.discoverRuntimeModels(true);
+      await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
+        status: "completed",
+        supported: true,
+        models,
+      });
+    } catch (error) {
+      await this.client.reportRuntimeModelListResult(runtimeId, requestId, {
+        status: "failed",
+        supported: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async refreshAndReportRuntimeModels(signal: AbortSignal): Promise<MultiremiRuntimeModel[]> {
+    const models = await this.discoverRuntimeModels(false);
+    if (this.stopped || signal.aborted) throw new Error("Runtime model refresh cancelled");
+
+    // Resolve the target only after discovery. A runtime_gone re-registration
+    // can happen while ACP is probing, and retries must never retain the deleted
+    // Runtime id in a closure.
+    const runtimeId = this.options.runtimeId;
+    if (!runtimeId) throw new Error("Runtime model refresh has no registered Runtime");
+    const generation = this.runtimeRegistrationGeneration;
+    await this.client.updateRuntimeModels(runtimeId, models, signal);
+    if (this.stopped || signal.aborted) throw new Error("Runtime model refresh cancelled");
+    if (this.options.runtimeId === runtimeId && this.runtimeRegistrationGeneration === generation) {
+      this.runtimeModelReportedGeneration = generation;
+    }
+    return models;
+  }
+
+  private startRuntimeModelRefresh(): void {
+    if (this.stopped) return;
+    if (this.runtimeModelRefreshTask) {
+      this.wakeRuntimeModelRetry();
+      return;
+    }
+    const abort = new AbortController();
+    this.runtimeModelRefreshAbort = abort;
+    const task = this.runRuntimeModelRefreshLoop(abort.signal).catch((error) => {
+      if (!this.stopped && !abort.signal.aborted) {
+        log.warn(`Runtime model refresh stopped unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
+      }
     });
+    this.runtimeModelRefreshTask = task;
+    void task.then(() => {
+      if (this.runtimeModelRefreshTask === task) this.runtimeModelRefreshTask = null;
+      if (this.runtimeModelRefreshAbort === abort) this.runtimeModelRefreshAbort = null;
+      if (!this.stopped && this.runtimeModelReportedGeneration < this.runtimeRegistrationGeneration) {
+        this.startRuntimeModelRefresh();
+      }
+    });
+  }
+
+  private async runRuntimeModelRefreshLoop(signal: AbortSignal): Promise<void> {
+    let failureCount = 0;
+    while (!this.stopped && !signal.aborted) {
+      if (this.runtimeModelReportedGeneration >= this.runtimeRegistrationGeneration) return;
+      const attemptGeneration = this.runtimeRegistrationGeneration;
+      try {
+        await this.refreshAndReportRuntimeModels(signal);
+        failureCount = 0;
+        // The Runtime may have re-registered while the PUT was in flight. In that
+        // case the generation was deliberately not marked and the cached catalog
+        // is uploaded again immediately to the current Runtime.
+        if (this.runtimeModelReportedGeneration >= this.runtimeRegistrationGeneration) return;
+      } catch (error) {
+        if (this.stopped || signal.aborted) return;
+        // A replacement Runtime should be attempted immediately. This also
+        // covers the narrow race where re-registration happened just before the
+        // retry sleeper installed its wake callback.
+        if (this.runtimeRegistrationGeneration !== attemptGeneration) {
+          failureCount = 0;
+          continue;
+        }
+        failureCount++;
+        const delayMs = Math.min(
+          this.options.runtimeModelRetryMaxMs,
+          this.options.runtimeModelRetryBaseMs * (2 ** Math.min(failureCount - 1, 20)),
+        );
+        log.warn(
+          `Runtime model refresh failed; retrying in ${delayMs}ms: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+        await this.waitForRuntimeModelRetry(delayMs, signal);
+      }
+    }
+  }
+
+  private async waitForRuntimeModelRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+    if (this.stopped || signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (this.runtimeModelRetryTimer) clearTimeout(this.runtimeModelRetryTimer);
+        this.runtimeModelRetryTimer = null;
+        if (this.runtimeModelRetryWake === finish) this.runtimeModelRetryWake = null;
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      this.runtimeModelRetryWake = finish;
+      this.runtimeModelRetryTimer = setTimeout(finish, delayMs);
+      this.runtimeModelRetryTimer.unref?.();
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  }
+
+  private wakeRuntimeModelRetry(): void {
+    this.runtimeModelRetryWake?.();
+  }
+
+  private cancelRuntimeModelProbe(): void {
+    this.runtimeModelProbeAbort?.abort();
+  }
+
+  private cancelRuntimeModelRefresh(): void {
+    this.runtimeModelRefreshAbort?.abort();
+    this.cancelRuntimeModelProbe();
+    this.wakeRuntimeModelRetry();
+  }
+
+  private async discoverRuntimeModels(force: boolean): Promise<MultiremiRuntimeModel[]> {
+    if (!force && this.runtimeModels) return this.runtimeModels;
+    if (this.runtimeModelProbe) return this.runtimeModelProbe;
+
+    const abort = new AbortController();
+    this.runtimeModelProbeAbort = abort;
+    const probe = (async () => {
+      const provider = this.providerFactory({
+        agentType: this.options.provider,
+        cwd: homedir(),
+      });
+      try {
+        if (!provider.discoverModelCapabilities) {
+          throw new Error(`ACP model discovery is not supported by provider: ${this.options.provider}`);
+        }
+        const capabilities = await withTimeout(
+          provider.discoverModelCapabilities(),
+          RUNTIME_MODEL_PROBE_TIMEOUT_MS,
+          `ACP model discovery timed out after ${RUNTIME_MODEL_PROBE_TIMEOUT_MS}ms`,
+          abort.signal,
+        );
+        if (!capabilities.length) {
+          throw new Error(`ACP did not advertise any models for provider: ${this.options.provider}`);
+        }
+        const models = runtimeModelsFromAcpCapabilities(this.options.provider, capabilities);
+        this.runtimeModels = models;
+        return models;
+      } finally {
+        await provider.close?.();
+      }
+    })();
+
+    this.runtimeModelProbe = probe;
+    try {
+      return await probe;
+    } finally {
+      if (this.runtimeModelProbe === probe) this.runtimeModelProbe = null;
+      if (this.runtimeModelProbeAbort === abort) this.runtimeModelProbeAbort = null;
+    }
   }
 
   private async handleRuntimeLocalSkillList(runtimeId: string, requestId: string): Promise<void> {
@@ -700,6 +909,7 @@ export class MultiremiDaemon {
 
   stop(): void {
     this.stopped = true;
+    this.cancelRuntimeModelRefresh();
   }
 
   async runGcOnce(): Promise<MultiremiDaemonGcSummary> {
@@ -734,7 +944,7 @@ export class MultiremiDaemon {
 
   private requestRestartAfterUpdate(): void {
     this.restartRequestedFlag = true;
-    this.stopped = true;
+    this.stop();
     this.onRestartRequested?.();
   }
 
@@ -1576,68 +1786,58 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function defaultRuntimeModels(provider: string): MultiremiRuntimeModel[] {
-  const normalized = provider.toLowerCase();
-  if (normalized === "codex") {
-    return [
-      {
-        id: "gpt-5.5",
-        label: "GPT-5.5",
-        provider: "openai",
-        default: true,
-        thinking: {
-          supportedLevels: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High" },
-            { value: "xhigh", label: "Extra high" },
-          ],
-          defaultLevel: "medium",
-        },
-      },
-      { id: "gpt-5.5-mini", label: "GPT-5.5 mini", provider: "openai", default: false },
-      { id: "gpt-5.4", label: "GPT-5.4", provider: "openai", default: false },
-      { id: "gpt-5.4-mini", label: "GPT-5.4 mini", provider: "openai", default: false },
-      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", provider: "openai", default: false },
-      { id: "gpt-5", label: "GPT-5", provider: "openai", default: false },
+export function runtimeModelsFromAcpCapabilities(
+  provider: string,
+  capabilities: AcpModelCapability[],
+): MultiremiRuntimeModel[] {
+  const vendor = provider.toLowerCase() === "claude"
+    ? "anthropic"
+    : provider.toLowerCase() === "codex"
+      ? "openai"
+      : provider;
+  return capabilities.map((model) => ({
+    id: model.id,
+    label: model.label,
+    provider: vendor,
+    default: model.default,
+    ...(model.effort?.supportedLevels.length
+      ? {
+          thinking: {
+            supportedLevels: model.effort.supportedLevels.map((level) => ({ ...level })),
+          },
+        }
+      : {}),
+  }));
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let abortHandler: (() => void) | null = null;
+  try {
+    const candidates: Promise<T>[] = [
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timer.unref?.();
+      }),
     ];
+    if (signal) {
+      candidates.push(new Promise<T>((_, reject) => {
+        abortHandler = () => reject(new Error("ACP model discovery cancelled"));
+        if (signal.aborted) abortHandler();
+        else signal.addEventListener("abort", abortHandler, { once: true });
+      }));
+    }
+    return await Promise.race(candidates);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
   }
-  if (normalized === "claude") {
-    return [
-      {
-        id: "claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        default: true,
-        thinking: {
-          supportedLevels: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High" },
-            { value: "max", label: "Max" },
-          ],
-        },
-      },
-      {
-        id: "claude-opus-4-7",
-        label: "Claude Opus 4.7",
-        provider: "anthropic",
-        default: false,
-        thinking: {
-          supportedLevels: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High" },
-            { value: "xhigh", label: "Extra high" },
-            { value: "max", label: "Max" },
-          ],
-        },
-      },
-      { id: "claude-opus-4-6", label: "Claude Opus 4.6", provider: "anthropic", default: false },
-      { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "anthropic", default: false },
-    ];
-  }
-  return [];
 }
 
 function sleep(ms: number): Promise<void> {

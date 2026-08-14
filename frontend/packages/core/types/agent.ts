@@ -403,9 +403,9 @@ export interface UpdateAgentRequest {
    * Runtime-native reasoning/effort token. Tri-state semantics (MUL-2339):
    *   - field omitted → no change
    *   - "" → clear the override; backend omits the effort flag and the
-   *     local CLI config / built-in default decides what the model runs at
-   *   - non-empty → set; validated server-side against the target
-   *     runtime's provider enum, rejected with 400 if not recognised
+   *     runtime default decides what the model runs at
+   *   - non-empty → set; validated server-side against the selected model's
+   *     runtime-advertised capabilities, rejected with 400 if unsupported
    */
   thinking_level?: string;
 }
@@ -627,8 +627,8 @@ export interface RuntimeModelThinking {
   /** Informational: the level the upstream CLI documents as its built-in
    *  default when no `--effort` flag is passed. Surfaced by the daemon
    *  but not actively rendered today — Multiremi's empty `thinking_level`
-   *  means "no override; let the local CLI config decide", which may
-   *  itself differ from this value. */
+   *  means "no override; follow the runtime default", which may itself
+   *  differ from this value. */
   default_level?: string;
 }
 

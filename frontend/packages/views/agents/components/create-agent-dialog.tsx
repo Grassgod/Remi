@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Globe, Lock } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
@@ -9,6 +9,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import type {
   Agent,
@@ -31,6 +32,11 @@ import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multiremi/core/agents";
 import { CharCounter } from "./char-counter";
 import { ENGINES, EngineSelect } from "./engine-select";
 import { useT } from "../../i18n";
+import { ThinkingField } from "./thinking-field";
+import {
+  getModelThinkingLevels,
+  supportsThinkingLevel,
+} from "./inspector/thinking-levels";
 
 export function CreateAgentDialog({
   template,
@@ -73,6 +79,9 @@ export function CreateAgentDialog({
     template?.visibility ?? "workspace",
   );
   const [model, setModel] = useState(template?.model ?? "");
+  const [thinkingLevel, setThinkingLevel] = useState(
+    template?.thinking_level ?? "",
+  );
   const [instructions, setInstructions] = useState(template?.instructions ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
@@ -89,11 +98,28 @@ export function CreateAgentDialog({
       ? template.provider
       : "claude",
   );
+  const fleet = useFleetProviderModels(wsId ?? "", provider);
+  const thinkingLevels = useMemo(
+    () => getModelThinkingLevels(fleet.models, model),
+    [fleet.models, model],
+  );
+
   const switchEngine = (next: string) => {
     setProvider(next);
     // The model catalog is per-engine; a claude model id makes no sense on
     // codex. Reset to "engine default" on switch.
     setModel("");
+    setThinkingLevel("");
+  };
+
+  const switchModel = (next: string) => {
+    if (
+      next !== model &&
+      !supportsThinkingLevel(fleet.models, next, thinkingLevel)
+    ) {
+      setThinkingLevel("");
+    }
+    setModel(next);
   };
 
   // Shared squad-join follow-up. Returns nothing — the caller has
@@ -141,6 +167,7 @@ export function CreateAgentDialog({
         instructions: trimmedInstructions || undefined,
         avatar_url: avatarUrl ?? undefined,
       };
+      if (thinkingLevel) data.thinking_level = thinkingLevel;
       if (template) {
         // Duplicate path: forward the hidden config fields the source
         // agent had so the clone is functional out of the box (args /
@@ -320,7 +347,13 @@ export function CreateAgentDialog({
               wsId={wsId ?? ""}
               provider={provider}
               value={model}
-              onChange={setModel}
+              onChange={switchModel}
+            />
+
+            <ThinkingField
+              value={thinkingLevel}
+              levels={thinkingLevels}
+              onChange={setThinkingLevel}
             />
 
             {/* --- Optional sections (instructions / skills) ---

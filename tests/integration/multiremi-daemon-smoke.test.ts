@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
+import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
 import { startMultiremiServer } from "@multiremi/api.js";
 import {
@@ -12,6 +13,7 @@ import {
   MultiremiDaemon,
   MultiremiRuntimeReregisterGate,
   preflightAgentPluginProvider,
+  runtimeModelsFromAcpCapabilities,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -29,6 +31,37 @@ afterEach(() => {
 });
 
 describe("Bun Multiremi daemon smoke", () => {
+  it("maps ACP model-specific effort capabilities to runtime model metadata", () => {
+    expect(runtimeModelsFromAcpCapabilities("codex", [
+      {
+        id: "gpt-probe",
+        label: "GPT Probe",
+        default: true,
+        effort: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "xhigh", label: "Extra high", description: "More reasoning" },
+          ],
+        },
+      },
+      { id: "gpt-fast", label: "GPT Fast", default: false },
+    ])).toEqual([
+      {
+        id: "gpt-probe",
+        label: "GPT Probe",
+        provider: "openai",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "xhigh", label: "Extra high", description: "More reasoning" },
+          ],
+        },
+      },
+      { id: "gpt-fast", label: "GPT Fast", provider: "openai", default: false },
+    ]);
+  });
+
   it("requires provider-native Plugin support during preflight", async () => {
     await expect(preflightAgentPluginProvider("codex", {
       which: () => "/opt/bin/codex",
@@ -428,7 +461,7 @@ describe("Bun Multiremi daemon smoke", () => {
     let started = 0;
     const bothStarted = deferred<void>();
     const release = deferred<void>();
-    const providerFactory = messageProviderFactory({
+    const taskProviderFactory = messageProviderFactory({
       text: "done",
       sessionId: "sess-concurrent",
       requestId: "req-concurrent",
@@ -436,6 +469,19 @@ describe("Bun Multiremi daemon smoke", () => {
         started += 1;
         if (started >= 2) bothStarted.resolve();
         await release.promise; // hold the task open until both are confirmed in flight
+      },
+    });
+    let modelProbeCount = 0;
+    const providerFactory: MultiremiDaemonProviderFactory = (options) => ({
+      ...taskProviderFactory(options),
+      discoverModelCapabilities: async () => {
+        modelProbeCount++;
+        return [{
+          id: "claude-concurrent",
+          label: "Claude Concurrent",
+          default: true,
+          effort: { supportedLevels: [{ value: "high", label: "High" }] },
+        }];
       },
     });
 
@@ -460,6 +506,16 @@ describe("Bun Multiremi daemon smoke", () => {
       expect((daemon as unknown as { activeTaskCount: number }).activeTaskCount).toBe(2);
       // The configured cap reached the server via the daemon-register path.
       expect(store.listRuntimes()[0]?.maxConcurrency).toBe(2);
+      await waitForCondition(
+        () => store.listRuntimeModels(store.listRuntimes()[0]!.id).some((model) => model.id === "claude-concurrent"),
+        5_000,
+      );
+      expect(modelProbeCount).toBe(1);
+      expect(store.listRuntimeModels(store.listRuntimes()[0]!.id)[0]).toMatchObject({
+        id: "claude-concurrent",
+        provider: "anthropic",
+        thinking: { supportedLevels: [{ value: "high", label: "High" }] },
+      });
 
       release.resolve();
       await waitForCondition(
@@ -470,6 +526,189 @@ describe("Bun Multiremi daemon smoke", () => {
       release.resolve();
       daemon.stop();
       await daemonRun?.catch(() => {}); // drain-on-shutdown: resolves once in-flight tasks finish
+      server.stop(true);
+    }
+  });
+
+  it("cancels and drains the background model probe during shutdown", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-stop-");
+    const daemonToken = await store.createAccessToken({
+      name: "Model probe shutdown daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-probe-stop-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const probeStarted = deferred<void>();
+    let closeCount = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "model-probe-stop-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 25,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => {
+          probeStarted.resolve();
+          return await new Promise<never>(() => {});
+        },
+        close: async () => {
+          closeCount++;
+        },
+      }),
+    });
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await withTimeout(probeStarted.promise, 2_000, "background model probe did not start");
+      daemon.stop();
+      await withTimeout(daemonRun, 2_000, "daemon did not drain the background model probe");
+
+      expect(closeCount).toBe(1);
+      expect((daemon as unknown as { runtimeModelProbe: unknown }).runtimeModelProbe).toBeNull();
+      expect((daemon as unknown as { runtimeModelRefreshTask: unknown }).runtimeModelRefreshTask).toBeNull();
+      expect(store.listRuntimeModels(store.listRuntimes()[0]!.id)).toEqual([]);
+    } finally {
+      daemon.stop();
+      await daemonRun?.catch(() => {});
+      server.stop(true);
+    }
+  });
+
+  it("retries a failed startup model report without blocking task claims", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-retry-");
+    const agent = store.createAgent({ name: "Retry Claude", provider: "claude", cwd: workDir });
+    const task = store.createTask({ agentId: agent.id, prompt: "Run while model reporting retries" });
+    const daemonToken = await store.createAccessToken({
+      name: "Model retry daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    let taskRan = false;
+    let updateAttempts = 0;
+    const originalUpdateRuntimeModels = store.updateRuntimeModels.bind(store);
+    store.updateRuntimeModels = ((runtimeId, models) => {
+      updateAttempts++;
+      if (!taskRan) throw new Error("transient model report failure");
+      return originalUpdateRuntimeModels(runtimeId, models);
+    }) as typeof store.updateRuntimeModels;
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-retry-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const taskProviderFactory = messageProviderFactory({
+      text: "task completed during retry",
+      sessionId: "sess-model-retry",
+      requestId: "req-model-retry",
+      onSend: async () => {
+        taskRan = true;
+      },
+    });
+    let modelProbeCount = 0;
+    const providerFactory: MultiremiDaemonProviderFactory = (options) => ({
+      ...taskProviderFactory(options),
+      discoverModelCapabilities: async () => {
+        modelProbeCount++;
+        return [{ id: "claude-retry", label: "Claude Retry", default: true }];
+      },
+    });
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "model-retry-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      runtimeModelRetryBaseMs: 10,
+      runtimeModelRetryMaxMs: 20,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory,
+    });
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await waitForCondition(() => store.getTask(task.id)?.status === "completed", 5_000);
+      await waitForCondition(() => {
+        const runtime = store.listRuntimes()[0];
+        return !!runtime && store.listRuntimeModels(runtime.id).some((model) => model.id === "claude-retry");
+      }, 5_000);
+
+      expect(taskRan).toBe(true);
+      expect(updateAttempts).toBeGreaterThanOrEqual(2);
+      // The successful ACP result is cached; a failed PUT retries the report,
+      // not the more expensive provider probe.
+      expect(modelProbeCount).toBe(1);
+    } finally {
+      daemon.stop();
+      await daemonRun?.catch(() => {});
+      server.stop(true);
+    }
+  });
+
+  it("retries ACP model discovery after an initial startup failure", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-retry-");
+    const daemonToken = await store.createAccessToken({
+      name: "Model probe retry daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-probe-retry-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    let modelProbeCount = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeName: "model-probe-retry-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      runtimeModelRetryBaseMs: 10,
+      runtimeModelRetryMaxMs: 20,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => {
+          modelProbeCount++;
+          if (modelProbeCount === 1) throw new Error("transient ACP probe failure");
+          return [{ id: "claude-probe-recovered", label: "Claude Probe Recovered", default: true }];
+        },
+      }),
+    });
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await waitForCondition(() => {
+        const runtime = store.listRuntimes()[0];
+        return !!runtime && store.listRuntimeModels(runtime.id).some((model) => model.id === "claude-probe-recovered");
+      }, 5_000);
+      expect(modelProbeCount).toBe(2);
+    } finally {
+      daemon.stop();
+      await daemonRun?.catch(() => {});
       server.stop(true);
     }
   });
@@ -1059,6 +1298,7 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     const updateTargets: string[] = [];
+    let modelProbeCount = 0;
     try {
       const daemon = new MultiremiDaemon({
         serverUrl: `http://127.0.0.1:${server.port}`,
@@ -1075,6 +1315,26 @@ describe("Bun Multiremi daemon smoke", () => {
           updateTargets.push(targetVersion);
           return `Updated to ${targetVersion}`;
         },
+        providerFactory: () => ({
+          async *sendStream() {},
+          getLastResponse: () => null,
+          discoverModelCapabilities: async () => {
+            modelProbeCount++;
+            return [
+              {
+                id: "claude-dynamic",
+                label: "Claude Dynamic",
+                default: true,
+                effort: {
+                  supportedLevels: [
+                    { value: "low", label: "Low" },
+                    { value: "xhigh", label: "Extra high" },
+                  ],
+                },
+              },
+            ];
+          },
+        }),
       });
 
       await daemon.start();
@@ -1090,7 +1350,21 @@ describe("Bun Multiremi daemon smoke", () => {
         status: "completed",
         supported: true,
       });
-      expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toContain("claude-sonnet-4-6");
+      expect(modelProbeCount).toBe(1);
+      expect(store.listRuntimeModels(runtimeId)).toEqual([
+        expect.objectContaining({
+          id: "claude-dynamic",
+          label: "Claude Dynamic",
+          provider: "anthropic",
+          default: true,
+          thinking: {
+            supportedLevels: [
+              { value: "low", label: "Low" },
+              { value: "xhigh", label: "Extra high" },
+            ],
+          },
+        }),
+      ]);
 
       const localSkillList = store.getRuntimeLocalSkillListRequest(runtimeId, localSkillRequest.id)!;
       expect(localSkillList.status).toBe("completed");
@@ -1144,6 +1418,67 @@ describe("Bun Multiremi daemon smoke", () => {
       const metadata = store.getRuntime(runtimeId)?.metadata ?? {};
       expect(metadata.launched_by).toBe("manual");
       expect(typeof metadata.cli_version).toBe("string");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("keeps the last runtime model snapshot when ACP discovery fails", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-model-probe-failure-");
+    const runtimeId = "rt_model_probe_failure";
+    store.registerRuntime({
+      id: runtimeId,
+      name: "model-probe-failure-runtime",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{
+        id: "claude-known-good",
+        label: "Claude Known Good",
+        provider: "anthropic",
+        default: true,
+      }],
+    });
+    const request = store.createRuntimeModelListRequest(runtimeId);
+    const daemonToken = await store.createAccessToken({
+      name: "Model probe failure daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-model-probe-failure-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        runtimeId,
+        runtimeName: "model-probe-failure-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        repoCacheRoot: join(workDir, ".repo-cache"),
+        providerFactory: () => ({
+          async *sendStream() {},
+          getLastResponse: () => null,
+          discoverModelCapabilities: async () => {
+            throw new Error("probe unavailable");
+          },
+        }),
+      });
+
+      await daemon.start();
+
+      expect(store.getRuntimeModelListRequest(runtimeId, request.id)).toMatchObject({
+        status: "failed",
+        error: "probe unavailable",
+      });
+      expect(store.listRuntimeModels(runtimeId).map((model) => model.id)).toEqual(["claude-known-good"]);
     } finally {
       server.stop(true);
     }
@@ -1308,6 +1643,107 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.listRuntimes()).toHaveLength(1);
       expect(store.listRuntimes()[0]?.status).toBe("online");
     } finally {
+      server.stop(true);
+    }
+  });
+
+  it("re-uploads the cached model snapshot to a replacement Runtime after runtime_gone", async () => {
+    const { store, workDir } = daemonTestBed("multiremi-daemon-runtime-gone-models-");
+    const oldRuntimeId = "rt_runtime_gone_models_old";
+    const newRuntimeId = "rt_runtime_gone_models_new";
+    const daemonToken = await store.createAccessToken({
+      name: "Runtime gone model daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const originalHeartbeat = store.heartbeatRuntime.bind(store);
+    let injectedRuntimeGone = false;
+    store.heartbeatRuntime = ((runtimeId, options) => {
+      if (
+        !injectedRuntimeGone &&
+        runtimeId === oldRuntimeId &&
+        store.listRuntimeModels(runtimeId).some((model) => model.id === "claude-cached")
+      ) {
+        injectedRuntimeGone = true;
+        store.deleteRuntime(runtimeId);
+      }
+      return originalHeartbeat(runtimeId, options);
+    }) as typeof store.heartbeatRuntime;
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-runtime-gone-models-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    let modelProbeCount = 0;
+    const daemon = new MultiremiDaemon({
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      runtimeId: oldRuntimeId,
+      daemonId: "daemon-runtime-gone-models",
+      runtimeName: "runtime-gone-models",
+      provider: "claude",
+      workspaceId: "local",
+      daemonPort: 0,
+      pollIntervalMs: 10,
+      runtimeModelRetryBaseMs: 10,
+      runtimeModelRetryMaxMs: 20,
+      repoCacheRoot: join(workDir, ".repo-cache"),
+      providerFactory: () => ({
+        async *sendStream() {},
+        getLastResponse: () => null,
+        discoverModelCapabilities: async () => {
+          modelProbeCount++;
+          return [{ id: "claude-cached", label: "Claude Cached", default: true }];
+        },
+      }),
+    });
+    const internal = daemon as unknown as {
+      client: {
+        registerRuntime: (input: Record<string, unknown>) => Promise<{ runtime: { id: string } }>;
+        updateRuntimeModels: (
+          runtimeId: string,
+          models: MultiremiRuntimeModel[],
+          signal?: AbortSignal,
+        ) => Promise<MultiremiRuntimeModel[]>;
+      };
+    };
+    const originalRegisterRuntime = internal.client.registerRuntime.bind(internal.client);
+    let registerCount = 0;
+    internal.client.registerRuntime = async (input) => {
+      registerCount++;
+      if (registerCount === 1) return originalRegisterRuntime(input);
+      // Force a genuinely new Runtime id and omit registration-time models so
+      // only the daemon's post-registration PUT can restore the snapshot.
+      const { models: _models, ...withoutModels } = input;
+      return originalRegisterRuntime({ ...withoutModels, id: newRuntimeId });
+    };
+    const originalUpdateModels = internal.client.updateRuntimeModels.bind(internal.client);
+    const updateTargets: string[] = [];
+    internal.client.updateRuntimeModels = async (runtimeId, models, signal) => {
+      updateTargets.push(runtimeId);
+      return originalUpdateModels(runtimeId, models, signal);
+    };
+
+    let daemonRun: Promise<void> | null = null;
+    try {
+      daemonRun = daemon.start();
+      await waitForCondition(() => {
+        if (!injectedRuntimeGone || !store.getRuntime(newRuntimeId)) return false;
+        return store.listRuntimeModels(newRuntimeId).some((model) => model.id === "claude-cached");
+      }, 5_000);
+
+      expect(store.getRuntime(oldRuntimeId)).toBeNull();
+      expect(store.getRuntime(newRuntimeId)?.status).toBe("online");
+      expect(modelProbeCount).toBe(1);
+      expect(updateTargets).toContain(oldRuntimeId);
+      expect(updateTargets).toContain(newRuntimeId);
+      const firstNewTarget = updateTargets.indexOf(newRuntimeId);
+      expect(updateTargets.slice(firstNewTarget + 1)).not.toContain(oldRuntimeId);
+    } finally {
+      daemon.stop();
+      await daemonRun?.catch(() => {});
       server.stop(true);
     }
   });

@@ -111,7 +111,7 @@ describe("ThinkingPropRow", () => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.queryByText("Thinking")).toBeNull();
+      expect(screen.queryByText("Reasoning effort")).toBeNull();
     });
   });
 
@@ -123,7 +123,7 @@ describe("ThinkingPropRow", () => {
     await waitFor(() => {
       expect(mockListFleetModels).toHaveBeenCalled();
     });
-    expect(screen.queryByText("Thinking")).toBeNull();
+    expect(screen.queryByText("Reasoning effort")).toBeNull();
   });
 
   it("renders the row with the persisted raw token when levels are empty but value is set (stale orphan)", async () => {
@@ -135,7 +135,7 @@ describe("ThinkingPropRow", () => {
     mockListFleetModels.mockResolvedValue(fleet([NO_THINKING_MODEL]));
     renderRow({ model: "gemini-2.5-pro", value: "xhigh" });
 
-    await screen.findByText("Thinking");
+    await screen.findByText("Reasoning effort");
     // The picker chip carries the raw value when it's not in the catalog.
     expect(await screen.findByText("xhigh")).toBeInTheDocument();
   });
@@ -161,17 +161,19 @@ describe("ThinkingPropRow", () => {
   it("renders the row with the matched label when the model still advertises the value", async () => {
     renderRow({ value: "high" });
 
-    await screen.findByText("Thinking");
+    await screen.findByText("Reasoning effort");
     // Both the chip and the tooltip carry "High".
     expect((await screen.findAllByText("High")).length).toBeGreaterThan(0);
   });
 
-  it("renders the row with \"Follow CLI config\" when value is empty and the model exposes levels", async () => {
+  it("renders the runtime-default fallback when value is empty and the model exposes levels", async () => {
     renderRow({ value: "" });
 
-    await screen.findByText("Thinking");
-    // Empty value means Multiremi omits --effort, so the local CLI's
-    // config decides — chip + tooltip both read "Follow CLI config".
-    expect((await screen.findAllByText("Follow CLI config")).length).toBeGreaterThan(0);
+    await screen.findByText("Reasoning effort");
+    // Empty value means Multiremi omits the effort override, so the runtime
+    // default decides — chip + tooltip both carry the same fallback label.
+    expect(
+      (await screen.findAllByText("Follow runtime default")).length,
+    ).toBeGreaterThan(0);
   });
 });

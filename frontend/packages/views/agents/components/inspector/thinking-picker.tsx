@@ -19,9 +19,9 @@ import { useT } from "../../../i18n";
  * Empty string is the "no override" sentinel: the backend omits the
  * effort flag entirely and the upstream CLI's own config / built-in
  * default decides what the model runs at. We render that state as
- * "Follow CLI config" rather than singling out one level as the
- * factory default, because the actual default at runtime is owned by
- * the user's local CLI install, not by Multiremi's catalog.
+ * "Follow runtime default" rather than singling out one level as the
+ * factory default, because the effective default belongs to the runtime,
+ * not to Multiremi's catalog.
  */
 export function ThinkingPicker({
   value,
@@ -29,7 +29,7 @@ export function ThinkingPicker({
   canEdit = true,
   onChange,
 }: {
-  /** Persisted thinking_level — "" means "follow local CLI config". */
+  /** Persisted thinking_level — "" means "follow runtime default". */
   value: string;
   /** Supported levels for the current (runtime, model) pair. Usually
    *  non-empty when the row is shown, but the stale-orphan clear path
@@ -104,10 +104,10 @@ export function ThinkingPicker({
               is deterministic across rows regardless of whether the label
               row has the `default` badge sibling. */}
           {/* No model-factory-default badge here on purpose: when the
-              picker is "Follow CLI config" (value === ""), Multiremi omits
-              `--effort` and the local CLI config decides — the model's
-              factory default is irrelevant to what actually fires, so
-              flagging one option as "default" was misleading. */}
+              picker follows the runtime default (value === ""), Multiremi
+              omits the effort override. The model's factory default may not
+              match the runtime's configured default, so flagging one option
+              as "default" would be misleading. */}
           <span className="block min-w-0 flex-1 text-left">
             <span className="truncate text-[13px] font-medium">{l.label}</span>
             {l.description && (

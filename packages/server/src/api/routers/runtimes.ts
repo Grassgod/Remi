@@ -5,6 +5,7 @@ import {
   daemonLocalSkillImportReportBody,
   daemonLocalSkillListReportBody,
   denyCurrentUserWorkspaceAccess,
+  denyDaemonRuntimeObservedStateAccess,
   denyDaemonTokenRuntimeWorkspace,
   denyDaemonTokenWorkspace,
   isJsonApiError,
@@ -54,6 +55,7 @@ import type {
   ReportRuntimeLocalSkillListInput,
   ReportRuntimeModelListInput,
   ReportRuntimeUpdateInput,
+  MultiremiRuntimeModel,
   UpdateRuntimeInput,
 } from "@multiremi/contracts/types.js";
 import type { RouterDeps } from "./deps.js";
@@ -74,7 +76,20 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (denied) return denied;
     const provider = validateMultiremiRuntimeProvider(body.provider);
     if ("error" in provider) return c.json({ error: provider.error }, provider.status);
-    if (currentAccessToken(c)?.type === "daemon") {
+    const accessToken = currentAccessToken(c);
+    if (accessToken?.type === "daemon") {
+      const requestedRuntimeId = cleanString(body.id);
+      const existing = requestedRuntimeId ? store.getRuntime(requestedRuntimeId) : null;
+      if (existing && requestedRuntimeId) {
+        const existingWorkspaceDenied = denyDaemonTokenRuntimeWorkspace(c, store, requestedRuntimeId);
+        if (existingWorkspaceDenied) return existingWorkspaceDenied;
+        const requestedDaemonId = cleanString(body.daemonId ?? body.daemon_id);
+        const effectiveDaemonId = cleanString(accessToken.daemonId) ?? requestedDaemonId;
+        const existingDaemonId = cleanString(existing.daemonId);
+        if (existingDaemonId && existingDaemonId !== effectiveDaemonId) {
+          return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+        }
+      }
       const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, body.daemonId ?? body.daemon_id);
       if (identityDenied) return identityDenied;
     }
@@ -149,11 +164,28 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (!request) return c.json({ error: "request not found" }, 404);
     return c.json(runtimeModelListRequestCompatibilityResponse(request));
   });
+  app.put("/api/daemon/runtimes/:runtimeId/models", async (c) => {
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    if (denied) return denied;
+    const body = await readJsonStrict<{ models?: MultiremiRuntimeModel[]; supported?: boolean }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    return c.json({
+      runtime_id: runtimeId,
+      supported: body.supported !== false,
+      models: store.updateRuntimeModels(runtimeId, body.models ?? []),
+    });
+  });
   app.post("/api/daemon/runtimes/:runtimeId/models/claim", (c) => {
-    return c.json({ request: store.claimRuntimeModelListRequest(c.req.param("runtimeId")) });
+    const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    if (denied) return denied;
+    return c.json({ request: store.claimRuntimeModelListRequest(runtimeId) });
   });
   app.post("/api/daemon/runtimes/:runtimeId/models/:requestId/result", async (c) => {
     const runtimeId = c.req.param("runtimeId");
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    if (denied) return denied;
     const requestId = c.req.param("requestId");
     const request = store.getRuntimeModelListRequest(runtimeId, requestId);
     if (!request) return c.json({ error: "request not found" }, 404);

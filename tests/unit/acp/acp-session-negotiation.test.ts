@@ -27,6 +27,8 @@ interface AgentProfile {
    * (dist/acp-agent.js:4084-4100).
    */
   effortAfterModel?: Record<string, string>;
+  /** Model-specific effort selector contents returned after a model switch. */
+  effortOptionsAfterModel?: Record<string, Array<{ value: string; name: string; description?: string }>>;
 }
 
 interface LoggedRequest {
@@ -160,8 +162,13 @@ rl.on("line", (line) => {
     case "session/set_config_option": {
       configOptions = configOptions.map((o) => o.id === msg.params.configId ? { ...o, currentValue: msg.params.value } : o);
       const forcedEffort = msg.params.configId === "model" ? (PROFILE.effortAfterModel || {})[msg.params.value] : undefined;
-      if (forcedEffort) {
-        configOptions = configOptions.map((o) => o.category === "thought_level" ? { ...o, currentValue: forcedEffort } : o);
+      const forcedEffortOptions = msg.params.configId === "model" ? (PROFILE.effortOptionsAfterModel || {})[msg.params.value] : undefined;
+      if (forcedEffort || forcedEffortOptions) {
+        configOptions = configOptions.map((o) => o.category === "thought_level" ? {
+          ...o,
+          ...(forcedEffort ? { currentValue: forcedEffort } : {}),
+          ...(forcedEffortOptions ? { options: forcedEffortOptions } : {}),
+        } : o);
       }
       return ok({ configOptions });
     }
@@ -367,6 +374,72 @@ describe("AcpProvider session/new payload", () => {
 });
 
 describe("AcpProvider model and effort", () => {
+  it("discovers each model's effort values after selecting that model", async () => {
+    const agent = fakeAgent({
+      ...claudeProfile(),
+      configOptions: [
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "claude-sonnet-4-6",
+          options: [
+            { value: "default", name: "Default" },
+            { value: "claude-sonnet-4-6", name: "Sonnet" },
+            { value: "claude-opus-4-6", name: "Opus" },
+          ],
+        },
+        CLAUDE_CONFIG_OPTIONS[1]!,
+      ],
+      effortAfterModel: { "claude-opus-4-6": "max" },
+      effortOptionsAfterModel: {
+        "claude-opus-4-6": [
+          { value: "low", name: "Low" },
+          { value: "max", name: "Max", description: "Deepest reasoning" },
+        ],
+      },
+    });
+    const provider = new AcpProvider({
+      agentType: "claude",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    const models = await provider.discoverModelCapabilities();
+    await provider.close();
+
+    expect(models).toEqual([
+      {
+        id: "claude-sonnet-4-6",
+        label: "Sonnet",
+        default: true,
+        effort: {
+          supportedLevels: [
+            { value: "high", label: "High" },
+          ],
+        },
+      },
+      {
+        id: "claude-opus-4-6",
+        label: "Opus",
+        default: false,
+        effort: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "max", label: "Max", description: "Deepest reasoning" },
+          ],
+        },
+      },
+    ]);
+    expect(only(agent.requests(), "session/set_config_option").map((request) => request.params)).toEqual([
+      { sessionId: "sess-1", configId: "model", value: "claude-opus-4-6" },
+    ]);
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+    expect(only(agent.requests(), "session/close")).toHaveLength(1);
+  });
+
   // codex-acp registers session/set_config_option (dist/index.js:29298) and
   // applies `model`/`reasoning_effort` to every turn; `_meta.codex.options.model`
   // was never read by anything.
@@ -416,7 +489,73 @@ describe("AcpProvider model and effort", () => {
       getMcpServers: () => [],
     });
 
-    await drain(provider.sendStream("hi", { chatId: "c1", model: "o3-not-offered", effort: "nonsense" }));
+    await drain(provider.sendStream("hi", { chatId: "c1", model: "o3-not-offered" }));
+    await provider.close();
+
+    expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(1);
+  });
+
+  it("rejects an explicitly requested effort the selected model does not advertise", async () => {
+    const agent = fakeAgent(codexProfile());
+    const provider = new AcpProvider({
+      agentType: "codex",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await expect(drain(provider.sendStream("hi", {
+      chatId: "c1",
+      model: "gpt-5.4",
+      effort: "ultra",
+    }))).rejects.toMatchObject({
+      name: "UnsupportedAcpEffortError",
+      code: "acp_effort_unsupported",
+      model: "gpt-5.4",
+      effort: "ultra",
+      supportedEfforts: ["low", "medium", "xhigh"],
+    });
+    await provider.close();
+
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+  });
+
+  it("validates an explicit effort even when it equals the agent's current value", async () => {
+    const agent = fakeAgent(claudeProfile());
+    const provider = new AcpProvider({
+      agentType: "claude",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    // `default` is an ACP selector sentinel, not a persisted effort choice.
+    // It starts as current, so this catches implementations that skip validation
+    // solely because requestedEffort === currentValue.
+    await expect(drain(provider.sendStream("hi", {
+      chatId: "c1",
+      effort: "default",
+    }))).rejects.toMatchObject({
+      name: "UnsupportedAcpEffortError",
+      effort: "default",
+      supportedEfforts: ["high"],
+    });
+    await provider.close();
+
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(0);
+  });
+
+  it("leaves effort unset when the caller follows the agent default", async () => {
+    const agent = fakeAgent(codexProfile());
+    const provider = new AcpProvider({
+      agentType: "codex",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await drain(provider.sendStream("hi", { chatId: "c1", effort: "" }));
     await provider.close();
 
     expect(only(agent.requests(), "session/set_config_option")).toHaveLength(0);
@@ -578,6 +717,40 @@ describe("AcpProvider warm session reuse", () => {
     expect(only(agent.requests(), "session/set_config_option").map((r) => r.params.value)).toEqual([
       "gpt-5.5", "low", "xhigh",
     ]);
+    expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
+  });
+
+  it("discards a warm session when a model switch leaves an unsupported effort", async () => {
+    const agent = fakeAgent({
+      ...codexProfile(),
+      effortAfterModel: { "gpt-5.5": "low" },
+      effortOptionsAfterModel: {
+        "gpt-5.5": [{ value: "low", name: "Low" }],
+      },
+    });
+    const provider = new AcpProvider({
+      agentType: "codex",
+      executable: agent.executable,
+      cwd: tempCwd(),
+      getMcpServers: () => [],
+    });
+
+    await drain(provider.sendStream("one", { chatId: "c1" }));
+    await expect(drain(provider.sendStream("invalid", {
+      chatId: "c1",
+      model: "gpt-5.5",
+      effort: "xhigh",
+    }))).rejects.toMatchObject({
+      name: "UnsupportedAcpEffortError",
+      model: "gpt-5.5",
+      effort: "xhigh",
+      supportedEfforts: ["low"],
+    });
+    await drain(provider.sendStream("three", { chatId: "c1" }));
+    await provider.close();
+
+    expect(only(agent.requests(), "session/new")).toHaveLength(2);
+    expect(only(agent.requests(), "session/close")).toHaveLength(2);
     expect(only(agent.requests(), "session/prompt")).toHaveLength(2);
   });
 

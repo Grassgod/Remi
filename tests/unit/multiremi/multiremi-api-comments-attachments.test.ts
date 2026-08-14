@@ -12,7 +12,23 @@ describe("Multiremi API — comments, reactions, and attachments", () => {
     const app = createMultiremiApp({ store });
     const alice = store.createWorkspaceMember({ name: "Original Alice" });
     const bob = store.createWorkspaceMember({ name: "Original Bob" });
-    const runtime = store.registerRuntime({ id: "rt_original_compat", name: "Original runtime", provider: "codex" });
+    const runtime = store.registerRuntime({
+      id: "rt_original_compat",
+      name: "Original runtime",
+      provider: "codex",
+      models: [{
+        id: "gpt-original",
+        label: "GPT Original",
+        provider: "openai",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "high", label: "High" },
+          ],
+        },
+      }],
+    });
 
     const createdAgent = await app.request("/api/agents", {
       method: "POST",

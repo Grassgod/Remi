@@ -8,7 +8,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { Agent } from "@multiremi/core/types";
+import type {
+  Agent,
+  RuntimeModelThinkingLevel,
+} from "@multiremi/core/types";
 import type { SupportedLocale } from "@multiremi/core/i18n";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -32,12 +35,30 @@ vi.mock("@multiremi/core/runtimes", () => ({
         ? [
             {
               id: "claude-sonnet",
-              name: "Sonnet",
+              label: "Sonnet",
               default: true,
               thinking: {
                 supported_levels: [
                   { value: "low", label: "Low", description: "" },
                   { value: "high", label: "High", description: "" },
+                ],
+              },
+            },
+            {
+              id: "claude-opus",
+              label: "Opus",
+              thinking: {
+                supported_levels: [
+                  { value: "high", label: "High", description: "" },
+                ],
+              },
+            },
+            {
+              id: "claude-haiku",
+              label: "Haiku",
+              thinking: {
+                supported_levels: [
+                  { value: "low", label: "Low", description: "" },
                 ],
               },
             },
@@ -92,19 +113,27 @@ vi.mock("./instructions-editor", () => ({
 vi.mock("./inspector/thinking-picker", () => ({
   ThinkingPicker: ({
     value,
+    levels,
     onChange,
   }: {
     value: string;
+    levels: RuntimeModelThinkingLevel[];
     onChange: (value: string) => void;
   }) => (
     <select
-      aria-label="Thinking"
+      aria-label="Reasoning effort"
       value={value}
       onChange={(event) => onChange(event.target.value)}
     >
-      <option value="">Follow CLI config</option>
-      <option value="low">Low</option>
-      <option value="high">High</option>
+      <option value="">Follow runtime default</option>
+      {levels.map((level) => (
+        <option key={level.value} value={level.value}>
+          {level.label}
+        </option>
+      ))}
+      {value && !levels.some((level) => level.value === value) && (
+        <option value={value}>{value}</option>
+      )}
     </select>
   ),
 }));
@@ -174,7 +203,7 @@ describe("EditAgentDialog", () => {
     fireEvent.change(screen.getByRole("spinbutton"), {
       target: { value: "6" },
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Thinking" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Reasoning effort" }), {
       target: { value: "high" },
     });
     fireEvent.change(screen.getByLabelText("Instructions"), {
@@ -214,6 +243,60 @@ describe("EditAgentDialog", () => {
     });
   });
 
+  it("clears an effort that the newly selected model does not support", async () => {
+    const { onSave } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "claude-opus" },
+    });
+    expect(
+      (screen.getByRole("combobox", {
+        name: "Reasoning effort",
+      }) as HTMLSelectElement).value,
+    ).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({
+      model: "claude-opus",
+      thinking_level: "",
+    });
+  });
+
+  it("keeps an effort that the newly selected model still supports", async () => {
+    const { onSave } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "claude-haiku" },
+    });
+    expect(
+      (screen.getByRole("combobox", {
+        name: "Reasoning effort",
+      }) as HTMLSelectElement).value,
+    ).toBe("low");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0]).toMatchObject({
+      model: "claude-haiku",
+      thinking_level: "low",
+    });
+  });
+
+  it("surfaces an orphan effort until the user explicitly clears it", async () => {
+    const { onSave } = renderDialog(
+      makeAgent({ model: "claude-retired", thinking_level: "xhigh" }),
+    );
+
+    const effort = screen.getByRole("combobox", { name: "Reasoning effort" });
+    expect((effort as HTMLSelectElement).value).toBe("xhigh");
+    fireEvent.change(effort, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]?.[0].thinking_level).toBe("");
+  });
+
   it("rejects an empty name and out-of-range concurrency locally", () => {
     renderDialog();
     const save = screen.getByRole("button", { name: "Save changes" });
@@ -251,7 +334,9 @@ describe("EditAgentDialog", () => {
     ).toBe("3");
     expect(screen.getByRole("group", { name: "Visibility" })).not.toBeNull();
     expect(screen.getByRole("group", { name: "Engine" })).not.toBeNull();
-    expect(screen.getByRole("group", { name: "Thinking" })).not.toBeNull();
+    expect(
+      screen.getByRole("group", { name: "Reasoning effort" }),
+    ).not.toBeNull();
   });
 
   it("renders the actions inside the shared dialog footer", () => {

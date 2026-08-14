@@ -66,7 +66,32 @@ export function runtimeCompatibilityResponse(runtime: MultiremiRuntime): Record<
 // for the rare "any" runtime that carries a model catalog but no fixed engine.
 const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
 
-export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): Array<Record<string, unknown>> {
+export interface FleetModelThinkingLevelResponse {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface FleetModelThinkingResponse {
+  supported_levels: FleetModelThinkingLevelResponse[];
+  default_level?: string;
+}
+
+export interface FleetModelResponse {
+  id: string;
+  label: string;
+  provider?: string;
+  default?: boolean;
+  thinking?: FleetModelThinkingResponse;
+}
+
+export interface FleetProviderModelsResponse {
+  provider: string;
+  online_runtime_count: number;
+  models: FleetModelResponse[];
+}
+
+export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId: string): FleetProviderModelsResponse[] {
   const usable = runtimes.filter(
     (r) => r.visibility === "public" || (r.ownerId ?? "local") === (callerOwnerId ?? "local"),
   );
@@ -114,8 +139,8 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
     }));
 }
 
-export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel): Record<string, unknown> {
-  const response: Record<string, unknown> = {
+export function runtimeModelCompatibilityResponse(model: MultiremiRuntimeModel): FleetModelResponse {
+  const response: FleetModelResponse = {
     id: model.id,
     label: model.label,
   };

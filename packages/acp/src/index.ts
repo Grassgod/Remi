@@ -19,8 +19,14 @@ export {
   resolveAvailableAcpPermissionMode,
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
+  UnsupportedAcpEffortError,
 } from "./provider.js";
-export type { AcpProviderOptions, AcpAgentPluginSendOptions } from "./provider.js";
+export type {
+  AcpProviderOptions,
+  AcpAgentPluginSendOptions,
+  AcpModelCapability,
+  AcpModelEffortCapability,
+} from "./provider.js";
 export { ensureAcpBridges, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "./provision.js";
 
 // ── Provider interface & shared types ─────────────────────────

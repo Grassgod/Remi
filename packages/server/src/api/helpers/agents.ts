@@ -27,13 +27,13 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { canCurrentUserAccessAgent, denyCurrentUserWorkspaceAccess } from "./auth-guards.js";
 import { canCurrentUserUseRuntime } from "./runtimes.js";
+import {
+  fleetModelsResponse,
+  type FleetModelResponse,
+  type FleetProviderModelsResponse,
+} from "../wire/runtimes.js";
 
 export const MAX_AGENT_DESCRIPTION_LENGTH = 255;
-
-export const PROVIDER_THINKING_LEVELS: Record<string, Set<string>> = {
-  claude: new Set(["low", "medium", "high", "xhigh", "max"]),
-  codex: new Set(["none", "minimal", "low", "medium", "high", "xhigh"]),
-};
 
 export function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentInput, "workspaceId" | "workspace_id">): string {
   return cleanString(input?.workspaceId) ??
@@ -52,14 +52,14 @@ export function requestedAgentWorkspaceId(c: Context, input?: Pick<CreateAgentIn
 export function overlayGatewayModels(
   store: MultiremiStore,
   workspaceId: string,
-  providers: Array<Record<string, unknown>>,
-): Array<Record<string, unknown>> {
+  providers: FleetProviderModelsResponse[],
+): FleetProviderModelsResponse[] {
   // Discovery off → never surface a (possibly stale) gateway snapshot; fall back
   // to the per-runtime union so turning the toggle off actually hides the models.
   if (!store.getRelayModelDiscovery(workspaceId)) return providers;
   const config = store.getRelayConfigForDaemon(workspaceId);
-  const byEngine = new Map<string, Record<string, unknown>>();
-  for (const provider of providers) byEngine.set(String(provider.provider), provider);
+  const byEngine = new Map<string, FleetProviderModelsResponse>();
+  for (const provider of providers) byEngine.set(provider.provider, provider);
   for (const engine of ["claude", "codex"] as const) {
     const engineConfig = config[engine];
     // No live gateway credential → don't surface any (possibly stale) snapshot.
@@ -69,12 +69,85 @@ export function overlayGatewayModels(
     // Only show a snapshot discovered for the CURRENT config revision — a changed
     // gateway/token invalidates the old catalog until rediscovery catches up.
     if (snapshot.sourceRevision !== engineConfig.revision) continue;
-    const models = snapshot.models.map((model) => ({ id: model.id, label: model.label, provider: engine }));
     const existing = byEngine.get(engine);
-    if (existing) existing.models = models;
-    else byEngine.set(engine, { provider: engine, online_runtime_count: 0, models });
+    const runtimeModels = new Map(existing?.models.map((model) => [model.id, model]));
+    const models = snapshot.models.map((model): FleetModelResponse => {
+      const runtimeModel = runtimeModels.get(model.id);
+      return {
+        id: model.id,
+        label: model.label,
+        provider: engine,
+        ...(runtimeModel?.default ? { default: true } : {}),
+        ...(runtimeModel?.thinking ? { thinking: runtimeModel.thinking } : {}),
+      };
+    });
+    byEngine.set(engine, {
+      provider: engine,
+      online_runtime_count: existing?.online_runtime_count ?? 0,
+      models,
+    });
   }
-  return [...byEngine.values()].sort((a, b) => String(a.provider).localeCompare(String(b.provider)));
+  return [...byEngine.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
+/** Build the same workspace/provider catalog used by GET /api/models. */
+export function workspaceProviderModelCatalog(
+  store: MultiremiStore,
+  workspaceId: string,
+  provider: string,
+  callerOwnerId: string,
+): FleetModelResponse[] {
+  const runtimes = store.listRuntimes().filter((runtime) => (runtime.workspaceId ?? "local") === workspaceId);
+  const providers = overlayGatewayModels(store, workspaceId, fleetModelsResponse(runtimes, callerOwnerId));
+  return providers.find((entry) => entry.provider === provider)?.models ?? [];
+}
+
+function validateAgentModelSelection(
+  c: Context,
+  store: MultiremiStore,
+  input: {
+    workspaceId: string;
+    provider: string;
+    model: string;
+    thinkingLevel: string;
+  },
+): Response | null {
+  // Model IDs remain an escape hatch for gateways that have not refreshed yet.
+  // Capability validation is needed only when an explicit effort override is
+  // requested, because that override must be proven against a concrete model.
+  if (!input.thinkingLevel) return null;
+  const models = workspaceProviderModelCatalog(
+    store,
+    input.workspaceId,
+    input.provider,
+    currentRequestUserId(c),
+  );
+  const selectedModel = input.model
+    ? models.find((model) => model.id === input.model)
+    : models.find((model) => model.default);
+
+  if (!selectedModel) {
+    if (input.model && models.length > 0) {
+      return c.json({
+        error: `thinking_level "${input.thinkingLevel}" cannot be set because model "${input.model}" is not available for provider "${input.provider}" in workspace "${input.workspaceId}"`,
+      }, 400);
+    }
+    if (models.length > 0) {
+      return c.json({
+        error: `thinking_level "${input.thinkingLevel}" cannot be set because no default model is identified for provider "${input.provider}" in workspace "${input.workspaceId}"; select a model explicitly`,
+      }, 400);
+    }
+    return c.json({
+      error: `thinking_level "${input.thinkingLevel}" cannot be set because no model catalog is available for provider "${input.provider}" in workspace "${input.workspaceId}"`,
+    }, 400);
+  }
+  const supportedLevels = selectedModel.thinking?.supported_levels ?? [];
+  if (!supportedLevels.some((level) => level.value === input.thinkingLevel)) {
+    return c.json({
+      error: `thinking_level "${input.thinkingLevel}" is not supported by model "${selectedModel.id}" for provider "${input.provider}"`,
+    }, 400);
+  }
+  return null;
 }
 
 export function skillWorkspaceId(skill: MultiremiSkill): string {
@@ -231,10 +304,15 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description);
   if (description instanceof Response) return description;
+  const model = agentRequestModel(input);
   const thinkingLevel = agentRequestThinkingLevel(input);
-  if (!isKnownThinkingValue(provider, thinkingLevel)) {
-    return agentThinkingLevelError(c, thinkingLevel, provider);
-  }
+  const invalidSelection = validateAgentModelSelection(c, store, {
+    workspaceId,
+    provider,
+    model,
+    thinkingLevel,
+  });
+  if (invalidSelection) return invalidSelection;
   const ownerId = currentRequestUserId(c);
   return {
     ...input,
@@ -247,6 +325,9 @@ export function withAgentRequestContext(c: Context, store: MultiremiStore, input
     owner_id: ownerId,
     runtimeId: null,
     runtime_id: null,
+    model: model || null,
+    thinkingLevel: thinkingLevel || null,
+    thinking_level: thinkingLevel || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
   };
@@ -328,16 +409,6 @@ export function withAgentUpdateRequestContext(
       applyProvider(provider);
     }
   }
-  if (hasRequestField(input, "thinkingLevel", "thinking_level")) {
-    const thinkingLevel = agentRequestThinkingLevel(input);
-    if (!isKnownThinkingValue(targetProvider, thinkingLevel)) {
-      return agentThinkingLevelError(c, thinkingLevel, targetProvider);
-    }
-  } else if (providerChanged && current.thinkingLevel && !isKnownThinkingValue(targetProvider, current.thinkingLevel)) {
-    return c.json({
-      error: `existing thinking_level "${current.thinkingLevel}" is not valid for provider "${targetProvider}"; pass thinking_level="" to clear or set a value valid for the new provider`,
-    }, 400);
-  }
   if (providerChanged) {
     const incompatible = store.listAgentPluginBindings(current.id).find((binding) =>
       binding.enabled && binding.plugin.provider !== targetProvider
@@ -352,8 +423,37 @@ export function withAgentUpdateRequestContext(
   // A model id is engine-specific — carrying e.g. a claude model onto codex
   // would hand the codex CLI an unknown model. Unless the request also picks
   // a model, an engine switch resets it to the engine default.
-  if (providerChanged && !hasRequestField(input, "model")) {
+  const modelProvided = hasRequestField(input, "model");
+  const thinkingLevelProvided = hasRequestField(input, "thinkingLevel", "thinking_level");
+  const targetModel = modelProvided
+    ? agentRequestModel(input)
+    : providerChanged ? "" : cleanString(current.model) ?? "";
+  const targetThinkingLevel = thinkingLevelProvided
+    ? agentRequestThinkingLevel(input)
+    : cleanString(current.thinkingLevel) ?? "";
+  if (modelProvided) {
+    next.model = targetModel;
+  } else if (providerChanged) {
     next.model = "";
+  }
+  if (thinkingLevelProvided) {
+    next.thinkingLevel = targetThinkingLevel;
+    next.thinking_level = targetThinkingLevel;
+  }
+  const currentModel = cleanString(current.model) ?? "";
+  const currentThinkingLevel = cleanString(current.thinkingLevel) ?? "";
+  const selectionChanged = targetWorkspaceId !== current.workspaceId ||
+    targetProvider !== current.provider ||
+    targetModel !== currentModel ||
+    targetThinkingLevel !== currentThinkingLevel;
+  if (selectionChanged) {
+    const invalidSelection = validateAgentModelSelection(c, store, {
+      workspaceId: targetWorkspaceId,
+      provider: targetProvider,
+      model: targetModel,
+      thinkingLevel: targetThinkingLevel,
+    });
+    if (invalidSelection) return invalidSelection;
   }
   if (hasRequestField(input, "maxConcurrentTasks", "max_concurrent_tasks")) {
     const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
@@ -382,6 +482,7 @@ export function withAgentTemplateRequestContext(
   if (conflict) return agentNameConflict(c, name);
   const provider = resolveAgentRequestProvider(c, store, workspaceId, input);
   if (provider instanceof Response) return provider;
+  const model = agentRequestModel(input);
   const maxConcurrentTasks = normalizeAgentRequestMaxConcurrentTasks(c, input.maxConcurrentTasks ?? input.max_concurrent_tasks);
   if (maxConcurrentTasks instanceof Response) return maxConcurrentTasks;
   const description = normalizeAgentRequestDescription(c, input.description ?? template.description);
@@ -398,6 +499,7 @@ export function withAgentTemplateRequestContext(
     owner_id: ownerId,
     runtimeId: null,
     runtime_id: null,
+    model: model || null,
     maxConcurrentTasks,
     max_concurrent_tasks: maxConcurrentTasks,
   };
@@ -452,17 +554,14 @@ export function normalizeAgentRequestDescription(c: Context, value: unknown): st
   return description;
 }
 
+export function agentRequestModel(
+  input: Pick<CreateAgentInput, "model"> | Pick<UpdateAgentInput, "model"> | Pick<CreateAgentFromTemplateInput, "model">,
+): string {
+  return cleanString(input.model) ?? "";
+}
+
 export function agentRequestThinkingLevel(input: CreateAgentInput | UpdateAgentInput): string {
-  return String(input.thinkingLevel ?? input.thinking_level ?? "");
-}
-
-export function isKnownThinkingValue(provider: string, value: string): boolean {
-  if (!value) return true;
-  return PROVIDER_THINKING_LEVELS[provider]?.has(value) ?? false;
-}
-
-export function agentThinkingLevelError(c: Context, value: string, provider: string): Response {
-  return c.json({ error: `thinking_level "${value}" is not a recognised value for runtime "${provider}"` }, 400);
+  return cleanString(input.thinkingLevel ?? input.thinking_level) ?? "";
 }
 
 export function normalizeAgentRequestMaxConcurrentTasks(c: Context, value: unknown): number | Response {

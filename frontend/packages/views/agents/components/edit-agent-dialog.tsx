@@ -28,7 +28,11 @@ import { CharCounter } from "./char-counter";
 import { EngineSelect } from "./engine-select";
 import { InstructionsEditor } from "./instructions-editor";
 import { ModelDropdown } from "./model-dropdown";
-import { ThinkingPicker } from "./inspector/thinking-picker";
+import { ThinkingField } from "./thinking-field";
+import {
+  getModelThinkingLevels,
+  supportsThinkingLevel,
+} from "./inspector/thinking-levels";
 
 const MIN_CONCURRENCY = 1;
 const MAX_CONCURRENCY = 50;
@@ -49,7 +53,6 @@ export function EditAgentDialog({
   const descriptionId = `${fieldId}-description`;
   const visibilityLabelId = `${fieldId}-visibility-label`;
   const concurrencyId = `${fieldId}-concurrency`;
-  const thinkingLabelId = `${fieldId}-thinking-label`;
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(
@@ -70,12 +73,10 @@ export function EditAgentDialog({
   const [saving, setSaving] = useState(false);
 
   const fleet = useFleetProviderModels(wsId ?? "", provider);
-  const thinkingLevels = useMemo(() => {
-    const selected = model
-      ? fleet.models.find((entry) => entry.id === model)
-      : fleet.models.find((entry) => entry.default) ?? fleet.models[0];
-    return selected?.thinking?.supported_levels ?? [];
-  }, [fleet.models, model]);
+  const thinkingLevels = useMemo(
+    () => getModelThinkingLevels(fleet.models, model),
+    [fleet.models, model],
+  );
 
   const concurrency = Number(maxConcurrency);
   const validConcurrency =
@@ -91,6 +92,16 @@ export function EditAgentDialog({
     setProvider(next);
     setModel("");
     setThinkingLevel("");
+  };
+
+  const switchModel = (next: string) => {
+    if (
+      next !== model &&
+      !supportsThinkingLevel(fleet.models, next, thinkingLevel)
+    ) {
+      setThinkingLevel("");
+    }
+    setModel(next);
   };
 
   const submit = async () => {
@@ -216,7 +227,7 @@ export function EditAgentDialog({
               wsId={wsId ?? ""}
               provider={provider}
               value={model}
-              onChange={setModel}
+              onChange={switchModel}
             />
 
             <div className="grid gap-4 sm:grid-cols-2">
@@ -246,32 +257,11 @@ export function EditAgentDialog({
                 )}
               </div>
 
-              {(thinkingLevels.length > 0 || thinkingLevel) && (
-                <div>
-                  <Label
-                    id={thinkingLabelId}
-                    className="text-xs text-muted-foreground"
-                  >
-                    {t(($) => $.inspector.prop_thinking)}
-                  </Label>
-                  {/* No input frame around the picker: only the chip is
-                      clickable, and a border made the whole row look like a
-                      form control that ignores clicks. The chip carries its
-                      own hover affordance (CHIP_CLASS); the h-9 wrapper only
-                      keeps the baseline aligned with the concurrency input. */}
-                  <div
-                    role="group"
-                    aria-labelledby={thinkingLabelId}
-                    className="mt-1 flex h-9 items-center"
-                  >
-                    <ThinkingPicker
-                      value={thinkingLevel}
-                      levels={thinkingLevels}
-                      onChange={setThinkingLevel}
-                    />
-                  </div>
-                </div>
-              )}
+              <ThinkingField
+                value={thinkingLevel}
+                levels={thinkingLevels}
+                onChange={setThinkingLevel}
+              />
             </div>
 
             <InstructionsEditor

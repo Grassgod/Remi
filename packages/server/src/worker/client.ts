@@ -184,6 +184,19 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/runtimes/${runtimeId}/models/${requestId}/result`, result);
   }
 
+  async updateRuntimeModels(
+    runtimeId: string,
+    models: MultiremiRuntimeModel[],
+    signal?: AbortSignal,
+  ): Promise<MultiremiRuntimeModel[]> {
+    const response = await this.put<{ models: MultiremiRuntimeModel[] }>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/models`,
+      { models, supported: true },
+      signal,
+    );
+    return response.models;
+  }
+
   async reportRuntimeLocalSkillListResult(runtimeId: string, requestId: string, result: {
     status: string;
     skills?: MultiremiRuntimeLocalSkillSummary[];
@@ -354,6 +367,16 @@ export class MultiremiDaemonClient {
       body: JSON.stringify(body),
     });
     return parseResponse<T>(resp, "POST", path);
+  }
+
+  private async put<T = unknown>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+    const resp = await fetch(this.baseUrl + path, {
+      method: "PUT",
+      headers: this.headers("application/json"),
+      body: JSON.stringify(body),
+      signal,
+    });
+    return parseResponse<T>(resp, "PUT", path);
   }
 
   private headers(contentType?: string, tokenOverride?: string | null): HeadersInit {

@@ -28,6 +28,7 @@ import type {
   SessionModeState,
   SessionModelState,
   SessionConfigOption,
+  SessionConfigSelectOption,
   McpServerConfig,
   NewSessionMeta,
   NewSessionResult,
@@ -67,6 +68,43 @@ export interface AcpAgentPluginSendOptions {
   pluginPaths?: string[];
   pluginFingerprint?: string;
   codexHome?: string;
+}
+
+export interface AcpModelEffortCapability {
+  supportedLevels: Array<{
+    value: string;
+    label: string;
+    description?: string;
+  }>;
+}
+
+/** One model and its model-specific effort values, discovered from ACP. */
+export interface AcpModelCapability {
+  id: string;
+  label: string;
+  description?: string;
+  default: boolean;
+  effort?: AcpModelEffortCapability;
+}
+
+/** A caller explicitly requested an effort value the selected model does not advertise. */
+export class UnsupportedAcpEffortError extends Error {
+  readonly code = "acp_effort_unsupported";
+
+  constructor(
+    readonly agentType: string,
+    readonly model: string | null,
+    readonly effort: string,
+    readonly supportedEfforts: string[],
+  ) {
+    const modelText = model ? `model "${model}"` : "the current model";
+    const available = supportedEfforts.length ? supportedEfforts.join(", ") : "none";
+    super(
+      `[acp_effort_unsupported] ${agentType}: effort "${effort}" is not supported by ${modelText} ` +
+        `(available: ${available})`,
+    );
+    this.name = "UnsupportedAcpEffortError";
+  }
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -187,11 +225,12 @@ export function resolveAvailableAcpPermissionMode(
 }
 
 /**
- * The `session/set_config_option` call for a requested model/effort value, or
- * null to skip it. Both bridges reject an unknown option id or value outright
+ * The `session/set_config_option` call for a requested select value, or null
+ * when the bridge does not advertise it. Both bridges reject an unknown option
+ * id or value outright
  * (claude-agent-acp dist/acp-agent.js:3476, 3525; codex-acp dist/index.js:29328,
- * 29370, 29379), so — as with permission modes — an unsupported value is skipped
- * rather than allowed to kill the session.
+ * 29370, 29379). Callers choose whether a missing value is optional (model)
+ * or an explicit unsupported request that must fail (effort).
  */
 export function resolveConfigOptionChange(
   configOptions: SessionConfigOption[] | undefined,
@@ -211,6 +250,22 @@ function currentConfigValue(configOptions: SessionConfigOption[] | undefined, ca
   const option = configOptions?.find((o) => o.category === category);
   if (!option || option.type !== "select") return null;
   return option.currentValue;
+}
+
+function selectConfigOption(
+  configOptions: SessionConfigOption[] | undefined,
+  category: string,
+): Extract<SessionConfigOption, { type: "select" }> | undefined {
+  const option = configOptions?.find((item) => item.category === category);
+  return option?.type === "select" ? option : undefined;
+}
+
+function flattenSelectOptions(option: Extract<SessionConfigOption, { type: "select" }>): SessionConfigSelectOption[] {
+  return option.options.flatMap((item) => ("options" in item ? item.options : [item]));
+}
+
+function isAcpDefaultSentinel(value: string): boolean {
+  return value.trim().toLowerCase() === "default";
 }
 
 export function resolveAcpExecutableForAgent(agentType: string, executable: string | null | undefined, fallback: string): string {
@@ -316,6 +371,7 @@ export class AcpProvider implements Provider {
   private _options: AcpProviderOptions;
   private _adapter: AgentAdapter;
   private _pool = new Map<string, PoolEntry>();
+  private _startingClients = new Set<AcpClient>();
   private _activeStreaming = new Set<string>();
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
@@ -355,6 +411,61 @@ export class AcpProvider implements Provider {
 
   getLastResponse(): AgentResponse | null {
     return this._lastResponse;
+  }
+
+  /**
+   * Discover the bridge's live model catalog and each model's effort values.
+   * Both supported bridges rewrite `thought_level` after the `model` option is
+   * changed, so a single session must walk the model selector in order.
+   */
+  async discoverModelCapabilities(): Promise<AcpModelCapability[]> {
+    const chatId = `__capability_probe__:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const entry = await this._ensureSession(chatId, {
+      chatId,
+      cwd: this._options.cwd ?? homedir(),
+      permissionMode: null,
+    });
+
+    try {
+      const modelOption = selectConfigOption(entry.configOptions, MODEL_OPTION_CATEGORY);
+      if (!modelOption) return [];
+
+      const initialModel = modelOption.currentValue;
+      const models = flattenSelectOptions(modelOption).filter((model) => !isAcpDefaultSentinel(model.value));
+      const discovered: AcpModelCapability[] = [];
+
+      for (const model of models) {
+        if (currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) !== model.value) {
+          await this._setConfigOption(entry, MODEL_OPTION_CATEGORY, model.value);
+        }
+
+        const effortOption = selectConfigOption(entry.configOptions, EFFORT_OPTION_CATEGORY);
+        const effortLevels = effortOption
+          ? flattenSelectOptions(effortOption).filter((level) => !isAcpDefaultSentinel(level.value))
+          : [];
+        discovered.push({
+          id: model.value,
+          label: model.name || model.value,
+          ...(model.description ? { description: model.description } : {}),
+          default: model.value === initialModel,
+          ...(effortLevels.length
+            ? {
+                effort: {
+                  supportedLevels: effortLevels.map((level) => ({
+                    value: level.value,
+                    label: level.name || level.value,
+                    ...(level.description ? { description: level.description } : {}),
+                  })),
+                },
+              }
+            : {}),
+        });
+      }
+
+      return discovered;
+    } finally {
+      await this._discardEntry(chatId, entry);
+    }
   }
 
   // ── Provider interface ─────────────────────────────────────────
@@ -557,16 +668,24 @@ export class AcpProvider implements Provider {
       if (stale) {
         await this._discardEntry(chatId, existing);
       } else {
-        if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
-          this._sessionToChatId.delete(existing.acpSessionId);
-          const result = await existing.client.loadSession(options.sessionId, cwd, mcpServers);
-          existing.acpSessionId = result.sessionId;
-          this._adoptSessionState(existing, result);
-          this._sessionToChatId.set(existing.acpSessionId, chatId);
+        try {
+          if (options?.sessionId && options.sessionId !== existing.acpSessionId) {
+            this._sessionToChatId.delete(existing.acpSessionId);
+            const result = await existing.client.loadSession(options.sessionId, cwd, mcpServers);
+            existing.acpSessionId = result.sessionId;
+            this._adoptSessionState(existing, result);
+            this._sessionToChatId.set(existing.acpSessionId, chatId);
+          }
+          await this._applyMode(existing, permissionMode);
+          await this._applyModelAndEffort(existing, model, effort);
+          return existing;
+        } catch (error) {
+          // A model switch can rewrite the effort selector before we learn that
+          // an explicit effort is unsupported. Never leave that half-applied
+          // state in the warm pool for the next turn.
+          await this._discardEntry(chatId, existing);
+          throw error;
         }
-        await this._applyMode(existing, permissionMode);
-        await this._applyModelAndEffort(existing, model, effort);
-        return existing;
       }
     }
 
@@ -604,45 +723,53 @@ export class AcpProvider implements Provider {
       },
     });
 
-    await client.start();
-    const initializeResult = await client.initialize();
+    this._startingClients.add(client);
+    try {
+      await client.start();
+      const initializeResult = await client.initialize();
 
-    // Official field when the agent advertises it, `_meta.additionalRoots`
-    // otherwise — both pinned bridges read the meta form as the compatibility
-    // fallback (claude-agent-acp dist/acp-agent.js:4549; codex-acp
-    // dist/index.js:27064-27072).
-    const addDirs = absoluteAdditionalDirectories(options?.addDirs, this._adapter.agentType);
-    const officialAddDirs = !!initializeResult.agentCapabilities?.sessionCapabilities?.additionalDirectories;
-    const meta: NewSessionMeta | undefined =
-      addDirs.length && !officialAddDirs ? { ...(sessionMeta ?? {}), additionalRoots: addDirs } : sessionMeta;
-    const additionalDirectories = officialAddDirs ? addDirs : undefined;
+      // Official field when the agent advertises it, `_meta.additionalRoots`
+      // otherwise — both pinned bridges read the meta form as the compatibility
+      // fallback (claude-agent-acp dist/acp-agent.js:4549; codex-acp
+      // dist/index.js:27064-27072).
+      const addDirs = absoluteAdditionalDirectories(options?.addDirs, this._adapter.agentType);
+      const officialAddDirs = !!initializeResult.agentCapabilities?.sessionCapabilities?.additionalDirectories;
+      const meta: NewSessionMeta | undefined =
+        addDirs.length && !officialAddDirs ? { ...(sessionMeta ?? {}), additionalRoots: addDirs } : sessionMeta;
+      const additionalDirectories = officialAddDirs ? addDirs : undefined;
 
-    const result = options?.sessionId
-      ? await client.resumeSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
-      : await client.newSession({ cwd, mcpServers, additionalDirectories, _meta: meta });
+      const result = options?.sessionId
+        ? await client.resumeSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
+        : await client.newSession({ cwd, mcpServers, additionalDirectories, _meta: meta });
 
-    const entry: PoolEntry = {
-      client,
-      acpSessionId: result.sessionId,
-      lastUsed: Date.now(),
-      promptState: createPromptState(),
-      cwd,
-      mcpServersKey,
-      pluginPathsKey,
-      pluginFingerprint,
-      codexHome,
-      appliedModel: null,
-      appliedEffort: null,
-      warnedPermissionMode: null,
-    };
-    this._adoptSessionState(entry, result);
-    await this._applyMode(entry, permissionMode);
-    await this._applyModelAndEffort(entry, model, effort);
+      const entry: PoolEntry = {
+        client,
+        acpSessionId: result.sessionId,
+        lastUsed: Date.now(),
+        promptState: createPromptState(),
+        cwd,
+        mcpServersKey,
+        pluginPathsKey,
+        pluginFingerprint,
+        codexHome,
+        appliedModel: null,
+        appliedEffort: null,
+        warnedPermissionMode: null,
+      };
+      this._adoptSessionState(entry, result);
+      await this._applyMode(entry, permissionMode);
+      await this._applyModelAndEffort(entry, model, effort);
 
-    this._pool.set(chatId, entry);
-    this._sessionToChatId.set(entry.acpSessionId, chatId);
-    this._startCleanupTimer();
-    return entry;
+      this._pool.set(chatId, entry);
+      this._sessionToChatId.set(entry.acpSessionId, chatId);
+      this._startCleanupTimer();
+      this._startingClients.delete(client);
+      return entry;
+    } catch (error) {
+      this._startingClients.delete(client);
+      await client.stop();
+      throw error;
+    }
   }
 
   /** Record what the agent advertised for a freshly created/loaded session. */
@@ -699,8 +826,26 @@ export class AcpProvider implements Provider {
         entry.appliedEffort = currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY);
       }
     }
-    if (effort && effort !== entry.appliedEffort) {
-      if (await this._setConfigOption(entry, EFFORT_OPTION_CATEGORY, effort)) entry.appliedEffort = effort;
+    const requestedEffort = effort?.trim() || null;
+    if (requestedEffort) {
+      const option = selectConfigOption(entry.configOptions, EFFORT_OPTION_CATEGORY);
+      const supported = option
+        ? flattenSelectOptions(option)
+            .map((item) => item.value)
+            .filter((value) => !isAcpDefaultSentinel(value))
+        : [];
+      if (!option || !supported.includes(requestedEffort)) {
+        throw new UnsupportedAcpEffortError(
+          this._adapter.agentType,
+          currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY) ?? model,
+          requestedEffort,
+          supported,
+        );
+      }
+      if (requestedEffort === entry.appliedEffort) return;
+      const result = await entry.client.setConfigOption(entry.acpSessionId, option.id, requestedEffort);
+      if (result?.configOptions) entry.configOptions = result.configOptions;
+      entry.appliedEffort = requestedEffort;
     }
   }
 
@@ -798,6 +943,9 @@ export class AcpProvider implements Provider {
       clearInterval(this._cleanupTimer);
       this._cleanupTimer = null;
     }
+    const starting = [...this._startingClients];
+    this._startingClients.clear();
+    await Promise.allSettled(starting.map((client) => client.stop()));
     await this.clearSession();
   }
 }

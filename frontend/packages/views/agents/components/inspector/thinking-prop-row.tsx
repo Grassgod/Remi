@@ -1,10 +1,10 @@
 "use client";
 
-import type { RuntimeModel } from "@multiremi/core/types";
 import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { PropRow } from "../../../common/prop-row";
 import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
+import { getModelThinkingLevels } from "./thinking-levels";
 
 /**
  * Thinking row for the agent inspector. Hidden when the active model has
@@ -36,8 +36,7 @@ export function ThinkingPropRow({
   const { t } = useT("agents");
   const { models } = useFleetProviderModels(wsId, provider);
 
-  const entry = pickModelEntry(models, model);
-  const levels = entry?.thinking?.supported_levels ?? [];
+  const levels = getModelThinkingLevels(models, model);
   if (levels.length === 0 && !value) return null;
 
   return (
@@ -50,12 +49,4 @@ export function ThinkingPropRow({
       />
     </PropRow>
   );
-}
-
-function pickModelEntry(
-  models: RuntimeModel[],
-  model: string,
-): RuntimeModel | undefined {
-  if (model) return models.find((m) => m.id === model);
-  return models.find((m) => m.default) ?? models[0];
 }

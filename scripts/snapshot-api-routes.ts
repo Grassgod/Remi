@@ -1237,6 +1237,9 @@ flow("daemon", async (rec, refs) => {
   });
   await rec.json("POST", "/api/daemon/heartbeat", { runtime_id: refs.runtimeId });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/tasks/claim`, {});
+  await rec.json("PUT", `/api/daemon/runtimes/${refs.runtimeId}/models`, {
+    models: [{ id: "claude-sonnet-4", label: "Claude Sonnet 4" }],
+  });
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/models/claim`, {});
   await rec.json("POST", `/api/daemon/runtimes/${refs.runtimeId}/models/${refs.runtimeModelRequestId}/result`, {
     models: [{ id: "claude-sonnet-4", name: "Claude Sonnet 4" }],

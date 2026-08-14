@@ -12,6 +12,7 @@ import { useAuthStore } from "@multiremi/core/auth";
 import { larkInstallationsOptions } from "@multiremi/core/lark";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
 import { useWorkspaceId } from "@multiremi/core/hooks";
+import { useFleetProviderModels } from "@multiremi/core/runtimes";
 import { isImeComposing } from "@multiremi/core/utils";
 import { useTimeAgo } from "../../i18n";
 import { Button } from "@multiremi/ui/components/ui/button";
@@ -41,6 +42,7 @@ import { EnginePicker } from "./inspector/engine-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
+import { supportsThinkingLevel } from "./inspector/thinking-levels";
 import { VisibilityPicker } from "./inspector/visibility-picker";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
 
@@ -88,7 +90,20 @@ export function AgentDetailInspector({
   const wsId = useWorkspaceId();
   const update = (data: Record<string, unknown>) => onUpdate(agent.id, data);
   const provider = agent.provider || "claude";
+  const { models } = useFleetProviderModels(wsId ?? "", provider);
   const showIntegrations = useHasIntegrations(agent.id);
+  const switchEngine = (next: string) =>
+    update({ provider: next, model: "", thinking_level: "" });
+  const switchModel = (next: string) => {
+    const data: Record<string, unknown> = { model: next };
+    if (
+      next !== (agent.model ?? "") &&
+      !supportsThinkingLevel(models, next, agent.thinking_level ?? "")
+    ) {
+      data.thinking_level = "";
+    }
+    return update(data);
+  };
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
@@ -111,7 +126,7 @@ export function AgentDetailInspector({
           <EnginePicker
             value={provider}
             canEdit={canEdit}
-            onChange={(next) => update({ provider: next })}
+            onChange={switchEngine}
           />
         </PropRow>
         <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
@@ -120,7 +135,7 @@ export function AgentDetailInspector({
             provider={provider}
             value={agent.model ?? ""}
             canEdit={canEdit}
-            onChange={(m) => update({ model: m })}
+            onChange={switchModel}
           />
         </PropRow>
         <ThinkingPropRow

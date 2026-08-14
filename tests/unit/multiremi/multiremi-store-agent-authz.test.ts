@@ -22,6 +22,18 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       workspaceId: "local",
       ownerId: "alice",
       visibility: "private",
+      models: [{
+        id: "gpt-authz",
+        label: "GPT Authz",
+        provider: "openai",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "minimal", label: "Minimal" },
+            { value: "high", label: "High" },
+          ],
+        },
+      }],
     });
     const bobPublic = store.registerRuntime({
       id: "rt_gate_bob_public",
@@ -30,6 +42,18 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
       workspaceId: "local",
       ownerId: "bob",
       visibility: "public",
+      models: [{
+        id: "claude-authz",
+        label: "Claude Authz",
+        provider: "anthropic",
+        default: true,
+        thinking: {
+          supportedLevels: [
+            { value: "low", label: "Low" },
+            { value: "max", label: "Max" },
+          ],
+        },
+      }],
     });
     const remoteRuntime = store.registerRuntime({
       id: "rt_gate_remote",
@@ -90,7 +114,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     });
     expect(invalidThinkingCreate.status).toBe(400);
     expect(await invalidThinkingCreate.json()).toEqual({
-      error: 'thinking_level "max" is not a recognised value for runtime "codex"',
+      error: 'thinking_level "max" is not supported by model "gpt-authz" for provider "codex"',
     });
 
     const bobPrivateRuntime = await app.request("/api/agents", {
@@ -231,7 +255,7 @@ describe("Multiremi store — Go-compatible agent authorization", () => {
     });
     expect(invalidThinkingUpdate.status).toBe(400);
     expect(await invalidThinkingUpdate.json()).toEqual({
-      error: 'thinking_level "minimal" is not a recognised value for runtime "claude"',
+      error: 'thinking_level "minimal" is not supported by model "claude-authz" for provider "claude"',
     });
 
     const duplicateName = await app.request("/api/agents", {

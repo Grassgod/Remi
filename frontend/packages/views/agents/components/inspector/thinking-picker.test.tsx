@@ -45,12 +45,12 @@ describe("ThinkingPicker", () => {
     cleanup();
   });
 
-  it('renders "Follow CLI config" when value is empty', () => {
+  it('renders "Follow runtime default" when value is empty', () => {
     renderPicker({ value: "" });
     // The trigger and the tooltip both carry the label. Empty value means
-    // Multiremi omits --effort, so the local CLI's config decides the
-    // reasoning level — see thinking-prop-row.tsx for the contract.
-    expect(screen.getAllByText("Follow CLI config").length).toBeGreaterThan(0);
+    // Multiremi omits the effort override, so the runtime default decides
+    // the reasoning level — see thinking-prop-row.tsx for the contract.
+    expect(screen.getAllByText("Follow runtime default").length).toBeGreaterThan(0);
   });
 
   it("renders the matching level label when value is set", () => {
@@ -61,7 +61,7 @@ describe("ThinkingPicker", () => {
   it("renders the raw token when the saved value is no longer in the catalog", () => {
     // Simulates a model swap that dropped the option the user previously
     // picked — we still surface what's persisted so the user can clear it,
-    // rather than silently showing "Follow CLI config".
+    // rather than silently showing the runtime-default fallback.
     renderPicker({ value: "xhigh", levels: CODEX_LEVELS });
     expect(screen.getAllByText("xhigh").length).toBeGreaterThan(0);
   });

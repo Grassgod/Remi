@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Agent } from "@multiremi/core/types";
+import type { Agent, RuntimeModel } from "@multiremi/core/types";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
@@ -20,6 +20,9 @@ const larkRef = vi.hoisted(() => ({
     install_supported: true as boolean | undefined,
   },
 }));
+const modelCatalogRef = vi.hoisted(() => ({
+  current: [] as RuntimeModel[],
+}));
 
 // Keyed on the query key so the inspector's two integration-visibility
 // queries resolve synchronously and independently.
@@ -32,6 +35,14 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+vi.mock("@multiremi/core/runtimes", () => ({
+  useFleetProviderModels: () => ({
+    models: modelCatalogRef.current,
+    onlineRuntimeCount: 1,
+    isLoading: false,
+    isError: false,
+  }),
+}));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({
   useFileUpload: () => ({ upload: vi.fn(), uploading: false }),
 }));
@@ -63,7 +74,15 @@ vi.mock("./inspector/engine-picker", () => ({
   EnginePicker: () => <span>engine-picker</span>,
 }));
 vi.mock("./inspector/model-picker", () => ({
-  ModelPicker: () => <span>model-picker</span>,
+  ModelPicker: ({
+    onChange,
+  }: {
+    onChange: (value: string) => Promise<void> | void;
+  }) => (
+    <button type="button" onClick={() => void onChange("claude-opus")}>
+      switch-model
+    </button>
+  ),
 }));
 vi.mock("./inspector/thinking-prop-row", () => ({
   ThinkingPropRow: () => <span>thinking-prop-row</span>,
@@ -133,6 +152,23 @@ beforeEach(() => {
     configured: true,
     install_supported: true,
   };
+  modelCatalogRef.current = [
+    {
+      id: "claude-sonnet",
+      label: "Sonnet",
+      default: true,
+      thinking: {
+        supported_levels: [{ value: "high", label: "High" }],
+      },
+    },
+    {
+      id: "claude-opus",
+      label: "Opus",
+      thinking: {
+        supported_levels: [{ value: "low", label: "Low" }],
+      },
+    },
+  ];
 });
 
 afterEach(() => {
@@ -229,5 +265,32 @@ describe("AgentDetailInspector description editor", () => {
 
     fireEvent.change(field, { target: { value: "x".repeat(256) } });
     expect(screen.getByRole("textbox")).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("AgentDetailInspector model editing", () => {
+  it("clears an effort that the next model does not support in the same update", () => {
+    const { onUpdate } = renderInspector(
+      makeAgent({ model: "claude-sonnet", thinking_level: "high" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "switch-model" }));
+
+    expect(onUpdate).toHaveBeenCalledWith("agent-1", {
+      model: "claude-opus",
+      thinking_level: "",
+    });
+  });
+
+  it("keeps a compatible effort when changing models", () => {
+    const { onUpdate } = renderInspector(
+      makeAgent({ model: "claude-sonnet", thinking_level: "low" }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "switch-model" }));
+
+    expect(onUpdate).toHaveBeenCalledWith("agent-1", {
+      model: "claude-opus",
+    });
   });
 });

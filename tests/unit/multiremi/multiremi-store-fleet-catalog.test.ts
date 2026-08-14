@@ -151,6 +151,310 @@ describe("Multiremi store — fleet engine and model catalog", () => {
     expect(codex.models).toEqual([]);
   });
 
+  it("keeps gateway visibility while preserving matching runtime effort metadata", async () => {
+    const store = createStore();
+    store.ensureLocalWorkspace();
+    store.registerRuntime({
+      id: "rt_gateway_effort_a",
+      name: "gateway effort a",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "claude-fable-5",
+          label: "Runtime label",
+          provider: "anthropic",
+          default: true,
+          thinking: {
+            supportedLevels: [
+              { value: "low", label: "Low" },
+              { value: "high", label: "High" },
+            ],
+            defaultLevel: "high",
+          },
+        },
+        { id: "runtime-only", label: "Runtime only", provider: "anthropic", default: false },
+      ],
+    });
+    store.registerRuntime({
+      id: "rt_gateway_effort_b",
+      name: "gateway effort b",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{
+        id: "claude-fable-5",
+        label: "Other runtime label",
+        provider: "anthropic",
+        default: false,
+        thinking: {
+          supportedLevels: [
+            { value: "xhigh", label: "Extra high" },
+            { value: "max", label: "Max" },
+          ],
+        },
+      }],
+    });
+    store.setRelayModelDiscovery("local", true);
+    const revision = store.upsertRelayConfig("local", "claude", {
+      fragment: JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway.example" } }),
+      tokenOp: "set",
+      authToken: "test-token",
+    });
+    store.saveGatewayModels("local", "claude", {
+      sourceRevision: revision,
+      models: [
+        { id: "claude-fable-5", label: "Gateway Fable 5" },
+        { id: "gateway-only", label: "Gateway only" },
+      ],
+    });
+
+    const app = createMultiremiApp({ store });
+    const body = await (await app.request("/api/models")).json();
+    const claude = body.providers.find((entry: any) => entry.provider === "claude");
+    expect(claude.models.map((model: any) => model.id)).toEqual(["claude-fable-5", "gateway-only"]);
+    const fable = claude.models[0];
+    expect(fable.label).toBe("Gateway Fable 5");
+    expect(fable.default).toBe(true);
+    expect(fable.thinking.default_level).toBe("high");
+    // Fleet selection semantics are unchanged: the first/default runtime model
+    // wins; the gateway overlay only preserves that selected model's metadata.
+    expect(fable.thinking.supported_levels.map((level: any) => level.value).sort()).toEqual(["high", "low"]);
+    expect(claude.models[1].thinking).toBeUndefined();
+  });
+
+  it("validates an agent's model and effort together against its workspace catalog", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_agent_catalog",
+      name: "agent catalog",
+      provider: "claude",
+      workspaceId: "local",
+      models: [
+        {
+          id: "claude-fable-5",
+          label: "Fable 5",
+          provider: "anthropic",
+          default: true,
+          thinking: {
+            supportedLevels: [
+              { value: "low", label: "Low" },
+              { value: "max", label: "Max" },
+            ],
+          },
+        },
+        {
+          id: "claude-fast",
+          label: "Fast",
+          provider: "anthropic",
+          default: false,
+          thinking: { supportedLevels: [{ value: "low", label: "Low" }] },
+        },
+      ],
+    });
+    const app = createMultiremiApp({ store });
+    const headers = { "Content-Type": "application/json" };
+
+    const customModel = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Custom model", provider: "claude", model: "claude-missing" }),
+    });
+    expect(customModel.status).toBe(201);
+    expect((await customModel.json()).model).toBe("claude-missing");
+
+    const unverifiedCustomEffort = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Unknown model effort",
+        provider: "claude",
+        model: "claude-missing",
+        thinking_level: "max",
+      }),
+    });
+    expect(unverifiedCustomEffort.status).toBe(400);
+    expect((await unverifiedCustomEffort.json()).error).toContain(
+      'model "claude-missing" is not available',
+    );
+
+    const invalidEffort = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Bad effort", provider: "claude", model: "claude-fast", thinking_level: "max" }),
+    });
+    expect(invalidEffort.status).toBe(400);
+    expect((await invalidEffort.json()).error).toBe(
+      'thinking_level "max" is not supported by model "claude-fast" for provider "claude"',
+    );
+
+    // An empty model means provider default; effort is checked against the
+    // catalog's default model before either field is persisted.
+    const valid = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Default Fable", provider: "claude", thinking_level: "max" }),
+    });
+    expect(valid.status).toBe(201);
+    const agent = await valid.json();
+    expect(agent.model).toBe("");
+    expect(agent.thinking_level).toBe("max");
+
+    const rejectedAtomicUpdate = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ model: "claude-fast" }),
+    });
+    expect(rejectedAtomicUpdate.status).toBe(400);
+    expect(store.getAgent(agent.id)?.model).toBeNull();
+    expect(store.getAgent(agent.id)?.thinkingLevel).toBe("max");
+
+    const validAtomicUpdate = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ model: "claude-fast", thinking_level: "low" }),
+    });
+    expect(validAtomicUpdate.status).toBe(200);
+    expect(store.getAgent(agent.id)?.model).toBe("claude-fast");
+    expect(store.getAgent(agent.id)?.thinkingLevel).toBe("low");
+
+    // The edit dialog submits the complete selection even when only metadata
+    // changed. A temporarily unavailable catalog must not block that no-op
+    // selection from saving the new name/description.
+    db!.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?", [
+      "2020-01-01T00:00:00.000Z",
+      runtime.id,
+    ]);
+    const metadataOnlyUpdate = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        name: "Renamed while catalog is unavailable",
+        description: "Metadata still saves",
+        provider: " claude ",
+        model: " claude-fast ",
+        thinking_level: " low ",
+      }),
+    });
+    expect(metadataOnlyUpdate.status).toBe(200);
+    expect(store.getAgent(agent.id)).toMatchObject({
+      name: "Renamed while catalog is unavailable",
+      description: "Metadata still saves",
+      provider: "claude",
+      model: "claude-fast",
+      thinkingLevel: "low",
+    });
+
+    const changedEffortWithoutCatalog = await app.request(`/api/agents/${agent.id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        provider: "claude",
+        model: "claude-fast",
+        thinking_level: "max",
+      }),
+    });
+    expect(changedEffortWithoutCatalog.status).toBe(400);
+    expect(store.getAgent(agent.id)?.thinkingLevel).toBe("low");
+  });
+
+  it("allows custom models but rejects unverifiable effort when no catalog is available", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const headers = { "Content-Type": "application/json" };
+
+    const providerDefaults = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Provider defaults", provider: "claude", model: "", thinking_level: "" }),
+    });
+    expect(providerDefaults.status).toBe(201);
+
+    const explicitModel = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "No catalog model", provider: "claude", model: "claude-fable-5" }),
+    });
+    expect(explicitModel.status).toBe(201);
+    expect((await explicitModel.json()).model).toBe("claude-fable-5");
+
+    const explicitEffort = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "No catalog effort", provider: "claude", thinking_level: "max" }),
+    });
+    expect(explicitEffort.status).toBe(400);
+    expect((await explicitEffort.json()).error).toContain("no model catalog is available");
+  });
+
+  it("accepts runtime-advertised effort values without a provider-wide allowlist", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_dynamic_effort",
+      name: "dynamic effort",
+      provider: "codex",
+      workspaceId: "local",
+      models: [{
+        id: "gpt-dynamic",
+        label: "GPT Dynamic",
+        provider: "openai",
+        default: true,
+        thinking: { supportedLevels: [{ value: "ultra", label: "Ultra" }] },
+      }],
+    });
+    const app = createMultiremiApp({ store });
+    const response = await app.request("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Dynamic effort",
+        provider: "codex",
+        model: "gpt-dynamic",
+        thinking_level: "ultra",
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json()).thinking_level).toBe("ultra");
+  });
+
+  it("requires an explicit model for effort when the catalog has no declared default", async () => {
+    const store = createStore();
+    store.registerRuntime({
+      id: "rt_no_default_model",
+      name: "no default model",
+      provider: "codex",
+      workspaceId: "local",
+      models: [{
+        id: "gpt-no-default",
+        label: "GPT No Default",
+        provider: "openai",
+        default: false,
+        thinking: { supportedLevels: [{ value: "high", label: "High" }] },
+      }],
+    });
+    const app = createMultiremiApp({ store });
+    const headers = { "Content-Type": "application/json" };
+
+    const ambiguous = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Ambiguous effort", provider: "codex", thinking_level: "high" }),
+    });
+    expect(ambiguous.status).toBe(400);
+    expect((await ambiguous.json()).error).toContain("no default model is identified");
+
+    const explicit = await app.request("/api/agents", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        name: "Explicit effort model",
+        provider: "codex",
+        model: "gpt-no-default",
+        thinking_level: "high",
+      }),
+    });
+    expect(explicit.status).toBe(201);
+  });
+
   it("claims runtime tasks atomically across sqlite connections", () => {
     const dir = mkdtempSync(join(tmpdir(), "multiremi-task-claim-"));
     const path = join(dir, "multiremi.db");

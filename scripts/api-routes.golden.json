@@ -1,10 +1,10 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 527,
+    "routeCount": 528,
     "routeCountByPrefix": {
       "native": 190,
-      "compat": 324,
+      "compat": 325,
       "root": 13
     },
     "getRoutes": 232,
@@ -14,8 +14,8 @@
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 295,
-    "mutationRoutesCovered": 274,
+    "mutationRoutes": 296,
+    "mutationRoutesCovered": 275,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -565,6 +565,7 @@
     "PUT /api/agents/:id/skills",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
+    "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
     "PUT /api/labels/:id",
@@ -1073,6 +1074,7 @@
     "PUT /api/agents/:id/skills",
     "PUT /api/autopilots/:id/triggers/:triggerId/signing-secret",
     "PUT /api/comments/:id",
+    "PUT /api/daemon/runtimes/:runtimeId/models",
     "PUT /api/issues/:id",
     "PUT /api/issues/:id/metadata/:key",
     "PUT /api/labels/:id",
@@ -4511,25 +4513,37 @@
       }
     },
     {
-      "key": "daemon#003 POST /api/daemon/runtimes/:runtimeId/models/claim",
+      "key": "daemon#003 PUT /api/daemon/runtimes/:runtimeId/models",
+      "route": "PUT /api/daemon/runtimes/:runtimeId/models",
+      "path": "/api/daemon/runtimes/rt_snapshot/models",
+      "status": 403,
+      "body": {
+        "error": "daemon token required",
+        "code": "daemon_token_required"
+      }
+    },
+    {
+      "key": "daemon#004 POST /api/daemon/runtimes/:runtimeId/models/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/models/claim",
-      "status": 200,
+      "status": 403,
       "body": {
-        "request": null
+        "error": "daemon token required",
+        "code": "daemon_token_required"
       }
     },
     {
-      "key": "daemon#004 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
+      "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/models/rml_9i3epsr6j5hf/result",
-      "status": 200,
+      "status": 403,
       "body": {
-        "status": "ok"
+        "error": "daemon token required",
+        "code": "daemon_token_required"
       }
     },
     {
-      "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
+      "key": "daemon#006 POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/claim",
       "status": 200,
@@ -4553,7 +4567,7 @@
       }
     },
     {
-      "key": "daemon#006 POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
+      "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/directory-scans/:requestId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/directory-scans/rds_abrrt3qds322/result",
       "status": 200,
@@ -4562,7 +4576,7 @@
       }
     },
     {
-      "key": "daemon#007 POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
+      "key": "daemon#008 POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/claim",
       "status": 200,
@@ -4571,7 +4585,7 @@
       }
     },
     {
-      "key": "daemon#008 POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
+      "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/:requestId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/rls_ccpewwo14x7v/result",
       "status": 200,
@@ -4580,7 +4594,7 @@
       }
     },
     {
-      "key": "daemon#009 POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
+      "key": "daemon#010 POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/claim",
       "status": 200,
@@ -4589,7 +4603,7 @@
       }
     },
     {
-      "key": "daemon#010 POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
+      "key": "daemon#011 POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/local-skills/import/:requestId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/local-skills/import/rli_ngo6cdqkk9pi/result",
       "status": 200,
@@ -4598,7 +4612,7 @@
       }
     },
     {
-      "key": "daemon#011 POST /api/daemon/runtimes/:runtimeId/update/claim",
+      "key": "daemon#012 POST /api/daemon/runtimes/:runtimeId/update/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/update/claim",
       "status": 200,
@@ -4607,7 +4621,7 @@
       }
     },
     {
-      "key": "daemon#012 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
+      "key": "daemon#013 POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/update/:updateId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/update/rup_cyvme8h5925t/result",
       "status": 200,
@@ -4616,7 +4630,7 @@
       }
     },
     {
-      "key": "daemon#013 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
+      "key": "daemon#014 POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "route": "POST /api/daemon/runtimes/:runtimeId/recover-orphans",
       "path": "/api/daemon/runtimes/rt_snapshot/recover-orphans",
       "status": 200,
@@ -4626,7 +4640,7 @@
       }
     },
     {
-      "key": "daemon#014 POST /api/daemon/deregister",
+      "key": "daemon#015 POST /api/daemon/deregister",
       "route": "POST /api/daemon/deregister",
       "path": "/api/daemon/deregister",
       "status": 200,
