@@ -55,7 +55,18 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
       const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
       if (loaded instanceof Response) return loaded;
     }
-    return c.json({ task: store.createTask(body) }, 201);
+    // Execution snapshots are minted only by the server's claim/retry path.
+    // Never trust these internal fields from a dashboard or PAT request: a
+    // forged empty/ready snapshot would bypass the Agent's real Plugin gate.
+    const {
+      provider: _provider,
+      pluginSnapshot: _pluginSnapshot,
+      plugin_snapshot: _pluginSnapshotSnake,
+      executionFingerprint: _executionFingerprint,
+      execution_fingerprint: _executionFingerprintSnake,
+      ...publicInput
+    } = body;
+    return c.json({ task: store.createTask(publicInput) }, 201);
   });
   app.get("/api/multiremi/tasks/:id", (c) => {
     const task = store.getTaskWithAgent(c.req.param("id"));

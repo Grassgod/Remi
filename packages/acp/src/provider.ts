@@ -54,6 +54,19 @@ export interface AcpProviderOptions {
   getMcpServers?: () => McpServerConfig[];
   /** Extra environment variables for the spawned ACP process. */
   env?: Record<string, string>;
+  /** Provider-native Plugin roots. Ephemeral callers normally pass these per send. */
+  pluginPaths?: string[];
+  /** Exact Plugin-set fingerprint; a change forces a fresh ACP process/session. */
+  pluginFingerprint?: string;
+  /** Isolated home used only for Codex Plugin execution. */
+  codexHome?: string;
+}
+
+/** ACP-local SendOptions extension kept out of the provider-neutral contract. */
+export interface AcpAgentPluginSendOptions {
+  pluginPaths?: string[];
+  pluginFingerprint?: string;
+  codexHome?: string;
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -131,6 +144,9 @@ interface PoolEntry {
    */
   cwd: string;
   mcpServersKey: string;
+  pluginPathsKey: string;
+  pluginFingerprint: string;
+  codexHome: string | null;
   /** Values currently in force, so a re-apply is only sent when they change. */
   appliedModel: string | null;
   appliedEffort: string | null;
@@ -496,24 +512,46 @@ export class AcpProvider implements Provider {
   // ── Session pool management ────────────────────────────────────
 
   private async _ensureSession(chatId: string, options?: SendOptions): Promise<PoolEntry> {
+    const pluginOptions = options as SendOptions & AcpAgentPluginSendOptions | undefined;
     const permissionMode = resolveAcpPermissionMode(this._adapter.agentType, options?.permissionMode);
     const cwd = options?.cwd ?? this._options.cwd ?? homedir();
     const mcpServers = this._options.getMcpServers?.() ?? [];
     const mcpServersKey = JSON.stringify(mcpServers);
     const model = options?.model ?? this._options.model ?? null;
     const effort = options?.effort ?? null;
+    const pluginPaths = absolutePluginPaths(pluginOptions?.pluginPaths ?? this._options.pluginPaths);
+    const pluginPathsKey = JSON.stringify(pluginPaths);
+    const pluginFingerprint = cleanFingerprint(
+      pluginOptions?.pluginFingerprint ?? this._options.pluginFingerprint,
+      pluginPathsKey,
+    );
+    const codexHome = this._adapter.agentType === "codex"
+      ? absoluteCodexHome(pluginOptions?.codexHome ?? this._options.codexHome)
+      : null;
+    if (this._adapter.agentType === "codex" && pluginPaths.length && !codexHome) {
+      throw new Error("Codex Agent Plugins require an isolated CODEX_HOME");
+    }
 
     const existing = this._pool.get(chatId);
     if (existing) {
       const stale =
         !existing.client.alive ||
         existing.cwd !== cwd ||
-        existing.mcpServersKey !== mcpServersKey;
+        existing.mcpServersKey !== mcpServersKey ||
+        existing.pluginPathsKey !== pluginPathsKey ||
+        existing.pluginFingerprint !== pluginFingerprint ||
+        existing.codexHome !== codexHome;
       if (stale && existing.client.alive) {
+        const reason = existing.cwd !== cwd
+          ? `cwd ${existing.cwd} -> ${cwd}`
+          : existing.mcpServersKey !== mcpServersKey
+            ? "mcpServers changed"
+            : existing.pluginFingerprint !== pluginFingerprint || existing.pluginPathsKey !== pluginPathsKey
+              ? "Agent Plugins changed"
+              : "CODEX_HOME changed";
         console.warn(
           `[acp] ${this._adapter.agentType}: recreating session for ${chatId} — ` +
-            `${existing.cwd !== cwd ? `cwd ${existing.cwd} -> ${cwd}` : "mcpServers changed"} ` +
-            "(both are fixed at session creation and cannot be re-applied)",
+            `${reason} (fixed at process/session creation and cannot be re-applied)`,
         );
       }
       if (stale) {
@@ -540,12 +578,14 @@ export class AcpProvider implements Provider {
       if (this._options.baseUrl) env.ANTHROPIC_BASE_URL = this._options.baseUrl;
     }
     if (this._options.env) Object.assign(env, this._options.env);
+    if (codexHome) env.CODEX_HOME = codexHome;
 
     const sessionMeta = this._adapter.buildSessionMeta({
       model,
       allowedTools: options?.allowedTools ?? this._options.allowedTools,
       systemPrompt: options?.systemPrompt,
-    });
+      pluginPaths,
+    } as Parameters<AgentAdapter["buildSessionMeta"]>[0]);
 
     const client = new AcpClient({
       executable: resolveAcpExecutableForAgent(
@@ -588,6 +628,9 @@ export class AcpProvider implements Provider {
       promptState: createPromptState(),
       cwd,
       mcpServersKey,
+      pluginPathsKey,
+      pluginFingerprint,
+      codexHome,
       appliedModel: null,
       appliedEffort: null,
       warnedPermissionMode: null,
@@ -823,6 +866,33 @@ function absoluteAdditionalDirectories(addDirs: string[] | undefined, agentType:
     console.warn(`[acp] ${agentType}: ignoring non-absolute additionalDirectories: ${dropped.join(", ")}`);
   }
   return kept;
+}
+
+function absolutePluginPaths(paths: string[] | undefined): string[] {
+  if (!paths?.length) return [];
+  const unique = new Set<string>();
+  for (const path of paths) {
+    const normalized = typeof path === "string" ? path.trim() : "";
+    if (!normalized || !isAbsolute(normalized)) {
+      throw new Error(`Agent Plugin path must be absolute: ${JSON.stringify(path)}`);
+    }
+    unique.add(normalized);
+  }
+  return [...unique];
+}
+
+function absoluteCodexHome(value: string | undefined): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) return null;
+  if (!isAbsolute(normalized)) {
+    throw new Error(`CODEX_HOME must be absolute: ${JSON.stringify(value)}`);
+  }
+  return normalized;
+}
+
+function cleanFingerprint(value: string | undefined, pluginPathsKey: string): string {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || `paths:${pluginPathsKey}`;
 }
 
 function extractChunkText(content: unknown): string {

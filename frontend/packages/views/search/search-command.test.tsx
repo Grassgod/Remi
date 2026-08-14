@@ -105,6 +105,7 @@ vi.mock("@multiremi/core/paths", () => ({
     projects: () => "/ws-test/projects",
     agents: () => "/ws-test/agents",
     runtimes: () => "/ws-test/runtimes",
+    plugins: () => "/ws-test/plugins",
     skills: () => "/ws-test/skills",
     settings: () => "/ws-test/settings",
     issueDetail: (id: string) => `/ws-test/issues/${id}`,
@@ -250,6 +251,22 @@ describe("SearchCommand", () => {
     await user.click(settingsItem);
 
     expect(mockPush).toHaveBeenCalledWith("/ws-test/settings");
+    expect(useSearchStore.getState().open).toBe(false);
+  });
+
+  it("finds and navigates to the plugins page", async () => {
+    const user = userEvent.setup();
+    renderSearch();
+
+    const input = screen.getByPlaceholderText("Type a command or search...");
+    await user.type(input, "plugins");
+
+    const pluginsItem = await screen.findByRole("option", {
+      name: /plugins/i,
+    });
+    await user.click(pluginsItem);
+
+    expect(mockPush).toHaveBeenCalledWith("/ws-test/plugins");
     expect(useSearchStore.getState().open).toBe(false);
   });
 

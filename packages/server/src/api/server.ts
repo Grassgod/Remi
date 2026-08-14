@@ -5,6 +5,7 @@ import { AgentTemplateError } from "./agent-templates.js";
 import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
 import { registerGithubRoutes } from "./routers/github.js";
@@ -18,6 +19,7 @@ import { registerWorkspaceRoutes } from "./routers/workspaces.js";
 import { registerMemberRoutes } from "./routers/members.js";
 import { registerInvitationRoutes } from "./routers/invitations.js";
 import { registerAgentRoutes } from "./routers/agents.js";
+import { registerAgentPluginRoutes } from "./routers/agent-plugins.js";
 import { registerAgentTemplateRoutes } from "./routers/agent-templates.js";
 import { registerSkillRoutes } from "./routers/skills.js";
 import { registerTokenRoutes } from "./routers/tokens.js";
@@ -188,14 +190,43 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
       c.set("multiremiAuth", buildRequestAuth(accessToken, null));
       await next();
     });
-  } else if (!authDisabledWarningEmitted) {
-    authDisabledWarningEmitted = true;
-    log.warn(
-      "dashboard auth is DISABLED (MULTIREMI_TOKEN is unset): all requests are unauthenticated and act as the local admin with full access",
-    );
+  } else {
+    if (!authDisabledWarningEmitted) {
+      authDisabledWarningEmitted = true;
+      log.warn(
+        "dashboard auth is DISABLED (MULTIREMI_TOKEN is unset): all requests are unauthenticated and act as the local admin with full access",
+      );
+    }
+    // Open dashboard mode still needs to recognize an explicitly supplied
+    // daemon/task token. Runtime-observed Plugin state has a strict daemon
+    // identity boundary, and treating every request as anonymous would make a
+    // locally hosted daemon unable to report its own state. Missing or unknown
+    // credentials retain the historical anonymous-admin behavior.
+    app.use("*", async (c, next) => {
+      const header = c.req.header("Authorization") ?? "";
+      const rawToken = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+      const accessToken = rawToken ? await store.verifyAccessToken(rawToken) : null;
+      if (accessToken) {
+        if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(c.req.raw)) {
+          return c.json({ error: "forbidden for daemon token" }, 403);
+        }
+        if (accessToken.type === "task" && isTaskTokenForbiddenRequest(c.req.raw)) {
+          return c.json({ error: "forbidden for task token" }, 403);
+        }
+        c.set("multiremiAuth", buildRequestAuth(accessToken, null));
+      }
+      await next();
+    });
   }
 
   app.onError((err, c) => {
+    if (err instanceof AgentPluginStoreError) {
+      const body = { error: err.message, code: err.code };
+      if (err.status === 404) return c.json(body, 404);
+      if (err.status === 409) return c.json(body, 409);
+      if (err.status === 403) return c.json(body, 403);
+      return c.json(body, 400);
+    }
     if (err instanceof SkillImportError) {
       return c.json({ error: err.message }, err.status as 400 | 502);
     }
@@ -309,6 +340,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   registerAgentRoutes(app, deps);
+  registerAgentPluginRoutes(app, deps);
   registerAgentTemplateRoutes(app, deps);
 
   registerSkillRoutes(app, deps);

@@ -14,6 +14,7 @@ import type {
   TaskUsageEntry,
   MultiremiIssueWorkspaceRepo,
   MultiremiIssueWorkspaceStatus,
+  ReportAgentPluginRuntimeStateInput,
 } from "@multiremi/contracts/types.js";
 
 export interface MultiremiWorkspaceReposResponse {
@@ -72,6 +73,12 @@ export interface MultiremiRecoverOrphansResult {
   retried: number;
 }
 
+export interface MultiremiDaemonAgentPluginDesiredResponse {
+  runtime_id: string;
+  revision: string;
+  plugins: unknown[];
+}
+
 export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
@@ -124,6 +131,25 @@ export class MultiremiDaemonClient {
       status: resp.status ?? "ok",
       ...resp,
     } as MultiremiDaemonHeartbeatAck;
+  }
+
+  async getRuntimeAgentPluginDesired(
+    runtimeId: string,
+  ): Promise<MultiremiDaemonAgentPluginDesiredResponse> {
+    return this.get<MultiremiDaemonAgentPluginDesiredResponse>(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/desired`,
+    );
+  }
+
+  async reportRuntimeAgentPluginState(
+    runtimeId: string,
+    versionId: string,
+    input: ReportAgentPluginRuntimeStateInput,
+  ): Promise<void> {
+    await this.post(
+      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/${encodeURIComponent(versionId)}/state`,
+      input,
+    );
   }
 
   async getWorkspaceRepos(workspaceId: string): Promise<MultiremiWorkspaceReposResponse> {
@@ -377,6 +403,12 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     maxAttempts: numberOrDefault(raw.max_attempts ?? raw.maxAttempts, 1),
     parentTaskId: stringOrNull(raw.parent_task_id ?? raw.parentTaskId),
     failureReason: stringOrNull(raw.failure_reason ?? raw.failureReason),
+    pluginSnapshot: Array.isArray(raw.plugin_snapshot)
+      ? raw.plugin_snapshot
+      : Array.isArray(raw.pluginSnapshot)
+        ? raw.pluginSnapshot
+        : [],
+    executionFingerprint: stringOrNull(raw.execution_fingerprint ?? raw.executionFingerprint),
     branchName: stringOrNull(raw.branch_name ?? raw.branchName),
     sessionId: stringOrNull(raw.session_id ?? raw.sessionId ?? raw.prior_session_id),
     priorSessionId: stringOrNull(raw.prior_session_id ?? raw.priorSessionId ?? raw.session_id ?? raw.sessionId),

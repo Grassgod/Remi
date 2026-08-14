@@ -162,6 +162,10 @@ export class ClaudeAdapter implements AgentAdapter {
     // spread at dist/acp-agent.js:4433 and no later key overrides either one.
     if (options.model) claudeOpts.model = options.model;
     if (options.allowedTools?.length) claudeOpts.allowedTools = options.allowedTools;
+    const pluginPaths = (options as AgentSessionOptions & { pluginPaths?: string[] }).pluginPaths;
+    if (pluginPaths?.length) {
+      claudeOpts.plugins = pluginPaths.map((path) => ({ type: "local", path }));
+    }
     if (Object.keys(claudeOpts).length > 0) meta.claudeCode = { options: claudeOpts };
 
     // `{append}` keeps the claude_code preset and appends to it; a bare string

@@ -7,7 +7,10 @@ import { HttpClient } from "./http";
  *  Deriving the expectation from the filesystem is the whole point: a module
  *  dropped from BOTH the wiring and this test's expectation is exactly the
  *  regression `declaredMethods()` cannot see, because it reads the wiring. */
-const ENDPOINT_MODULES = import.meta.glob<Record<string, unknown>>("./endpoints/*.ts", { eager: true });
+const ENDPOINT_MODULES = import.meta.glob<Record<string, unknown>>(
+  ["./endpoints/*.ts", "!./endpoints/*.test.ts"],
+  { eager: true },
+);
 
 /** Every public method declared by every endpoint module, paired with the
  *  module that declares it. This is the set the facade must expose. */

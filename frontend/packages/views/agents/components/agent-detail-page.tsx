@@ -299,6 +299,7 @@ export function AgentDetailPage({ agentId }: AgentDetailPageProps) {
           agent={agent}
           runtimes={runtimes}
           onUpdate={handleUpdate}
+          canEdit={canEdit.allowed && !agent.archived_at}
           navIntent={tabNavIntent}
           onNavIntentHandled={() => setTabNavIntent(null)}
         />

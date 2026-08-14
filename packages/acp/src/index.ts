@@ -20,7 +20,7 @@ export {
   resolveAcpExecutableForAgent,
   resolveAcpHealthCheckCommand,
 } from "./provider.js";
-export type { AcpProviderOptions } from "./provider.js";
+export type { AcpProviderOptions, AcpAgentPluginSendOptions } from "./provider.js";
 export { ensureAcpBridges, bridgeVersion, agentCliVersion, reinstallBridge, type ProvisionProvider } from "./provision.js";
 
 // ── Provider interface & shared types ─────────────────────────

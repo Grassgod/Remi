@@ -47,11 +47,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       "created_at",
       "dispatched_at",
       "error",
+      "execution_fingerprint",
       "id",
       "issue_id",
       "issue_session_id",
       "kind",
       "max_attempts",
+      "plugin_snapshot",
       "priority",
       "result",
       "runtime_id",
@@ -74,7 +76,9 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       attempt: 1,
       max_attempts: 3,
       kind: "direct",
+      plugin_snapshot: [],
     });
+    expect(pendingBody[0].execution_fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(pendingBody[0].dispatched_at).toBeString();
     expect(pendingBody[0].created_at).toBeString();
     expect(pendingBody[0]).not.toHaveProperty("agentId");

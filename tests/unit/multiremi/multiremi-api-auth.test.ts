@@ -310,7 +310,13 @@ describe("Multiremi API — authentication and token scoping", () => {
     const registeredRuntime = await app.request("/api/multiremi/runtimes", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${daemonBody.token.token}` },
-      body: JSON.stringify({ id: "rt_auth_daemon", name: "Auth daemon", provider: "codex", workspaceId: "local" }),
+      body: JSON.stringify({
+        id: "rt_auth_daemon",
+        name: "Auth daemon",
+        provider: "codex",
+        workspaceId: "local",
+        daemonId: "daemon-owner",
+      }),
     });
     expect(registeredRuntime.status).toBe(201);
 

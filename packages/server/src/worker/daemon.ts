@@ -6,7 +6,12 @@ import { AcpProvider, type AcpProviderOptions, bridgeVersion, agentCliVersion, r
 import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, RequestPermissionParams } from "@shared/contracts/acp-protocol.js";
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
-import { MultiremiDaemonClient, type MultiremiDaemonGcStatus, type MultiremiDaemonRegisterResponse } from "./client.js";
+import {
+  MultiremiDaemonClient,
+  type MultiremiDaemonGcStatus,
+  type MultiremiDaemonRegisterResponse,
+  type MultiremiRelayWire,
+} from "./client.js";
 import { createEventMapper, responseToUsage } from "./acp-event-mapper.js";
 import {
   browseRuntimeDirectory,
@@ -26,10 +31,34 @@ import {
   writeAgentSkillContext,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
-import { syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
+import { mergeCodexConfig, syncRelayConfigs } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
+import { AgentPluginCache } from "@daemon/agent-runtime/agent-plugins/cache.js";
+import {
+  AgentPluginRuntimeReconciler,
+  pluginBlocked,
+  pluginSetupRequired,
+} from "@daemon/agent-runtime/agent-plugins/reconciler.js";
+import {
+  cleanupNonIssueTaskPluginRuntime,
+  materializeTaskPlugins,
+  resolveTaskPluginRuntimeBase,
+  resolveTaskPluginSnapshot,
+} from "@daemon/agent-runtime/agent-plugins/materialize.js";
+import {
+  installCodexPluginHome,
+  seedCodexHomeFromBase,
+} from "@daemon/agent-runtime/agent-plugins/codex-home.js";
+import {
+  agentPluginDesiredFromWire,
+  runtimePluginStateReport,
+} from "@daemon/agent-runtime/agent-plugins/wire.js";
+import type {
+  AgentPluginArtifactSpec,
+  PreparedAgentPluginRuntime,
+} from "@daemon/agent-runtime/agent-plugins/types.js";
 import {
   LocalDirectoryError,
   LocalPathLocker,
@@ -116,6 +145,10 @@ export interface MultiremiDaemonOptions {
   gcIntervalMs?: number;
   gcTtlMs?: number;
   gcOrphanTtlMs?: number;
+  /** Runtime-global immutable Agent Plugin cache. */
+  pluginCacheRoot?: string;
+  /** Injectable provider capability probe; production uses the native CLI and ACP bridge. */
+  agentPluginProviderPreflight?: MultiremiAgentPluginProviderPreflight;
 }
 
 interface RunSummary {
@@ -138,6 +171,7 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
 export type MultiremiDaemonUpdateRunner = (targetVersion: string) => string | Promise<string>;
+export type MultiremiAgentPluginProviderPreflight = (provider: "claude" | "codex") => void | Promise<void>;
 
 export class MultiremiRuntimeReregisterGate {
   private nextAttemptByWorkspace = new Map<string, number>();
@@ -164,7 +198,7 @@ export class MultiremiRuntimeReregisterGate {
 
 export class MultiremiDaemon {
   private client: MultiremiDaemonClient;
-  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs">> & {
+  private options: Required<Omit<MultiremiDaemonOptions, "token" | "runtimeId" | "daemonId" | "workspaceId" | "providerFactory" | "updateRunner" | "localSkillRoots" | "launchedBy" | "onRestartRequested" | "taskTimeoutMs" | "daemonPort" | "workspacesRoot" | "repoCacheRoot" | "gcEnabled" | "gcIntervalMs" | "gcTtlMs" | "gcOrphanTtlMs" | "pluginCacheRoot" | "agentPluginProviderPreflight">> & {
     token: string | null;
     runtimeId: string | null;
     daemonId: string | null;
@@ -178,6 +212,7 @@ export class MultiremiDaemon {
     gcIntervalMs: number;
     gcTtlMs: number;
     gcOrphanTtlMs: number;
+    pluginCacheRoot: string;
   };
   private providerFactory: MultiremiDaemonProviderFactory;
   private updateRunner: MultiremiDaemonUpdateRunner;
@@ -188,6 +223,7 @@ export class MultiremiDaemon {
   private repoServerPort = 0;
   private workspaceRepoUrls = new Map<string, Set<string>>();
   private workspaceSettings = new Map<string, Record<string, unknown>>();
+  private workspaceRelays = new Map<string, MultiremiRelayWire | undefined>();
   private stopped = false;
   private startedAt = new Date();
   private ready = false;
@@ -200,6 +236,9 @@ export class MultiremiDaemon {
   private runtimeGoneInflight = new Set<string>();
   private reregisterGate = new MultiremiRuntimeReregisterGate();
   private readonly explicitRuntimeId: boolean;
+  private readonly agentPluginCache: AgentPluginCache;
+  private readonly agentPluginReconciler: AgentPluginRuntimeReconciler;
+  private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
 
   constructor(options: MultiremiDaemonOptions) {
     const workspacesRoot = options.workspacesRoot ?? process.env.MULTIREMI_WORKSPACES_ROOT ?? join(homedir(), ".remi", "multiremi", "workspaces");
@@ -230,14 +269,33 @@ export class MultiremiDaemon {
       gcIntervalMs: options.gcIntervalMs ?? numberEnv(process.env.MULTIREMI_GC_INTERVAL_MS, 15 * 60 * 1000),
       gcTtlMs: options.gcTtlMs ?? numberEnv(process.env.MULTIREMI_GC_TTL_MS, 72 * 60 * 60 * 1000),
       gcOrphanTtlMs: options.gcOrphanTtlMs ?? numberEnv(process.env.MULTIREMI_GC_ORPHAN_TTL_MS, 72 * 60 * 60 * 1000),
+      pluginCacheRoot: options.pluginCacheRoot
+        ?? process.env.MULTIREMI_PLUGIN_CACHE_ROOT
+        ?? join(homedir(), ".remi", "plugin-cache", "sha256"),
       serverUrl: options.serverUrl,
     };
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
+    this.agentPluginProviderPreflight = options.agentPluginProviderPreflight ?? preflightAgentPluginProvider;
     this.localSkillRoots = options.localSkillRoots ?? {};
     this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
     this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
+    this.agentPluginCache = new AgentPluginCache({
+      root: this.options.pluginCacheRoot,
+      serverUrl: this.options.serverUrl,
+      getAuthToken: () => this.options.token,
+    });
+    this.agentPluginReconciler = new AgentPluginRuntimeReconciler({
+      cache: this.agentPluginCache,
+      preflight: (snapshot) => this.preflightAgentPlugin(snapshot),
+      reportState: async (state) => {
+        const runtimeId = this.options.runtimeId;
+        if (!runtimeId) return;
+        const report = runtimePluginStateReport(state);
+        await this.client.reportRuntimeAgentPluginState(runtimeId, report.versionId, report.input);
+      },
+    });
   }
 
   async start(): Promise<void> {
@@ -251,6 +309,7 @@ export class MultiremiDaemon {
     try {
       await this.registerCurrentRuntime();
       await this.refreshWorkspaceRepos(this.options.workspaceId);
+      await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
       // registerCurrentRuntime() assigns a non-null runtime id; it is re-read each
       // iteration because handleHeartbeatAck() may re-register and replace it.
       await this.client.recoverOrphans(this.options.runtimeId!);
@@ -260,6 +319,9 @@ export class MultiremiDaemon {
         try {
           const ack = await this.client.heartbeatRuntime(this.options.runtimeId!);
           const skipClaim = await this.handleHeartbeatAck(this.options.runtimeId!, ack);
+          if (!skipClaim && !this.stopped) {
+            await this.reconcileRuntimeAgentPlugins(this.options.runtimeId!);
+          }
           if (this.stopped || this.claimsPaused) break;
           if (skipClaim) {
             if (this.options.once) return;
@@ -351,6 +413,7 @@ export class MultiremiDaemon {
     const repos = normalizeRepoList(response.repos ?? []);
     this.workspaceRepoUrls.set(workspaceId, new Set(repos.map((repo) => repo.url.trim()).filter(Boolean)));
     this.workspaceSettings.set(workspaceId, response.settings ?? {});
+    this.workspaceRelays.set(workspaceId, response.relay);
     this.repoCache.sync(workspaceId, repos);
     syncRelayConfigs(response.relay, workspaceId);
   }
@@ -603,6 +666,37 @@ export class MultiremiDaemon {
     }
   }
 
+  private async reconcileRuntimeAgentPlugins(runtimeId: string): Promise<void> {
+    const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId);
+    if (desired.runtime_id && desired.runtime_id !== runtimeId) {
+      throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
+    }
+    const parsed = desired.plugins.map(agentPluginDesiredFromWire);
+    this.agentPluginReconciler.restoreStates(parsed.map((entry) => entry.state));
+    await this.agentPluginReconciler.reconcile(parsed.map((entry) => entry.artifact));
+  }
+
+  private async preflightAgentPlugin(snapshot: AgentPluginArtifactSpec): Promise<void> {
+    await this.agentPluginProviderPreflight(snapshot.provider);
+    const binaries = snapshot.requirements?.binaries;
+    if (binaries === undefined) return;
+    if (!Array.isArray(binaries) || binaries.some((value) => typeof value !== "string" || !value.trim())) {
+      throw pluginBlocked(
+        `Agent Plugin ${snapshot.name} has invalid requirements.binaries`,
+        "plugin_requirements_invalid",
+      );
+    }
+    const missing = binaries
+      .map((value) => String(value).trim())
+      .filter((binary) => !Bun.which(binary));
+    if (missing.length) {
+      throw pluginSetupRequired(
+        `Agent Plugin ${snapshot.name} requires missing Runtime binaries: ${missing.join(", ")}`,
+        "plugin_binary_missing",
+      );
+    }
+  }
+
   stop(): void {
     this.stopped = true;
   }
@@ -658,12 +752,23 @@ export class MultiremiDaemon {
       : null;
     let summary: RunSummary | null = null;
     let resolvedWorkDir: ResolvedTaskWorkDir | null = null;
+    let pluginRuntimeBase: string | null = null;
+    let pluginRuntime: PreparedAgentPluginRuntime | undefined;
 
     try {
       resolvedWorkDir = await this.resolveTaskWorkDir(task, abort.signal);
+      if (resolveTaskPluginSnapshot(task).length) {
+        pluginRuntimeBase = resolveTaskPluginRuntimeBase(task, resolvedWorkDir.workDir, this.options.workspacesRoot);
+        pluginRuntime = await this.prepareTaskPluginRuntime(
+          task,
+          resolvedWorkDir.workDir,
+          pluginRuntimeBase,
+          abort.signal,
+        );
+      }
       await this.client.startTask(task.id);
       await this.client.reportProgress(task.id, "Agent execution started", 1, 3);
-      summary = await this.runAgent(task, abort.signal, resolvedWorkDir);
+      summary = await this.runAgent(task, abort.signal, resolvedWorkDir, pluginRuntime);
       const poisonedReason = classifyPoisonedOutput(summary.output);
       if (poisonedReason) {
         await this.client.reportTaskUsage(task.id, summary.usage);
@@ -687,11 +792,42 @@ export class MultiremiDaemon {
       await this.client.failTask(task.id, error, summary?.sessionId ?? task.sessionId, summary?.workDir ?? task.workDir, failureReason);
       log.error(`Failed task ${task.id}: ${error}`);
     } finally {
+      if (pluginRuntimeBase && !task.issueId && !task.chatSessionId) {
+        await cleanupNonIssueTaskPluginRuntime(task, this.options.workspacesRoot).catch((error) => {
+          log.warn(`Failed to clean task Plugin runtime for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
       resolvedWorkDir?.release?.();
       this.activeTaskCount = Math.max(0, this.activeTaskCount - 1);
       clearInterval(cancelWatcher);
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  private async prepareTaskPluginRuntime(
+    task: MultiremiTaskWithAgent,
+    workDir: string,
+    runtimeBase: string,
+    signal: AbortSignal,
+  ): Promise<PreparedAgentPluginRuntime> {
+    const prepared = await materializeTaskPlugins(task, workDir, this.agentPluginCache, {
+      runtimeBase,
+      signal,
+    });
+    if (!task.issueId) writeTaskGcContext(runtimeBase, task);
+    if (task.agent?.provider === "codex" && prepared.codexHome) {
+      const relayFragment = this.workspaceRelays.get(task.workspaceId)?.codex?.fragment ?? "";
+      const configToml = relayFragment.trim() ? mergeCodexConfig("", relayFragment) : undefined;
+      const baseHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+      await installCodexPluginHome(prepared, {
+        seedHome: (targetHome) => seedCodexHomeFromBase({
+          baseHome,
+          targetHome,
+          ...(configToml === undefined ? {} : { configToml }),
+        }),
+      });
+    }
+    return prepared;
   }
 
   private async resolveTaskWorkDir(task: MultiremiTaskWithAgent, signal: AbortSignal): Promise<ResolvedTaskWorkDir> {
@@ -948,7 +1084,12 @@ export class MultiremiDaemon {
     }
   }
 
-  private async runAgent(task: MultiremiTaskWithAgent, signal: AbortSignal, resolvedWorkDir: ResolvedTaskWorkDir): Promise<RunSummary> {
+  private async runAgent(
+    task: MultiremiTaskWithAgent,
+    signal: AbortSignal,
+    resolvedWorkDir: ResolvedTaskWorkDir,
+    pluginRuntime?: PreparedAgentPluginRuntime,
+  ): Promise<RunSummary> {
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
     if (agent.provider !== "claude" && agent.provider !== "codex") {
@@ -987,6 +1128,7 @@ export class MultiremiDaemon {
       workDir,
       signal,
       approvalMode: this.options.approvalMode,
+      pluginRuntime,
     };
     const config = runtime.assemble(ctx);
 
@@ -998,6 +1140,9 @@ export class MultiremiDaemon {
       cwd: config.cwd,
       env: config.env,
       getMcpServers: () => config.mcpServers,
+      pluginPaths: config.pluginPaths,
+      pluginFingerprint: config.pluginFingerprint,
+      codexHome: config.codexHome,
     });
     if (!provider.sendStream) {
       throw new Error(`Provider ${agent.provider} does not support streaming`);
@@ -1163,6 +1308,7 @@ export class MultiremiDaemon {
       const response = await this.client.getWorkspaceRepos(workspaceId);
       this.workspaceRepoUrls.set(workspaceId, new Set(response.repos.map((repo) => repo.url.trim()).filter(Boolean)));
       this.workspaceSettings.set(workspaceId, response.settings ?? {});
+      this.workspaceRelays.set(workspaceId, response.relay);
       this.repoCache.sync(workspaceId, response.repos);
       syncRelayConfigs(response.relay, workspaceId);
     } catch (err) {
@@ -1215,6 +1361,78 @@ export class MultiremiDaemon {
       ?? optionalBoolean(settings.coauthorEnabled)
       ?? optionalBoolean(settings.coAuthor);
     return coAuthoredByEnabled ?? true;
+  }
+}
+
+export interface AgentPluginProviderPreflightDependencies {
+  which?: (binary: string) => string | null;
+  commandSucceeds?: (executable: string, args: string[]) => Promise<boolean>;
+  bridgeHealthy?: (provider: "claude" | "codex") => Promise<boolean>;
+}
+
+/** Verify the provider can actually consume a native Plugin before reporting Ready. */
+export async function preflightAgentPluginProvider(
+  provider: "claude" | "codex",
+  dependencies: AgentPluginProviderPreflightDependencies = {},
+): Promise<void> {
+  const which = dependencies.which ?? ((binary: string) => Bun.which(binary));
+  const executable = which(provider);
+  if (!executable) {
+    throw pluginSetupRequired(
+      `${provider} CLI is not installed on this Runtime`,
+      `plugin_${provider}_cli_missing`,
+    );
+  }
+  if (provider === "codex") {
+    const supportsPlugins = await (dependencies.commandSucceeds ?? pluginProbeCommandSucceeds)(
+      executable,
+      ["plugin", "--help"],
+    );
+    if (!supportsPlugins) {
+      throw pluginSetupRequired(
+        "Codex CLI does not support Agent Plugins; update Codex and retry",
+        "plugin_codex_cli_unsupported",
+      );
+    }
+  }
+  const bridgeHealthy = dependencies.bridgeHealthy ?? (async (agentType: "claude" | "codex") => {
+    const providerClient = new AcpProvider({ agentType });
+    try {
+      return await providerClient.healthCheck();
+    } finally {
+      await providerClient.close();
+    }
+  });
+  if (!(await bridgeHealthy(provider))) {
+    throw pluginSetupRequired(
+      `${provider} ACP bridge is unavailable on this Runtime`,
+      `plugin_${provider}_bridge_missing`,
+    );
+  }
+}
+
+async function pluginProbeCommandSucceeds(executable: string, args: string[]): Promise<boolean> {
+  let processHandle: ReturnType<typeof Bun.spawn>;
+  try {
+    processHandle = Bun.spawn([executable, ...args], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  } catch {
+    return false;
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timedOut = new Promise<number>((resolveTimeout) => {
+    timer = setTimeout(() => {
+      try { processHandle.kill(); } catch {}
+      resolveTimeout(-1);
+    }, 15_000);
+  });
+  try {
+    return await Promise.race([processHandle.exited, timedOut]) === 0;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

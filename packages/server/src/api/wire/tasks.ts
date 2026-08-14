@@ -217,6 +217,8 @@ export function daemonTaskWireResponse(task: MultiremiTask, triggerMetadata: Mul
   if (task.autopilotRunId) response.autopilot_run_id = task.autopilotRunId;
   if (task.triggerCommentId) response.trigger_comment_id = task.triggerCommentId;
   if (task.triggerSummary) response.trigger_summary = task.triggerSummary;
+  if (task.executionFingerprint || task.pluginSnapshot.length) response.plugin_snapshot = task.pluginSnapshot;
+  if (task.executionFingerprint) response.execution_fingerprint = task.executionFingerprint;
   if (triggerMetadata?.triggerThreadId) response.trigger_thread_id = triggerMetadata.triggerThreadId;
   if (triggerMetadata?.triggerCommentContent) response.trigger_comment_content = triggerMetadata.triggerCommentContent;
   if (triggerMetadata?.triggerAuthorType) response.trigger_author_type = triggerMetadata.triggerAuthorType;

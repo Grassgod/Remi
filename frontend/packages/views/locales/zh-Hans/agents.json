@@ -188,6 +188,7 @@
     "tasks": "Tasks",
     "instructions": "指令",
     "skills": "Skills",
+    "plugins": "插件",
     "environment": "环境变量",
     "custom_args": "自定义参数",
     "mcp_config": "MCP",

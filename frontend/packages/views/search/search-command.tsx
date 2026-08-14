@@ -19,6 +19,7 @@ import {
   Bot,
   Monitor,
   Moon,
+  Puzzle,
   Sun,
   BookOpenText,
   Settings,
@@ -75,6 +76,7 @@ type NavKey =
   | "knowledge"
   | "agents"
   | "runtimes"
+  | "plugins"
   | "skills"
   | "settings";
 
@@ -129,6 +131,7 @@ export function SearchCommand() {
     { key: "knowledge", label: t(($) => $.pages.knowledge), icon: Library, keywords: ["knowledge", "wiki", "memory", "知识库"] },
     { key: "agents", label: t(($) => $.pages.agents), icon: Bot, keywords: ["agents", "bots", "ai"] },
     { key: "runtimes", label: t(($) => $.pages.runtimes), icon: Monitor, keywords: ["runtimes", "environments"] },
+    { key: "plugins", label: t(($) => $.pages.plugins), icon: Puzzle, keywords: ["plugins", "extensions", "插件"] },
     { key: "skills", label: t(($) => $.pages.skills), icon: BookOpenText, keywords: ["skills", "library"] },
     { key: "settings", label: t(($) => $.pages.settings), icon: Settings, keywords: ["settings", "config", "preferences", "设置"] },
   ];

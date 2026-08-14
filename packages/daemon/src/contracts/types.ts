@@ -22,6 +22,7 @@ import type {
   MultiremiSkillImportSource,
   RunAutopilotInput,
 } from "@multiremi/contracts/types.js";
+import type { AgentPluginSnapshot } from "../agent-runtime/agent-plugins/types.js";
 
 // --- Task shape (prompts/ephemeral.ts, skills/ephemeral.ts) ----------------
 
@@ -49,6 +50,10 @@ export interface AgentTaskAgent {
   // (`{ mcpServers: {...} }`); parsed defensively. Optional + unknown so the
   // concrete MultiremiAgent stays structurally assignable.
   mcpConfig?: unknown | null;
+
+  // Wire convenience only. Task execution must prefer AgentTask.pluginSnapshot,
+  // which the server freezes atomically when the task is claimed.
+  plugins?: AgentPluginSnapshot[];
 }
 
 /** Skill materialized into the task workdir. */
@@ -186,6 +191,13 @@ export interface AgentTask {
   projectDocs?: AgentTaskProjectDocsIndex | null;
   project_docs?: AgentTaskProjectDocsIndex | null;
   repos: AgentTaskRepo[];
+
+  /** Exact immutable Agent Plugin versions frozen for this execution. */
+  pluginSnapshot?: AgentPluginSnapshot[];
+  plugin_snapshot?: AgentPluginSnapshot[];
+  /** Capability fingerprint frozen by the server; snake_case accepted on wire. */
+  executionFingerprint?: string | null;
+  execution_fingerprint?: string | null;
 
   // Workspace + spawn-context fields (workspace/persistent.ts, env/injector.ts).
   workDir: string | null;

@@ -126,6 +126,28 @@ test("AgentSession forwards model and effort to the provider", async () => {
   expect(options.effort).toBe("high");
 });
 
+test("ephemeral Agent Plugin preparation reaches ACP without changing cwd", async () => {
+  const ctx = ephemeralContext({ provider: "codex" });
+  ctx.pluginRuntime = {
+    runtimeRoot: "/daemon/workspaces/.task-runtime/tsk_1/.remi-runtime",
+    pluginPaths: ["/daemon/cache/plugin-v1"],
+    pluginFingerprint: "sha256:plugin-v1",
+    executionFingerprint: "sha256:execution-v1",
+    codexHome: "/daemon/workspaces/.task-runtime/tsk_1/.remi-runtime/codex-home/execution-v1",
+  };
+  const config = new AgentRuntime().assemble(ctx);
+  const options = await runOnce(config) as SendOptions & {
+    pluginPaths?: string[];
+    pluginFingerprint?: string;
+    codexHome?: string;
+  };
+
+  expect(options.cwd).toBe("/tmp/work");
+  expect(options.pluginPaths).toEqual(["/daemon/cache/plugin-v1"]);
+  expect(options.pluginFingerprint).toBe("sha256:execution-v1");
+  expect(options.codexHome).toContain("/.remi-runtime/codex-home/");
+});
+
 test("a continued turn forwards the pinned session id and the current cwd", async () => {
   const config = new AgentRuntime().assemble(ephemeralContext({}, { sessionId: "sess-resumed" }));
   const options = await runOnce(config);

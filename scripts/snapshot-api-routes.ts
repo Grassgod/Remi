@@ -706,6 +706,12 @@ const BY_NAME: Record<string, keyof SeedRefs> = {
 
 function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
   switch (name) {
+    case "digest":
+      return "0".repeat(64);
+    case "versionId":
+      return "apv_snapshot";
+    case "bindingId":
+      return "apb_snapshot";
     case "engine":
       return "claude";
     case "key":
@@ -753,6 +759,7 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       const segments = pattern.split("/");
       const index = segments.indexOf(":id");
       const collection = segments[index - 1];
+      if (collection === "agent-plugins") return "apl_snapshot";
       const key = ID_BY_COLLECTION[collection];
       if (key) return String(refs[key]);
       break;

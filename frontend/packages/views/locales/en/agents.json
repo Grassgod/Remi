@@ -192,6 +192,7 @@
     "tasks": "Tasks",
     "instructions": "Instructions",
     "skills": "Skills",
+    "plugins": "Plugins",
     "environment": "Environment",
     "custom_args": "Custom Args",
     "mcp_config": "MCP",

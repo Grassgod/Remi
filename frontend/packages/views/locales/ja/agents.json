@@ -188,6 +188,7 @@
     "tasks": "タスク",
     "instructions": "指示",
     "skills": "スキル",
+    "plugins": "プラグイン",
     "environment": "環境",
     "custom_args": "カスタム引数",
     "mcp_config": "MCP",

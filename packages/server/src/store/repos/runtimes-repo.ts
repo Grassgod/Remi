@@ -308,9 +308,19 @@ export class RuntimesRepo {
     // unclaimable forever (its runtime is gone, and the stamp blocks every
     // other machine). Drop the orphaned provider session too so the re-pooled
     // task starts fresh rather than resuming a session on a vanished machine.
-    this.repoolQueuedTasksForRuntime(id);
-    const result = this.ctx.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]);
-    return result.changes > 0;
+    const tx = this.ctx.db.transaction(() => {
+      this.repoolQueuedTasksForRuntime(id);
+      // PostgreSQL migrations intentionally do not rely on foreign-key
+      // cascades, and SQLite test stores may run with FK enforcement disabled.
+      // Remove observed Plugin state explicitly so historical reads never try
+      // to hydrate a Runtime that no longer exists.
+      this.ctx.db.run(
+        "DELETE FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ?",
+        [id],
+      );
+      return this.ctx.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]).changes > 0;
+    });
+    return tx();
   }
 
   /**

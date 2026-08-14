@@ -452,6 +452,7 @@ function toSessionAgentLane(row: Row): MultiremiSessionAgentLane {
   const sessionId = String(row.session_id);
   const agentId = String(row.agent_id);
   const providerSessionId = nullableString(row.provider_session_id);
+  const executionFingerprint = nullableString(row.execution_fingerprint);
   const runtimeId = nullableString(row.runtime_id);
   const workDir = nullableString(row.work_dir);
   const lastTaskId = nullableString(row.last_task_id);
@@ -468,6 +469,8 @@ function toSessionAgentLane(row: Row): MultiremiSessionAgentLane {
     runtimeId,
     runtime_id: runtimeId,
     provider: nullableString(row.provider),
+    executionFingerprint,
+    execution_fingerprint: executionFingerprint,
     workDir,
     work_dir: workDir,
     cursorSeq,

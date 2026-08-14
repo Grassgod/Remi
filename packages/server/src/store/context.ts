@@ -21,6 +21,7 @@ import type {
   ListIssuesInput,
   UpdateIssueInput,
   MultiremiAgent,
+  MultiremiTaskPluginSnapshotEntry,
   MultiremiAnalyticsEvent,
   MultiremiAutopilotRun,
   MultiremiDaemonHeartbeatAck,
@@ -173,6 +174,16 @@ export interface AgentsSurface {
   getSkill(id: string, options?: { includeArchived?: boolean; includeFiles?: boolean }): MultiremiSkill | null;
 }
 
+export interface AgentPluginsSurface {
+  lockAgentPluginWorkspace(workspaceId: string): void;
+  assertAgentPluginWorkspaceMoveAllowed(agentId: string, targetWorkspaceId: string): void;
+  reconcileAgentPluginDesiredStateWithinLock(workspaceId: string): void;
+  resolveAgentPluginSnapshot(agentId: string): MultiremiTaskPluginSnapshotEntry[];
+  getAgentPluginCapabilityRevision(agentId: string): string;
+  runtimeHasReadyAgentPlugins(runtimeId: string, agentId: string): boolean;
+  assertAgentPluginProviderCompatible(agentId: string, provider: string): void;
+}
+
 // The analytics recorders are shared by the runtimes, autopilots and tasks domains but are not part
 // of the MultiremiStore public surface, so they cannot be reached through `resolveHost`. The facade
 // registers the AnalyticsRepo here as it constructs it and callers resolve it at call time.
@@ -262,7 +273,7 @@ export interface RuntimesSurface {
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
-export interface StoreContextHost extends AgentsSurface, IssuesSurface, WorkspacesSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
+export interface StoreContextHost extends AgentsSurface, AgentPluginsSurface, IssuesSurface, WorkspacesSurface, SquadsSurface, ProjectsSurface, TasksSurface, RuntimesSurface, ChatSurface, IssueSessionsSurface, AutopilotsSurface, AccessTokensSurface {}
 
 export class StoreContext {
   readonly taskEnqueuedListeners = new Set<TaskEnqueuedListener>();
@@ -312,6 +323,10 @@ export class StoreContext {
   // never through a constructor-injected sibling (which would deadlock the carve order). Today they
   // all resolve to the still-monolithic facade.
   agents(): AgentsSurface {
+    return this.resolveHost();
+  }
+
+  agentPlugins(): AgentPluginsSurface {
     return this.resolveHost();
   }
 

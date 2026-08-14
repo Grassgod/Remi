@@ -17,9 +17,11 @@ import { mcpBlock } from "./capabilities/mcp.js";
 import { promptsBlock } from "./capabilities/prompts.js";
 import { identityBlock } from "./capabilities/identity.js";
 import { permissionsBlock } from "./capabilities/permissions.js";
+import { agentPluginsBlock } from "./capabilities/agent-plugins.js";
 
 const CAPABILITIES: CapabilityBlock[] = [
   workspaceBlock,
+  agentPluginsBlock,
   envBlock,
   mcpBlock,
   promptsBlock,

@@ -10,6 +10,8 @@ import {
   Pencil,
   Copy,
   Check,
+  Gauge,
+  Puzzle,
 } from "lucide-react";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { toast } from "sonner";
@@ -28,6 +30,12 @@ import { useWorkspacePaths } from "@multiremi/core/paths";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@multiremi/ui/components/ui/tabs";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -42,6 +50,7 @@ import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
+import { RuntimePluginsTab } from "./runtime-plugins-tab";
 import { useT } from "../../i18n";
 
 function getMetaString(
@@ -114,6 +123,7 @@ function useNowTick(intervalMs = 30_000): number {
 
 export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const { t } = useT("runtimes");
+  const { t: tPlugins } = useT("plugins");
   const cliVersion =
     runtime.runtime_mode === "local" ? getCliVersion(runtime.metadata) : null;
   const agentVersion =
@@ -187,45 +197,69 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
         }
       />
 
-      {/* Body — single scroll container that owns the Hero card AND the
-          analytic blocks below. Putting Hero inside the scroll (instead of
-          pinning it under the topbar) means the scroll bar starts at the
-          page boundary rather than mid-content; the topbar stays sticky on
-          its own because it's navigation, not data. */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="grid grid-cols-1 gap-4 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-w-0 space-y-5">
-            <HeroCard
-              runtime={runtime}
-              health={health}
-              lastSeen={lastSeen}
-              ownerMember={ownerMember}
-              cliVersion={cliVersion}
-              daemonShort={daemonShort}
-              canEdit={!!canDelete}
-            />
-            <UsageSection runtime={runtime} />
-          </div>
+      <Tabs
+        defaultValue="overview"
+        className="flex min-h-0 flex-1 flex-col gap-0"
+      >
+        <TabsList
+          variant="line"
+          className="h-auto w-full shrink-0 justify-start gap-0 rounded-none border-b px-4 pb-[5px] sm:px-6"
+        >
+          <TabsTrigger
+            value="overview"
+            className="h-auto flex-none rounded-none px-3 py-2.5 text-xs"
+          >
+            <Gauge />
+            {tPlugins(($) => $.runtime.overview_tab)}
+          </TabsTrigger>
+          <TabsTrigger
+            value="plugins"
+            className="h-auto flex-none rounded-none px-3 py-2.5 text-xs"
+          >
+            <Puzzle />
+            {tPlugins(($) => $.runtime.plugins_tab)}
+          </TabsTrigger>
+        </TabsList>
 
-          {/* Right rail: serving agents + diagnostics */}
-          <div className="space-y-4">
-            <ServingAgentsCard
-              agents={servingAgents}
-              presenceMap={presenceMap}
-              agentHref={(id) => paths.agentDetail(id)}
-            />
-            <DiagnosticsCard
-              runtime={runtime}
-              cliVersion={cliVersion}
-              agentVersion={agentVersion}
-              acpVersion={acpVersion}
-              launchedBy={launchedBy}
-              canDelete={!!canDelete}
-              onDelete={() => setDeleteOpen(true)}
-            />
+        {/* The Overview panel keeps the original single scroll container so
+            the Hero and analytics move together below the page navigation. */}
+        <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto">
+          <div className="grid grid-cols-1 gap-4 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0 space-y-5">
+              <HeroCard
+                runtime={runtime}
+                health={health}
+                lastSeen={lastSeen}
+                ownerMember={ownerMember}
+                cliVersion={cliVersion}
+                daemonShort={daemonShort}
+                canEdit={!!canDelete}
+              />
+              <UsageSection runtime={runtime} />
+            </div>
+
+            <div className="space-y-4">
+              <ServingAgentsCard
+                agents={servingAgents}
+                presenceMap={presenceMap}
+                agentHref={(id) => paths.agentDetail(id)}
+              />
+              <DiagnosticsCard
+                runtime={runtime}
+                cliVersion={cliVersion}
+                agentVersion={agentVersion}
+                acpVersion={acpVersion}
+                launchedBy={launchedBy}
+                canDelete={!!canDelete}
+                onDelete={() => setDeleteOpen(true)}
+              />
+            </div>
           </div>
-        </div>
-      </div>
+        </TabsContent>
+        <TabsContent value="plugins" className="min-h-0 flex-1 overflow-y-auto">
+          <RuntimePluginsTab runtime={runtime} canManage={!!canDelete} />
+        </TabsContent>
+      </Tabs>
 
       {/* Delete confirmation — unified light/cascade dialog. Shared across
           this page and the runtime list kebab so the two entry points stay

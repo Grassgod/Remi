@@ -1,6 +1,7 @@
 // Barrel for the api wire layer (serializers + request-shape normalizers).
 // api.ts and the per-domain routers import from here.
 export * from "./agents.js";
+export * from "./agent-plugins.js";
 export * from "./attachments.js";
 export * from "./autopilots.js";
 export * from "./billing.js";

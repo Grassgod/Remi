@@ -264,12 +264,30 @@ export function withAgentUpdateRequestContext(
       error: "custom_env is no longer accepted on this endpoint; use PUT /api/agents/{id}/env (or `multiremi agent env set`)",
     }, 400);
   }
+  const targetWorkspaceId = hasRequestField(input, "workspaceId", "workspace_id")
+    ? cleanString(input.workspaceId ?? input.workspace_id) ?? "local"
+    : current.workspaceId;
+  if (targetWorkspaceId !== current.workspaceId) {
+    const denied = denyCurrentUserWorkspaceAccess(c, store, targetWorkspaceId);
+    if (denied) return denied;
+    if (store.listAgentPluginBindings(current.id).length > 0) {
+      return c.json({
+        error: "remove all plugin bindings before moving this agent to another workspace",
+        code: "agent_plugin_workspace_move_blocked",
+      }, 409);
+    }
+    next.workspaceId = targetWorkspaceId;
+    next.workspace_id = targetWorkspaceId;
+  }
   if (hasRequestField(input, "name")) {
     const name = cleanString(typeof input.name === "string" ? input.name : null);
     if (!name) return c.json({ error: "name is required" }, 400);
-    const conflict = store.getAgentByWorkspaceAndName(current.workspaceId, name);
+    const conflict = store.getAgentByWorkspaceAndName(targetWorkspaceId, name);
     if (conflict && conflict.id !== current.id) return agentNameConflict(c, name);
     next.name = name;
+  } else if (targetWorkspaceId !== current.workspaceId) {
+    const conflict = store.getAgentByWorkspaceAndName(targetWorkspaceId, current.name);
+    if (conflict && conflict.id !== current.id) return agentNameConflict(c, current.name);
   }
   if (hasRequestField(input, "description")) {
     const description = normalizeAgentRequestDescription(c, input.description);
@@ -299,7 +317,7 @@ export function withAgentUpdateRequestContext(
     delete next.runtimeId;
     delete next.runtime_id;
     if (legacyRuntimeId) {
-      const provider = resolveAgentRequestProvider(c, store, current.workspaceId, {
+      const provider = resolveAgentRequestProvider(c, store, targetWorkspaceId, {
         runtime_id: legacyRuntimeId,
         // On an "any" runtime the request's provider falls through; default it
         // to the agent's CURRENT provider (not "claude") so a legacy move to an
@@ -319,6 +337,17 @@ export function withAgentUpdateRequestContext(
     return c.json({
       error: `existing thinking_level "${current.thinkingLevel}" is not valid for provider "${targetProvider}"; pass thinking_level="" to clear or set a value valid for the new provider`,
     }, 400);
+  }
+  if (providerChanged) {
+    const incompatible = store.listAgentPluginBindings(current.id).find((binding) =>
+      binding.enabled && binding.plugin.provider !== targetProvider
+    );
+    if (incompatible) {
+      return c.json({
+        error: `unbind ${incompatible.plugin.provider} plugin "${incompatible.plugin.name}" before switching agent provider to ${targetProvider}`,
+        code: "provider_mismatch",
+      }, 409);
+    }
   }
   // A model id is engine-specific — carrying e.g. a claude model onto codex
   // would hand the codex CLI an unknown model. Unless the request also picks

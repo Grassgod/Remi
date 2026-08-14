@@ -23,6 +23,9 @@ vi.mock("./tabs/instructions-tab", () => ({
 vi.mock("./tabs/skills-tab", () => ({
   SkillsTab: () => <div>skills-tab</div>,
 }));
+vi.mock("./tabs/plugins-tab", () => ({
+  PluginsTab: () => <div>plugins-tab</div>,
+}));
 vi.mock("./tabs/env-tab", () => ({
   EnvTab: () => <div>env-tab</div>,
 }));
@@ -179,6 +182,18 @@ describe("AgentOverviewPane tab semantics", () => {
 
     expect(screen.getByRole("tabpanel")).toHaveTextContent("instructions-tab");
     expect(screen.queryByText("activity-tab")).not.toBeInTheDocument();
+  });
+
+  it("places provider plugins directly after skills", () => {
+    renderPane([makeRuntime("claude")]);
+
+    const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent?.trim());
+    expect(tabs.indexOf("Plugins")).toBe(tabs.indexOf("Skills") + 1);
+  });
+
+  it("hides plugins for unsupported providers", () => {
+    renderPane([makeRuntime("gemini")]);
+    expect(screen.queryByRole("tab", { name: /^Plugins$/i })).not.toBeInTheDocument();
   });
 });
 

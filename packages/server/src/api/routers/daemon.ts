@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import {
   MAX_TASK_MESSAGES_PER_REQUEST,
+  bindDaemonTokenIdentityOrDeny,
   buildDaemonInstallInstructions,
   callerCanReceiveRelay,
   compareDaemonPendingTasks,
@@ -102,6 +103,8 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     const denied = denyDaemonTokenWorkspace(c, body.workspace_id);
     if (denied) return denied;
+    const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, body.daemon_id);
+    if (identityDenied) return identityDenied;
     const owner = daemonRegisterOwnerContext(c, store, body.workspace_id);
     if ("error" in owner) return c.json({ error: owner.error }, owner.status);
     const registerWorkspace = String(body.workspace_id ?? "").trim() || "local";

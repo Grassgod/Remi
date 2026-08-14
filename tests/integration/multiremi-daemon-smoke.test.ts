@@ -11,6 +11,7 @@ import {
   MULTIREMI_REREGISTER_FAILURE_BACKOFF_MS,
   MultiremiDaemon,
   MultiremiRuntimeReregisterGate,
+  preflightAgentPluginProvider,
   type MultiremiDaemonProviderFactory,
 } from "@multiremi/daemon.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -28,6 +29,24 @@ afterEach(() => {
 });
 
 describe("Bun Multiremi daemon smoke", () => {
+  it("requires provider-native Plugin support during preflight", async () => {
+    await expect(preflightAgentPluginProvider("codex", {
+      which: () => "/opt/bin/codex",
+      commandSucceeds: async () => false,
+      bridgeHealthy: async () => true,
+    })).rejects.toMatchObject({
+      code: "plugin_codex_cli_unsupported",
+      retryKind: "setup_required",
+    });
+    await expect(preflightAgentPluginProvider("claude", {
+      which: () => "/opt/bin/claude",
+      bridgeHealthy: async () => false,
+    })).rejects.toMatchObject({
+      code: "plugin_claude_bridge_missing",
+      retryKind: "setup_required",
+    });
+  });
+
   it("coalesces runtime_gone re-register attempts like the Go daemon", () => {
     const gate = new MultiremiRuntimeReregisterGate();
     const t0 = 1_000_000;
@@ -242,6 +261,154 @@ describe("Bun Multiremi daemon smoke", () => {
         status: "online",
       });
       expect(closed).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("reconciles, materializes and cleans a direct task Agent Plugin runtime", async () => {
+    const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-");
+    const userRepo = join(root, "user-repo");
+    const workspacesRoot = join(root, "workspaces");
+    mkdirSync(userRepo, { recursive: true });
+    const agent = store.createAgent({ name: "Plugin Claude", provider: "claude", cwd: userRepo });
+    const plugin = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "runtime-proof", version: "1.0.0" },
+      files: [{ path: "skills/runtime-proof/SKILL.md", content: "# Runtime proof\n" }],
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id, config: { scope: "docs" } });
+    const task = store.createTask({ agentId: agent.id, prompt: "Use the runtime Plugin" });
+    const daemonToken = await store.createAccessToken({
+      name: "Plugin daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-plugin-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const expectedRuntimeId = daemonRuntimeIdForTest("daemon-plugin", "claude");
+    let pluginBody = "";
+    let providerPluginPaths: string[] = [];
+    let sendPluginFingerprint = "";
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        daemonId: "daemon-plugin",
+        runtimeName: "plugin-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot,
+        repoCacheRoot: join(root, ".repo-cache"),
+        pluginCacheRoot: join(root, ".plugin-cache"),
+        agentPluginProviderPreflight: async () => {},
+        providerFactory: (options) => {
+          providerPluginPaths = options.pluginPaths ?? [];
+          return {
+            async *sendStream(_message, rawOptions) {
+              const pluginOptions = rawOptions as SendOptions & {
+                pluginPaths?: string[];
+                pluginFingerprint?: string;
+              };
+              sendPluginFingerprint = pluginOptions.pluginFingerprint ?? "";
+              pluginBody = readFileSync(
+                join(pluginOptions.pluginPaths![0]!, "skills", "runtime-proof", "SKILL.md"),
+                "utf8",
+              );
+              yield {
+                sessionUpdate: "agent_message_chunk",
+                content: [{ type: "text", text: "Plugin completed" }],
+              } as any;
+            },
+            getLastResponse: () => ({
+              text: "Plugin completed",
+              sessionId: "sess-plugin",
+              requestId: "req-plugin",
+            }),
+          };
+        },
+      });
+
+      await daemon.start();
+
+      expect(store.getTask(task.id)).toMatchObject({ status: "completed", result: "Plugin completed" });
+      expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
+        status: "ready",
+        observedDigest: plugin.activeVersion!.artifactDigest,
+      }]);
+      expect(providerPluginPaths).toHaveLength(1);
+      expect(sendPluginFingerprint).toBe(store.getTask(task.id)?.executionFingerprint!);
+      expect(pluginBody).toBe("# Runtime proof\n");
+      expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
+      expect(existsSync(join(workspacesRoot, ".task-runtime", task.id))).toBe(false);
+      expect(existsSync(join(root, ".plugin-cache", plugin.activeVersion!.artifactDigest, "payload"))).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  it("reports Plugin preflight setup_required and leaves the task queued", async () => {
+    const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-preflight-");
+    const userRepo = join(root, "user-repo");
+    mkdirSync(userRepo, { recursive: true });
+    const agent = store.createAgent({ name: "Preflight Claude", provider: "claude", cwd: userRepo });
+    const plugin = store.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "preflight-proof", version: "1.0.0" },
+      files: [{ path: "skills/preflight-proof/SKILL.md", content: "# Preflight\n" }],
+      requirements: { binaries: ["multiremi-binary-that-does-not-exist"] },
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const task = store.createTask({ agentId: agent.id, prompt: "Do not claim until ready" });
+    const daemonToken = await store.createAccessToken({
+      name: "Preflight daemon",
+      type: "daemon",
+      workspaceId: "local",
+    });
+    const server = startMultiremiServer({
+      store,
+      scheduler: null,
+      authToken: "root-preflight-secret",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
+    const expectedRuntimeId = daemonRuntimeIdForTest("daemon-plugin-preflight", "claude");
+
+    try {
+      const daemon = new MultiremiDaemon({
+        serverUrl: `http://127.0.0.1:${server.port}`,
+        token: daemonToken.token,
+        daemonId: "daemon-plugin-preflight",
+        runtimeName: "plugin-preflight-runtime",
+        provider: "claude",
+        workspaceId: "local",
+        once: true,
+        daemonPort: 0,
+        workspacesRoot: join(root, "workspaces"),
+        repoCacheRoot: join(root, ".repo-cache"),
+        pluginCacheRoot: join(root, ".plugin-cache"),
+        agentPluginProviderPreflight: async () => {},
+        providerFactory: () => {
+          throw new Error("setup-required task must not reach the provider");
+        },
+      });
+
+      await daemon.start();
+
+      expect(store.getTask(task.id)?.status).toBe("queued");
+      expect(store.listAgentPluginRuntimeStates({ runtimeId: expectedRuntimeId })).toMatchObject([{
+        status: "setup_required",
+        retryCount: 1,
+        lastErrorCode: "plugin_binary_missing",
+      }]);
     } finally {
       server.stop(true);
     }
