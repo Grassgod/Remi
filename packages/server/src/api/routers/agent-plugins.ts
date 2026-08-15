@@ -398,6 +398,7 @@ function repositoryInspectionResponse(resolved: ResolvedAgentPluginGitSource) {
       manifest: candidate.manifest,
       fileCount: candidate.fileCount,
       artifactSize: candidate.artifactSize,
+      artifactSizeKnown: candidate.artifactSizeKnown,
     })),
   };
 }

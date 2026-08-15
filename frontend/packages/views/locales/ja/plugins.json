@@ -46,6 +46,7 @@
     "change_folder_action": "別のフォルダーを選択",
     "folder_hint": "Claude または Codex のプラグイン manifest を含むディレクトリを選択してください。",
     "folder_summary": "{{count}} ファイル、{{size}}",
+    "repository_folder_summary": "{{count}} ファイル、サイズはインポート時に確認",
     "version_label": "インポートバージョン",
     "version_hint": "ネイティブ manifest にバージョンがなくても SemVer は必須です。",
     "advanced_title": "ランタイム設定",
@@ -80,6 +81,8 @@
       "source_ref_unavailable": "そのブランチ、タグ、コミットは利用できません。",
       "plugin_selection_required": "リポジトリ内のプラグインを選択してください。",
       "repository_read_failed": "プラグインリポジトリを読み込めませんでした。",
+      "repository_timeout": "リポジトリの読み込みがタイムアウトしました。もう一度お試しください。",
+      "repository_unavailable": "リポジトリに接続できません。URL とリポジトリの認証情報を確認してください。",
       "invalid_requirements": "ランタイム要件は JSON オブジェクトである必要があります。",
       "read_failed": "選択したプラグインフォルダーを読み込めませんでした。"
     }

@@ -121,6 +121,7 @@ export const AgentPluginRepositoryCandidateSchema = z
     manifest: UnknownRecordSchema,
     fileCount: z.number().int().nonnegative(),
     artifactSize: z.number().int().nonnegative(),
+    artifactSizeKnown: z.boolean().default(true),
   })
   .loose();
 

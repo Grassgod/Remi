@@ -360,6 +360,8 @@ export interface MultiremiAgentPluginRepositoryCandidate {
   manifest: Record<string, unknown>;
   fileCount: number;
   artifactSize: number;
+  /** Defaults to true for responses from servers predating deferred size calculation. */
+  artifactSizeKnown?: boolean;
 }
 
 export interface MultiremiAgentPluginRepositoryInspection {

@@ -62,6 +62,8 @@ export interface ResolvedAgentPluginGitCandidate {
   fileCount: number;
   /** Includes the manifest bytes. */
   artifactSize: number;
+  /** False during repository inspection; exact size is calculated during import. */
+  artifactSizeKnown: boolean;
   /**
    * Paths are relative to the Plugin root. The manifest is omitted because the
    * canonical artifact builder regenerates it from `manifest`.
@@ -203,6 +205,13 @@ export async function resolveAgentPluginGitSource(
         "plugin_candidate_limit_exceeded",
       );
     }
+    if (input.includeFiles !== true) {
+      await prefetchGitObjects(
+        bareRepo,
+        discovered.map((candidate) => candidate.objectId),
+        deadlineAt,
+      );
+    }
 
     const candidates: ResolvedAgentPluginGitCandidate[] = [];
     let firstCandidateError: AgentPluginGitImportError | null = null;
@@ -316,7 +325,6 @@ async function discoverManifestEntries(
     "ls-tree",
     "-r",
     "-z",
-    "-l",
     "--full-tree",
     revision,
   ];
@@ -373,6 +381,7 @@ async function resolveCandidate(
     bareRepo,
     revision,
     discovered.pluginSubdir,
+    false,
     deadlineAt,
   );
   if (entries.length > MAX_ARTIFACT_FILES) {
@@ -382,18 +391,56 @@ async function resolveCandidate(
     );
   }
 
-  let artifactSize = 0;
-  const normalized = entries.map((entry) => {
-    if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755") || entry.size === null) {
+  const normalizeEntries = (treeEntries: GitTreeEntry[], requireSizes: boolean) => treeEntries.map((entry) => {
+    if (entry.type !== "blob" || (entry.mode !== "100644" && entry.mode !== "100755")) {
       throw unsafeFile(entry.path);
     }
-    const size = entry.size;
+    if (requireSizes && entry.size === null) {
+      throw new AgentPluginGitImportError(
+        `Git did not report an object size for ${entry.path}`,
+        "plugin_git_tree_invalid",
+      );
+    }
     const path = relativePluginPath(entry.path, discovered.pluginSubdir);
     if (path === ".git" || path.startsWith(".git/")) throw unsafeFile(entry.path);
-    artifactSize += size;
-    return { ...entry, size, relativePath: path };
+    return { ...entry, relativePath: path };
   });
-  if (artifactSize > MAX_ARTIFACT_BYTES) {
+
+  const inspectedEntries = normalizeEntries(entries, false);
+  let normalized = inspectedEntries;
+  if (includeFiles) {
+    await prefetchGitObjects(
+      bareRepo,
+      inspectedEntries.map((entry) => entry.objectId),
+      deadlineAt,
+    );
+    const sizedEntries = await listPluginEntries(
+      bareRepo,
+      revision,
+      discovered.pluginSubdir,
+      true,
+      deadlineAt,
+    );
+    if (
+      sizedEntries.length !== entries.length
+      || sizedEntries.some((entry, index) => (
+        entry.mode !== entries[index]?.mode
+        || entry.type !== entries[index]?.type
+        || entry.objectId !== entries[index]?.objectId
+        || entry.path !== entries[index]?.path
+      ))
+    ) {
+      throw new AgentPluginGitImportError(
+        "Git returned inconsistent Plugin tree entries",
+        "plugin_git_tree_invalid",
+      );
+    }
+    normalized = normalizeEntries(sizedEntries, true);
+  }
+
+  const artifactSizeKnown = includeFiles;
+  const artifactSize = normalized.reduce((total, entry) => total + (entry.size ?? 0), 0);
+  if (artifactSizeKnown && artifactSize > MAX_ARTIFACT_BYTES) {
     throw new AgentPluginGitImportError(
       `Plugin artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`,
       "plugin_artifact_too_large",
@@ -407,7 +454,7 @@ async function resolveCandidate(
   const [manifestBytes] = await catFileObjects(
     bareRepo,
     [manifestEntry.objectId],
-    manifestEntry.size + 1024,
+    (manifestEntry.size ?? MAX_ARTIFACT_BYTES) + 1024,
     deadlineAt,
   );
   let manifestValue: unknown;
@@ -442,12 +489,14 @@ async function resolveCandidate(
     const contents = await catFileObjects(
       bareRepo,
       artifactEntries.map((entry) => entry.objectId),
-      artifactEntries.reduce((total, entry) => total + entry.size, 0) + artifactEntries.length * 128 + 1024,
+      artifactEntries.reduce((total, entry) => total + (entry.size ?? 0), 0)
+        + artifactEntries.length * 128
+        + 1024,
       deadlineAt,
     );
     files = artifactEntries.map((entry, index) => {
       const bytes = contents[index]!;
-      if (bytes.byteLength !== entry.size) {
+      if (entry.size === null || bytes.byteLength !== entry.size) {
         throw new AgentPluginGitImportError(
           `Git object size changed while reading ${entry.path}`,
           "plugin_artifact_file_invalid",
@@ -472,6 +521,7 @@ async function resolveCandidate(
     manifest,
     fileCount: normalized.length,
     artifactSize,
+    artifactSizeKnown,
     ...(files ? { files } : {}),
   };
 }
@@ -480,6 +530,7 @@ async function listPluginEntries(
   bareRepo: string,
   revision: string,
   pluginSubdir: string,
+  includeSizes: boolean,
   deadlineAt: number,
 ): Promise<GitTreeEntry[]> {
   const args = [
@@ -487,10 +538,10 @@ async function listPluginEntries(
     "ls-tree",
     "-r",
     "-z",
-    "-l",
     "--full-tree",
     revision,
   ];
+  if (includeSizes) args.splice(4, 0, "-l");
   if (pluginSubdir) args.push("--", `:(literal)${pluginSubdir}`);
   const output = await runGit(args, {
     maxOutputBytes: 8 * 1024 * 1024,
@@ -499,6 +550,44 @@ async function listPluginEntries(
     deadlineAt,
   });
   return parseLsTree(output);
+}
+
+async function prefetchGitObjects(
+  bareRepo: string,
+  objectIds: string[],
+  deadlineAt: number,
+): Promise<void> {
+  const uniqueObjectIds = [...new Set(objectIds)];
+  if (uniqueObjectIds.length === 0) return;
+  if (uniqueObjectIds.some((objectId) => !FULL_GIT_OBJECT_ID.test(objectId))) {
+    throw new AgentPluginGitImportError(
+      "Plugin tree contains an invalid Git object id",
+      "plugin_git_tree_invalid",
+    );
+  }
+  await runGit(
+    [
+      `--git-dir=${bareRepo}`,
+      "-c",
+      "fetch.negotiationAlgorithm=noop",
+      "fetch",
+      "--quiet",
+      "origin",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--filter=blob:none",
+      "--stdin",
+    ],
+    {
+      input: Buffer.from(`${uniqueObjectIds.join("\n")}\n`, "utf8"),
+      maxOutputBytes: 1024 * 1024,
+      errorCode: "plugin_git_fetch_failed",
+      errorMessage: "unable to fetch the selected Plugin files",
+      errorStatus: 502,
+      deadlineAt,
+    },
+  );
 }
 
 async function catFileObjects(
@@ -546,11 +635,13 @@ function parseLsTree(output: Uint8Array): GitTreeEntry[] {
   const records = text.split("\0");
   if (records.at(-1) === "") records.pop();
   return records.map((record) => {
-    const match = record.match(/^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}(?:[0-9a-f]{24})?) +(-|\d+)\t([\s\S]+)$/);
+    const match = record.match(
+      /^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}(?:[0-9a-f]{24})?)(?: +(-|\d+))?\t([\s\S]+)$/,
+    );
     if (!match) {
       throw new AgentPluginGitImportError("Git returned an invalid tree entry", "plugin_git_tree_invalid");
     }
-    const size = match[4] === "-" ? null : Number(match[4]);
+    const size = match[4] === undefined || match[4] === "-" ? null : Number(match[4]);
     if (size !== null && (!Number.isSafeInteger(size) || size < 0)) {
       throw new AgentPluginGitImportError("Git returned an invalid object size", "plugin_git_tree_invalid");
     }

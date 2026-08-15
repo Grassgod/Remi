@@ -46,6 +46,7 @@
     "change_folder_action": "다른 폴더 선택",
     "folder_hint": "Claude 또는 Codex 플러그인 manifest가 포함된 디렉터리를 선택하세요.",
     "folder_summary": "파일 {{count}}개, {{size}}",
+    "repository_folder_summary": "파일 {{count}}개, 크기는 가져올 때 확인",
     "version_label": "가져올 버전",
     "version_hint": "네이티브 manifest에 버전이 없어도 SemVer는 필수입니다.",
     "advanced_title": "런타임 설정",
@@ -80,6 +81,8 @@
       "source_ref_unavailable": "해당 브랜치, 태그 또는 커밋을 더 이상 사용할 수 없습니다.",
       "plugin_selection_required": "저장소에서 플러그인을 선택하세요.",
       "repository_read_failed": "플러그인 저장소를 읽지 못했습니다.",
+      "repository_timeout": "저장소를 읽는 데 시간이 너무 오래 걸렸습니다. 다시 시도하세요.",
+      "repository_unavailable": "저장소에 연결할 수 없습니다. URL과 저장소 자격 증명을 확인하세요.",
       "invalid_requirements": "런타임 요구 사항은 JSON 객체여야 합니다.",
       "read_failed": "선택한 플러그인 폴더를 읽지 못했습니다."
     }

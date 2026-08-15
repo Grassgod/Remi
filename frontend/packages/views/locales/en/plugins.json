@@ -46,6 +46,7 @@
     "change_folder_action": "Choose another folder",
     "folder_hint": "Select a directory containing a Claude or Codex plugin manifest.",
     "folder_summary": "{{count}} files, {{size}}",
+    "repository_folder_summary": "{{count}} files, size checked on import",
     "version_label": "Import version",
     "version_hint": "SemVer is required even when the native manifest omits a version.",
     "advanced_title": "Runtime setup",
@@ -80,6 +81,8 @@
       "source_ref_unavailable": "That branch, tag, or commit is no longer available.",
       "plugin_selection_required": "Choose a plugin from this repository.",
       "repository_read_failed": "Couldn't read the plugin repository.",
+      "repository_timeout": "The repository took too long to read. Try again.",
+      "repository_unavailable": "Couldn't connect to the repository. Check the URL and repository credentials.",
       "invalid_requirements": "Runtime requirements must be a JSON object.",
       "read_failed": "Couldn't read the selected plugin folder."
     }

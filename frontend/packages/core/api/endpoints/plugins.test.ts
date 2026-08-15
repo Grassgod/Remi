@@ -103,6 +103,7 @@ describe("PluginsEndpoints", () => {
         name: "Review tools",
         version: "1.0.0",
         manifest: { name: "Review tools", version: "1.0.0" },
+        artifactSizeKnown: true,
       }],
     });
     expect(fetchMock.mock.calls[0]?.[0]).toBe(

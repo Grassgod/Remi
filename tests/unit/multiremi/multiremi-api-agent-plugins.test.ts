@@ -29,6 +29,7 @@ describe("Multiremi API — agent plugins", () => {
           manifest: { name: "review-tools", version: "1.2.0" },
           fileCount: 2,
           artifactSize: 48,
+          artifactSizeKnown: input.includeFiles === true,
           ...(input.includeFiles === true
             ? {
                 files: [{
@@ -66,6 +67,7 @@ describe("Multiremi API — agent plugins", () => {
           name: "review-tools",
           sourceSubdir: "plugins/review",
           version: "1.2.0",
+          artifactSizeKnown: false,
         }],
       },
     });
@@ -149,6 +151,7 @@ describe("Multiremi API — agent plugins", () => {
             manifest: { name: "shared-claude", version: "1.0.0" },
             fileCount: 1,
             artifactSize: 48,
+            artifactSizeKnown: true,
             files: [],
           },
           {
@@ -161,6 +164,7 @@ describe("Multiremi API — agent plugins", () => {
             manifest: { name: "shared-codex", version: "2.0.0" },
             fileCount: 1,
             artifactSize: 48,
+            artifactSizeKnown: true,
             files: [],
           },
         ],
@@ -230,6 +234,7 @@ describe("Multiremi API — agent plugins", () => {
             manifest: { name: "review-tools", version: "2.0.0" },
             fileCount: 1,
             artifactSize: 48,
+            artifactSizeKnown: true,
             files: [],
           }],
         };
@@ -344,6 +349,7 @@ describe("Multiremi API — agent plugins", () => {
           manifest: { name: "review-tools", version: "1.0.0" },
           fileCount: 1,
           artifactSize: 48,
+          artifactSizeKnown: true,
           files: [],
         }],
       }),

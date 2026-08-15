@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -80,6 +81,8 @@ describe("Agent Plugin Git import", () => {
       content: Buffer.from("# Lark\n").toString("base64"),
       encoding: "base64",
     }]);
+    expect(claude.artifactSizeKnown).toBe(true);
+    expect(claude.artifactSize).toBeGreaterThan(0);
 
     const codex = resolved.candidates.find((candidate) => candidate.provider === "codex")!;
     expect(codex).toMatchObject({
@@ -124,9 +127,99 @@ describe("Agent Plugin Git import", () => {
         version: "1.0.0",
         pluginSubdir: "packages/wiki",
         fileCount: 2,
+        artifactSize: 0,
+        artifactSizeKnown: false,
       }),
     ]);
     expect(resolved.candidates[0]!.files).toBeUndefined();
+  });
+
+  it("inspects a partial clone without downloading unrelated Plugin payloads", async () => {
+    const repo = createRepository("main");
+    git(repo, "config", "uploadpack.allowFilter", "true");
+    writeJson(join(repo, ".claude-plugin/plugin.json"), {
+      name: "metadata-only",
+      version: "1.0.0",
+    });
+    writeFile(join(repo, "skills/review/SKILL.md"), "# Payload that inspection must not fetch\n");
+    commitAll(repo, "partial clone");
+    const manifestObjectId = git(repo, "rev-parse", "HEAD:.claude-plugin/plugin.json");
+    const payloadObjectId = git(repo, "rev-parse", "HEAD:skills/review/SKILL.md");
+    const traceRoot = mkdtempSync(join(tmpdir(), "multiremi-plugin-git-trace-"));
+    tempRoots.push(traceRoot);
+    const tracePath = join(traceRoot, "packets.log");
+    const previousTracePacket = process.env.GIT_TRACE_PACKET;
+
+    try {
+      process.env.GIT_TRACE_PACKET = tracePath;
+      const resolved = await resolveAgentPluginGitSource({
+        sourceUrl: pathToFileURL(repo).href,
+      });
+      expect(resolved.candidates[0]).toMatchObject({
+        name: "metadata-only",
+        artifactSize: 0,
+        artifactSizeKnown: false,
+      });
+    } finally {
+      restoreEnv("GIT_TRACE_PACKET", previousTracePacket);
+    }
+
+    const packetTrace = readFileSync(tracePath, "utf8");
+    expect(packetTrace).toContain(manifestObjectId);
+    expect(packetTrace).not.toContain(payloadObjectId);
+  });
+
+  it("imports only the selected Plugin subtree from a partial clone", async () => {
+    const repo = createRepository("main");
+    git(repo, "config", "uploadpack.allowFilter", "true");
+    writeJson(join(repo, "plugins/selected/.claude-plugin/plugin.json"), {
+      name: "selected",
+      version: "1.0.0",
+    });
+    writeFile(join(repo, "plugins/selected/skills/review/SKILL.md"), "# Selected\n");
+    writeJson(join(repo, "plugins/other/.claude-plugin/plugin.json"), {
+      name: "other",
+      version: "1.0.0",
+    });
+    writeFile(join(repo, "plugins/other/skills/review/SKILL.md"), "# Other\n");
+    commitAll(repo, "multiple plugins");
+    const selectedPayloadId = git(
+      repo,
+      "rev-parse",
+      "HEAD:plugins/selected/skills/review/SKILL.md",
+    );
+    const otherPayloadId = git(
+      repo,
+      "rev-parse",
+      "HEAD:plugins/other/skills/review/SKILL.md",
+    );
+    const traceRoot = mkdtempSync(join(tmpdir(), "multiremi-plugin-git-import-trace-"));
+    tempRoots.push(traceRoot);
+    const tracePath = join(traceRoot, "packets.log");
+    const previousTracePacket = process.env.GIT_TRACE_PACKET;
+
+    try {
+      process.env.GIT_TRACE_PACKET = tracePath;
+      const resolved = await resolveAgentPluginGitSource({
+        sourceUrl: pathToFileURL(repo).href,
+        sourceSubdir: "plugins/selected",
+        provider: "claude",
+        manifestPath: ".claude-plugin/plugin.json",
+        includeFiles: true,
+        exactSourceSubdir: true,
+      });
+      expect(resolved.candidates[0]?.files).toEqual([{
+        path: "skills/review/SKILL.md",
+        content: Buffer.from("# Selected\n").toString("base64"),
+        encoding: "base64",
+      }]);
+    } finally {
+      restoreEnv("GIT_TRACE_PACKET", previousTracePacket);
+    }
+
+    const packetTrace = readFileSync(tracePath, "utf8");
+    expect(packetTrace).toContain(selectedPayloadId);
+    expect(packetTrace).not.toContain(otherPayloadId);
   });
 
   it("resolves an explicit commit even when the remote has no valid default branch", async () => {
@@ -250,15 +343,30 @@ describe("Agent Plugin Git import", () => {
     );
 
     const largeRepo = createRepository("main");
+    git(largeRepo, "config", "uploadpack.allowFilter", "true");
     writeJson(join(largeRepo, ".claude-plugin/plugin.json"), { name: "many-files" });
     for (let index = 0; index < 2_000; index++) {
       writeFile(join(largeRepo, `files/${String(index).padStart(4, "0")}.txt`), "x");
     }
     commitAll(largeRepo, "many files");
-    await expectGitError(
-      resolveAgentPluginGitSource({ sourceUrl: pathToFileURL(largeRepo).href }),
-      "plugin_artifact_too_large",
-    );
+    const payloadObjectId = git(largeRepo, "rev-parse", "HEAD:files/0000.txt");
+    const traceRoot = mkdtempSync(join(tmpdir(), "multiremi-plugin-git-limit-trace-"));
+    tempRoots.push(traceRoot);
+    const tracePath = join(traceRoot, "packets.log");
+    const previousTracePacket = process.env.GIT_TRACE_PACKET;
+    try {
+      process.env.GIT_TRACE_PACKET = tracePath;
+      await expectGitError(
+        resolveAgentPluginGitSource({
+          sourceUrl: pathToFileURL(largeRepo).href,
+          includeFiles: true,
+        }),
+        "plugin_artifact_too_large",
+      );
+    } finally {
+      restoreEnv("GIT_TRACE_PACKET", previousTracePacket);
+    }
+    expect(readFileSync(tracePath, "utf8")).not.toContain(payloadObjectId);
 
     const oversizedRepo = createRepository("main");
     writeJson(join(oversizedRepo, ".claude-plugin/plugin.json"), { name: "oversized" });
@@ -267,7 +375,10 @@ describe("Agent Plugin Git import", () => {
     writeFileSync(oversizedPath, Buffer.alloc(25 * 1024 * 1024));
     commitAll(oversizedRepo, "oversized");
     await expectGitError(
-      resolveAgentPluginGitSource({ sourceUrl: pathToFileURL(oversizedRepo).href }),
+      resolveAgentPluginGitSource({
+        sourceUrl: pathToFileURL(oversizedRepo).href,
+        includeFiles: true,
+      }),
       "plugin_artifact_too_large",
     );
   });

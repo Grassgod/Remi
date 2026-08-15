@@ -96,6 +96,7 @@ function repositoryInspection(overrides: Record<string, unknown> = {}) {
         manifest: { name: "Review tools", version: "1.2.0" },
         fileCount: 2,
         artifactSize: 128,
+        artifactSizeKnown: false,
       },
     ],
     ...overrides,
@@ -122,6 +123,7 @@ describe("PluginImportDialog", () => {
 
     expect(await screen.findByText("Review tools")).toBeInTheDocument();
     expect(screen.getByText("1.2.0")).toBeInTheDocument();
+    expect(await screen.findByText(/2 files, size checked on import/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Branch, tag, or commit" })).toHaveTextContent("main");
     await user.click(screen.getByRole("button", { name: /^Import$/i }));
 
@@ -230,6 +232,23 @@ describe("PluginImportDialog", () => {
       "Enter a valid Git repository URL.",
     );
     expect(screen.queryByText("invalid Plugin Git repository URL")).not.toBeInTheDocument();
+  });
+
+  it("explains repository timeouts instead of showing the generic read error", async () => {
+    const user = userEvent.setup();
+    inspectAsync.mockRejectedValue(new ApiError(
+      "Plugin Git operation timed out",
+      504,
+      "Gateway Timeout",
+      { code: "plugin_git_timeout" },
+    ));
+    renderDialog();
+    await user.type(screen.getByLabelText("Repository URL"), "https://example.test/slow.git");
+    await user.click(screen.getByRole("button", { name: /read repository/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The repository took too long to read. Try again.",
+    );
   });
 
   it("can recover an existing Plugin when its stored ref was deleted", async () => {

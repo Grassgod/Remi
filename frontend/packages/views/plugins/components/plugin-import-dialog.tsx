@@ -224,6 +224,11 @@ export function PluginImportDialog({
         return t(($) => $.import.errors.plugin_selection_required);
       case "plugin_git_url_invalid":
         return t(($) => $.import.errors.invalid_repository_url);
+      case "plugin_git_timeout":
+        return t(($) => $.import.errors.repository_timeout);
+      case "plugin_git_remote_unavailable":
+      case "plugin_git_fetch_failed":
+        return t(($) => $.import.errors.repository_unavailable);
       default:
         return t(($) => $.import.errors.repository_read_failed);
     }
@@ -460,10 +465,14 @@ export function PluginImportDialog({
       revision={inspection?.sourceRevision ?? null}
       providerName={t(($) => $.provider[candidate.provider])}
       automaticVersionLabel={t(($) => $.import.automatic_version)}
-      summaryLabel={t(($) => $.import.folder_summary, {
-        count: candidate.fileCount,
-        size: formatBytes(candidate.artifactSize),
-      })}
+      summaryLabel={candidate.artifactSizeKnown === false
+        ? t(($) => $.import.repository_folder_summary, {
+            count: candidate.fileCount,
+          })
+        : t(($) => $.import.folder_summary, {
+            count: candidate.fileCount,
+            size: formatBytes(candidate.artifactSize),
+          })}
     />
   );
 

@@ -46,6 +46,7 @@
     "change_folder_action": "选择其他目录",
     "folder_hint": "请选择包含 Claude 或 Codex 插件 manifest 的目录。",
     "folder_summary": "{{count}} 个文件，{{size}}",
+    "repository_folder_summary": "{{count}} 个文件，导入时检查大小",
     "version_label": "导入版本",
     "version_hint": "即使原生 manifest 未声明版本，也必须填写 SemVer。",
     "advanced_title": "Runtime 设置",
@@ -80,6 +81,8 @@
       "source_ref_unavailable": "该分支、Tag 或 Commit 已不存在。",
       "plugin_selection_required": "请选择仓库中的一个插件。",
       "repository_read_failed": "无法读取插件仓库。",
+      "repository_timeout": "读取仓库超时，请重试。",
+      "repository_unavailable": "无法连接仓库，请检查 URL 和仓库访问凭据。",
       "invalid_requirements": "运行时依赖必须是 JSON 对象。",
       "read_failed": "无法读取所选插件目录。"
     }
