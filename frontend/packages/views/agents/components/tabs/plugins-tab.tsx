@@ -93,6 +93,12 @@ function AddPluginDialog({
     () => mergeVersions(plugin, versionsQuery.data ?? []),
     [plugin, versionsQuery.data],
   );
+  const selectedVersion =
+    versions.find((version) => version.id === versionId) ?? null;
+  const policyLabel =
+    policy === "pinned"
+      ? t(($) => $.agent.pinned)
+      : t(($) => $.agent.follow_active);
 
   const reset = () => {
     setPluginId(null);
@@ -156,7 +162,9 @@ function AddPluginDialog({
                 }}
               >
                 <SelectTrigger id="agent-plugin-select" className="w-full">
-                  <SelectValue placeholder={t(($) => $.agent.plugin_placeholder)} />
+                  <SelectValue placeholder={t(($) => $.agent.plugin_placeholder)}>
+                    {plugin?.name}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {plugins.map((item) => (
@@ -181,7 +189,7 @@ function AddPluginDialog({
                 }}
               >
                 <SelectTrigger id="agent-plugin-policy" className="w-full">
-                  <SelectValue />
+                  <SelectValue>{policyLabel}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="follow_active">
@@ -201,7 +209,9 @@ function AddPluginDialog({
                 </Label>
                 <Select value={versionId} onValueChange={setVersionId}>
                   <SelectTrigger id="agent-plugin-version" className="w-full">
-                    <SelectValue placeholder={t(($) => $.agent.version_placeholder)} />
+                    <SelectValue placeholder={t(($) => $.agent.version_placeholder)}>
+                      {selectedVersion?.version}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {versions.map((version) => (
@@ -279,6 +289,12 @@ function EditPluginDialog({
     () => mergeVersions(binding?.plugin ?? null, versionsQuery.data ?? []),
     [binding?.plugin, versionsQuery.data],
   );
+  const selectedVersion =
+    versions.find((version) => version.id === versionId) ?? null;
+  const policyLabel =
+    policy === "pinned"
+      ? t(($) => $.agent.pinned)
+      : t(($) => $.agent.follow_active);
 
   const handleSave = async () => {
     if (!binding || (policy === "pinned" && !versionId)) return;
@@ -329,7 +345,7 @@ function EditPluginDialog({
               }}
             >
               <SelectTrigger id="edit-agent-plugin-policy" className="w-full">
-                <SelectValue />
+                <SelectValue>{policyLabel}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="follow_active">
@@ -351,7 +367,9 @@ function EditPluginDialog({
                 <SelectTrigger id="edit-agent-plugin-version" className="w-full">
                   <SelectValue
                     placeholder={t(($) => $.agent.version_placeholder)}
-                  />
+                  >
+                    {selectedVersion?.version}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {versions.map((version) => (

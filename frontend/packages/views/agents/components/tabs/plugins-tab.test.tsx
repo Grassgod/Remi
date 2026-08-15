@@ -136,12 +136,21 @@ describe("Agent PluginsTab", () => {
 
     const addButtons = await screen.findAllByRole("button", { name: "Add plugin" });
     await user.click(addButtons[0]!);
-    await user.click(screen.getByRole("combobox", { name: "Plugin" }));
+    const pluginSelect = screen.getByRole("combobox", { name: "Plugin" });
+    await user.click(pluginSelect);
 
     const option = await screen.findByRole("option", { name: "Claude review" });
     expect(option).toBeInTheDocument();
     expect(screen.queryByText("Codex review")).not.toBeInTheDocument();
     await user.click(option);
+    expect(pluginSelect).toHaveTextContent("Claude review");
+    expect(pluginSelect).not.toHaveTextContent("claude-plugin");
+
+    const policySelect = screen.getByRole("combobox", {
+      name: "Version policy",
+    });
+    expect(policySelect).toHaveTextContent("Follow active version");
+    expect(policySelect).not.toHaveTextContent("follow_active");
     await user.click(screen.getByRole("button", { name: /^Attach$/i }));
 
     expect(createBinding).toHaveBeenCalledWith({
@@ -219,12 +228,21 @@ describe("Agent PluginsTab", () => {
     await user.click(
       await screen.findByRole("button", { name: "Change version policy" }),
     );
-    await user.click(screen.getByRole("combobox", { name: "Version policy" }));
+    const policySelect = screen.getByRole("combobox", {
+      name: "Version policy",
+    });
+    await user.click(policySelect);
     await user.click(
       await screen.findByRole("option", { name: "Pin version" }),
     );
-    await user.click(screen.getByRole("combobox", { name: "Version" }));
+    expect(policySelect).toHaveTextContent("Pin version");
+    expect(policySelect).not.toHaveTextContent("pinned");
+
+    const versionSelect = screen.getByRole("combobox", { name: "Version" });
+    await user.click(versionSelect);
     await user.click(await screen.findByRole("option", { name: "0.9.0" }));
+    expect(versionSelect).toHaveTextContent("0.9.0");
+    expect(versionSelect).not.toHaveTextContent("v0");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(updateBinding).toHaveBeenCalledWith({
