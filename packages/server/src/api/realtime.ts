@@ -5,6 +5,7 @@
 import {
   canUserViewTaskMessages,
   hasJwtWorkspaceAccess,
+  isDaemonOwnerWorkspaceMember,
   isDaemonTokenAllowedRequest,
   isPendingForRuntime,
   verifyJwtToken,
@@ -513,18 +514,50 @@ export async function authorizeDaemonWebSocketRequest(
   store: MultiremiStore,
   authToken: string,
   runtimeIds: string[],
-): Promise<{ accessToken: MultiremiAccessToken | null } | { response: Response }> {
+): Promise<
+  | {
+      accessToken: MultiremiAccessToken | null;
+      canReportAgentPluginProtocol: boolean;
+    }
+  | { response: Response }
+> {
   let accessToken: MultiremiAccessToken | null = null;
   const token = bearerToken(req);
-  if (authToken && token !== authToken) {
+  if (token && token !== authToken) {
     accessToken = await store.verifyAccessToken(token);
     if (!accessToken) return { response: Response.json({ error: "unauthorized" }, { status: 401 }) };
     if (accessToken.type === "daemon" && !isDaemonTokenAllowedRequest(req)) {
       return { response: Response.json({ error: "forbidden for daemon token" }, { status: 403 }) };
     }
-    if (accessToken.type === "task") {
-      return { response: Response.json({ error: "forbidden for task token" }, { status: 403 }) };
+    if (accessToken.type !== "daemon") {
+      return {
+        response: Response.json(
+          { error: "daemon token required", code: "daemon_token_required" },
+          { status: 403 },
+        ),
+      };
     }
+    if (!cleanString(accessToken.daemonId)) {
+      return {
+        response: Response.json(
+          { error: "forbidden for daemon identity", code: "daemon_identity_forbidden" },
+          { status: 403 },
+        ),
+      };
+    }
+    if (!isDaemonOwnerWorkspaceMember(store, accessToken)) {
+      return {
+        response: Response.json(
+          {
+            error: "daemon owner is no longer a workspace member",
+            code: "daemon_owner_membership_required",
+          },
+          { status: 403 },
+        ),
+      };
+    }
+  } else if (authToken && token !== authToken) {
+    return { response: Response.json({ error: "unauthorized" }, { status: 401 }) };
   }
 
   for (const runtimeId of runtimeIds) {
@@ -533,11 +566,22 @@ export async function authorizeDaemonWebSocketRequest(
     if (accessToken?.type === "daemon" && (runtime.workspaceId ?? "local") !== accessToken.workspaceId) {
       return { response: Response.json({ error: "forbidden for daemon token workspace" }, { status: 403 }) };
     }
-    if (accessToken?.type === "daemon" && accessToken.daemonId && runtime.daemonId && runtime.daemonId !== accessToken.daemonId) {
-      return { response: Response.json({ error: "runtime not found" }, { status: 404 }) };
+    if (accessToken?.type === "daemon") {
+      const tokenDaemonId = cleanString(accessToken.daemonId);
+      const runtimeDaemonId = cleanString(runtime.daemonId);
+      if (!tokenDaemonId || !runtimeDaemonId || runtimeDaemonId !== tokenDaemonId) {
+        return { response: Response.json({ error: "runtime not found" }, { status: 404 }) };
+      }
     }
   }
-  return { accessToken };
+  return {
+    accessToken,
+    // The deployment-wide master token is the historical daemon credential.
+    // Keep it compatible while preventing PAT/JWT websocket clients from
+    // rewriting daemon capability metadata. Open mode is trusted as before.
+    canReportAgentPluginProtocol:
+      !authToken || token === authToken || accessToken?.type === "daemon",
+  };
 }
 
 export function resolveBrowserWebSocketWorkspaceId(
@@ -653,14 +697,32 @@ export function parseDaemonWebSocketMessage(message: string | BufferSource): Rec
   }
 }
 
-export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): { runtimeId: string | null; supportsBatchImport: boolean; supportsDirectoryScan: boolean } {
+export function parseDaemonWebSocketHeartbeat(event: Record<string, any>): {
+  runtimeId: string | null;
+  supportsBatchImport: boolean;
+  supportsDirectoryScan: boolean;
+  agentPluginProtocol: number | undefined;
+} {
   const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, any> : {};
   const runtimeId = cleanString(payload.runtime_id ?? event.runtime_id);
+  const protocolValue = Object.prototype.hasOwnProperty.call(payload, "agent_plugin_protocol")
+    ? payload.agent_plugin_protocol
+    : Object.prototype.hasOwnProperty.call(event, "agent_plugin_protocol")
+      ? event.agent_plugin_protocol
+      : undefined;
   return {
     runtimeId,
     supportsBatchImport: Boolean(payload.supports_batch_import ?? event.supports_batch_import),
     supportsDirectoryScan: Boolean(payload.supports_directory_scan ?? event.supports_directory_scan),
+    agentPluginProtocol: protocolValue === undefined
+      ? undefined
+      : normalizeProtocolVersion(protocolValue),
   };
+}
+
+function normalizeProtocolVersion(value: unknown): number {
+  const protocol = Number(value);
+  return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
 }
 
 export function decodeWebSocketMessage(message: BufferSource): string {

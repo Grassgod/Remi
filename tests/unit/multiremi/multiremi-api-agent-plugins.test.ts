@@ -596,12 +596,17 @@ describe("Multiremi API — agent plugins", () => {
 
   it("serves desired state, observed reports, retry generations and exact artifact bytes to daemons", async () => {
     const store = createStore();
+    const runtimeStateEvents: any[] = [];
+    store.onWorkspaceEvent((event) => {
+      if (event.type === "agent_plugin:runtime_state") runtimeStateEvents.push(event);
+    });
     const runtime = store.registerRuntime({
       id: "rt_api_plugin",
       name: "Plugin runtime",
       provider: "claude",
       daemonId: "daemon-local",
       workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
     });
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
     const plugin = store.importAgentPlugin({
@@ -645,6 +650,8 @@ describe("Multiremi API — agent plugins", () => {
       workspaceId: "remote",
       userId: "remote-user",
     });
+    const taskCredentialTask = store.createTask({ agentId: agent.id, prompt: "Task credential scope" });
+    const taskCredential = await store.createTaskAccessToken(taskCredentialTask, "local");
     const app = createMultiremiApp({ store, authToken: "root-secret" });
     const daemonHeaders = { Authorization: `Bearer ${daemonToken.token}` };
 
@@ -654,7 +661,7 @@ describe("Multiremi API — agent plugins", () => {
       ["same-workspace PAT", localPat.token],
       ["cross-workspace PAT", remotePat.token],
       ["JWT", signTestJwt({ sub: "local", exp: Math.floor(Date.now() / 1000) + 60 })],
-      ["master token", "root-secret"],
+      ["task token", taskCredential.token],
       ["cross-workspace daemon", remoteToken.token],
       ["wrong daemon identity", wrongDaemon.token],
       ["unbound daemon identity", unboundDaemon.token],
@@ -671,7 +678,55 @@ describe("Multiremi API — agent plugins", () => {
       });
       expect(deniedReport.status, `${label} state report`).toBe(403);
     }
+    const masterDesired = await app.request(desiredPath, {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect(masterDesired.status).toBe(200);
+    const deniedHeartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${wrongDaemon.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runtime_id: runtime.id, agent_plugin_protocol: 0 }),
+    });
+    expect(deniedHeartbeat.status).toBe(403);
+    expect(await deniedHeartbeat.json()).toMatchObject({ code: "daemon_identity_forbidden" });
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
+    const deniedHumanCapability = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${localPat.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runtime_id: runtime.id, agent_plugin_protocol: 0 }),
+    });
+    expect(deniedHumanCapability.status).toBe(403);
+    expect(await deniedHumanCapability.json()).toMatchObject({ code: "daemon_token_required" });
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
+    const deniedHumanHeartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${localPat.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runtime_id: runtime.id }),
+    });
+    expect(deniedHumanHeartbeat.status).toBe(403);
+    expect(await deniedHumanHeartbeat.json()).toMatchObject({ code: "daemon_token_required" });
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
     expect(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins[0]?.status).toBe("pending");
+
+    const masterHeartbeat = await app.request("/api/daemon/heartbeat", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer root-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ runtime_id: runtime.id, agent_plugin_protocol: 2 }),
+    });
+    expect(masterHeartbeat.status).toBe(200);
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(2);
 
     const desired = await app.request(desiredPath, {
       headers: daemonHeaders,
@@ -698,6 +753,31 @@ describe("Multiremi API — agent plugins", () => {
     );
     expect(reported.status).toBe(200);
     expect((await reported.json()).state).toMatchObject({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest });
+    const repeatedReport = await app.request(statePath, {
+      method: "POST",
+      headers: { ...daemonHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
+    });
+    expect(repeatedReport.status).toBe(200);
+    expect(runtimeStateEvents).toHaveLength(1);
+
+    const masterReport = await app.request(statePath, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret", "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
+    });
+    expect(masterReport.status).toBe(200);
+
+    const openApp = createMultiremiApp({ store, authToken: "" });
+    expect((await openApp.request(desiredPath)).status).toBe(200);
+    expect((await openApp.request(statePath, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "ready", observed_digest: plugin.activeVersion!.artifactDigest }),
+    })).status).toBe(200);
+    expect((await openApp.request(desiredPath, {
+      headers: { Authorization: `Bearer ${localPat.token}` },
+    })).status).toBe(403);
 
     const retry = await app.request(`/api/multiremi/agent-plugins/${plugin.id}/runtimes/retry`, {
       method: "POST",
@@ -722,15 +802,21 @@ describe("Multiremi API — agent plugins", () => {
     const sameWorkspaceUser = await app.request(`/api/daemon/agent-plugin-artifacts/${digest}`, {
       headers: { Authorization: `Bearer ${localPat.token}` },
     });
-    expect(sameWorkspaceUser.status).toBe(200);
+    expect(sameWorkspaceUser.status).toBe(403);
+    expect(await sameWorkspaceUser.json()).toMatchObject({ code: "daemon_token_required" });
     const crossWorkspaceUser = await app.request(`/api/daemon/agent-plugin-artifacts/${digest}`, {
       headers: { Authorization: `Bearer ${remotePat.token}` },
     });
-    expect(crossWorkspaceUser.status).toBe(404);
+    expect(crossWorkspaceUser.status).toBe(403);
+    expect(await crossWorkspaceUser.json()).toMatchObject({ code: "daemon_token_required" });
   });
 
   it("binds legacy daemon tokens on first registration and rejects identity changes", async () => {
     const store = createStore();
+    const capabilityEvents: any[] = [];
+    store.onWorkspaceEvent((event) => {
+      if (event.type === "agent_plugin:runtime_capability") capabilityEvents.push(event);
+    });
     const daemonToken = await store.createAccessToken({
       name: "Legacy daemon",
       type: "daemon",
@@ -756,6 +842,46 @@ describe("Multiremi API — agent plugins", () => {
     const runtimeId = registeredBody.runtimes[0].id;
     expect(store.getAccessToken(daemonToken.id)?.daemonId).toBe("daemon-bound");
     expect(store.getRuntime(runtimeId)?.daemonId).toBe("daemon-bound");
+    expect(store.getRuntime(runtimeId)?.metadata.agent_plugin_protocol).toBe(0);
+    expect(capabilityEvents[0]?.payload).toMatchObject({
+      runtime_id: runtimeId,
+      previous_agent_plugin_protocol: null,
+      agent_plugin_protocol: 0,
+      supported: false,
+    });
+
+    const upgraded = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-bound",
+        capabilities: { agent_plugins: 1 },
+        runtimes: [{ type: "claude" }],
+      }),
+    });
+    expect(upgraded.status).toBe(200);
+    expect(store.getRuntime(runtimeId)?.metadata.agent_plugin_protocol).toBe(1);
+    expect(capabilityEvents).toHaveLength(2);
+    expect(capabilityEvents[1]?.payload).toMatchObject({
+      runtime_id: runtimeId,
+      previous_agent_plugin_protocol: 0,
+      agent_plugin_protocol: 1,
+      supported: true,
+    });
+
+    const repeatedUpgrade = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-bound",
+        capabilities: { agent_plugins: 1 },
+        runtimes: [{ type: "claude" }],
+      }),
+    });
+    expect(repeatedUpgrade.status).toBe(200);
+    expect(capabilityEvents).toHaveLength(2);
 
     const missingRuntimeIdentity = await app.request("/api/multiremi/runtimes", {
       method: "POST",

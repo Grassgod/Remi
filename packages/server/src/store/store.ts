@@ -15,7 +15,17 @@ import { IssueSessionsRepo } from "@multiremi/store/repos/issue-sessions-repo.js
 import { ChatRepo } from "@multiremi/store/repos/chat-repo.js";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { IssueWorkspacesRepo } from "@multiremi/store/repos/issue-workspaces-repo.js";
-import { RuntimesRepo } from "@multiremi/store/repos/runtimes-repo.js";
+import {
+  RuntimesRepo,
+  type ArchiveAgentsAndDeleteRuntimeResult,
+  type StrictRuntimeDeleteResult,
+} from "@multiremi/store/repos/runtimes-repo.js";
+import {
+  DaemonRetirementRepo,
+  type DaemonInventoryEntry,
+  type DaemonRetirementPlan,
+  type RetireDaemonResult,
+} from "@multiremi/store/repos/daemon-retirement-repo.js";
 import { TasksRepo } from "@multiremi/store/repos/tasks-repo.js";
 import {
   AutopilotsRepo,
@@ -249,6 +259,7 @@ export class MultiremiStore {
   private issues: IssuesRepo;
   private issueWorkspaces: IssueWorkspacesRepo;
   private runtimes: RuntimesRepo;
+  private daemonRetirement: DaemonRetirementRepo;
   private autopilots: AutopilotsRepo;
   private tasks: TasksRepo;
 
@@ -275,6 +286,7 @@ export class MultiremiStore {
     this.issues = new IssuesRepo(this.ctx);
     this.issueWorkspaces = new IssueWorkspacesRepo(this.ctx);
     this.runtimes = new RuntimesRepo(this.ctx);
+    this.daemonRetirement = new DaemonRetirementRepo(this.ctx);
     this.autopilots = new AutopilotsRepo(this.ctx);
     this.tasks = new TasksRepo(this.ctx);
     this.migrate();
@@ -349,6 +361,11 @@ runMigrations(this.db);
 
   createSkill(input: CreateSkillInput): MultiremiSkill {
     return this.agents.createSkill(input);
+  }
+
+  /** Internal primitive for callers that already own a database transaction. */
+  createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill {
+    return this.agents.createSkillWithinTransaction(input);
   }
 
   updateSkill(id: string, input: UpdateSkillInput): MultiremiSkill {
@@ -487,6 +504,10 @@ runMigrations(this.db);
     return this.agentPlugins.assertAgentPluginProviderCompatible(agentId, provider);
   }
 
+  recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+    return this.agentPlugins.recordAgentPluginRuntimeHeartbeat(runtimeId);
+  }
+
   listAgentPluginRuntimeStates(
     options: { workspaceId?: string; pluginId?: string; runtimeId?: string; includeHistorical?: boolean } = {},
   ): MultiremiAgentPluginRuntimeState[] {
@@ -503,6 +524,19 @@ runMigrations(this.db);
     input: ReportAgentPluginRuntimeStateInput,
   ): MultiremiAgentPluginRuntimeState {
     return this.agentPlugins.reportAgentPluginRuntimeState(runtimeId, versionId, input);
+  }
+
+  reportAgentPluginRuntimeStateResult(
+    runtimeId: string,
+    versionId: string,
+    input: ReportAgentPluginRuntimeStateInput,
+  ): { state: MultiremiAgentPluginRuntimeState; changed: boolean } {
+    return this.agentPlugins.reportAgentPluginRuntimeStateResult(runtimeId, versionId, input);
+  }
+
+  /** Internal cross-domain primitive; caller owns workspace lifecycle + Plugin locks. */
+  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+    return this.agentPlugins.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
   }
 
   retryAgentPluginRuntime(
@@ -792,7 +826,19 @@ runMigrations(this.db);
   }
 
   async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {
-    return this.accessTokens.createAccessToken(input);
+    const type = String(input.type ?? "pat").trim().toLowerCase();
+    const daemonId = type === "daemon" ? String(input.daemonId ?? input.daemon_id ?? "").trim() : "";
+    if (!daemonId) return this.accessTokens.createAccessToken(input);
+    const workspaceId = String(input.workspaceId ?? input.workspace_id ?? "local").trim() || "local";
+    return this.accessTokens.createAccessToken({ ...input, workspaceId, daemonId }, () => {
+      this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
+      this.daemonRetirement.assertCanRegister(workspaceId, daemonId);
+      this.daemonRetirement.claimIdentityOwnerWithinLock(
+        workspaceId,
+        daemonId,
+        String(input.userId ?? input.user_id ?? "local").trim() || "local",
+      );
+    });
   }
 
   async createTaskAccessToken(
@@ -815,7 +861,90 @@ runMigrations(this.db);
   }
 
   bindDaemonAccessToken(id: string, daemonId: string): MultiremiAccessToken | null {
-    return this.accessTokens.bindDaemonAccessToken(id, daemonId);
+    const normalizedDaemonId = daemonId.trim();
+    if (!normalizedDaemonId) return null;
+    const initial = this.accessTokens.getAccessToken(id);
+    if (!initial || initial.type !== "daemon") return null;
+    return this.db.transaction(() => {
+      this.daemonRetirement.lockLifecycle(initial.workspaceId, normalizedDaemonId);
+      this.daemonRetirement.assertCanRegister(initial.workspaceId, normalizedDaemonId);
+      const current = this.accessTokens.getAccessToken(id);
+      if (!current || current.type !== "daemon" || current.workspaceId !== initial.workspaceId) return null;
+      this.daemonRetirement.claimIdentityOwnerWithinLock(
+        current.workspaceId,
+        normalizedDaemonId,
+        current.userId,
+      );
+      return this.accessTokens.bindDaemonAccessToken(id, normalizedDaemonId);
+    })();
+  }
+
+  promoteCliAccessTokenToDaemon(
+    id: string,
+    workspaceId: string,
+    daemonId: string,
+  ): MultiremiAccessToken | null {
+    const normalizedWorkspaceId = workspaceId.trim() || "local";
+    const normalizedDaemonId = daemonId.trim();
+    if (!normalizedDaemonId) return null;
+    return this.db.transaction(() => {
+      this.daemonRetirement.lockLifecycle(normalizedWorkspaceId, normalizedDaemonId);
+      this.daemonRetirement.assertCanRegister(normalizedWorkspaceId, normalizedDaemonId);
+      const current = this.accessTokens.getAccessToken(id);
+      if (
+        !current
+        || current.workspaceId !== normalizedWorkspaceId
+        || current.type !== "pat"
+        || current.purpose !== "cli"
+      ) return null;
+      this.daemonRetirement.claimIdentityOwnerWithinLock(
+        normalizedWorkspaceId,
+        normalizedDaemonId,
+        current.userId,
+      );
+      return this.accessTokens.promoteCliAccessTokenToDaemon(
+        id,
+        normalizedWorkspaceId,
+        normalizedDaemonId,
+      );
+    })();
+  }
+
+  promoteCliAccessTokenForRuntime(
+    id: string,
+    runtimeId: string,
+  ): MultiremiAccessToken | null {
+    return this.db.transaction(() => {
+      const token = this.accessTokens.getAccessToken(id);
+      const runtime = this.runtimes.getRuntime(runtimeId);
+      if (
+        !token ||
+        token.type !== "pat" ||
+        token.purpose !== "cli" ||
+        !runtime
+      ) {
+        return null;
+      }
+      const workspaceId = String(runtime.workspaceId ?? "local").trim() || "local";
+      const daemonId = String(runtime.daemonId ?? "").trim();
+      const runtimeOwnerId = String(runtime.ownerId ?? "").trim();
+      if (
+        !daemonId ||
+        token.workspaceId !== workspaceId ||
+        !runtimeOwnerId ||
+        token.userId !== runtimeOwnerId
+      ) {
+        return null;
+      }
+      this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
+      this.daemonRetirement.assertCanRegister(workspaceId, daemonId);
+      this.daemonRetirement.claimIdentityOwnerWithinLock(workspaceId, daemonId, token.userId);
+      return this.accessTokens.promoteCliAccessTokenToDaemon(
+        id,
+        workspaceId,
+        daemonId,
+      );
+    })();
   }
 
   revokeAccessToken(id: string): MultiremiAccessToken | null {
@@ -838,7 +967,100 @@ runMigrations(this.db);
   }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
-    return this.runtimes.registerRuntime(input);
+    const daemonId = String(input.daemonId ?? input.daemon_id ?? "").trim();
+    if (!daemonId) return this.runtimes.registerRuntime(input);
+    const workspaceId = String(input.workspaceId ?? input.workspace_id ?? "local").trim() || "local";
+    const tx = this.db.transaction(() => {
+      this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.agentPlugins.lockAgentPluginWorkspace(workspaceId);
+      this.daemonRetirement.assertCanRegister(workspaceId, daemonId);
+      const requestedOwnerId = String(input.ownerId ?? input.owner_id ?? "").trim() || null;
+      const ownerId = this.daemonRetirement.claimIdentityOwnerWithinLock(
+        workspaceId,
+        daemonId,
+        requestedOwnerId,
+      );
+      const runtime = this.runtimes.registerRuntimeWithinTransaction({
+        ...input,
+        workspaceId,
+        daemonId,
+        ownerId,
+      });
+      this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
+      return runtime;
+    });
+    return tx();
+  }
+
+  registerDaemonRuntimeBatch(inputs: RegisterRuntimeInput[]): MultiremiRuntime[] {
+    if (inputs.length === 0) return [];
+    const first = inputs[0];
+    const workspaceId = String(first.workspaceId ?? first.workspace_id ?? "local").trim() || "local";
+    const daemonId = String(first.daemonId ?? first.daemon_id ?? "").trim();
+    if (!daemonId) throw new Error("daemonId is required for daemon Runtime registration");
+    for (const input of inputs) {
+      const inputWorkspaceId = String(input.workspaceId ?? input.workspace_id ?? "local").trim() || "local";
+      const inputDaemonId = String(input.daemonId ?? input.daemon_id ?? "").trim();
+      if (inputWorkspaceId !== workspaceId || inputDaemonId !== daemonId) {
+        throw new Error("daemon Runtime batch must use one workspace and daemon identity");
+      }
+    }
+
+    return this.db.transaction(() => {
+      this.daemonRetirement.lockLifecycle(workspaceId, daemonId);
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.agentPlugins.lockAgentPluginWorkspace(workspaceId);
+      this.daemonRetirement.assertCanRegister(workspaceId, daemonId);
+      const requestedOwnerId = String(first.ownerId ?? first.owner_id ?? "").trim() || null;
+      const ownerId = this.daemonRetirement.claimIdentityOwnerWithinLock(
+        workspaceId,
+        daemonId,
+        requestedOwnerId,
+      );
+      const runtimes = inputs.map((input) => this.runtimes.registerRuntimeWithinTransaction({
+        ...input,
+        workspaceId,
+        daemonId,
+        ownerId,
+      }));
+      this.agentPlugins.reconcileAgentPluginDesiredStateWithinLock(workspaceId);
+      return runtimes;
+    })();
+  }
+
+  isDaemonRetired(workspaceId: string, daemonId: string): boolean {
+    return this.daemonRetirement.isRetired(workspaceId, daemonId);
+  }
+
+  listDaemonInventory(workspaceId: string): DaemonInventoryEntry[] {
+    return this.daemonRetirement.listInventory(workspaceId);
+  }
+
+  getDaemonIdentityOwnerUserId(workspaceId: string, daemonId: string): string | null {
+    return this.daemonRetirement.getIdentityOwnerUserId(workspaceId, daemonId);
+  }
+
+  getDaemonRetirementPlan(workspaceId: string, daemonId: string): DaemonRetirementPlan {
+    return this.daemonRetirement.getPlan(workspaceId, daemonId);
+  }
+
+  retireDaemon(
+    workspaceId: string,
+    daemonId: string,
+    expectedSnapshot: string,
+    retiredBy: string | null,
+    requiredOwnerUserId: string | null = null,
+    options: { abandonIssueWorkspaces?: boolean } = {},
+  ): RetireDaemonResult {
+    return this.daemonRetirement.retire(
+      workspaceId,
+      daemonId,
+      expectedSnapshot,
+      retiredBy,
+      requiredOwnerUserId,
+      options,
+    );
   }
 
   getRuntime(id: string): MultiremiRuntime | null {
@@ -873,14 +1095,14 @@ runMigrations(this.db);
     return this.runtimes.deleteRuntime(id);
   }
 
-  deleteRuntimeWithArchivedAgentCleanup(id: string): boolean {
+  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
     return this.runtimes.deleteRuntimeWithArchivedAgentCleanup(id);
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
-  ): { status: "ok"; agentsArchived: number; tasksCancelled: number } | { status: "plan_changed"; activeAgents: MultiremiAgent[] } {
+  ): ArchiveAgentsAndDeleteRuntimeResult {
     return this.runtimes.archiveAgentsAndDeleteRuntime(id, expectedActiveAgentIds);
   }
 
@@ -1062,7 +1284,12 @@ runMigrations(this.db);
   } = {}): MultiremiRuntimeDaily[] {
     return this.usage.listRuntimeDaily(input);
   }
-  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean; supportsDirectoryScan?: boolean } = {}): MultiremiDaemonHeartbeatAck {
+  heartbeatRuntime(runtimeId: string, options: {
+    claimPending?: boolean;
+    supportsBatchImport?: boolean;
+    supportsDirectoryScan?: boolean;
+    agentPluginProtocol?: number;
+  } = {}): MultiremiDaemonHeartbeatAck {
     return this.runtimes.heartbeatRuntime(runtimeId, options);
   }
 
@@ -1454,6 +1681,20 @@ runMigrations(this.db);
     createdAt?: string;
   }): MultiremiSessionEvent {
     return this.sessions.appendSessionEvent(sessionId, input);
+  }
+
+  /** Internal primitive for callers that already own a database transaction. */
+  appendSessionEventWithinTransaction(sessionId: string, input: {
+    authorType: string;
+    authorId?: string | null;
+    kind?: string;
+    body?: string;
+    taskId?: string | null;
+    sourceCommentId?: string | null;
+    metadata?: Record<string, unknown>;
+    createdAt?: string;
+  }): MultiremiSessionEvent {
+    return this.sessions.appendSessionEventWithinTransaction(sessionId, input);
   }
 
   listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {

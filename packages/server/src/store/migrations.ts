@@ -166,6 +166,27 @@ export function runMigrations(db: SqlDatabase): void {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS multiremi_daemon_retirements (
+      workspace_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      retired_by TEXT,
+      retired_at TEXT NOT NULL,
+      runtime_ids TEXT NOT NULL DEFAULT '[]',
+      impact TEXT NOT NULL DEFAULT '{}',
+      PRIMARY KEY(workspace_id, daemon_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_multiremi_daemon_retirements_daemon
+      ON multiremi_daemon_retirements(daemon_id, retired_at);
+
+    CREATE TABLE IF NOT EXISTS multiremi_daemon_lifecycle_locks (
+      workspace_id TEXT NOT NULL,
+      daemon_id TEXT NOT NULL,
+      owner_user_id TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(workspace_id, daemon_id)
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_agent_plugin_runtime_states (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL DEFAULT 'local',
@@ -178,6 +199,7 @@ export function runMigrations(db: SqlDatabase): void {
       observed_digest TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
       retry_generation INTEGER NOT NULL DEFAULT 0,
+      pending_heartbeat_count INTEGER NOT NULL DEFAULT 0,
       next_retry_at TEXT,
       last_error_code TEXT,
       last_error TEXT,
@@ -1215,6 +1237,11 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_agents", "runtime_id TEXT");
   addColumnIfMissing(db, "multiremi_agents", "max_concurrent_tasks INTEGER NOT NULL DEFAULT 6");
   addColumnIfMissing(db, "multiremi_agent_plugins", "source_subdir TEXT");
+  addColumnIfMissing(
+    db,
+    "multiremi_agent_plugin_runtime_states",
+    "pending_heartbeat_count INTEGER NOT NULL DEFAULT 0",
+  );
   addColumnIfMissing(db, "multiremi_runtimes", "daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "legacy_daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "runtime_mode TEXT NOT NULL DEFAULT 'local'");
@@ -1223,6 +1250,7 @@ export function runMigrations(db: SqlDatabase): void {
   addColumnIfMissing(db, "multiremi_runtimes", "owner_id TEXT");
   addColumnIfMissing(db, "multiremi_runtimes", "visibility TEXT NOT NULL DEFAULT 'private'");
   addColumnIfMissing(db, "multiremi_runtimes", "name_customized INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(db, "multiremi_daemon_lifecycle_locks", "owner_user_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "daemon_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "task_id TEXT");
   addColumnIfMissing(db, "multiremi_access_tokens", "agent_id TEXT");
@@ -1240,6 +1268,7 @@ export function runMigrations(db: SqlDatabase): void {
       "UPDATE multiremi_access_tokens SET purpose = 'cli' WHERE type = 'pat' AND (name = 'CLI token' OR name = 'Multiremi daemon' OR name LIKE 'Remi daemon %')",
     );
   }
+  backfillDaemonIdentityOwners(db);
   addColumnIfMissing(db, "multiremi_issues", "assignee_type TEXT");
   addColumnIfMissing(db, "multiremi_issues", "assignee_id TEXT");
   addColumnIfMissing(db, "multiremi_issues", "metadata TEXT NOT NULL DEFAULT '{}'");
@@ -1660,6 +1689,69 @@ function backfillOwnerExternalId(db: SqlDatabase): void {
     "UPDATE multiremi_users SET external_id = ? WHERE id = 'local' AND (external_id IS NULL OR external_id = '')",
     [ownerOpenId],
   );
+}
+
+// Older databases stored the machine owner independently on Runtime and daemon-token
+// rows. Persist the claim on the lifecycle row when every active identity agrees.
+// Conflicting legacy data is deliberately left unclaimed: the runtime claim guard
+// will reject every future mutation until an administrator resolves the bad rows.
+function backfillDaemonIdentityOwners(db: SqlDatabase): void {
+  const now = new Date().toISOString();
+  const rows = db.query(
+    `SELECT workspace_id, daemon_id, owner_user_id
+     FROM (
+       SELECT COALESCE(workspace_id, 'local') AS workspace_id,
+              daemon_id,
+              owner_id AS owner_user_id
+       FROM multiremi_runtimes
+       WHERE daemon_id IS NOT NULL AND daemon_id != ''
+         AND owner_id IS NOT NULL AND owner_id != ''
+       UNION ALL
+       SELECT workspace_id,
+              daemon_id,
+              user_id AS owner_user_id
+       FROM multiremi_access_tokens
+       WHERE type = 'daemon'
+         AND daemon_id IS NOT NULL AND daemon_id != ''
+         AND user_id IS NOT NULL AND user_id != ''
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > ?)
+     ) daemon_identities
+     ORDER BY workspace_id, daemon_id, owner_user_id`,
+  ).all(now) as Array<{ workspace_id: string; daemon_id: string; owner_user_id: string }>;
+
+  const ownersByDaemon = new Map<string, {
+    workspaceId: string;
+    daemonId: string;
+    owners: Set<string>;
+  }>();
+  for (const row of rows) {
+    const workspaceId = String(row.workspace_id ?? "local").trim() || "local";
+    const daemonId = String(row.daemon_id ?? "").trim();
+    const ownerUserId = String(row.owner_user_id ?? "").trim();
+    if (!daemonId || !ownerUserId) continue;
+    const key = `${workspaceId}\u0000${daemonId}`;
+    const entry = ownersByDaemon.get(key) ?? { workspaceId, daemonId, owners: new Set<string>() };
+    entry.owners.add(ownerUserId);
+    ownersByDaemon.set(key, entry);
+  }
+
+  for (const { workspaceId, daemonId, owners } of ownersByDaemon.values()) {
+    if (owners.size !== 1) continue;
+    const ownerUserId = [...owners][0]!;
+    db.run(
+      `INSERT INTO multiremi_daemon_lifecycle_locks (workspace_id, daemon_id, owner_user_id, updated_at)
+       VALUES (?, ?, ?, ?) ON CONFLICT(workspace_id, daemon_id) DO NOTHING`,
+      [workspaceId, daemonId, ownerUserId, now],
+    );
+    db.run(
+      `UPDATE multiremi_daemon_lifecycle_locks
+       SET owner_user_id = ?, updated_at = ?
+       WHERE workspace_id = ? AND daemon_id = ?
+         AND (owner_user_id IS NULL OR owner_user_id = '')`,
+      [ownerUserId, now, workspaceId, daemonId],
+    );
+  }
 }
 
 function nextIssueNumber(db: SqlDatabase, workspaceId: string): number {

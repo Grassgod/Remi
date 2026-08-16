@@ -13,6 +13,7 @@ export type DaemonWebSocketData = {
   runtimeId: string | null;
   runtimeIds: string[];
   accessToken: MultiremiAccessToken | null;
+  canReportAgentPluginProtocol: boolean;
 }
 
 export type BrowserWebSocketData = {

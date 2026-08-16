@@ -4,8 +4,12 @@ import {
   bindDaemonTokenIdentityOrDeny,
   daemonLocalSkillImportReportBody,
   daemonLocalSkillListReportBody,
+  daemonRegisterOwnerContext,
   denyCurrentUserWorkspaceAccess,
+  denyDaemonOwnerWorkspaceMembership,
+  denyUnprivilegedOwnerlessDaemonClaim,
   denyDaemonRuntimeObservedStateAccess,
+  denyDaemonTokenRuntimeIdentity,
   denyDaemonTokenRuntimeWorkspace,
   denyDaemonTokenWorkspace,
   isJsonApiError,
@@ -17,6 +21,8 @@ import {
   loadRuntimeForCurrentUser,
   overlayGatewayModels,
   parseExpectedActiveAgentIds,
+  promoteLegacyCliPatForDaemonHeartbeat,
+  promoteLegacyCliPatForDaemonRegistration,
   readJson,
   readJsonStrict,
   safeCreateRuntimeUpdateRequest,
@@ -24,6 +30,7 @@ import {
   validateMultiremiRuntimeProvider,
 } from "../helpers.js";
 import {
+  authenticatedRequestUserId,
   cleanString,
   compareRuntimeUsageDailyCompatibilityRows,
   currentAccessToken,
@@ -61,7 +68,7 @@ import type {
 import type { RouterDeps } from "./deps.js";
 
 export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
-  const { store } = deps;
+  const { store, authToken } = deps;
 
   app.get("/api/multiremi/runtimes", (c) => {
     const loaded = listRuntimesForCurrentUser(c, store);
@@ -71,29 +78,74 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   app.post("/api/multiremi/runtimes", async (c) => {
     const body = await readJson<RegisterRuntimeInput>(c);
     const workspaceId = body.workspaceId ?? body.workspace_id ?? "local";
+    const ownerMembershipDenied = denyDaemonOwnerWorkspaceMembership(c, store);
+    if (ownerMembershipDenied) return ownerMembershipDenied;
     const denied = denyDaemonTokenWorkspace(c, workspaceId) ??
       (currentAccessToken(c)?.type === "daemon" ? null : denyCurrentUserWorkspaceAccess(c, store, workspaceId));
     if (denied) return denied;
     const provider = validateMultiremiRuntimeProvider(body.provider);
     if ("error" in provider) return c.json({ error: provider.error }, provider.status);
-    const accessToken = currentAccessToken(c);
+    let accessToken = currentAccessToken(c);
+    const requestedRuntimeId = cleanString(body.id);
+    const existingRuntime = requestedRuntimeId ? store.getRuntime(requestedRuntimeId) : null;
+    if (existingRuntime && accessToken?.type !== "daemon") {
+      const editable = loadRuntimeForCurrentEditor(c, store, requestedRuntimeId!, "edit");
+      if (editable instanceof Response) return editable;
+    }
+    const bodyDaemonId = cleanString(body.daemonId ?? body.daemon_id);
+    if (accessToken?.type === "daemon" && !bodyDaemonId) {
+      return c.json({ error: "daemonId is required", code: "daemon_identity_required" }, 403);
+    }
+    const requestedDaemonId = bodyDaemonId;
+    const registrationOwner = requestedDaemonId
+      ? daemonRegisterOwnerContext(c, store, workspaceId)
+      : null;
+    if (registrationOwner && "error" in registrationOwner) {
+      return c.json({ error: registrationOwner.error }, registrationOwner.status);
+    }
+    if (requestedDaemonId && store.isDaemonRetired(workspaceId, requestedDaemonId)) {
+      return c.json({ error: "daemon has been retired", code: "daemon_retired" }, 410);
+    }
+    const ownerlessClaimDenied = denyUnprivilegedOwnerlessDaemonClaim(
+      c,
+      store,
+      workspaceId,
+      requestedDaemonId,
+    );
+    if (ownerlessClaimDenied) return ownerlessClaimDenied;
+    if (accessToken?.type === "pat" && accessToken.purpose === "cli") {
+      const upgradeDenied = promoteLegacyCliPatForDaemonRegistration(
+        c,
+        store,
+        workspaceId,
+        requestedDaemonId ?? "",
+      );
+      if (upgradeDenied) return upgradeDenied;
+      accessToken = currentAccessToken(c);
+    }
     if (accessToken?.type === "daemon") {
-      const requestedRuntimeId = cleanString(body.id);
-      const existing = requestedRuntimeId ? store.getRuntime(requestedRuntimeId) : null;
-      if (existing && requestedRuntimeId) {
+      if (existingRuntime && requestedRuntimeId) {
         const existingWorkspaceDenied = denyDaemonTokenRuntimeWorkspace(c, store, requestedRuntimeId);
         if (existingWorkspaceDenied) return existingWorkspaceDenied;
-        const requestedDaemonId = cleanString(body.daemonId ?? body.daemon_id);
         const effectiveDaemonId = cleanString(accessToken.daemonId) ?? requestedDaemonId;
-        const existingDaemonId = cleanString(existing.daemonId);
+        const existingDaemonId = cleanString(existingRuntime.daemonId);
         if (existingDaemonId && existingDaemonId !== effectiveDaemonId) {
           return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
         }
       }
-      const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, body.daemonId ?? body.daemon_id);
+      const identityDenied = bindDaemonTokenIdentityOrDeny(c, store, requestedDaemonId);
       if (identityDenied) return identityDenied;
     }
-    return c.json({ runtime: store.registerRuntime(body) }, 201);
+    const registration = requestedDaemonId
+      ? {
+        ...body,
+        daemonId: requestedDaemonId,
+        ownerId: registrationOwner && "ownerId" in registrationOwner
+          ? registrationOwner.ownerId
+          : null,
+      }
+      : body;
+    return c.json({ runtime: store.registerRuntime(registration) }, 201);
   });
   app.get("/api/multiremi/runtimes/:id", (c) => {
     const loaded = loadRuntimeForCurrentUser(c, store, c.req.param("id"));
@@ -166,7 +218,7 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.put("/api/daemon/runtimes/:runtimeId/models", async (c) => {
     const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
     if (denied) return denied;
     const body = await readJsonStrict<{ models?: MultiremiRuntimeModel[]; supported?: boolean }>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
@@ -178,13 +230,13 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
   });
   app.post("/api/daemon/runtimes/:runtimeId/models/claim", (c) => {
     const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
     if (denied) return denied;
     return c.json({ request: store.claimRuntimeModelListRequest(runtimeId) });
   });
   app.post("/api/daemon/runtimes/:runtimeId/models/:requestId/result", async (c) => {
     const runtimeId = c.req.param("runtimeId");
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId);
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, runtimeId, authToken);
     if (denied) return denied;
     const requestId = c.req.param("requestId");
     const request = store.getRuntimeModelListRequest(runtimeId, requestId);
@@ -485,8 +537,22 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const activeAgents = store.listActiveAgentsByRuntime(loaded.runtime.id);
     if (activeAgents.length) return c.json(runtimeHasActiveAgentsResponse(activeAgents), 409);
-    const deleted = store.deleteRuntimeWithArchivedAgentCleanup(loaded.runtime.id);
-    if (!deleted) return c.json({ error: "runtime not found" }, 404);
+    const result = store.deleteRuntimeWithArchivedAgentCleanup(loaded.runtime.id);
+    if (result.status === "active_agents") return c.json(runtimeHasActiveAgentsResponse(result.activeAgents), 409);
+    if (result.status === "active_tasks") {
+      return c.json({
+        error: "cannot delete runtime while it has active tasks",
+        code: "runtime_has_active_tasks",
+      }, 409);
+    }
+    if (result.status === "daemon_last_runtime") {
+      return c.json({
+        error: "cannot delete the last runtime of a daemon; retire the machine instead",
+        code: "daemon_last_runtime",
+        daemon_id: result.daemonId,
+      }, 409);
+    }
+    if (result.status === "not_found") return c.json({ error: "runtime not found" }, 404);
     return c.json({ status: "ok" });
   });
   app.post("/api/runtimes/:id/archive-agents-and-delete", async (c) => {
@@ -497,6 +563,13 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     const expectedIds = parseExpectedActiveAgentIds(c, body.expected_active_agent_ids ?? []);
     if (expectedIds instanceof Response) return expectedIds;
     const result = store.archiveAgentsAndDeleteRuntime(loaded.runtime.id, expectedIds);
+    if (result.status === "daemon_last_runtime") {
+      return c.json({
+        error: "cannot delete the last runtime of a daemon; retire the machine instead",
+        code: "daemon_last_runtime",
+        daemon_id: result.daemonId,
+      }, 409);
+    }
     if (result.status === "plan_changed") {
       return c.json(runtimeHasActiveAgentsResponse(
         result.activeAgents,
@@ -511,9 +584,26 @@ export function registerRuntimeRoutes(app: Hono, deps: RouterDeps): void {
     });
   });
   app.post("/api/multiremi/runtimes/:id/heartbeat", (c) => {
-    const denied = denyDaemonTokenRuntimeWorkspace(c, store, c.req.param("id"));
+    let token = currentAccessToken(c);
+    const runtimeId = c.req.param("id");
+    if (token?.type === "pat" && token.purpose === "cli") {
+      const upgradeDenied = promoteLegacyCliPatForDaemonHeartbeat(c, store, runtimeId);
+      if (upgradeDenied) return upgradeDenied;
+      token = currentAccessToken(c);
+    }
+    const isMaster = Boolean(authToken) && c.req.header("Authorization") === `Bearer ${authToken}`;
+    if (
+      token?.type !== "daemon"
+      && !isMaster
+      && authenticatedRequestUserId(c) !== null
+    ) {
+      return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+    }
+    const ownerMembershipDenied = denyDaemonOwnerWorkspaceMembership(c, store);
+    if (ownerMembershipDenied) return ownerMembershipDenied;
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, runtimeId);
     if (denied) return denied;
-    const ack = store.heartbeatRuntime(c.req.param("id"), {
+    const ack = store.heartbeatRuntime(runtimeId, {
       supportsBatchImport: c.req.query("supports_batch_import") === "true" || c.req.query("supportsBatchImport") === "true",
       supportsDirectoryScan: c.req.query("supports_directory_scan") === "true" || c.req.query("supportsDirectoryScan") === "true",
     });

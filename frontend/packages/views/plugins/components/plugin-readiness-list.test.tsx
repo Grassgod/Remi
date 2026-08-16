@@ -48,6 +48,20 @@ const blockedState = {
   version: { id: "version-1", version: "1.2.0" },
 } as unknown as AgentPluginRuntimeState;
 
+const daemonUpgradeState = {
+  ...blockedState,
+  id: "state-upgrade",
+  status: "setup_required",
+  retryCount: 0,
+  nextRetryAt: null,
+  lastErrorCode: "daemon_upgrade_required",
+  lastError: "Upgrade the Multiremi daemon to enable Agent Plugins.",
+  runtime: {
+    ...blockedState.runtime,
+    metadata: { cli_version: "0.2.26" },
+  },
+} as unknown as AgentPluginRuntimeState;
+
 describe("PluginReadinessList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,5 +122,83 @@ describe("PluginReadinessList", () => {
 
     expect(screen.getByText("Offline")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Retry$/i })).not.toBeInTheDocument();
+  });
+
+  it("turns an unsupported daemon into an upgrade action instead of a futile retry", () => {
+    render(
+      <I18nProvider locale="en" resources={resources}>
+        <PluginReadinessList
+          pluginId="plugin-1"
+          states={[daemonUpgradeState]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Daemon upgrade required")).toBeInTheDocument();
+    expect(
+      screen.getByText(/This daemon version cannot install plugins/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Daemon CLI v0.2.26")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Upgrade daemon/i }),
+    ).toHaveAttribute("href", "/runtimes/runtime-1");
+    expect(
+      screen.queryByText(/Upgrade the Multiremi daemon/),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Retry$/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps waiting and downloading visibly distinct", () => {
+    render(
+      <I18nProvider locale="en" resources={resources}>
+        <PluginReadinessList
+          pluginId="plugin-1"
+          states={[
+            {
+              ...blockedState,
+              id: "state-pending",
+              status: "pending",
+              lastErrorCode: null,
+              lastError: null,
+            },
+            {
+              ...blockedState,
+              id: "state-downloading",
+              status: "downloading",
+              lastErrorCode: null,
+              lastError: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Waiting for daemon")).toBeInTheDocument();
+    expect(screen.getByText("Downloading")).toBeInTheDocument();
+  });
+
+  it("gives a recovery step when a capable daemon never starts setup", () => {
+    render(
+      <I18nProvider locale="en" resources={resources}>
+        <PluginReadinessList
+          pluginId="plugin-1"
+          states={[
+            {
+              ...blockedState,
+              lastErrorCode: "daemon_plugin_reconcile_timeout",
+              lastError: "Internal watchdog message",
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(
+      screen.getByText(/Make sure it is running, then retry/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Internal watchdog message/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Retry$/i })).toBeInTheDocument();
   });
 });

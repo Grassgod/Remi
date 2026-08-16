@@ -1222,7 +1222,8 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
     const cascadeBody = await cascade.json();
     expect(cascadeBody).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 3 });
     expect(store.getRuntime(runtime.id)).toBeNull();
-    expect(store.getAgent(agent.id)).toBeNull();
+    expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
+    expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();
   });
 
   it("serves selected console workflows across linked workspace resources", async () => {

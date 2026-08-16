@@ -140,9 +140,13 @@
     "last_attempt": "Last attempt {{when}}",
     "retry_success": "Retry scheduled",
     "retry_failed": "Couldn't schedule retry",
+    "daemon_upgrade_description": "This daemon version cannot install plugins. Upgrade the daemon, then retry.",
+    "daemon_reconcile_timeout_description": "The daemon did not start plugin setup. Make sure it is running, then retry.",
+    "daemon_cli_version": "Daemon CLI v{{version}}",
+    "upgrade_daemon_action": "Upgrade daemon",
     "version": "v{{version}}",
     "statuses": {
-      "pending": "Pending",
+      "pending": "Waiting for daemon",
       "preflight": "Checking",
       "downloading": "Downloading",
       "verifying": "Verifying",
@@ -150,6 +154,7 @@
       "ready": "Ready",
       "retry_scheduled": "Retry scheduled",
       "setup_required": "Setup required",
+      "daemon_upgrade_required": "Daemon upgrade required",
       "blocked": "Blocked",
       "offline": "Offline",
       "unknown": "Unknown"

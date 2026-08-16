@@ -16,6 +16,7 @@ import type {
   MultiremiIssueWorkspaceStatus,
   ReportAgentPluginRuntimeStateInput,
 } from "@multiremi/contracts/types.js";
+import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 
 export interface MultiremiWorkspaceReposResponse {
   workspace_id: string;
@@ -31,6 +32,7 @@ export interface MultiremiDaemonRegisterRuntimeInput {
   deviceName?: string;
   cliVersion?: string;
   launchedBy?: string | null;
+  agentPluginProtocol?: number;
   runtime: {
     name: string;
     type: string;
@@ -79,6 +81,25 @@ export interface MultiremiDaemonAgentPluginDesiredResponse {
   plugins: unknown[];
 }
 
+export class MultiremiDaemonHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+    readonly responseBody: string,
+    readonly code: string | null,
+  ) {
+    super(`${method} ${path} returned ${status}: ${responseBody}`);
+    this.name = "MultiremiDaemonHttpError";
+  }
+}
+
+/** Authentication/retirement failures require operator action, not polling. */
+export function isTerminalDaemonAuthorityError(error: unknown): boolean {
+  return error instanceof MultiremiDaemonHttpError
+    && (error.status === 401 || error.status === 403 || error.status === 410);
+}
+
 export class MultiremiDaemonClient {
   private baseUrl: string;
   private token: string | null;
@@ -99,6 +120,9 @@ export class MultiremiDaemonClient {
       device_name: input.deviceName ?? "",
       cli_version: input.cliVersion ?? "",
       launched_by: input.launchedBy ?? "",
+      capabilities: {
+        agent_plugins: input.agentPluginProtocol ?? MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+      },
       runtimes: [input.runtime],
     });
   }
@@ -119,6 +143,7 @@ export class MultiremiDaemonClient {
         runtime_id: runtimeId,
         supports_batch_import: true,
         supports_directory_scan: true,
+        agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
       });
     } catch (error) {
       if (isRuntimeGoneHeartbeatError(error)) {
@@ -136,9 +161,23 @@ export class MultiremiDaemonClient {
   async getRuntimeAgentPluginDesired(
     runtimeId: string,
   ): Promise<MultiremiDaemonAgentPluginDesiredResponse> {
-    return this.get<MultiremiDaemonAgentPluginDesiredResponse>(
-      `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/desired`,
-    );
+    const path = `/api/daemon/runtimes/${encodeURIComponent(runtimeId)}/agent-plugins/desired`;
+    try {
+      return await this.get<MultiremiDaemonAgentPluginDesiredResponse>(path);
+    } catch (error) {
+      // A new daemon may connect to a server from before Agent Plugins existed.
+      // Missing routes return an unstructured 404; a structured runtime-not-found
+      // response still needs to propagate so the daemon can re-register.
+      if (
+        error instanceof MultiremiDaemonHttpError
+        && (error.status === 404 || error.status === 405)
+        && error.code !== "runtime_not_found"
+        && !error.responseBody.toLowerCase().includes("runtime not found")
+      ) {
+        return { runtime_id: runtimeId, revision: "unsupported", plugins: [] };
+      }
+      throw error;
+    }
   }
 
   async reportRuntimeAgentPluginState(
@@ -395,7 +434,30 @@ async function parseResponse<T>(resp: Response, method: string, path: string): P
     return (text ? JSON.parse(text) : undefined) as T;
   }
   const text = await resp.text();
-  throw new Error(`${method} ${path} returned ${resp.status}: ${text}`);
+  throw new MultiremiDaemonHttpError(
+    resp.status,
+    method,
+    path,
+    text,
+    responseErrorCode(text),
+  );
+}
+
+function responseErrorCode(text: string): string | null {
+  try {
+    const body = JSON.parse(text) as { code?: unknown; error?: { code?: unknown } | unknown };
+    const nestedError = body.error && typeof body.error === "object"
+      ? body.error as Record<string, unknown>
+      : null;
+    const code = typeof body.code === "string"
+      ? body.code
+      : typeof nestedError?.code === "string"
+        ? nestedError.code
+        : null;
+    return code?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 function isRuntimeGoneHeartbeatError(error: unknown): boolean {

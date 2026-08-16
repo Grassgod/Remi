@@ -1,13 +1,26 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { configStore } from "@multiremi/core/config";
+import { runtimeKeys } from "@multiremi/core/runtimes/queries";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
+
+const provisionDaemonCredential = vi.hoisted(() => vi.fn());
+const realtime = vi.hoisted(() => ({
+  daemonRegisterHandler: null as ((payload: unknown) => void) | null,
+}));
+
+const TEST_DAEMON_CREDENTIAL = {
+  token: "mdt_testtoken",
+  tokenId: "dtk_testtoken",
+  workspaceId: "ws-test",
+  daemonId: "daemon-test",
+};
 
 vi.mock("@multiremi/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
@@ -15,9 +28,7 @@ vi.mock("@multiremi/core/hooks", () => ({
 
 vi.mock("@multiremi/core/api", () => ({
   api: {
-    createPersonalAccessToken: vi.fn(async () => ({
-      token: "mul_testtoken",
-    })),
+    provisionDaemonCredential,
   },
 }));
 
@@ -32,7 +43,9 @@ vi.mock("@multiremi/core/paths", () => ({
 }));
 
 vi.mock("@multiremi/core/realtime", () => ({
-  useWSEvent: vi.fn(),
+  useWSEvent: (event: string, handler: (payload: unknown) => void) => {
+    if (event === "daemon:register") realtime.daemonRegisterHandler = handler;
+  },
 }));
 
 vi.mock("../../navigation", () => ({
@@ -57,13 +70,17 @@ function renderDialog(config?: {
     configStore.getState().setDaemonConfig(config);
   }
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={qc}>
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <ConnectRemoteDialog onClose={vi.fn()} />
-      </I18nProvider>
-    </QueryClientProvider>,
-  );
+  const invalidateQueries = vi.spyOn(qc, "invalidateQueries");
+  return {
+    ...render(
+      <QueryClientProvider client={qc}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <ConnectRemoteDialog onClose={vi.fn()} />
+        </I18nProvider>
+      </QueryClientProvider>,
+    ),
+    invalidateQueries,
+  };
 }
 
 const ligatureClasses = [
@@ -72,15 +89,26 @@ const ligatureClasses = [
 ];
 
 describe("ConnectRemoteDialog", () => {
+  beforeEach(() => {
+    provisionDaemonCredential.mockReset();
+    provisionDaemonCredential.mockResolvedValue(TEST_DAEMON_CREDENTIAL);
+    realtime.daemonRegisterHandler = null;
+  });
+
   it("uses generated self-host setup commands by default", async () => {
     const { baseElement } = renderDialog();
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "remi setup --server-url http://localhost:3000 --workspace-id ws-test --token mul_testtoken --start",
+        "remi setup --server-url http://localhost:3000 --workspace-id ws-test --daemon-id daemon-test --token mdt_testtoken --start",
       ),
     );
     expect(baseElement).toHaveTextContent("MULTIREMI_BASE_URL=http://localhost:3000");
+    expect(provisionDaemonCredential).toHaveBeenCalledWith({
+      workspace_id: "ws-test",
+      name: expect.stringMatching(/^Remi daemon \d{4}-\d{2}-\d{2}$/),
+      expires_in_days: 365,
+    });
   });
 
   it("uses self-host daemon URLs from runtime config", async () => {
@@ -90,19 +118,81 @@ describe("ConnectRemoteDialog", () => {
 
     await waitFor(() =>
       expect(baseElement).toHaveTextContent(
-        "remi setup --server-url https://api.example.com --workspace-id ws-test --token mul_testtoken --start",
+        "remi setup --server-url https://api.example.com --workspace-id ws-test --daemon-id daemon-test --token mdt_testtoken --start",
       ),
     );
   });
 
-  it("disables font ligatures in setup command code", () => {
+  it("disables font ligatures in setup command code", async () => {
     const { baseElement } = renderDialog();
 
+    await waitFor(() =>
+      expect(
+        Array.from(baseElement.querySelectorAll("code")).find((node) =>
+          node.textContent?.includes("remi setup"),
+        ),
+      ).toBeTruthy(),
+    );
     const setupCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
       node.textContent?.includes("remi setup"),
     );
 
     expect(setupCode).toHaveClass(...ligatureClasses);
+  });
+
+  it("shows a retryable error without exposing a placeholder setup command", async () => {
+    provisionDaemonCredential.mockRejectedValueOnce(new Error("offline"));
+    const { baseElement, invalidateQueries } = renderDialog();
+
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent("Couldn't create a connection credential."),
+    );
+    expect(baseElement).toHaveTextContent("Retry");
+    expect(baseElement).not.toHaveTextContent("<YOUR_TOKEN>");
+    expect(baseElement).not.toHaveTextContent("Waiting for your computer");
+    await waitFor(() =>
+      expect(invalidateQueries).toHaveBeenCalledWith({
+        queryKey: runtimeKeys.daemonInventory("ws-test"),
+      }),
+    );
+  });
+
+  it("refreshes daemon inventory after provisioning succeeds", async () => {
+    const { baseElement, invalidateQueries } = renderDialog();
+
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent("Waiting for your computer"),
+    );
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: runtimeKeys.daemonInventory("ws-test"),
+    });
+  });
+
+  it("only completes for the daemon credential provisioned by this dialog", async () => {
+    const { baseElement } = renderDialog();
+
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent("Waiting for your computer"),
+    );
+    expect(realtime.daemonRegisterHandler).not.toBeNull();
+
+    act(() => {
+      realtime.daemonRegisterHandler?.({
+        daemon_id: "daemon-from-another-dialog",
+        runtime_id: "rt-other",
+      });
+    });
+    expect(baseElement).not.toHaveTextContent("Computer connected");
+
+    act(() => {
+      realtime.daemonRegisterHandler?.({
+        daemon_id: "daemon-test",
+        runtime_id: "rt-test",
+      });
+    });
+    await waitFor(() =>
+      expect(baseElement).toHaveTextContent("Computer connected"),
+    );
   });
 
   it("disables font ligatures in self-host install command code", () => {

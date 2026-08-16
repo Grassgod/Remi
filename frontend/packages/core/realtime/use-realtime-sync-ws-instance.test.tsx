@@ -101,9 +101,9 @@ describe("useRealtimeSync — ws instance change", () => {
     const ws2 = createMockWs();
     rerender({ ws: ws2 });
 
-    // Should have called invalidateQueries for all workspace-scoped keys
-    // (16 workspace-scoped + 1 workspaceKeys.list() = 17 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(17);
+    // Should have called invalidateQueries for all workspace-scoped keys,
+    // including task and Product Session caches affected by daemon retirement.
+    expect(invalidateSpy).toHaveBeenCalledTimes(24);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -120,7 +120,7 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it("invalidates chat, pins, labels, and invitations queries on ws instance change", () => {
+  it("invalidates chat, plugins, pins, labels, and invitations queries on ws instance change", () => {
     const ws1 = createMockWs();
     const { rerender } = renderHook(
       ({ ws }) => useRealtimeSync(ws, stores),
@@ -137,5 +137,12 @@ describe("useRealtimeSync — ws instance change", () => {
     expect(calls).toContainEqual(["chat", "ws-1"]);
     expect(calls).toContainEqual(["labels", "ws-1"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "invitations"]);
+    expect(calls).toContainEqual(["workspaces", "ws-1", "agent-plugins"]);
+    expect(calls).toContainEqual(["workspaces", "ws-1", "agent-tasks"]);
+    expect(calls).toContainEqual(["runtimes", "models", "fleet", "ws-1"]);
+    expect(calls).toContainEqual(["runtimes", "daemons", "inventory", "ws-1"]);
+    expect(calls).toContainEqual(["issues", "workspace"]);
+    expect(calls).toContainEqual(["issues", "tasks"]);
+    expect(calls).toContainEqual(["issues", "sessions"]);
   });
 });

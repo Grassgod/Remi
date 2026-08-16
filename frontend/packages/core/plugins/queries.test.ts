@@ -42,4 +42,5 @@ describe("agent plugin version and runtime queries", () => {
     expect(listRuntimeAgentPluginStates).toHaveBeenCalledWith("runtime/1");
     queryClient.clear();
   });
+
 });

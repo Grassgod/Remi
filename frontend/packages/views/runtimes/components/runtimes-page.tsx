@@ -5,7 +5,9 @@ import { useDefaultLayout } from "react-resizable-panels";
 import {
   Cloud,
   Monitor,
+  MoreHorizontal,
   Plus,
+  PowerOff,
   Search,
   Server,
 } from "lucide-react";
@@ -13,11 +15,22 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { agentTaskSnapshotOptions } from "@multiremi/core/agents";
-import { runtimeListOptions, runtimeKeys } from "@multiremi/core/runtimes/queries";
+import {
+  daemonInventoryOptions,
+  runtimeListOptions,
+  runtimeKeys,
+} from "@multiremi/core/runtimes/queries";
 import { useUpdatableRuntimeIds } from "@multiremi/core/runtimes/hooks";
 import { useWSEvent } from "@multiremi/core/realtime";
 import { agentListOptions } from "@multiremi/core/workspace/queries";
 import { Button } from "@multiremi/ui/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@multiremi/ui/components/ui/dropdown-menu";
 import { Input } from "@multiremi/ui/components/ui/input";
 import {
   ResizableHandle,
@@ -33,6 +46,7 @@ import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
 import { RuntimeList, buildWorkloadIndex } from "./runtime-list";
+import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -110,6 +124,7 @@ export function RuntimesPage({
   }, []);
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
+  const [retiringDaemonId, setRetiringDaemonId] = useState<string | null>(null);
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multimira_runtimes_layout",
   });
@@ -120,11 +135,22 @@ export function RuntimesPage({
   );
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
+  // The server returns the full fleet to workspace managers and only the
+  // caller's own daemons to regular members. Besides avoiding fleet metadata
+  // disclosure, the returned ids are the authority for which machines this
+  // user may retire.
+  const { data: daemonInventory } = useQuery(daemonInventoryOptions(wsId));
 
   const handleDaemonEvent = useCallback(() => {
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
   }, [qc, wsId]);
   useWSEvent("daemon:register", handleDaemonEvent);
+
+  const handleMachineRetired = useCallback(() => {
+    userSelectedRef.current = false;
+    setSelectedMachineId(null);
+    setRetiringDaemonId(null);
+  }, []);
 
   const updatableIds = useUpdatableRuntimeIds(wsId);
   const now = useNowTick();
@@ -143,6 +169,7 @@ export function RuntimesPage({
         currentUserId,
         workloadByRuntimeId: workloadIndex,
         ensureLocalMachine: hasLocalMachine,
+        daemonInventory: daemonInventory?.daemons,
       }),
     [
       runtimes,
@@ -152,6 +179,7 @@ export function RuntimesPage({
       currentUserId,
       workloadIndex,
       hasLocalMachine,
+      daemonInventory?.daemons,
     ],
   );
 
@@ -183,13 +211,23 @@ export function RuntimesPage({
     machines.find((machine) => machine.id === selectedMachineId) ??
     filteredMachines[0] ??
     null;
+  const retireableDaemonIds = new Set(
+    daemonInventory?.daemons.map((daemon) => daemon.daemon_id) ?? [],
+  );
+  const selectedMachineCanRetire =
+    selectedMachine?.mode === "local" &&
+    !!selectedMachine.daemonId &&
+    retireableDaemonIds.has(selectedMachine.daemonId);
+  const retiringMachine = retiringDaemonId
+    ? machines.find((machine) => machine.daemonId === retiringDaemonId) ?? null
+    : null;
 
   if (isLoading || fetching) return <RuntimesPageSkeleton />;
 
-  const totalCount = runtimes.length;
+  const totalCount = machines.length;
   // Desktop always has a synthesized local machine row, so the
   // "register a runtime" empty state would hide the Start button.
-  const showEmpty = totalCount === 0 && !bootstrapping && !hasLocalMachine;
+  const showEmpty = machines.length === 0 && !bootstrapping && !hasLocalMachine;
 
   // A modal dialog painting over the populated runtimes list drives a Chromium
   // compositor runaway that starves the main thread under interaction — the
@@ -206,6 +244,12 @@ export function RuntimesPage({
         onConnectRemote={() => setShowConnectDialog(true)}
         cloudRuntimeEnabled={cloudRuntimeEnabled}
         onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
+        mobile={isMobile}
+        onRetireMachine={
+          isMobile && selectedMachineCanRetire
+            ? () => setRetiringDaemonId(selectedMachine.daemonId)
+            : undefined
+        }
       />
 
       {runtimeDialogOpen ? (
@@ -226,6 +270,7 @@ export function RuntimesPage({
             filter={machineFilter}
             setFilter={setMachineFilter}
             onSelect={handleSelectMachine}
+            className="max-h-[42dvh]"
           />
           <MachineDetail
             machine={selectedMachine}
@@ -269,6 +314,11 @@ export function RuntimesPage({
             <ResizablePanel id="detail" minSize="45%">
               <MachineDetail
                 machine={selectedMachine}
+                onRetire={
+                  selectedMachineCanRetire
+                    ? () => setRetiringDaemonId(selectedMachine.daemonId)
+                    : undefined
+                }
                 updatableIds={updatableIds}
                 now={now}
                 bootstrapping={bootstrapping}
@@ -287,6 +337,18 @@ export function RuntimesPage({
       {cloudRuntimeEnabled && showCloudRuntimeDialog && (
         <CloudRuntimeDialog onClose={() => setShowCloudRuntimeDialog(false)} />
       )}
+      {retiringMachine && retiringDaemonId && (
+        <RetireDaemonDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setRetiringDaemonId(null);
+          }}
+          wsId={wsId}
+          daemonId={retiringDaemonId}
+          machineName={retiringMachine.title}
+          onRetired={handleMachineRetired}
+        />
+      )}
     </div>
   );
 }
@@ -301,11 +363,15 @@ function PageHeaderBar({
   onConnectRemote,
   cloudRuntimeEnabled,
   onOpenCloudRuntime,
+  mobile,
+  onRetireMachine,
 }: {
   totalCount: number;
   onConnectRemote: () => void;
   cloudRuntimeEnabled: boolean;
   onOpenCloudRuntime: () => void;
+  mobile: boolean;
+  onRetireMachine?: () => void;
 }) {
   const { t } = useT("runtimes");
   return (
@@ -320,23 +386,92 @@ function PageHeaderBar({
         )}
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-        {cloudRuntimeEnabled && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onOpenCloudRuntime}
-          >
-            <Cloud className="h-3 w-3" />
-            {t(($) => $.cloud_runtime.action)}
-          </Button>
+        {mobile ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label={t(($) => $.page.actions_aria)}
+                />
+              }
+            >
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem onClick={onConnectRemote}>
+                <Plus className="size-3.5" />
+                {t(($) => $.page.connect_remote)}
+              </DropdownMenuItem>
+              {cloudRuntimeEnabled && (
+                <DropdownMenuItem onClick={onOpenCloudRuntime}>
+                  <Cloud className="size-3.5" />
+                  {t(($) => $.cloud_runtime.action)}
+                </DropdownMenuItem>
+              )}
+              {onRetireMachine && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={onRetireMachine}
+                  >
+                    <PowerOff className="size-3.5" />
+                    {t(($) => $.machine.retire.action)}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <>
+            {cloudRuntimeEnabled && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onOpenCloudRuntime}
+              >
+                <Cloud className="h-3 w-3" />
+                {t(($) => $.cloud_runtime.action)}
+              </Button>
+            )}
+            <Button type="button" size="sm" onClick={onConnectRemote}>
+              <Plus className="h-3 w-3" />
+              {t(($) => $.page.connect_remote)}
+            </Button>
+          </>
         )}
-        <Button type="button" size="sm" onClick={onConnectRemote}>
-          <Plus className="h-3 w-3" />
-          {t(($) => $.page.connect_remote)}
-        </Button>
       </div>
     </PageHeader>
+  );
+}
+
+function MachineActionsMenu({ onRetire }: { onRetire: () => void }) {
+  const { t } = useT("runtimes");
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-label={t(($) => $.machine.actions_aria)}
+          />
+        }
+      >
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem variant="destructive" onClick={onRetire}>
+          <PowerOff className="size-3.5" />
+          {t(($) => $.machine.retire.action)}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -581,12 +716,14 @@ function ProviderIconStack({ providers }: { providers: string[] }) {
 
 function MachineDetail({
   machine,
+  onRetire,
   updatableIds,
   now,
   bootstrapping,
   actions,
 }: {
   machine: RuntimeMachine | null;
+  onRetire?: () => void;
   updatableIds: Set<string>;
   now: number;
   bootstrapping?: boolean;
@@ -691,7 +828,12 @@ function MachineDetail({
               ))}
             </div>
           </div>
-          {actions && <div className="shrink-0">{actions}</div>}
+          {(actions || onRetire) && (
+            <div className="flex shrink-0 items-center gap-2">
+              {actions}
+              {onRetire && <MachineActionsMenu onRetire={onRetire} />}
+            </div>
+          )}
         </div>
       </div>
 

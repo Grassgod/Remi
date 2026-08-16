@@ -24,3 +24,17 @@ export const EMPTY_PERSONAL_ACCESS_TOKEN = {
   created_at: "",
   token: "",
 };
+
+export const ProvisionDaemonCredentialResponseSchema = z.object({
+  token: z.string().regex(/^mdt_/),
+  tokenId: z.string().regex(/^dtk_/),
+  workspaceId: z.string().min(1),
+  daemonId: z.string().min(1),
+}).loose();
+
+export const EMPTY_PROVISION_DAEMON_CREDENTIAL = {
+  token: "",
+  tokenId: "",
+  workspaceId: "",
+  daemonId: "",
+};

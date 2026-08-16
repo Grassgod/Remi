@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { createStore, resetMultiremiTestEnv } from "./helpers.js";
+import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -12,6 +12,49 @@ function importPlugin(store: ReturnType<typeof createStore>, version = "1.0.0") 
 }
 
 describe("Multiremi store - Agent Plugin execution snapshots", () => {
+  it("fails closed when a daemon downgrades its Plugin protocol", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_protocol_downgrade",
+      name: "Plugin protocol runtime",
+      provider: "claude",
+      daemonId: "daemon-plugin-protocol",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const agent = store.createAgent({ name: "Protocol worker", provider: "claude" });
+    const plugin = importPlugin(store);
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+      retryGeneration: 0,
+    });
+
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 0 });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({
+      status: "setup_required",
+      retryGeneration: 1,
+      observedDigest: null,
+      lastErrorCode: "daemon_upgrade_required",
+    });
+    expect(() => store.reportAgentPluginRuntimeState(runtime.id, plugin.activeVersionId!, {
+      status: "ready",
+      observedDigest: plugin.activeVersion!.artifactDigest,
+      retryGeneration: 0,
+    })).toThrow("Upgrade the Multiremi daemon");
+
+    const task = store.createTask({ agentId: agent.id, prompt: "must not run without Plugin support" });
+    db!.run(
+      `UPDATE multiremi_agent_plugin_runtime_states
+       SET status = 'ready', observed_digest = ?, last_error_code = NULL, last_error = NULL
+       WHERE runtime_id = ? AND plugin_version_id = ?`,
+      [plugin.activeVersion!.artifactDigest, runtime.id, plugin.activeVersionId],
+    );
+    expect(store.claimTask(runtime.id)).toBeNull();
+    expect(store.getTask(task.id)?.status).toBe("queued");
+  });
+
   it("waits for exact Runtime readiness and freezes bindings in the claim transaction", () => {
     const store = createStore();
     const runtime = store.registerRuntime({
@@ -114,6 +157,41 @@ describe("Multiremi store - Agent Plugin execution snapshots", () => {
     expect(currentClaim.id).toBe(current.id);
     expect(currentClaim.pluginSnapshot).toMatchObject([{ versionId: candidate.id, version: "2.0.0" }]);
     expect(currentClaim.executionFingerprint).not.toBe(claimed.executionFingerprint);
+  });
+
+  it("keeps an empty frozen retry independent from plugins bound later", () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_empty_plugin_retry",
+      name: "Empty Plugin retry runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store.createAgent({ name: "Empty Plugin retry worker", provider: "claude" });
+    const issue = store.createIssue({ title: "Retry without Plugins", workspaceId: "local" });
+    const task = store.createTask({
+      agentId: agent.id,
+      issueId: issue.id,
+      prompt: "run without plugins",
+      maxAttempts: 2,
+    });
+    const claimed = store.claimTask(runtime.id)!;
+    expect(claimed.pluginSnapshot).toEqual([]);
+    expect(claimed.executionFingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+    store.startTask(task.id);
+    store.failTask(task.id, { error: "runtime went away", failureReason: "runtime_offline" });
+    const retry = store.listTasks().find((entry) => entry.parentTaskId === task.id)!;
+    expect(retry).toMatchObject({
+      pluginSnapshot: [],
+      executionFingerprint: claimed.executionFingerprint,
+      status: "queued",
+    });
+
+    const plugin = importPlugin(store);
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]?.status).not.toBe("ready");
+    expect(store.claimTask(runtime.id)?.id).toBe(retry.id);
   });
 
   it("starts a fresh provider session when an Agent Plugin binding changes", () => {

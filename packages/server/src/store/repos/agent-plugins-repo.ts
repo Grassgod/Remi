@@ -3,6 +3,10 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import { parseJson, toJson } from "@multiremi/store/helpers.js";
 import type { StoreContext } from "@multiremi/store/context.js";
 import {
+  isRuntimeEffectivelyOnline,
+  withRuntimeLiveness,
+} from "@multiremi/store/repos/runtimes-repo.js";
+import {
   AgentPluginValidationError,
   buildAgentPluginArtifact,
   canonicalJson,
@@ -26,6 +30,7 @@ import type {
   UpdateAgentPluginBindingInput,
   UpdateAgentPluginInput,
 } from "@multiremi/contracts/types.js";
+import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
 
@@ -47,6 +52,13 @@ const REASON_PRIORITY: Record<MultiremiAgentPluginDesiredReason, number> = {
   pinned_binding: 3,
   task_snapshot: 4,
 };
+
+const AGENT_PLUGIN_PENDING_HEARTBEAT_LIMIT = 3;
+const DAEMON_UPGRADE_REQUIRED_CODE = "daemon_upgrade_required";
+const DAEMON_UPGRADE_REQUIRED_MESSAGE = "Upgrade the Multiremi daemon to enable Agent Plugins.";
+const DAEMON_RECONCILE_TIMEOUT_CODE = "daemon_plugin_reconcile_timeout";
+const DAEMON_RECONCILE_TIMEOUT_MESSAGE =
+  "The daemon advertised Agent Plugin support but did not start reconciliation after 3 heartbeats.";
 
 export class AgentPluginStoreError extends Error {
   constructor(message: string, readonly code: string, readonly status: number) {
@@ -318,8 +330,25 @@ export class AgentPluginsRepo {
         throw badRequest("rollback version is not available", "rollback_version_unavailable");
       }
       if (target.id === plugin.activeVersionId) return plugin;
-      this.reconcileAgentPluginDesiredStateLocked(plugin.workspaceId, { additionalVersionId: target.id, pluginId: plugin.id });
-      this.assertVersionReadyForActivation(plugin, target);
+      if (plugin.candidateVersionId !== target.id) {
+        this.ctx.db.run(
+          "UPDATE multiremi_agent_plugins SET candidate_version_id = ?, updated_at = ? WHERE id = ?",
+          [target.id, nowIso(), plugin.id],
+        );
+      }
+      this.reconcileAgentPluginDesiredStateLocked(plugin.workspaceId);
+      try {
+        this.assertVersionReadyForActivation(this.requirePlugin(plugin.id), target);
+      } catch (error) {
+        // Rollback is a two-phase operation: persist the target as the
+        // candidate so daemons can freshly preflight it, then a later retry (or
+        // the normal Activate action) performs the switch once every live
+        // Runtime reports Ready.
+        if (error instanceof AgentPluginStoreError && error.code === "plugin_version_not_ready") {
+          return this.requirePlugin(plugin.id);
+        }
+        throw error;
+      }
       const previousActive = plugin.activeVersionId;
       this.ctx.db.run(
         "UPDATE multiremi_agent_plugins SET active_version_id = ?, candidate_version_id = ?, updated_at = ? WHERE id = ?",
@@ -483,7 +512,9 @@ export class AgentPluginsRepo {
     const runtime = this.requireRuntime(runtimeId);
     const agent = this.requireAgent(agentId);
     if ((runtime.workspaceId ?? "local") !== agent.workspaceId) return false;
-    for (const entry of this.resolveAgentPluginSnapshot(agent.id)) {
+    const snapshot = this.resolveAgentPluginSnapshot(agent.id);
+    if (snapshot.length > 0 && !runtimeSupportsAgentPlugins(runtime)) return false;
+    for (const entry of snapshot) {
       const row = this.ctx.db.query(
         `SELECT s.status, s.observed_digest, s.desired, v.artifact_digest
          FROM multiremi_agent_plugin_runtime_states s
@@ -581,7 +612,35 @@ export class AgentPluginsRepo {
     versionId: string,
     input: ReportAgentPluginRuntimeStateInput,
   ): MultiremiAgentPluginRuntimeState {
-    this.requireRuntime(runtimeId);
+    return this.reportAgentPluginRuntimeStateResult(runtimeId, versionId, input).state;
+  }
+
+  reportAgentPluginRuntimeStateResult(
+    runtimeId: string,
+    versionId: string,
+    input: ReportAgentPluginRuntimeStateInput,
+  ): { state: MultiremiAgentPluginRuntimeState; changed: boolean } {
+    const initialRuntime = this.requireRuntime(runtimeId);
+    const workspaceId = initialRuntime.workspaceId ?? "local";
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockAgentPluginWorkspace(workspaceId);
+      const runtime = this.requireRuntime(runtimeId);
+      if ((runtime.workspaceId ?? "local") !== workspaceId) {
+        throw notFound("runtime not found", "runtime_not_found");
+      }
+      if (!runtimeSupportsAgentPlugins(runtime)) {
+        throw conflict(DAEMON_UPGRADE_REQUIRED_MESSAGE, DAEMON_UPGRADE_REQUIRED_CODE);
+      }
+      return this.reportAgentPluginRuntimeStateWithinLock(runtimeId, versionId, input);
+    })();
+  }
+
+  private reportAgentPluginRuntimeStateWithinLock(
+    runtimeId: string,
+    versionId: string,
+    input: ReportAgentPluginRuntimeStateInput,
+  ): { state: MultiremiAgentPluginRuntimeState; changed: boolean } {
     const version = this.requireVersion(versionId);
     const row = this.ctx.db.query(
       "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ? AND plugin_version_id = ? AND desired = 1",
@@ -593,7 +652,7 @@ export class AgentPluginsRepo {
       : null;
     const expectedGeneration = Number(row.retry_generation ?? 0);
     if (reportedGeneration !== null && reportedGeneration !== expectedGeneration) {
-      return this.requireRuntimeState(String(row.id));
+      return { state: this.requireRuntimeState(String(row.id)), changed: false };
     }
     const status = normalizeRuntimeStatus(input.status);
     const observedDigest = cleanString(input.observedDigest ?? input.observed_digest);
@@ -616,7 +675,7 @@ export class AgentPluginsRepo {
       && cleanString(row.next_retry_at) === nextRetryAt
       && cleanString(row.last_error_code) === lastErrorCode
       && cleanString(row.last_error) === lastError;
-    if (unchanged) return this.requireRuntimeState(String(row.id));
+    if (unchanged) return { state: this.requireRuntimeState(String(row.id)), changed: false };
     const now = nowIso();
     const update = this.ctx.db.run(
       `UPDATE multiremi_agent_plugin_runtime_states
@@ -626,6 +685,7 @@ export class AgentPluginsRepo {
              WHEN ? = 1 THEN retry_count + 1
              ELSE retry_count
            END,
+           pending_heartbeat_count = 0,
            next_retry_at = ?,
            last_error_code = ?, last_error = ?, last_attempt_at = ?,
            last_ready_at = CASE WHEN ? = 'ready' THEN ? ELSE last_ready_at END, updated_at = ?
@@ -648,8 +708,81 @@ export class AgentPluginsRepo {
         expectedGeneration,
       ],
     );
-    if (update.changes === 0) return this.requireRuntimeState(String(row.id));
-    return this.requireRuntimeState(String(row.id));
+    if (update.changes === 0) {
+      return { state: this.requireRuntimeState(String(row.id)), changed: false };
+    }
+    return { state: this.requireRuntimeState(String(row.id)), changed: true };
+  }
+
+  recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+    const runtime = this.requireRuntime(runtimeId);
+    const workspaceId = runtime.workspaceId ?? "local";
+    const transaction = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.lockAgentPluginWorkspace(workspaceId);
+      return this.recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+    });
+    return transaction();
+  }
+
+  /** Caller owns the workspace lifecycle and Plugin locks in that order. */
+  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[] {
+    const runtime = this.requireRuntime(runtimeId);
+    const workspaceId = runtime.workspaceId ?? "local";
+    const beforeRows = this.ctx.db.query(
+      `SELECT * FROM multiremi_agent_plugin_runtime_states
+       WHERE runtime_id = ? AND desired = 1`,
+    ).all(runtimeId) as Row[];
+    const before = new Map(beforeRows.map((row) => [String(row.id), runtimeStateFingerprint(row)]));
+    this.reconcileAgentPluginDesiredStateLocked(workspaceId);
+    const reconciledRows = this.ctx.db.query(
+      `SELECT * FROM multiremi_agent_plugin_runtime_states
+       WHERE runtime_id = ? AND desired = 1`,
+    ).all(runtimeId) as Row[];
+    const changed = new Set(
+      reconciledRows
+        .filter((row) => before.get(String(row.id)) !== runtimeStateFingerprint(row))
+        .map((row) => String(row.id)),
+    );
+    const reconciledIds = new Set(reconciledRows.map((row) => String(row.id)));
+    for (const id of before.keys()) {
+      // desired=1 -> desired=0 is still a runtime-state transition. Include
+      // the historical row so heartbeat callers can publish the removal.
+      if (!reconciledIds.has(id)) changed.add(id);
+    }
+    if (!runtimeSupportsAgentPlugins(this.requireRuntime(runtimeId))) {
+      return [...changed].map((id) => this.requireRuntimeState(id));
+    }
+
+    const rows = this.ctx.db.query(
+      `SELECT id, pending_heartbeat_count
+       FROM multiremi_agent_plugin_runtime_states
+       WHERE runtime_id = ? AND desired = 1 AND status = 'pending' AND last_attempt_at IS NULL`,
+    ).all(runtimeId) as Row[];
+    const now = nowIso();
+    for (const row of rows) {
+      const count = Number(row.pending_heartbeat_count ?? 0) + 1;
+      const id = String(row.id);
+      if (count < AGENT_PLUGIN_PENDING_HEARTBEAT_LIMIT) {
+        // This counter is diagnostic state, not a user-visible transition. In
+        // particular it must not move updated_at, which is the desired-state
+        // wait origin shown by API clients.
+        this.ctx.db.run(
+          "UPDATE multiremi_agent_plugin_runtime_states SET pending_heartbeat_count = ? WHERE id = ?",
+          [count, id],
+        );
+        continue;
+      }
+      this.ctx.db.run(
+        `UPDATE multiremi_agent_plugin_runtime_states
+         SET status = 'blocked', pending_heartbeat_count = ?, next_retry_at = NULL,
+             last_error_code = ?, last_error = ?, updated_at = ?
+         WHERE id = ? AND status = 'pending' AND last_attempt_at IS NULL`,
+        [count, DAEMON_RECONCILE_TIMEOUT_CODE, DAEMON_RECONCILE_TIMEOUT_MESSAGE, now, id],
+      );
+      changed.add(id);
+    }
+    return [...changed].map((id) => this.requireRuntimeState(id));
   }
 
   retryAgentPluginRuntime(pluginId: string, runtimeId?: string | null, versionId?: string | null): MultiremiAgentPluginRuntimeState[] {
@@ -672,16 +805,24 @@ export class AgentPluginsRepo {
         params.push(version.id);
       }
       const rows = this.ctx.db.query(
-        `SELECT id FROM multiremi_agent_plugin_runtime_states WHERE ${where.join(" AND ")}`,
+        `SELECT id, runtime_id FROM multiremi_agent_plugin_runtime_states WHERE ${where.join(" AND ")}`,
       ).all(...params) as Row[];
       const now = nowIso();
       for (const row of rows) {
+        const supported = runtimeSupportsAgentPlugins(this.requireRuntime(String(row.runtime_id)));
         this.ctx.db.run(
           `UPDATE multiremi_agent_plugin_runtime_states
-           SET status = 'pending', observed_digest = NULL, retry_count = 0,
-               retry_generation = retry_generation + 1, next_retry_at = NULL,
-               last_error_code = NULL, last_error = NULL, updated_at = ? WHERE id = ?`,
-          [now, String(row.id)],
+           SET status = ?, observed_digest = NULL, retry_count = 0,
+               retry_generation = retry_generation + 1, pending_heartbeat_count = 0,
+               next_retry_at = NULL, last_error_code = ?, last_error = ?,
+               last_attempt_at = NULL, updated_at = ? WHERE id = ?`,
+          [
+            supported ? "pending" : "setup_required",
+            supported ? null : DAEMON_UPGRADE_REQUIRED_CODE,
+            supported ? null : DAEMON_UPGRADE_REQUIRED_MESSAGE,
+            now,
+            String(row.id),
+          ],
         );
       }
       return rows.map((row) => this.requireRuntimeState(String(row.id)));
@@ -796,26 +937,147 @@ export class AgentPluginsRepo {
     }
 
     const runtimes = this.ctx.db.query(
-      "SELECT id, provider FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
+      "SELECT * FROM multiremi_runtimes WHERE COALESCE(workspace_id, 'local') = ?",
     ).all(workspaceId) as Row[];
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_agent_plugin_runtime_states SET desired = 0, updated_at = ? WHERE workspace_id = ? AND desired = 1",
-      [now, workspaceId],
+    const existingRows = this.ctx.db.query(
+      "SELECT * FROM multiremi_agent_plugin_runtime_states WHERE workspace_id = ?",
+    ).all(workspaceId) as Row[];
+    const stateKey = (runtimeId: string, versionId: string) => `${runtimeId}\u0000${versionId}`;
+    const existingByKey = new Map(
+      existingRows.map((row) => [stateKey(String(row.runtime_id), String(row.plugin_version_id)), row]),
     );
-    for (const runtime of runtimes) {
+    const targets = new Map<string, {
+      runtime: ReturnType<typeof toRuntimeRef>;
+      versionId: string;
+      pluginId: string;
+      reason: MultiremiAgentPluginDesiredReason;
+    }>();
+    for (const runtimeRow of runtimes) {
+      const runtime = toRuntimeRef(runtimeRow);
       for (const [versionId, item] of desired) {
-        if (String(runtime.provider) !== "any" && String(runtime.provider) !== item.provider) continue;
+        if (runtime.provider !== "any" && runtime.provider !== item.provider) continue;
+        targets.set(stateKey(runtime.id, versionId), {
+          runtime,
+          versionId,
+          pluginId: item.pluginId,
+          reason: item.reason,
+        });
+      }
+    }
+
+    const now = nowIso();
+    for (const row of existingRows) {
+      const key = stateKey(String(row.runtime_id), String(row.plugin_version_id));
+      if (Number(row.desired) !== 1 || targets.has(key)) continue;
+      this.ctx.db.run(
+        "UPDATE multiremi_agent_plugin_runtime_states SET desired = 0, updated_at = ? WHERE id = ? AND desired = 1",
+        [now, String(row.id)],
+      );
+    }
+
+    for (const [key, target] of targets) {
+      const supported = runtimeSupportsAgentPlugins(target.runtime);
+      const existing = existingByKey.get(key);
+      if (!existing) {
         this.ctx.db.run(
           `INSERT INTO multiremi_agent_plugin_runtime_states (
              id, workspace_id, runtime_id, plugin_id, plugin_version_id, desired, desired_reason,
-             status, retry_count, retry_generation, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, 1, ?, 'pending', 0, 0, ?, ?)
-           ON CONFLICT(runtime_id, plugin_version_id) DO UPDATE SET
-             desired = 1, desired_reason = excluded.desired_reason, updated_at = excluded.updated_at`,
-          [createId("aps"), workspaceId, String(runtime.id), item.pluginId, versionId, item.reason, now, now],
+             status, observed_digest, retry_count, retry_generation, pending_heartbeat_count,
+             next_retry_at, last_error_code, last_error, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULL, 0, 0, 0, NULL, ?, ?, ?, ?)`,
+          [
+            createId("aps"),
+            workspaceId,
+            target.runtime.id,
+            target.pluginId,
+            target.versionId,
+            target.reason,
+            supported ? "pending" : "setup_required",
+            supported ? null : DAEMON_UPGRADE_REQUIRED_CODE,
+            supported ? null : DAEMON_UPGRADE_REQUIRED_MESSAGE,
+            now,
+            now,
+          ],
         );
+        continue;
       }
+
+      const wasDesired = Number(existing.desired) === 1;
+      const currentStatus = normalizeRuntimeStatus(existing.status);
+      let status = currentStatus;
+      let observedDigest = cleanString(existing.observed_digest);
+      let retryCount = Number(existing.retry_count ?? 0);
+      let retryGeneration = Number(existing.retry_generation ?? 0);
+      let pendingHeartbeatCount = Number(existing.pending_heartbeat_count ?? 0);
+      let nextRetryAt = cleanString(existing.next_retry_at);
+      let lastErrorCode = cleanString(existing.last_error_code);
+      let lastError = cleanString(existing.last_error);
+      let lastAttemptAt = cleanString(existing.last_attempt_at);
+      let lastReadyAt = cleanString(existing.last_ready_at);
+
+      if (!supported) {
+        if (
+          currentStatus !== "setup_required" ||
+          cleanString(existing.last_error_code) !== DAEMON_UPGRADE_REQUIRED_CODE
+        ) {
+          retryGeneration += 1;
+        }
+        status = "setup_required";
+        observedDigest = null;
+        pendingHeartbeatCount = 0;
+        nextRetryAt = null;
+        lastErrorCode = DAEMON_UPGRADE_REQUIRED_CODE;
+        lastError = DAEMON_UPGRADE_REQUIRED_MESSAGE;
+        lastAttemptAt = null;
+        lastReadyAt = null;
+      } else if (lastErrorCode === DAEMON_UPGRADE_REQUIRED_CODE || !wasDesired) {
+        if (!wasDesired) retryGeneration += 1;
+        status = "pending";
+        observedDigest = null;
+        retryCount = 0;
+        pendingHeartbeatCount = 0;
+        nextRetryAt = null;
+        lastErrorCode = null;
+        lastError = null;
+        lastAttemptAt = null;
+        lastReadyAt = null;
+      }
+
+      const changed = !wasDesired
+        || normalizeDesiredReason(existing.desired_reason) !== target.reason
+        || currentStatus !== status
+        || cleanString(existing.observed_digest) !== observedDigest
+        || Number(existing.retry_count ?? 0) !== retryCount
+        || Number(existing.retry_generation ?? 0) !== retryGeneration
+        || Number(existing.pending_heartbeat_count ?? 0) !== pendingHeartbeatCount
+        || cleanString(existing.next_retry_at) !== nextRetryAt
+        || cleanString(existing.last_error_code) !== lastErrorCode
+        || cleanString(existing.last_error) !== lastError
+        || cleanString(existing.last_attempt_at) !== lastAttemptAt
+        || cleanString(existing.last_ready_at) !== lastReadyAt;
+      if (!changed) continue;
+      this.ctx.db.run(
+        `UPDATE multiremi_agent_plugin_runtime_states
+         SET desired = 1, desired_reason = ?, status = ?, observed_digest = ?, retry_count = ?,
+             retry_generation = ?, pending_heartbeat_count = ?, next_retry_at = ?, last_error_code = ?, last_error = ?,
+             last_attempt_at = ?, last_ready_at = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          target.reason,
+          status,
+          observedDigest,
+          retryCount,
+          retryGeneration,
+          pendingHeartbeatCount,
+          nextRetryAt,
+          lastErrorCode,
+          lastError,
+          lastAttemptAt,
+          lastReadyAt,
+          now,
+          String(existing.id),
+        ],
+      );
     }
   }
 
@@ -905,15 +1167,24 @@ export class AgentPluginsRepo {
        LIMIT 1`,
     ).get(plugin.id, plugin.workspaceId) as Row | null;
     if (!binding) return;
-    const notReady = this.ctx.db.query(
-      `SELECT r.id
+    const runtimeStates = this.ctx.db.query(
+      `SELECT r.id, r.status AS runtime_status, r.last_heartbeat_at,
+              s.id AS state_id, s.status AS plugin_status, s.observed_digest
        FROM multiremi_runtimes r
        LEFT JOIN multiremi_agent_plugin_runtime_states s
          ON s.runtime_id = r.id AND s.plugin_version_id = ? AND s.desired = 1
-       WHERE COALESCE(r.workspace_id, 'local') = ? AND r.status = 'online'
-         AND (r.provider = ? OR r.provider = 'any')
-         AND (s.id IS NULL OR s.status <> 'ready' OR s.observed_digest IS NULL OR s.observed_digest <> ?)` ,
-    ).all(version.id, plugin.workspaceId, plugin.provider, version.artifactDigest) as Row[];
+       WHERE COALESCE(r.workspace_id, 'local') = ?
+         AND (r.provider = ? OR r.provider = 'any')`,
+    ).all(version.id, plugin.workspaceId, plugin.provider) as Row[];
+    const notReady = runtimeStates.filter((row) =>
+      runtimeRowIsEffectivelyOnline(row)
+      && (
+        row.state_id == null
+        || row.plugin_status !== "ready"
+        || row.observed_digest == null
+        || row.observed_digest !== version.artifactDigest
+      )
+    );
     if (notReady.length > 0) {
       throw conflict(
         `plugin version is not ready on ${notReady.length} online runtime(s)`,
@@ -1021,13 +1292,13 @@ export class AgentPluginsRepo {
     const summaryVersionId = candidateVersionId ?? activeVersionId;
     const states = summaryVersionId
       ? this.ctx.db.query(
-        `SELECT s.runtime_id, s.status, r.status AS runtime_status
+        `SELECT s.runtime_id, s.status, r.status AS runtime_status, r.last_heartbeat_at
          FROM multiremi_agent_plugin_runtime_states s
          JOIN multiremi_runtimes r ON r.id = s.runtime_id
          WHERE s.plugin_id = ? AND s.plugin_version_id = ? AND s.desired = 1`,
       ).all(id, summaryVersionId) as Row[]
       : [];
-    const onlineStates = states.filter((state) => state.runtime_status === "online");
+    const onlineStates = states.filter(runtimeRowIsEffectivelyOnline);
     const summary = {
       desired: states.length,
       ready: onlineStates.filter((state) => state.status === "ready").length,
@@ -1035,7 +1306,7 @@ export class AgentPluginsRepo {
       retrying: onlineStates.filter((state) => state.status === "retry_scheduled").length,
       setupRequired: onlineStates.filter((state) => state.status === "setup_required").length,
       blocked: onlineStates.filter((state) => state.status === "blocked").length,
-      offline: states.filter((state) => state.runtime_status === "offline").length,
+      offline: states.filter((state) => !runtimeRowIsEffectivelyOnline(state)).length,
     };
     return {
       id,
@@ -1162,7 +1433,7 @@ function normalizeObject(value: unknown): Record<string, unknown> {
 
 function toRuntimeRef(row: Row) {
   const now = String(row.updated_at ?? row.created_at ?? nowIso());
-  return {
+  return withRuntimeLiveness({
     id: String(row.id),
     name: String(row.name ?? ""),
     provider: String(row.provider ?? "any"),
@@ -1188,7 +1459,42 @@ function toRuntimeRef(row: Row) {
     lastHeartbeatAt: cleanString(row.last_heartbeat_at),
     createdAt: String(row.created_at ?? now),
     updatedAt: now,
-  };
+  });
+}
+
+function runtimeRowIsEffectivelyOnline(row: Row): boolean {
+  return isRuntimeEffectivelyOnline({
+    status: row.runtime_status === "offline" ? "offline" : "online",
+    lastHeartbeatAt: cleanString(row.last_heartbeat_at),
+  });
+}
+
+export function runtimeSupportsAgentPlugins(runtime: {
+  daemonId: string | null;
+  metadata: Record<string, unknown>;
+}): boolean {
+  // Runtimes without a daemon identity are server-managed/test runtimes and keep
+  // the pre-handshake behavior. Daemon-backed runtimes must opt in explicitly so
+  // old binaries cannot be mistaken for a worker that is about to reconcile.
+  if (!runtime.daemonId) return true;
+  const protocol = Number(
+    runtime.metadata.agent_plugin_protocol ?? runtime.metadata.agentPluginProtocol ?? 0,
+  );
+  return Number.isSafeInteger(protocol) && protocol >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION;
+}
+
+function runtimeStateFingerprint(row: Row): string {
+  return canonicalJson({
+    desired: Number(row.desired) === 1,
+    desiredReason: normalizeDesiredReason(row.desired_reason),
+    status: normalizeRuntimeStatus(row.status),
+    observedDigest: cleanString(row.observed_digest),
+    retryCount: Number(row.retry_count ?? 0),
+    retryGeneration: Number(row.retry_generation ?? 0),
+    nextRetryAt: cleanString(row.next_retry_at),
+    lastErrorCode: cleanString(row.last_error_code),
+    lastError: cleanString(row.last_error),
+  });
 }
 
 function cleanString(value: unknown): string | null {

@@ -200,6 +200,19 @@ export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
   token: string;
 }
 
+export interface ProvisionDaemonCredentialRequest {
+  workspace_id: string;
+  name?: string;
+  expires_in_days?: number;
+}
+
+export interface ProvisionDaemonCredentialResponse {
+  token: string;
+  tokenId: string;
+  workspaceId: string;
+  daemonId: string;
+}
+
 export interface ManagedIssueShare {
   token: string;
   expires_at: string;

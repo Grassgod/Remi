@@ -7,6 +7,7 @@ import { projectDocKeys } from "../../project-docs/queries";
 import { pinKeys } from "../../pins/queries";
 import { autopilotKeys } from "../../autopilots/queries";
 import { runtimeKeys } from "../../runtimes/queries";
+import { runtimeModelsKeys } from "../../runtimes/models";
 import {
   agentTaskSnapshotKeys,
   agentActivityKeys,
@@ -15,6 +16,8 @@ import {
 } from "../../agents/queries";
 import { githubKeys } from "../../github/queries";
 import { larkKeys } from "../../lark/queries";
+import { agentPluginKeys } from "../../plugins/queries";
+import { chatKeys } from "../../chat/queries";
 import { onInboxInvalidate } from "../../inbox/ws-updaters";
 import { workspaceKeys } from "../../workspace/queries";
 import type { SyncContext } from "./types";
@@ -52,6 +55,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) {
         qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+        qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
         // Squad members status is derived per agent, so any agent
         // change (status flip, archive, runtime swap) needs to refresh the
         // per-squad members-status cache without refetching the static squad
@@ -74,6 +78,12 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
     skill: () => {
       const wsId = getCurrentWsId();
       if (wsId) qc.invalidateQueries({ queryKey: workspaceKeys.skills(wsId) });
+    },
+    agent_plugin: () => {
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
+      }
     },
     project: () => {
       const wsId = getCurrentWsId();
@@ -116,6 +126,16 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       const wsId = getCurrentWsId();
       if (wsId) {
         qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+        qc.invalidateQueries({ queryKey: runtimeKeys.daemonInventory(wsId) });
+        qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+        qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
+        qc.invalidateQueries({ queryKey: issueKeys.workspacesAll() });
+        qc.invalidateQueries({ queryKey: ["issues", "tasks"] });
+        qc.invalidateQueries({ queryKey: ["issues", "sessions"] });
         // Runtime online/offline transitions move the derived status
         // for every agent that hosts on this runtime, which shifts the
         // working/idle/offline pill on the squad page.
@@ -161,6 +181,7 @@ export function createPrefixRefresh({ qc, authStore }: SyncContext): {
       // catches every agent's list — the per-agent detail key sits
       // under agentTasks/<wsId>/<agentId>.
       qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
       // Per-issue task list (issue-detail Execution log). Prefix match
       // across all issues — keeps the contract "any task: event makes
       // every list-of-tasks query stale" so cache stays fresh even

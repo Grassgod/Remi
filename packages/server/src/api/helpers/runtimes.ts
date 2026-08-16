@@ -3,6 +3,11 @@
 import type { Context } from "hono";
 import { MultiremiStore, daemonRuntimeId } from "@multiremi/store/store.js";
 import {
+  DaemonIdentityOwnerConflictError,
+  DaemonRetiredError,
+} from "@multiremi/store/repos/daemon-retirement-repo.js";
+import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
+import {
   MULTIREMI_DAEMON_PROVIDERS,
   cleanString,
   currentAccessToken,
@@ -18,6 +23,7 @@ import type {
   ReportRuntimeLocalSkillImportInput,
   ReportRuntimeLocalSkillListInput,
 } from "@multiremi/contracts/types.js";
+import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 import {
   currentJwtUserId,
   currentWorkspaceRole,
@@ -35,6 +41,9 @@ export type DaemonRegisterRequestBody = {
   device_name?: string;
   cli_version?: string;
   launched_by?: string;
+  capabilities?: {
+    agent_plugins?: number;
+  };
   runtimes?: Array<{
     name?: string;
     type?: string;
@@ -52,6 +61,7 @@ export function buildDaemonInstallInstructions(input: {
   workspaceId?: string | null;
   token?: string | null;
   tokenId?: string | null;
+  daemonId?: string | null;
   provider?: string | null;
   version?: string | null;
 }) {
@@ -60,6 +70,7 @@ export function buildDaemonInstallInstructions(input: {
     ?? cleanString(process.env.MULTIREMI_PUBLIC_URL)
     ?? requestOrigin(input.requestUrl);
   const provider = cleanString(input.provider);
+  const daemonId = cleanString(input.daemonId);
   if (provider && !MULTIREMI_DAEMON_PROVIDERS.has(provider)) {
     throw new MultiremiApiError(`Unsupported Multiremi runtime provider: ${provider}`, 400);
   }
@@ -78,6 +89,7 @@ export function buildDaemonInstallInstructions(input: {
     input.token ? shellArg(input.token) : "<YOUR_TOKEN>",
   ];
   if (provider) setupParts.push("--provider", provider);
+  if (daemonId) setupParts.push("--daemon-id", shellArg(daemonId));
   const setupCommand = setupParts.join(" ");
   const daemonCommand = "multiremi daemon";
   const daemonStartCommand = "multiremi daemon start";
@@ -89,6 +101,7 @@ export function buildDaemonInstallInstructions(input: {
     provider: provider ?? "auto",
     token: input.token ?? null,
     tokenId: input.tokenId ?? null,
+    daemonId: daemonId ?? null,
     installScriptUrl,
     releaseArtifactPattern: "multiremi-${version}-${os}-${arch}.tar.gz",
     installCommand,
@@ -194,7 +207,14 @@ export function deregisterDaemonRuntimes(c: Context, store: MultiremiStore, runt
   for (const runtimeId of runtimeIds) {
     const runtime = store.getRuntime(runtimeId);
     if (!runtime) continue;
-    if (token?.type === "daemon" && (runtime.workspaceId ?? "local") !== token.workspaceId) continue;
+    if (
+      token?.type === "daemon" && (
+        (runtime.workspaceId ?? "local") !== token.workspaceId
+        || !token.daemonId
+        || !runtime.daemonId
+        || runtime.daemonId !== token.daemonId
+      )
+    ) continue;
     const updated = store.setRuntimeOffline(runtimeId);
     if (!updated || runtime.status === updated.status) continue;
     store.emitWorkspaceEvent({
@@ -264,6 +284,7 @@ export function registerDaemonRuntimes(
   body: DaemonRegisterRequestBody,
   auth: { ownerId: string | null } = { ownerId: null },
   includeRelay = false,
+  options: { allowLegacyDaemonMigration?: boolean } = {},
 ):
   | {
     runtimes: ReturnType<typeof daemonRuntimeResponse>[];
@@ -272,7 +293,7 @@ export function registerDaemonRuntimes(
     settings: Record<string, unknown>;
     relay: Record<string, unknown>;
   }
-  | { error: string; status: 400 | 404 | 500 } {
+  | { error: string; status: 400 | 404 | 409 | 500 } {
   // Older self-host clients (e.g. the v0.2.0 `remi` release) omit workspace_id
   // in the register body and relied on the server deriving it. This is a
   // single-workspace local deployment, so default to "local" — matching the
@@ -287,10 +308,19 @@ export function registerDaemonRuntimes(
   const deviceName = String(body.device_name ?? "").trim();
   const cliVersion = String(body.cli_version ?? "").trim();
   const launchedBy = String(body.launched_by ?? "").trim();
-  const legacyDaemonIds = uniqueStrings(body.legacy_daemon_ids ?? []);
+  const agentPluginProtocol = normalizeAgentPluginProtocol(body.capabilities?.agent_plugins);
+  const legacyDaemonIds = options.allowLegacyDaemonMigration === false
+    ? []
+    : uniqueStrings(body.legacy_daemon_ids ?? []);
   const repos = workspaceReposResponse(store, workspaceId, includeRelay);
   if (!repos) return { error: "workspace not found", status: 404 };
-  const registered: ReturnType<typeof daemonRuntimeResponse>[] = [];
+  const registrations: Array<{
+    provider: string;
+    version: string;
+    id: string;
+    previousAgentPluginProtocol: number | null;
+    input: Parameters<MultiremiStore["registerDaemonRuntimeBatch"]>[0][number];
+  }> = [];
   for (const runtime of runtimes) {
     const providerResult = validateMultiremiRuntimeProvider(runtime.type);
     if ("error" in providerResult) return providerResult;
@@ -298,14 +328,14 @@ export function registerDaemonRuntimes(
     const version = String(runtime.version ?? "").trim();
     const name = String(runtime.name ?? "").trim() || (deviceName ? `${provider} (${deviceName})` : provider);
     const id = daemonRuntimeId(daemonId, provider);
+    const existingRuntime = store.getRuntime(id);
     const deviceInfo = [deviceName, version].filter(Boolean).join(" · ");
-    // Ownership is set once, on first registration (owner = the registering
-    // token's user). Re-registration (daemon restart/heartbeat) must never
-    // hijack an already-owned runtime.
-    const ownerId = store.getRuntime(id)?.ownerId ?? auth.ownerId;
-    let saved: ReturnType<MultiremiStore["registerRuntime"]>;
-    try {
-      saved = store.registerRuntime({
+    registrations.push({
+      provider,
+      version,
+      id,
+      previousAgentPluginProtocol: readAgentPluginProtocol(existingRuntime?.metadata),
+      input: {
         id,
         name,
         provider,
@@ -316,40 +346,78 @@ export function registerDaemonRuntimes(
           version,
           cli_version: cliVersion,
           launched_by: launchedBy,
+          agent_plugin_protocol: agentPluginProtocol,
           ...(typeof runtime.acpVersion === "string" && runtime.acpVersion ? { acp_version: runtime.acpVersion } : {}),
           ...(typeof runtime.agentVersion === "string" && runtime.agentVersion ? { agent_version: runtime.agentVersion } : {}),
         },
         workspaceId,
-        ownerId,
+        ownerId: auth.ownerId,
         status: runtime.status === "offline" ? "offline" : "online",
         maxConcurrency: Number.isFinite(Number(runtime.maxConcurrency)) && Number(runtime.maxConcurrency) >= 1
           ? Math.floor(Number(runtime.maxConcurrency))
           : 1,
-      });
-    } catch (error) {
-      store.recordRuntimeFailure({
-        ownerId: auth.ownerId,
-        workspaceId,
-        daemonId,
-        provider,
-        failureReason: "registration_failed",
-        errorType: "db_error",
-        recoverable: true,
-      });
-      const message = error instanceof Error ? error.message : String(error);
-      return { error: `failed to register runtime: ${message}`, status: 500 };
-    }
-    if (runtime.status === "offline") store.setRuntimeOffline(saved.id);
-    mergeLegacyDaemonRuntimes(store, saved, provider, legacyDaemonIds);
+      },
+    });
+  }
+
+  let savedRuntimes: ReturnType<MultiremiStore["registerDaemonRuntimeBatch"]>;
+  try {
+    savedRuntimes = store.registerDaemonRuntimeBatch(registrations.map((entry) => entry.input));
+  } catch (error) {
+    if (
+      error instanceof DaemonRetiredError
+      || error instanceof DaemonIdentityOwnerConflictError
+      || error instanceof RuntimeRegistrationIdentityConflictError
+    ) throw error;
+    const failed = registrations[0];
+    store.recordRuntimeFailure({
+      ownerId: auth.ownerId,
+      workspaceId,
+      daemonId,
+      provider: failed?.provider ?? "other",
+      failureReason: "registration_failed",
+      errorType: "db_error",
+      recoverable: true,
+    });
+    const message = error instanceof Error ? error.message : String(error);
+    return { error: `failed to register runtime: ${message}`, status: 500 };
+  }
+
+  const registered: ReturnType<typeof daemonRuntimeResponse>[] = [];
+  const capabilityChanges: Array<{ runtimeId: string; previous: number | null }> = [];
+  for (const [index, registration] of registrations.entries()) {
+    const saved = savedRuntimes[index];
+    mergeLegacyDaemonRuntimes(store, saved, registration.provider, legacyDaemonIds);
     const current = store.getRuntime(saved.id) ?? saved;
+    if (registration.previousAgentPluginProtocol !== agentPluginProtocol) {
+      capabilityChanges.push({
+        runtimeId: current.id,
+        previous: registration.previousAgentPluginProtocol,
+      });
+    }
     registered.push(daemonRuntimeResponse(current, {
       daemonId,
-      version,
+      version: registration.version,
       cliVersion,
       launchedBy,
     }));
   }
   if (registered.length > 0) {
+    for (const change of capabilityChanges) {
+      store.emitWorkspaceEvent({
+        type: "agent_plugin:runtime_capability",
+        workspaceId,
+        actorType: "daemon",
+        actorId: daemonId,
+        payload: {
+          runtime_id: change.runtimeId,
+          daemon_id: daemonId,
+          previous_agent_plugin_protocol: change.previous,
+          agent_plugin_protocol: agentPluginProtocol,
+          supported: agentPluginProtocol >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+        },
+      });
+    }
     // Let browsers (e.g. the "Add computer" dialog) auto-detect a daemon coming
     // online and jump to the new runtime. `runtime_id` targets the primary card.
     store.emitWorkspaceEvent({
@@ -374,6 +442,17 @@ export function registerDaemonRuntimes(
   };
 }
 
+function normalizeAgentPluginProtocol(value: unknown): number {
+  const protocol = Number(value);
+  if (!Number.isSafeInteger(protocol) || protocol < 0) return 0;
+  return protocol;
+}
+
+function readAgentPluginProtocol(metadata: Record<string, unknown> | null | undefined): number | null {
+  if (!metadata || !("agent_plugin_protocol" in metadata || "agentPluginProtocol" in metadata)) return null;
+  return normalizeAgentPluginProtocol(metadata.agent_plugin_protocol ?? metadata.agentPluginProtocol);
+}
+
 export function daemonRegisterOwnerContext(
   c: Context,
   store: MultiremiStore,
@@ -391,11 +470,28 @@ export function daemonRegisterOwnerContext(
   }
   // Daemon tokens are machine identities: runtimes they register are owned by the
   // user who created the token (during `remi setup`), not left ownerless.
-  if (token.type === "daemon") return { ownerId: cleanString(token.userId) ?? null };
+  if (token.type === "daemon") {
+    const ownerId = cleanString(token.userId);
+    if (
+      ownerId
+      && ownerId !== "local"
+      && !store.getUserRoleInWorkspace(ownerId, targetWorkspaceId)
+    ) {
+      return { error: "forbidden for token workspace", status: 403 };
+    }
+    return { ownerId };
+  }
   if (token.workspaceId !== targetWorkspaceId) {
     return { error: "forbidden for token workspace", status: 403 };
   }
-  return { ownerId: cleanString(token.userId) ?? "local" };
+  const ownerId = cleanString(token.userId) ?? "local";
+  if (
+    ownerId !== "local"
+    && !store.getUserRoleInWorkspace(ownerId, targetWorkspaceId)
+  ) {
+    return { error: "forbidden for token workspace", status: 403 };
+  }
+  return { ownerId };
 }
 
 export function mergeLegacyDaemonRuntimes(

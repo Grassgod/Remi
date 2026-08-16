@@ -21,6 +21,7 @@ import type {
   ListIssuesInput,
   UpdateIssueInput,
   MultiremiAgent,
+  MultiremiAgentPluginRuntimeState,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiAnalyticsEvent,
   MultiremiAutopilotRun,
@@ -173,6 +174,7 @@ export interface AgentsSurface {
   getAgentByRef(ref: string, workspaceId?: string | null): MultiremiAgent | null;
   listActiveAgentsByRuntime(runtimeId: string): MultiremiAgent[];
   createSkill(input: CreateSkillInput): MultiremiSkill;
+  createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill;
   getSkill(id: string, options?: { includeArchived?: boolean; includeFiles?: boolean }): MultiremiSkill | null;
 }
 
@@ -184,6 +186,8 @@ export interface AgentPluginsSurface {
   getAgentPluginCapabilityRevision(agentId: string): string;
   runtimeHasReadyAgentPlugins(runtimeId: string, agentId: string): boolean;
   assertAgentPluginProviderCompatible(agentId: string, provider: string): void;
+  recordAgentPluginRuntimeHeartbeat(runtimeId: string): MultiremiAgentPluginRuntimeState[];
+  recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId: string): MultiremiAgentPluginRuntimeState[];
 }
 
 // The analytics recorders are shared by the runtimes, autopilots and tasks domains but are not part
@@ -268,12 +272,27 @@ export interface IssueSessionsSurface {
     metadata?: Record<string, unknown>;
     createdAt?: string;
   }): MultiremiSessionEvent;
+  appendSessionEventWithinTransaction(sessionId: string, input: {
+    authorType: string;
+    authorId?: string | null;
+    kind?: string;
+    body?: string;
+    taskId?: string | null;
+    sourceCommentId?: string | null;
+    metadata?: Record<string, unknown>;
+    createdAt?: string;
+  }): MultiremiSessionEvent;
 }
 
 export interface RuntimesSurface {
   getRuntime(id: string): MultiremiRuntime | null;
   getRuntimeByDaemonAndProvider(daemonId: string, provider: string): MultiremiRuntime | null;
-  heartbeatRuntime(runtimeId: string, options?: { claimPending?: boolean; supportsBatchImport?: boolean; supportsDirectoryScan?: boolean }): MultiremiDaemonHeartbeatAck;
+  heartbeatRuntime(runtimeId: string, options?: {
+    claimPending?: boolean;
+    supportsBatchImport?: boolean;
+    supportsDirectoryScan?: boolean;
+    agentPluginProtocol?: number;
+  }): MultiremiDaemonHeartbeatAck;
   runtimeCanRunAgent(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean;
 }
 
@@ -321,6 +340,21 @@ export class StoreContext {
       );
     }
     return this.analyticsRepo;
+  }
+
+  /**
+   * Serialize workspace-scoped Runtime lifecycle mutations across SQLite and
+   * Postgres. Daemon retirement holds this row lock while it re-reads its plan
+   * and removes Runtime-affine state; every write that can add such state must
+   * take the same lock and revalidate after acquiring it.
+   *
+   * The caller must already be inside a database transaction.
+   */
+  lockWorkspaceRuntimeLifecycle(workspaceId: string): void {
+    this.db.run(
+      "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
+      [workspaceId],
+    );
   }
 
   // Lazy cross-domain accessors. A carved-out repo reaches a domain it does not own through these,

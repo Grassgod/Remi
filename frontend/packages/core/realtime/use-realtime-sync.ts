@@ -12,11 +12,14 @@ import { projectKeys } from "../projects/queries";
 import { projectDocKeys } from "../project-docs/queries";
 import { autopilotKeys } from "../autopilots/queries";
 import { runtimeKeys } from "../runtimes/queries";
+import { runtimeModelsKeys } from "../runtimes/models";
 import { labelKeys } from "../labels/queries";
+import { agentPluginKeys } from "../plugins/queries";
 import {
   agentTaskSnapshotKeys,
   agentActivityKeys,
   agentRunCountsKeys,
+  agentTasksKeys,
 } from "../agents/queries";
 import { inboxKeys } from "../inbox/queries";
 import { workspaceKeys } from "../workspace/queries";
@@ -51,12 +54,19 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: projectDocKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+    qc.invalidateQueries({ queryKey: runtimeKeys.daemonInventory(wsId) });
     qc.invalidateQueries({ queryKey: autopilotKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentActivityKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: agentRunCountsKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: issueKeys.workspacesAll() });
+    qc.invalidateQueries({ queryKey: ["issues", "tasks"] });
+    qc.invalidateQueries({ queryKey: ["issues", "sessions"] });
   }
   qc.invalidateQueries({ queryKey: workspaceKeys.list() });
 }

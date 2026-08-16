@@ -337,6 +337,8 @@ describe("Multiremi multi-user auth", () => {
 
   it("FR8: a daemon token owns the runtimes it registers, and re-registration never hijacks the owner", async () => {
     const store = seedDeployment();
+    store.createWorkspaceMember({ id: "usr_setup_user", name: "Setup user", role: "member" });
+    store.createWorkspaceMember({ id: "usr_other", name: "Other user", role: "member" });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
     // A daemon token minted for a specific user (as `remi setup` would).
@@ -357,14 +359,16 @@ describe("Multiremi multi-user auth", () => {
     const runtimeId = (await first.json()).runtimes[0].id;
     expect(store.getRuntime(runtimeId)?.ownerId).toBe("usr_setup_user");
 
-    // A different daemon token (owned by someone else) re-registers the same
-    // runtime; ownership must not change.
-    const otherDaemon = await store.createAccessToken({
+    // The identity claim rejects a token for another owner before it exists.
+    await expect(store.createAccessToken({
       workspaceId: "local", userId: "usr_other", daemonId: "daemon-1", name: "Daemon other", type: "daemon",
+    })).rejects.toThrow("already owned by another user");
+    const sameOwnerDaemon = await store.createAccessToken({
+      workspaceId: "local", userId: "usr_setup_user", daemonId: "daemon-1", name: "Daemon replacement", type: "daemon",
     });
     const second = await app.request("/api/daemon/register", {
       method: "POST",
-      headers: jsonAuth(otherDaemon.token),
+      headers: jsonAuth(sameOwnerDaemon.token),
       body: JSON.stringify({ workspace_id: "local", daemon_id: "daemon-1", runtimes: [{ type: "codex", version: "1.0.1" }] }),
     });
     expect(second.status).toBe(200);

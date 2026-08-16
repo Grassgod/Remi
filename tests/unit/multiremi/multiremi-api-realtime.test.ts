@@ -16,7 +16,12 @@ describe("Multiremi API — realtime websockets", () => {
     const localSkillRequest = store.createRuntimeLocalSkillListRequest(runtime.id);
     const importOne = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "ws-one" });
     const importTwo = store.createRuntimeLocalSkillImportRequest(runtime.id, { skill_key: "ws-two" });
-    const camelRuntime = store.registerRuntime({ id: "rt_ws_camel", name: "Camel WS runtime", provider: "codex" });
+    const camelRuntime = store.registerRuntime({
+      id: "rt_ws_camel",
+      name: "Camel WS runtime",
+      provider: "codex",
+      metadata: { agent_plugin_protocol: 1 },
+    });
     const camelImportOne = store.createRuntimeLocalSkillImportRequest(camelRuntime.id, { skill_key: "ws-camel-one" });
     const camelImportTwo = store.createRuntimeLocalSkillImportRequest(camelRuntime.id, { skill_key: "ws-camel-two" });
     const server = startMultiremiServer({ store, scheduler: null, port: 0, hostname: "127.0.0.1" });
@@ -49,6 +54,7 @@ describe("Multiremi API — realtime websockets", () => {
         },
       });
       expect(camelHeartbeatAck.payload.pending_local_skill_imports).toBeUndefined();
+      expect(store.getRuntime(camelRuntime.id)?.metadata.agent_plugin_protocol).toBe(1);
       expect(store.getRuntimeLocalSkillImportRequest(camelRuntime.id, camelImportTwo.id)?.status).toBe("pending");
       camelWs.close();
       await Bun.sleep(25);
@@ -98,7 +104,8 @@ describe("Multiremi API — realtime websockets", () => {
       });
       expect(heartbeatAck.payload.pending_local_skill_imports.map((item: any) => item.id)).toEqual([importOne.id, importTwo.id]);
 
-      store.deleteRuntime(runtime.id);
+      store.cancelTask(queued.id);
+      expect(store.deleteRuntime(runtime.id)).toBeTrue();
       ws.send(JSON.stringify({
         type: "daemon:heartbeat",
         payload: { runtime_id: "rt_ws" },
@@ -514,7 +521,14 @@ describe("Multiremi API — realtime websockets", () => {
 
   it("scopes daemon websocket upgrades to authorized runtime workspaces", async () => {
     const store = createStore();
-    store.registerRuntime({ id: "rt_ws_local", name: "Local WS", provider: "codex", workspaceId: "local", daemonId: "daemon-local" });
+    store.registerRuntime({
+      id: "rt_ws_local",
+      name: "Local WS",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
     store.registerRuntime({ id: "rt_ws_other_daemon", name: "Other daemon WS", provider: "codex", workspaceId: "local", daemonId: "daemon-other" });
     store.registerRuntime({ id: "rt_ws_remote", name: "Remote WS", provider: "codex", workspaceId: "remote" });
     const daemonToken = await store.createAccessToken({
@@ -522,6 +536,38 @@ describe("Multiremi API — realtime websockets", () => {
       daemonId: "daemon-local",
       name: "Local daemon",
       type: "daemon",
+    });
+    const unboundDaemonToken = await store.createAccessToken({
+      workspaceId: "local",
+      name: "Unbound local daemon",
+      type: "daemon",
+    });
+    const humanToken = await store.createAccessToken({
+      workspaceId: "local",
+      name: "Local human",
+      type: "pat",
+    });
+    const removedMember = store.createWorkspaceMember({
+      id: "member-removed-daemon-ws",
+      workspaceId: "local",
+      userId: "removed-daemon-ws-owner",
+      name: "Removed daemon WS owner",
+      role: "member",
+    });
+    const removedDaemonToken = await store.createAccessToken({
+      workspaceId: "local",
+      daemonId: "daemon-removed-ws",
+      userId: "removed-daemon-ws-owner",
+      name: "Removed daemon WS",
+      type: "daemon",
+    });
+    store.registerRuntime({
+      id: "rt_ws_removed_owner",
+      name: "Removed owner WS",
+      provider: "claude",
+      workspaceId: "local",
+      daemonId: "daemon-removed-ws",
+      ownerId: "removed-daemon-ws-owner",
     });
     const server = startMultiremiServer({
       store,
@@ -541,10 +587,57 @@ describe("Multiremi API — realtime websockets", () => {
       });
       local.close();
 
+      const removedOwner = new WebSocket(
+        `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_removed_owner`,
+        { headers: { Authorization: `Bearer ${removedDaemonToken.token}` } } as any,
+      );
+      expect(await nextWebSocketMessage(removedOwner)).toMatchObject({ type: "ready" });
+      store.archiveWorkspaceMember(removedMember.id);
+      removedOwner.send(JSON.stringify({
+        type: "daemon:heartbeat",
+        payload: { runtime_id: "rt_ws_removed_owner" },
+      }));
+      expect(await nextWebSocketMessage(removedOwner)).toMatchObject({
+        type: "error",
+        code: "daemon_owner_membership_required",
+      });
+
+      const removedOwnerReconnect = new WebSocket(
+        `ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_removed_owner`,
+        { headers: { Authorization: `Bearer ${removedDaemonToken.token}` } } as any,
+      );
+      await expectWebSocketRejected(removedOwnerReconnect);
+
+      const human = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
+        headers: { Authorization: `Bearer ${humanToken.token}` },
+      } as any);
+      await expectWebSocketRejected(human);
+      expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(1);
+
+      const master = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
+        headers: { Authorization: "Bearer root-secret" },
+      } as any);
+      expect(await nextWebSocketMessage(master)).toMatchObject({ type: "ready" });
+      master.send(JSON.stringify({
+        type: "daemon:heartbeat",
+        payload: { runtime_id: "rt_ws_local", agent_plugin_protocol: 2 },
+      }));
+      expect(await nextWebSocketMessage(master)).toMatchObject({
+        type: "daemon:heartbeat_ack",
+        payload: { runtime_id: "rt_ws_local", status: "ok" },
+      });
+      expect(store.getRuntime("rt_ws_local")?.metadata.agent_plugin_protocol).toBe(2);
+      master.close();
+
       const otherDaemon = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_other_daemon`, {
         headers: { Authorization: `Bearer ${daemonToken.token}` },
       } as any);
       await expectWebSocketRejected(otherDaemon);
+
+      const unboundDaemon = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_local`, {
+        headers: { Authorization: `Bearer ${unboundDaemonToken.token}` },
+      } as any);
+      await expectWebSocketRejected(unboundDaemon);
 
       const remote = new WebSocket(`ws://127.0.0.1:${server.port}/api/daemon/ws?runtime_ids=rt_ws_remote`, {
         headers: { Authorization: `Bearer ${daemonToken.token}` },

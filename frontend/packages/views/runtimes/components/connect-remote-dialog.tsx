@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Copy, Terminal } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  ChevronRight,
+  Copy,
+  LoaderCircle,
+  RotateCw,
+  Terminal,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@multiremi/core/api";
 import { useWorkspaceId } from "@multiremi/core/hooks";
@@ -39,12 +47,14 @@ function daemonCommands(
   serverUrl: string | undefined,
   workspaceId: string | undefined,
   token: string | null,
+  daemonId: string | null,
 ) {
   const normalizedServerUrl = normalizeCommandURL(serverUrl) || SERVER_URL_PLACEHOLDER;
   const normalizedWorkspaceId = workspaceId?.trim() || WORKSPACE_ID_PLACEHOLDER;
   const setupToken = token?.trim() || "<YOUR_TOKEN>";
-  const setupBase =
+  let setupBase =
     `remi setup --server-url ${normalizedServerUrl} --workspace-id ${normalizedWorkspaceId}`;
+  if (daemonId?.trim()) setupBase += ` --daemon-id ${daemonId.trim()}`;
 
   return {
     setupCmd: `${setupBase} --token ${setupToken} --start`,
@@ -61,14 +71,22 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const navigation = useNavigation();
   const newRuntimeIdRef = useRef<string | null>(null);
+  const provisionedDaemonIdRef = useRef<string | null>(null);
 
   // `remi setup ... --start` stores config + token and starts the agent.
   // The dialog listens for the resulting `daemon:register` WS event.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
       if (step !== "instructions") return;
-      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
       const p = payload as Record<string, unknown> | null;
+      if (
+        typeof p?.daemon_id !== "string" ||
+        p.daemon_id !== provisionedDaemonIdRef.current
+      ) {
+        return;
+      }
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: runtimeKeys.daemonInventory(wsId) });
       if (p?.runtime_id && typeof p.runtime_id === "string") {
         newRuntimeIdRef.current = p.runtime_id;
       }
@@ -94,10 +112,19 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const handleProvisionedDaemonId = useCallback((daemonId: string | null) => {
+    provisionedDaemonIdRef.current = daemonId;
+  }, []);
+
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-lg">
-        {step === "instructions" && <InstructionsStep onClose={onClose} />}
+        {step === "instructions" && (
+          <InstructionsStep
+            onClose={onClose}
+            onProvisionedDaemonId={handleProvisionedDaemonId}
+          />
+        )}
         {step === "success" && (
           <SuccessStep
             onGoToAgents={handleGoToAgents}
@@ -185,36 +212,69 @@ function CommandStep({
 // Step 1: Instructions
 // ---------------------------------------------------------------------------
 
-function InstructionsStep({ onClose }: { onClose: () => void }) {
+function InstructionsStep({
+  onClose,
+  onProvisionedDaemonId,
+}: {
+  onClose: () => void;
+  onProvisionedDaemonId: (daemonId: string | null) => void;
+}) {
   const { t } = useT("runtimes");
   const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
   const wsId = useWorkspaceId();
+  const qc = useQueryClient();
   const [setupToken, setSetupToken] = useState<string | null>(null);
+  const [daemonId, setDaemonId] = useState<string | null>(null);
+  const [credentialStatus, setCredentialStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [credentialAttempt, setCredentialAttempt] = useState(0);
   const [browserOrigin, setBrowserOrigin] = useState("");
   useEffect(() => {
     setBrowserOrigin(window.location.origin);
   }, []);
   useEffect(() => {
+    if (!wsId) {
+      setCredentialStatus("error");
+      return;
+    }
     let cancelled = false;
+    setCredentialStatus("loading");
+    setSetupToken(null);
+    setDaemonId(null);
+    onProvisionedDaemonId(null);
     void api
-      .createPersonalAccessToken({
+      .provisionDaemonCredential({
+        workspace_id: wsId,
         name: `Remi daemon ${new Date().toISOString().slice(0, 10)}`,
         expires_in_days: 365,
-        purpose: "cli",
-        ...(wsId ? { workspace_id: wsId } : {}),
       })
       .then((result) => {
-        if (!cancelled) setSetupToken(result.token);
+        if (cancelled) return;
+        if (!result.token || !result.daemonId) {
+          setCredentialStatus("error");
+          return;
+        }
+        setSetupToken(result.token);
+        setDaemonId(result.daemonId);
+        onProvisionedDaemonId(result.daemonId);
+        setCredentialStatus("ready");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setCredentialStatus("error");
+      })
+      .finally(() => {
+        void qc.invalidateQueries({
+          queryKey: runtimeKeys.daemonInventory(wsId),
+        });
+      });
     return () => {
       cancelled = true;
     };
-  }, [wsId]);
+  }, [credentialAttempt, onProvisionedDaemonId, qc, wsId]);
   const { setupCmd, installCmd } = daemonCommands(
     daemonServerUrl || browserOrigin,
     wsId,
     setupToken,
+    daemonId,
   );
   return (
     <>
@@ -236,21 +296,53 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
             copyAria={t(($) => $.connect.copy_aria)}
           />
 
-          <div>
-            <CommandStep
-              n={2}
-              label={t(($) => $.connect.step2_label)}
-              cmd={setupCmd}
-              copyAria={t(($) => $.connect.copy_aria)}
-            />
-            <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
-              {t(($) => $.connect.step2_hint)}
-            </p>
-          </div>
+          {credentialStatus === "ready" ? (
+            <div>
+              <CommandStep
+                n={2}
+                label={t(($) => $.connect.step2_label)}
+                cmd={setupCmd}
+                copyAria={t(($) => $.connect.copy_aria)}
+              />
+              <p className="mt-1.5 text-[11px] leading-[1.55] text-muted-foreground">
+                {t(($) => $.connect.step2_hint)}
+              </p>
+            </div>
+          ) : credentialStatus === "loading" ? (
+            <div
+              className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-3 text-xs text-muted-foreground"
+              role="status"
+            >
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
+              {t(($) => $.connect.credential_loading)}
+            </div>
+          ) : (
+            <div
+              className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5"
+              role="alert"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-xs text-destructive">
+                <AlertCircle className="size-4 shrink-0" aria-hidden />
+                {t(($) => $.connect.credential_error)}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => setCredentialAttempt((attempt) => attempt + 1)}
+              >
+                <RotateCw className="size-3" aria-hidden />
+                {t(($) => $.connect.credential_retry)}
+              </Button>
+            </div>
+          )}
 
-          <LiveListening />
+          {credentialStatus === "ready" && <LiveListening />}
 
-          <TroubleshootingDetails installCmd={installCmd} setupCmd={setupCmd} />
+          <TroubleshootingDetails
+            installCmd={installCmd}
+            setupCmd={credentialStatus === "ready" ? setupCmd : null}
+          />
         </div>
       </div>
 
@@ -268,7 +360,7 @@ function TroubleshootingDetails({
   setupCmd,
 }: {
   installCmd: string;
-  setupCmd: string;
+  setupCmd: string | null;
 }) {
   const { t } = useT("runtimes");
   return (
@@ -288,12 +380,14 @@ function TroubleshootingDetails({
           cmd={installCmd}
           copyAria={t(($) => $.connect.copy_aria)}
         />
-        <CommandStep
-          n={2}
-          label={t(($) => $.connect.step2_label)}
-          cmd={setupCmd}
-          copyAria={t(($) => $.connect.copy_aria)}
-        />
+        {setupCmd && (
+          <CommandStep
+            n={2}
+            label={t(($) => $.connect.step2_label)}
+            cmd={setupCmd}
+            copyAria={t(($) => $.connect.copy_aria)}
+          />
+        )}
         <ul className="space-y-1">
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>

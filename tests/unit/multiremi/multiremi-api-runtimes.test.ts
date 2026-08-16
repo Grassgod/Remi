@@ -66,7 +66,6 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       ["unbound daemon", unboundDaemon.token],
       ["cross-workspace daemon", remoteDaemon.token],
       ["PAT", pat.token],
-      ["master token", "root-model-secret"],
     ] as const) {
       const denied = await app.request(path, {
         method: "PUT",
@@ -145,6 +144,27 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
       },
     });
     expect(store.listRuntimeModels(runtime.id).map((model) => model.id)).toEqual(["claude-live"]);
+
+    const masterAccepted = await app.request(path, {
+      method: "PUT",
+      headers: { Authorization: "Bearer root-model-secret", "Content-Type": "application/json" },
+      body,
+    });
+    expect(masterAccepted.status).toBe(200);
+
+    const openApp = createMultiremiApp({ store, authToken: "" });
+    const openAccepted = await openApp.request(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    expect(openAccepted.status).toBe(200);
+    const openPatDenied = await openApp.request(path, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${pat.token}`, "Content-Type": "application/json" },
+      body,
+    });
+    expect(openPatDenied.status).toBe(403);
   });
 
   it("serves runtime metadata updates and usage endpoints", async () => {
@@ -529,9 +549,132 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     expect(cascade.status).toBe(200);
     expect(await cascade.json()).toEqual({ status: "ok", agents_archived: 1, tasks_cancelled: 2 });
     expect(store.getRuntime(runtime.id)).toBeNull();
-    expect(store.getAgent(agent.id)).toBeNull();
+    expect(store.getAgent(agent.id)).toMatchObject({ runtimeId: null });
+    expect(store.getAgent(agent.id)?.archivedAt).not.toBeNull();
     expect(store.getTask(agentTask.id)?.status).toBe("cancelled");
     expect(store.getTask(runtimeTask.id)?.status).toBe("cancelled");
+  });
+
+  it("fails closed when ordinary deletion would orphan an in-flight task", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_delete_in_flight",
+      name: "Delete in-flight",
+      provider: "codex",
+    });
+    const agent = store.createAgent({
+      id: "agt_delete_in_flight",
+      name: "Delete in-flight agent",
+      provider: "codex",
+    });
+    const task = store.createTask({
+      agentId: agent.id,
+      runtimeId: runtime.id,
+      prompt: "still running",
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const app = createMultiremiApp({ store });
+
+    const blocked = await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({
+      error: "cannot delete runtime while it has active tasks",
+      code: "runtime_has_active_tasks",
+    });
+    expect(store.getRuntime(runtime.id)).not.toBeNull();
+    expect(store.getTask(task.id)).toMatchObject({
+      runtimeId: runtime.id,
+      status: "running",
+    });
+
+    store.cancelTask(task.id);
+    const deleted = await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(store.getRuntime(runtime.id)).toBeNull();
+  });
+
+  it("rechecks active Agents after taking the Runtime lifecycle lock", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({
+      id: "rt_delete_agent_race",
+      name: "Delete Agent race",
+      provider: "codex",
+    });
+    const listActiveAgents = store.listActiveAgentsByRuntime.bind(store);
+    let firstRead = true;
+    let racedAgentId = "";
+    store.listActiveAgentsByRuntime = ((runtimeId: string) => {
+      if (firstRead) {
+        firstRead = false;
+        racedAgentId = store.createAgent({
+          name: "Raced Agent",
+          provider: "codex",
+          runtimeId,
+        }).id;
+        return [];
+      }
+      return listActiveAgents(runtimeId);
+    }) as typeof store.listActiveAgentsByRuntime;
+    const app = createMultiremiApp({ store });
+
+    const response = await app.request(`/api/runtimes/${runtime.id}`, { method: "DELETE" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "runtime_has_active_agents",
+      active_agents: [{ id: racedAgentId }],
+    });
+    expect(store.getRuntime(runtime.id)).not.toBeNull();
+    expect(store.getAgent(racedAgentId)?.runtimeId).toBe(runtime.id);
+  });
+
+  it("protects the last local daemon Runtime while leaving Cloud Runtime deletion unaffected", async () => {
+    const store = createStore();
+    const lastLocal = store.registerRuntime({
+      id: "rt_last_local_daemon",
+      name: "Last local daemon Runtime",
+      provider: "codex",
+      daemonId: "daemon-last-local",
+      runtimeMode: "local",
+    });
+    const cloud = store.registerRuntime({
+      id: "rt_cloud_daemon_delete",
+      name: "Cloud Runtime",
+      provider: "codex",
+      daemonId: "daemon-cloud-delete",
+      runtimeMode: "cloud",
+    });
+    const app = createMultiremiApp({ store });
+
+    const blocked = await app.request(`/api/runtimes/${lastLocal.id}`, { method: "DELETE" });
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({
+      error: "cannot delete the last runtime of a daemon; retire the machine instead",
+      code: "daemon_last_runtime",
+      daemon_id: "daemon-last-local",
+    });
+    expect(store.getRuntime(lastLocal.id)).not.toBeNull();
+
+    const cloudDeleted = await app.request(`/api/runtimes/${cloud.id}`, { method: "DELETE" });
+    expect(cloudDeleted.status).toBe(200);
+    expect(store.getRuntime(cloud.id)).toBeNull();
+
+    const activeAgent = store.createAgent({
+      name: "Last daemon Agent",
+      provider: "codex",
+      runtimeId: lastLocal.id,
+    });
+    const cascadeBlocked = await app.request(`/api/runtimes/${lastLocal.id}/archive-agents-and-delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_active_agent_ids: [activeAgent.id] }),
+    });
+    expect(cascadeBlocked.status).toBe(409);
+    expect(await cascadeBlocked.json()).toMatchObject({
+      code: "daemon_last_runtime",
+      daemon_id: "daemon-last-local",
+    });
+    expect(store.getAgent(activeAgent.id)?.runtimeId).toBe(lastLocal.id);
   });
 
   it("serves runtime model list request flow", async () => {
@@ -1290,9 +1433,9 @@ describe("Multiremi API — runtimes and runtime request queues", () => {
     const store = createStore();
     store.ensureLocalWorkspace();
     const app = createMultiremiApp({ store });
-    store.registerRuntime = (() => {
+    store.registerDaemonRuntimeBatch = (() => {
       throw new Error("database is locked");
-    }) as typeof store.registerRuntime;
+    }) as typeof store.registerDaemonRuntimeBatch;
 
     const failed = await app.request("/api/daemon/register", {
       method: "POST",

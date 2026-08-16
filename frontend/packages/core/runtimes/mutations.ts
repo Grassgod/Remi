@@ -1,8 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { runtimeKeys } from "./queries";
+import { runtimeModelsKeys } from "./models";
 import { workspaceKeys } from "../workspace/queries";
-import { agentTaskSnapshotKeys } from "../agents/queries";
+import { agentTaskSnapshotKeys, agentTasksKeys } from "../agents/queries";
+import { agentPluginKeys } from "../plugins/queries";
+import { chatKeys } from "../chat/queries";
+import { issueKeys } from "../issues/queries";
 
 export function useDeleteRuntime(wsId: string) {
   const qc = useQueryClient();
@@ -56,6 +60,42 @@ export function useUpdateRuntime(wsId: string) {
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+    },
+  });
+}
+
+export function useRetireDaemon(wsId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      daemonId,
+      expectedSnapshot,
+      abandonIssueWorkspaces,
+    }: {
+      daemonId: string;
+      expectedSnapshot: string;
+      abandonIssueWorkspaces?: boolean;
+    }) => api.retireDaemon(
+      wsId,
+      daemonId,
+      expectedSnapshot,
+      abandonIssueWorkspaces ?? false,
+    ),
+    onSettled: (_data, _error, variables) => {
+      qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
+      qc.invalidateQueries({ queryKey: runtimeKeys.daemonInventory(wsId) });
+      qc.invalidateQueries({
+        queryKey: runtimeKeys.daemonRetirementPlan(wsId, variables.daemonId),
+      });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      qc.invalidateQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: agentTasksKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: agentPluginKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.workspacesAll() });
+      qc.invalidateQueries({ queryKey: ["issues", "tasks"] });
+      qc.invalidateQueries({ queryKey: ["issues", "sessions"] });
     },
   });
 }

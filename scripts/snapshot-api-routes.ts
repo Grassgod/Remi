@@ -713,6 +713,8 @@ function resolveParam(pattern: string, name: string, refs: SeedRefs): string {
       return "apv_snapshot";
     case "bindingId":
       return "apb_snapshot";
+    case "daemonId":
+      return "dmn_snapshot";
     case "engine":
       return "claude";
     case "key":
@@ -791,6 +793,8 @@ function getQuery(pattern: string, refs: SeedRefs): string {
       return `?member_id=${encodeURIComponent(refs.inboxMemberId)}`;
     case "/api/multiremi/inbox":
       return `?memberId=${encodeURIComponent(refs.inboxMemberId)}`;
+    case "/api/multiremi/daemons/:daemonId/retirement-plan":
+      return `?workspace_id=${encodeURIComponent(refs.workspaceId)}`;
     default:
       return "";
   }
@@ -1224,6 +1228,17 @@ flow("runtimes", async (rec, refs) => {
   await rec.json("POST", `/api/runtimes/${id}/update`, { target_version: "9.9.9" });
   await rec.json("POST", `/api/runtimes/${id}/archive-agents-and-delete`, {});
   await rec.call("DELETE", `/api/runtimes/${refs.runtimeId}`);
+});
+
+flow("daemon-retirement", async (rec, refs) => {
+  const plan = await rec.call(
+    "GET",
+    `/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=${encodeURIComponent(refs.workspaceId)}`,
+  );
+  await rec.json("POST", "/api/multiremi/daemons/dmn_snapshot/retire", {
+    workspace_id: refs.workspaceId,
+    expected_snapshot: plan.body?.plan?.snapshot,
+  });
 });
 
 // -- daemon -----------------------------------------------------------------

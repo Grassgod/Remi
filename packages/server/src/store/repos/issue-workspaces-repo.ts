@@ -24,10 +24,34 @@ export class IssueWorkspacesRepo {
   }
 
   report(input: ReportIssueWorkspaceInput): MultiremiIssueWorkspace {
+    const initialIssue = this.ctx.db.query(
+      "SELECT workspace_id FROM multiremi_issues WHERE id = ?",
+    ).get(input.issueId) as Row | null;
+    if (!initialIssue) throw new Error(`Issue not found: ${input.issueId}`);
+    const workspaceId = String(initialIssue.workspace_id ?? "local");
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      return this.reportWithinLifecycleLock(input, workspaceId);
+    });
+    return tx();
+  }
+
+  /** Caller holds the issue workspace's Runtime lifecycle lock. */
+  private reportWithinLifecycleLock(
+    input: ReportIssueWorkspaceInput,
+    workspaceId: string,
+  ): MultiremiIssueWorkspace {
     const issue = this.ctx.db.query(
       "SELECT issue_key, issue_kind, workspace_id FROM multiremi_issues WHERE id = ?",
     ).get(input.issueId) as Row | null;
-    if (!issue) throw new Error(`Issue not found: ${input.issueId}`);
+    if (!issue || String(issue.workspace_id ?? "local") !== workspaceId) {
+      throw new Error(`Issue not found: ${input.issueId}`);
+    }
+    const runtime = this.ctx.runtimes().getRuntime(input.runtimeId);
+    if (!runtime) throw new Error(`Runtime not found: ${input.runtimeId}`);
+    if ((runtime.workspaceId ?? "local") !== workspaceId) {
+      throw new Error("runtime belongs to another workspace");
+    }
     const issueKey = String(issue.issue_key ?? input.issueId);
     const expectedBranch = issue.issue_kind === "intake" ? "" : `agent/${issueKey}`;
     if (input.branchName !== expectedBranch) {
@@ -71,7 +95,7 @@ export class IssueWorkspacesRepo {
          updated_at = excluded.updated_at`,
       [
         input.issueId,
-        String(issue.workspace_id ?? "local"),
+        workspaceId,
         issueKey,
         input.runtimeId,
         input.rootPath,
@@ -88,8 +112,25 @@ export class IssueWorkspacesRepo {
   }
 
   markCleaned(issueId: string, runtimeId: string): MultiremiIssueWorkspace {
+    const initial = this.get(issueId);
+    if (!initial) throw new Error(`Issue workspace not found: ${issueId}`);
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      return this.markCleanedWithinLifecycleLock(issueId, runtimeId, initial.workspaceId);
+    });
+    return tx();
+  }
+
+  /** Caller holds the issue workspace's Runtime lifecycle lock. */
+  private markCleanedWithinLifecycleLock(
+    issueId: string,
+    runtimeId: string,
+    workspaceId: string,
+  ): MultiremiIssueWorkspace {
     const current = this.get(issueId);
-    if (!current) throw new Error(`Issue workspace not found: ${issueId}`);
+    if (!current || current.workspaceId !== workspaceId) {
+      throw new Error(`Issue workspace not found: ${issueId}`);
+    }
     if (
       !current.runtimeId
       || (current.runtimeId !== runtimeId && !this.runtimesShareDaemon(current.runtimeId, runtimeId))

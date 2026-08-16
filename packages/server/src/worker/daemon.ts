@@ -16,6 +16,7 @@ import type { ElicitationCreateParams, ElicitationResult, PermissionOutcome, Req
 import { answersToElicitationContent, elicitationToQuestions } from "@shared/contracts/acp-elicitation.js";
 import type { AgentResponse, Provider } from "@shared/contracts/provider-types.js";
 import {
+  isTerminalDaemonAuthorityError,
   MultiremiDaemonClient,
   type MultiremiDaemonGcStatus,
   type MultiremiDaemonRegisterResponse,
@@ -54,6 +55,7 @@ import {
 import {
   cleanupNonIssueTaskPluginRuntime,
   materializeTaskPlugins,
+  prepareCodexPluginReadinessRuntime,
   resolveTaskPluginRuntimeBase,
   resolveTaskPluginSnapshot,
 } from "@daemon/agent-runtime/agent-plugins/materialize.js";
@@ -69,6 +71,7 @@ import type {
   AgentPluginArtifactSpec,
   PreparedAgentPluginRuntime,
 } from "@daemon/agent-runtime/agent-plugins/types.js";
+import { AgentPluginError } from "@daemon/agent-runtime/agent-plugins/types.js";
 import {
   LocalDirectoryError,
   LocalPathLocker,
@@ -87,6 +90,7 @@ import type {
   RegisterRuntimeInput,
   TaskUsageEntry,
 } from "@multiremi/contracts/types.js";
+import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 
 // Re-export the per-task context writers (moved to daemon/agent-runtime/skills in D6)
 // so existing `from "../multiremi/daemon.js"` imports keep resolving (铁律#3).
@@ -189,7 +193,10 @@ export type MultiremiTaskProvider = Pick<Provider, "sendStream" | "getLastRespon
 
 export type MultiremiDaemonProviderFactory = (options: AcpProviderOptions) => MultiremiTaskProvider;
 export type MultiremiDaemonUpdateRunner = (targetVersion: string) => string | Promise<string>;
-export type MultiremiAgentPluginProviderPreflight = (provider: "claude" | "codex") => void | Promise<void>;
+export type MultiremiAgentPluginProviderPreflight = (
+  provider: "claude" | "codex",
+  signal?: AbortSignal,
+) => void | Promise<void>;
 
 export class MultiremiRuntimeReregisterGate {
   private nextAttemptByWorkspace = new Map<string, number>();
@@ -257,6 +264,7 @@ export class MultiremiDaemon {
   private readonly agentPluginCache: AgentPluginCache;
   private readonly agentPluginReconciler: AgentPluginRuntimeReconciler;
   private readonly agentPluginProviderPreflight: MultiremiAgentPluginProviderPreflight;
+  private agentPluginReconcileAbort: AbortController | null = null;
   private runtimeModels: MultiremiRuntimeModel[] | null = null;
   private runtimeRegistrationGeneration = 0;
   private runtimeModelReportedGeneration = 0;
@@ -316,7 +324,8 @@ export class MultiremiDaemon {
     this.providerFactory = options.providerFactory ?? ((providerOptions) => new AcpProvider(providerOptions));
     this.updateRunner = options.updateRunner ?? runDefaultMultiremiUpdate;
     this.onRestartRequested = options.onRestartRequested ?? null;
-    this.agentPluginProviderPreflight = options.agentPluginProviderPreflight ?? preflightAgentPluginProvider;
+    this.agentPluginProviderPreflight = options.agentPluginProviderPreflight
+      ?? ((provider, signal) => preflightAgentPluginProvider(provider, {}, signal));
     this.localSkillRoots = options.localSkillRoots ?? {};
     this.client = new MultiremiDaemonClient(options.serverUrl, this.options.token);
     this.repoCache = new MultiremiRepoCache(this.options.repoCacheRoot);
@@ -327,7 +336,8 @@ export class MultiremiDaemon {
     });
     this.agentPluginReconciler = new AgentPluginRuntimeReconciler({
       cache: this.agentPluginCache,
-      preflight: (snapshot) => this.preflightAgentPlugin(snapshot),
+      preflight: (snapshot, payloadPath, signal) =>
+        this.preflightAgentPlugin(snapshot, payloadPath, signal),
       reportState: async (state) => {
         const runtimeId = this.options.runtimeId;
         if (!runtimeId) return;
@@ -405,6 +415,13 @@ export class MultiremiDaemon {
           // re-launches it. Log and retry on the next poll. `once` mode (tests,
           // one-shot runs) still surfaces the error.
           if (this.stopped || this.options.once) throw err;
+          if (isTerminalDaemonAuthorityError(err)) {
+            log.error(
+              `daemon authorization was revoked or retired; stopping: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            this.stop();
+            break;
+          }
           log.warn(`daemon poll loop error, retrying in ${this.options.pollIntervalMs}ms: ${err instanceof Error ? err.message : String(err)}`);
           await sleep(this.options.pollIntervalMs);
         }
@@ -430,6 +447,7 @@ export class MultiremiDaemon {
         deviceName: this.options.deviceName,
         cliVersion: multiremiVersion,
         launchedBy: this.options.launchedBy ?? "manual",
+        agentPluginProtocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
         runtime: {
           // Empty name → server derives `<provider> (<deviceName>)`, which the
           // dashboard splits into the machine title + a clean provider row.
@@ -494,6 +512,7 @@ export class MultiremiDaemon {
         acp_version: this.acpVersion() ?? undefined,
         agent_version: this.agentVersion() ?? undefined,
         launched_by: this.options.launchedBy ?? "manual",
+        agent_plugin_protocol: MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
       },
       deviceInfo: `${this.options.runtimeName} · ${multiremiVersion}`,
       ...(this.runtimeModels ? { models: this.runtimeModels } : {}),
@@ -546,6 +565,13 @@ export class MultiremiDaemon {
         this.reregisterGate.recordRegisterCompletion(workspaceId, Date.now());
       } catch (error) {
         this.reregisterGate.recordRegisterCompletion(workspaceId, Date.now(), error);
+        if (isTerminalDaemonAuthorityError(error)) {
+          log.error(
+            `Runtime cannot re-register because daemon authorization was revoked or retired; stopping: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          this.stop();
+          return false;
+        }
         log.warn(`Re-register after runtime_gone failed for ${workspaceId}: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
@@ -877,38 +903,84 @@ export class MultiremiDaemon {
   }
 
   private async reconcileRuntimeAgentPlugins(runtimeId: string): Promise<void> {
-    const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId);
-    if (desired.runtime_id && desired.runtime_id !== runtimeId) {
-      throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
+    this.agentPluginReconcileAbort?.abort();
+    const abort = new AbortController();
+    this.agentPluginReconcileAbort = abort;
+    try {
+      const desired = await this.client.getRuntimeAgentPluginDesired(runtimeId);
+      if (desired.runtime_id && desired.runtime_id !== runtimeId) {
+        throw new Error(`Agent Plugin desired state belongs to Runtime ${desired.runtime_id}, expected ${runtimeId}`);
+      }
+      const parsed = desired.plugins.map(agentPluginDesiredFromWire);
+      this.agentPluginReconciler.restoreStates(parsed.map((entry) => entry.state));
+      await this.agentPluginReconciler.reconcile(
+        parsed.map((entry) => entry.artifact),
+        { signal: abort.signal },
+      );
+    } finally {
+      if (this.agentPluginReconcileAbort === abort) {
+        this.agentPluginReconcileAbort = null;
+      }
     }
-    const parsed = desired.plugins.map(agentPluginDesiredFromWire);
-    this.agentPluginReconciler.restoreStates(parsed.map((entry) => entry.state));
-    await this.agentPluginReconciler.reconcile(parsed.map((entry) => entry.artifact));
   }
 
-  private async preflightAgentPlugin(snapshot: AgentPluginArtifactSpec): Promise<void> {
-    await this.agentPluginProviderPreflight(snapshot.provider);
+  private async preflightAgentPlugin(
+    snapshot: AgentPluginArtifactSpec,
+    payloadPath: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.agentPluginProviderPreflight(snapshot.provider, signal);
     const binaries = snapshot.requirements?.binaries;
-    if (binaries === undefined) return;
-    if (!Array.isArray(binaries) || binaries.some((value) => typeof value !== "string" || !value.trim())) {
-      throw pluginBlocked(
-        `Agent Plugin ${snapshot.name} has invalid requirements.binaries`,
-        "plugin_requirements_invalid",
-      );
+    if (binaries !== undefined) {
+      if (!Array.isArray(binaries) || binaries.some((value) => typeof value !== "string" || !value.trim())) {
+        throw pluginBlocked(
+          `Agent Plugin ${snapshot.name} has invalid requirements.binaries`,
+          "plugin_requirements_invalid",
+        );
+      }
+      const missing = binaries
+        .map((value) => String(value).trim())
+        .filter((binary) => !Bun.which(binary));
+      if (missing.length) {
+        throw pluginSetupRequired(
+          `Agent Plugin ${snapshot.name} requires missing Runtime binaries: ${missing.join(", ")}`,
+          "plugin_binary_missing",
+        );
+      }
     }
-    const missing = binaries
-      .map((value) => String(value).trim())
-      .filter((binary) => !Bun.which(binary));
-    if (missing.length) {
-      throw pluginSetupRequired(
-        `Agent Plugin ${snapshot.name} requires missing Runtime binaries: ${missing.join(", ")}`,
-        "plugin_binary_missing",
+    if (snapshot.provider !== "codex") return;
+
+    try {
+      const prepared = await prepareCodexPluginReadinessRuntime(
+        snapshot,
+        payloadPath,
+        join(this.options.pluginCacheRoot, ".codex-readiness"),
+        signal,
+      );
+      const workspaceId = this.options.workspaceId ?? "local";
+      const relayFragment = this.workspaceRelays.get(workspaceId)?.codex?.fragment ?? "";
+      const configToml = relayFragment.trim() ? mergeCodexConfig("", relayFragment) : undefined;
+      const baseHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+      await installCodexPluginHome(prepared, {
+        signal,
+        seedHome: (targetHome) => seedCodexHomeFromBase({
+          baseHome,
+          targetHome,
+          ...(configToml === undefined ? {} : { configToml }),
+        }),
+      });
+    } catch (error) {
+      if (error instanceof AgentPluginError) throw error;
+      throw pluginBlocked(
+        `Codex Plugin ${snapshot.name} native installation failed: ${error instanceof Error ? error.message : String(error)}`,
+        "plugin_codex_install_failed",
       );
     }
   }
 
   stop(): void {
     this.stopped = true;
+    this.agentPluginReconcileAbort?.abort();
     this.cancelRuntimeModelRefresh();
   }
 
@@ -1031,6 +1103,7 @@ export class MultiremiDaemon {
       const configToml = relayFragment.trim() ? mergeCodexConfig("", relayFragment) : undefined;
       const baseHome = process.env.CODEX_HOME || join(homedir(), ".codex");
       await installCodexPluginHome(prepared, {
+        signal,
         seedHome: (targetHome) => seedCodexHomeFromBase({
           baseHome,
           targetHome,
@@ -1636,7 +1709,7 @@ export class MultiremiDaemon {
 
 export interface AgentPluginProviderPreflightDependencies {
   which?: (binary: string) => string | null;
-  commandSucceeds?: (executable: string, args: string[]) => Promise<boolean>;
+  commandSucceeds?: (executable: string, args: string[], signal?: AbortSignal) => Promise<boolean>;
   bridgeHealthy?: (provider: "claude" | "codex") => Promise<boolean>;
 }
 
@@ -1644,6 +1717,7 @@ export interface AgentPluginProviderPreflightDependencies {
 export async function preflightAgentPluginProvider(
   provider: "claude" | "codex",
   dependencies: AgentPluginProviderPreflightDependencies = {},
+  signal?: AbortSignal,
 ): Promise<void> {
   const which = dependencies.which ?? ((binary: string) => Bun.which(binary));
   const executable = which(provider);
@@ -1657,6 +1731,7 @@ export async function preflightAgentPluginProvider(
     const supportsPlugins = await (dependencies.commandSucceeds ?? pluginProbeCommandSucceeds)(
       executable,
       ["plugin", "--help"],
+      signal,
     );
     if (!supportsPlugins) {
       throw pluginSetupRequired(
@@ -1673,7 +1748,29 @@ export async function preflightAgentPluginProvider(
       await providerClient.close();
     }
   });
-  if (!(await bridgeHealthy(provider))) {
+  let bridgeAvailable: boolean;
+  try {
+    bridgeAvailable = await withTimeout(
+      bridgeHealthy(provider),
+      15_000,
+      `${provider} ACP bridge health check timed out`,
+      signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      throw new AgentPluginError(
+        `${provider} Plugin preflight was cancelled`,
+        "plugin_cancelled",
+        "transient",
+        { cause: error },
+      );
+    }
+    throw pluginSetupRequired(
+      `${provider} ACP bridge is unavailable on this Runtime: ${error instanceof Error ? error.message : String(error)}`,
+      `plugin_${provider}_bridge_missing`,
+    );
+  }
+  if (!bridgeAvailable) {
     throw pluginSetupRequired(
       `${provider} ACP bridge is unavailable on this Runtime`,
       `plugin_${provider}_bridge_missing`,
@@ -1681,7 +1778,14 @@ export async function preflightAgentPluginProvider(
   }
 }
 
-async function pluginProbeCommandSucceeds(executable: string, args: string[]): Promise<boolean> {
+async function pluginProbeCommandSucceeds(
+  executable: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) {
+    throw new AgentPluginError("Codex Plugin preflight was cancelled", "plugin_cancelled", "transient");
+  }
   let processHandle: ReturnType<typeof Bun.spawn>;
   try {
     processHandle = Bun.spawn([executable, ...args], {
@@ -1693,16 +1797,33 @@ async function pluginProbeCommandSucceeds(executable: string, args: string[]): P
     return false;
   }
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let abortHandler: (() => void) | null = null;
   const timedOut = new Promise<number>((resolveTimeout) => {
     timer = setTimeout(() => {
       try { processHandle.kill(); } catch {}
       resolveTimeout(-1);
     }, 15_000);
+    timer.unref?.();
   });
   try {
-    return await Promise.race([processHandle.exited, timedOut]) === 0;
+    const candidates: Promise<number>[] = [processHandle.exited, timedOut];
+    if (signal) {
+      candidates.push(new Promise<number>((_, reject) => {
+        abortHandler = () => {
+          try { processHandle.kill(); } catch {}
+          reject(new AgentPluginError(
+            "Codex Plugin preflight was cancelled",
+            "plugin_cancelled",
+            "transient",
+          ));
+        };
+        signal.addEventListener("abort", abortHandler, { once: true });
+      }));
+    }
+    return await Promise.race(candidates) === 0;
   } finally {
     if (timer) clearTimeout(timer);
+    if (signal && abortHandler) signal.removeEventListener("abort", abortHandler);
   }
 }
 

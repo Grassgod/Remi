@@ -234,6 +234,12 @@ export type MultiremiAgentPluginSourceType = "manifest" | "git" | "marketplace" 
 
 export type MultiremiAgentPluginVersionPolicy = "follow_active" | "pinned";
 
+/**
+ * Version of the daemon/server protocol used to stage provider-native Agent Plugins.
+ * A daemon must advertise at least this value during registration and heartbeat.
+ */
+export const MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION = 1;
+
 export type MultiremiAgentPluginRuntimeStatus =
   | "pending"
   | "downloading"

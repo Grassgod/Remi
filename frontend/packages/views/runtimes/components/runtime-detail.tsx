@@ -50,6 +50,7 @@ import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
+import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import { RuntimePluginsTab } from "./runtime-plugins-tab";
 import { useT } from "../../i18n";
 
@@ -147,6 +148,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const now = useNowTick();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [retiringDaemonId, setRetiringDaemonId] = useState<string | null>(null);
 
   const health = deriveRuntimeHealth(runtime, now);
   const ownerMember = runtime.owner_id
@@ -270,7 +272,26 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
         runtime={runtime}
         wsId={wsId}
         onDeleted={handleDeleted}
+        onRetireDaemon={(daemonId) => {
+          setDeleteOpen(false);
+          setRetiringDaemonId(daemonId);
+        }}
       />
+      {retiringDaemonId && (
+        <RetireDaemonDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setRetiringDaemonId(null);
+          }}
+          wsId={wsId}
+          daemonId={retiringDaemonId}
+          machineName={runtime.name}
+          onRetired={() => {
+            setRetiringDaemonId(null);
+            navigation.replace(paths.runtimes());
+          }}
+        />
+      )}
     </div>
   );
 }

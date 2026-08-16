@@ -20,11 +20,15 @@ async function setup() {
   return { store, app, ownerToken: owner.token, memberToken: member.token };
 }
 
-function register(app: ReturnType<typeof createMultiremiApp>, token: string) {
+function register(
+  app: ReturnType<typeof createMultiremiApp>,
+  token: string,
+  daemonId = "d1",
+) {
   return app.request("/api/daemon/register", {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ daemon_id: "d1", workspace_id: "local", runtimes: [{ type: "claude" }] }),
+    body: JSON.stringify({ daemon_id: daemonId, workspace_id: "local", runtimes: [{ type: "claude" }] }),
   });
 }
 
@@ -37,7 +41,7 @@ describe("relay config API — security", () => {
     expect(asOwner.relay?.claude?.auth_token).toBe("TOPSECRET");
 
     // A non-admin member's token must NOT leak the fleet secret.
-    const asMember = await (await register(app, memberToken)).json();
+    const asMember = await (await register(app, memberToken, "d2")).json();
     expect(JSON.stringify(asMember.relay)).not.toContain("TOPSECRET");
     expect(asMember.relay?.claude ?? null).toBeNull();
   });

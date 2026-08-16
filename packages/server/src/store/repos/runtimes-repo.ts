@@ -23,10 +23,15 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { RuntimeRequestQueue, type RuntimeRequestSpec } from "@multiremi/store/repos/runtime-request-queue.js";
+import {
+  RUNTIME_AUXILIARY_TABLES,
+  RUNTIME_REQUEST_TABLES,
+} from "@multiremi/store/runtime-lifecycle-tables.js";
 import type {
   CreateRuntimeLocalSkillImportInput,
   CreateRuntimeUpdateInput,
   MultiremiAgent,
+  MultiremiAgentPluginRuntimeState,
   MultiremiDaemonHeartbeatAck,
   MultiremiRuntime,
   MultiremiRuntimeDirectoryCandidate,
@@ -52,10 +57,32 @@ import type {
   ReportRuntimeUpdateInput,
   UpdateRuntimeInput,
 } from "@multiremi/contracts/types.js";
+import { MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
 
-const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
+export class RuntimeRegistrationIdentityConflictError extends Error {
+  readonly code = "runtime_registration_identity_conflict";
+
+  constructor(readonly runtimeId: string) {
+    super(`Runtime ${runtimeId} is already registered to another daemon identity`);
+    this.name = "RuntimeRegistrationIdentityConflictError";
+  }
+}
+
+export type StrictRuntimeDeleteResult =
+  | { status: "deleted" }
+  | { status: "not_found" }
+  | { status: "active_agents"; activeAgents: MultiremiAgent[] }
+  | { status: "active_tasks" }
+  | { status: "daemon_last_runtime"; daemonId: string };
+
+export type ArchiveAgentsAndDeleteRuntimeResult =
+  | { status: "ok"; agentsArchived: number; tasksCancelled: number }
+  | { status: "plan_changed"; activeAgents: MultiremiAgent[] }
+  | { status: "daemon_last_runtime"; daemonId: string };
+
+export const RUNTIME_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const RUNTIME_MODEL_LIST_PENDING_TIMEOUT_MS = 30 * 1000;
 const RUNTIME_MODEL_LIST_RUNNING_TIMEOUT_MS = 60 * 1000;
 const RUNTIME_UPDATE_PENDING_TIMEOUT_MS = 120 * 1000;
@@ -134,6 +161,11 @@ export class RuntimesRepo {
   }
 
   registerRuntime(input: RegisterRuntimeInput): MultiremiRuntime {
+    return this.ctx.db.transaction(() => this.registerRuntimeWithinTransaction(input))();
+  }
+
+  /** Caller already owns the transaction and any daemon/workspace locks. */
+  registerRuntimeWithinTransaction(input: RegisterRuntimeInput): MultiremiRuntime {
     const id = input.id ?? createId("rt");
     const now = nowIso();
     const currentRow = this.ctx.db.query("SELECT * FROM multiremi_runtimes WHERE id = ?").get(id) as Row | null;
@@ -162,7 +194,7 @@ export class RuntimesRepo {
       : current?.metadata ?? {};
     const maxConcurrency = normalizeRuntimeConcurrency(input.maxConcurrency ?? input.max_concurrency ?? current?.maxConcurrency ?? 1);
     const status = input.status === "offline" ? "offline" : "online";
-    this.ctx.db.run(
+    const result = this.ctx.db.run(
       `INSERT INTO multiremi_runtimes (
         id, name, provider, daemon_id, legacy_daemon_id, runtime_mode, device_info, metadata,
         workspace_id, owner_id, visibility, status, max_concurrency,
@@ -182,7 +214,20 @@ export class RuntimesRepo {
         status = excluded.status,
         max_concurrency = excluded.max_concurrency,
         last_heartbeat_at = excluded.last_heartbeat_at,
-        updated_at = excluded.updated_at`,
+        updated_at = excluded.updated_at
+      WHERE COALESCE(multiremi_runtimes.workspace_id, 'local') = COALESCE(excluded.workspace_id, 'local')
+        AND (
+          COALESCE(multiremi_runtimes.daemon_id, '') = COALESCE(excluded.daemon_id, '')
+          OR (
+            multiremi_runtimes.daemon_id IS NULL
+            AND excluded.daemon_id IS NOT NULL
+            AND multiremi_runtimes.provider = excluded.provider
+            AND (
+              COALESCE(multiremi_runtimes.owner_id, '') = COALESCE(excluded.owner_id, '')
+              OR (multiremi_runtimes.owner_id IS NULL AND excluded.owner_id = 'local')
+            )
+          )
+        )`,
       [
         id,
         input.name,
@@ -202,7 +247,19 @@ export class RuntimesRepo {
         now,
       ],
     );
-    if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, input.provider, now);
+    // Runtime ids are global primary keys. Daemon ids used to be mapped through
+    // a short hash that can collide, and the hash did not include workspace.
+    // The conditional UPSERT above is the concurrency-safe invariant: a daemon
+    // registration may only refresh the exact machine identity that already
+    // owns this row. The narrow second branch upgrades pre-daemon legacy rows:
+    // provider and owner must still match (an ownerless row is recoverable only
+    // by the local administrator/open single-user deployment). Provider changes
+    // remain valid after a daemon identity is established and cause pinned work
+    // to be re-pooled below. A rejected conflict reports zero changed rows.
+    if (result.changes === 0) throw new RuntimeRegistrationIdentityConflictError(id);
+    if (input.models !== undefined) {
+      this.replaceRuntimeModelsWithinTransaction(id, input.models, input.provider, now);
+    }
     const runtime = this.getRuntime(id)!;
     if (!current) {
       this.ctx.analytics().recordRuntimeRegisteredAnalytics(runtime);
@@ -234,59 +291,59 @@ export class RuntimesRepo {
   }
 
   updateRuntime(id: string, input: UpdateRuntimeInput): MultiremiRuntime {
-    const current = this.getRuntime(id);
-    if (!current) throw new Error(`Runtime not found: ${id}`);
-    const ownerId = resolveOptionalStringField(input, "ownerId", "owner_id", current.ownerId);
-    const visibility = hasAnyField(input, "visibility")
-      ? normalizeRuntimeVisibility(input.visibility)
-      : current.visibility;
-    const maxConcurrency = hasAnyField(input, "maxConcurrency", "max_concurrency")
-      ? normalizeRuntimeConcurrency(input.maxConcurrency ?? input.max_concurrency)
-      : current.maxConcurrency;
-    const runtimeMode = hasAnyField(input, "runtimeMode", "runtime_mode")
-      ? cleanOptionalString(input.runtimeMode ?? input.runtime_mode) ?? "local"
-      : current.runtimeMode;
-    const deviceInfo = hasAnyField(input, "deviceInfo", "device_info")
-      ? cleanOptionalString(input.deviceInfo ?? input.device_info) ?? ""
-      : current.deviceInfo;
-    const metadata = hasAnyField(input, "metadata")
-      ? normalizeRuntimeMetadata(input.metadata ?? {})
-      : current.metadata;
-    const now = nowIso();
-    this.ctx.db.run(
-      `UPDATE multiremi_runtimes SET
-        name = ?,
-        name_customized = CASE WHEN ? = 1 THEN 1 ELSE name_customized END,
-        runtime_mode = ?,
-        device_info = ?,
-        metadata = ?,
-        owner_id = ?,
-        visibility = ?,
-        max_concurrency = ?,
-        updated_at = ?
-       WHERE id = ?`,
-      [
-        input.name ?? current.name,
-        hasAnyField(input, "name") ? 1 : 0,
-        runtimeMode,
-        deviceInfo,
-        toJson(metadata),
-        ownerId,
-        visibility,
-        maxConcurrency,
-        now,
-        id,
-      ],
-    );
-    if (input.models !== undefined) this.replaceRuntimeModels(id, input.models, current.provider, now);
-    const updated = this.getRuntime(id)!;
-    // Ownership/visibility just changed → re-pool any queued task pinned here
-    // that the runtime may no longer run, so it isn't stranded on a machine the
-    // claim predicate now rejects.
-    if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local")) {
-      this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(updated, agent));
-    }
-    return updated;
+    return this.withRuntimeLifecycleLock(id, (current) => {
+      const ownerId = resolveOptionalStringField(input, "ownerId", "owner_id", current.ownerId);
+      const visibility = hasAnyField(input, "visibility")
+        ? normalizeRuntimeVisibility(input.visibility)
+        : current.visibility;
+      const maxConcurrency = hasAnyField(input, "maxConcurrency", "max_concurrency")
+        ? normalizeRuntimeConcurrency(input.maxConcurrency ?? input.max_concurrency)
+        : current.maxConcurrency;
+      const runtimeMode = hasAnyField(input, "runtimeMode", "runtime_mode")
+        ? cleanOptionalString(input.runtimeMode ?? input.runtime_mode) ?? "local"
+        : current.runtimeMode;
+      const deviceInfo = hasAnyField(input, "deviceInfo", "device_info")
+        ? cleanOptionalString(input.deviceInfo ?? input.device_info) ?? ""
+        : current.deviceInfo;
+      const metadata = hasAnyField(input, "metadata")
+        ? normalizeRuntimeMetadata(input.metadata ?? {})
+        : current.metadata;
+      const now = nowIso();
+      this.ctx.db.run(
+        `UPDATE multiremi_runtimes SET
+          name = ?,
+          name_customized = CASE WHEN ? = 1 THEN 1 ELSE name_customized END,
+          runtime_mode = ?,
+          device_info = ?,
+          metadata = ?,
+          owner_id = ?,
+          visibility = ?,
+          max_concurrency = ?,
+          updated_at = ?
+         WHERE id = ?`,
+        [
+          input.name ?? current.name,
+          hasAnyField(input, "name") ? 1 : 0,
+          runtimeMode,
+          deviceInfo,
+          toJson(metadata),
+          ownerId,
+          visibility,
+          maxConcurrency,
+          now,
+          id,
+        ],
+      );
+      if (input.models !== undefined) this.replaceRuntimeModelsWithinTransaction(id, input.models, current.provider, now);
+      const updated = this.getRuntime(id)!;
+      // Ownership/visibility just changed → re-pool any queued task pinned here
+      // that the runtime may no longer run, so it isn't stranded on a machine the
+      // claim predicate now rejects.
+      if (current.visibility !== updated.visibility || (current.ownerId ?? "local") !== (updated.ownerId ?? "local")) {
+        this.repoolQueuedTasksForRuntime(id, (agent) => this.runtimeCanRunAgent(updated, agent));
+      }
+      return updated;
+    });
   }
 
   setRuntimeOffline(id: string): MultiremiRuntime | null {
@@ -303,24 +360,77 @@ export class RuntimesRepo {
   }
 
   deleteRuntime(id: string): boolean {
-    // Free any queued task pinned to this runtime before it disappears — a
-    // chat-session / local_directory follow-up stamped here would otherwise be
-    // unclaimable forever (its runtime is gone, and the stamp blocks every
-    // other machine). Drop the orphaned provider session too so the re-pooled
-    // task starts fresh rather than resuming a session on a vanished machine.
-    const tx = this.ctx.db.transaction(() => {
-      this.repoolQueuedTasksForRuntime(id);
-      // PostgreSQL migrations intentionally do not rely on foreign-key
-      // cascades, and SQLite test stores may run with FK enforcement disabled.
-      // Remove observed Plugin state explicitly so historical reads never try
-      // to hydrate a Runtime that no longer exists.
-      this.ctx.db.run(
-        "DELETE FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ?",
-        [id],
-      );
-      return this.ctx.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]).changes > 0;
-    });
-    return tx();
+    const initial = this.getRuntime(id);
+    if (!initial) return false;
+    return this.ctx.db.transaction(() => {
+      const workspaceId = initial.workspaceId ?? "local";
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      const current = this.getRuntime(id);
+      if (!current || (current.workspaceId ?? "local") !== workspaceId) return false;
+      if (this.isLastManagedDaemonRuntime(current)) return false;
+      return this.deleteRuntimeWithinTransaction(id);
+    })();
+  }
+
+  /** Caller owns the Runtime workspace lifecycle and Plugin locks. */
+  private deleteRuntimeWithinTransaction(
+    id: string,
+    options: { repoolQueuedTasks?: boolean } = {},
+  ): boolean {
+    if (!this.getRuntime(id)) return false;
+    // Task claim takes the same workspace lifecycle lock as Runtime deletion,
+    // so this check cannot race a queued task becoming dispatched. Queued work
+    // is safely re-pooled below; work already owned by a daemon must be handled
+    // explicitly by the confirmed cascade path instead of being orphaned.
+    if (this.hasInFlightTasksForRuntime(id) || this.hasUnrepoolableQueuedTasksForRuntime(id)) return false;
+    const now = nowIso();
+    if (options.repoolQueuedTasks !== false) this.repoolQueuedTasksForRuntime(id);
+
+    // PostgreSQL intentionally has no FK cascades, and SQLite tests may have
+    // FK enforcement disabled. Keep every runtime reference explicit here so
+    // all delete paths have identical behavior.
+    this.ctx.db.run(
+      "UPDATE multiremi_agents SET runtime_id = NULL, updated_at = ? WHERE runtime_id = ?",
+      [now, id],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_issue_workspaces
+       SET runtime_id = NULL,
+           status = CASE WHEN status = 'cleaned' THEN status ELSE 'runtime_offline' END,
+           updated_at = ?
+       WHERE runtime_id = ?`,
+      [now, id],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_session_agent_lanes
+       SET provider_session_id = NULL,
+           runtime_id = NULL,
+           provider = NULL,
+           execution_fingerprint = NULL,
+           work_dir = NULL,
+           cursor_seq = 0,
+           generation = generation + 1,
+           last_task_id = NULL,
+           updated_at = ?
+       WHERE runtime_id = ?`,
+      [now, id],
+    );
+    this.ctx.db.run(
+      `UPDATE multiremi_chat_sessions
+       SET session_id = NULL,
+           work_dir = NULL,
+           session_runtime_id = NULL,
+           session_provider = NULL,
+           session_execution_fingerprint = NULL,
+           updated_at = ?
+       WHERE session_runtime_id = ?`,
+      [now, id],
+    );
+    for (const table of RUNTIME_AUXILIARY_TABLES) {
+      this.ctx.db.run(`DELETE FROM ${table} WHERE runtime_id = ?`, [id]);
+    }
+    return this.ctx.db.run("DELETE FROM multiremi_runtimes WHERE id = ?", [id]).changes > 0;
   }
 
   /**
@@ -375,26 +485,59 @@ export class RuntimesRepo {
   }
 
   /** The daemon id a task is bound to by a local_directory resource, or null. */
-  deleteRuntimeWithArchivedAgentCleanup(id: string): boolean {
-    if (!this.getRuntime(id)) return false;
-    const tx = this.ctx.db.transaction(() => {
-      this.pauseAutopilotsByAgentIds(this.listArchivedAgentIdsByRuntime(id));
-      this.deleteArchivedAgentsByRuntime(id);
-      return this.deleteRuntime(id);
-    });
-    return tx();
+  deleteRuntimeWithArchivedAgentCleanup(id: string): StrictRuntimeDeleteResult {
+    const initial = this.getRuntime(id);
+    if (!initial) return { status: "not_found" };
+    let clearedProjects: Array<{ id: string; workspaceId: string; updatedAt: string }> = [];
+    const result = this.ctx.db.transaction(() => {
+      const workspaceId = initial.workspaceId ?? "local";
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      const current = this.getRuntime(id);
+      if (!current || (current.workspaceId ?? "local") !== workspaceId) return { status: "not_found" as const };
+      const activeAgents = this.ctx.agents().listActiveAgentsByRuntime(id);
+      if (activeAgents.length) return { status: "active_agents" as const, activeAgents };
+      const archivedAgentIds = this.listArchivedAgentIdsByRuntime(id);
+      // Check before pausing autopilots or deleting archived Agents: a refused
+      // delete must leave the entire Runtime graph unchanged.
+      if (
+        this.hasInFlightTasksForRuntime(id)
+        || this.hasUnrepoolableQueuedTasksForRuntime(id)
+        || this.hasActiveTasksForAgents(archivedAgentIds)
+      ) return { status: "active_tasks" as const };
+      if (this.isLastManagedDaemonRuntime(current)) {
+        return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
+      }
+      this.pauseAutopilotsByAgentIds(archivedAgentIds);
+      clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
+      const deleted = this.deleteRuntimeWithinTransaction(id);
+      if (!deleted) throw new Error(`Runtime changed during deletion: ${id}`);
+      return { status: "deleted" as const };
+    })();
+    this.publishClearedProjectDefaults(clearedProjects);
+    return result;
   }
 
   archiveAgentsAndDeleteRuntime(
     id: string,
     expectedActiveAgentIds: string[],
-  ): { status: "ok"; agentsArchived: number; tasksCancelled: number } | { status: "plan_changed"; activeAgents: MultiremiAgent[] } {
-    if (!this.getRuntime(id)) throw new Error(`Runtime not found: ${id}`);
+  ): ArchiveAgentsAndDeleteRuntimeResult {
+    const initial = this.getRuntime(id);
+    if (!initial) throw new Error(`Runtime not found: ${id}`);
     const expected = new Set(expectedActiveAgentIds);
-    const tx = this.ctx.db.transaction(() => {
+    let clearedProjects: Array<{ id: string; workspaceId: string; updatedAt: string }> = [];
+    const result = this.ctx.db.transaction(() => {
+      const workspaceId = initial.workspaceId ?? "local";
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      const current = this.getRuntime(id);
+      if (!current || (current.workspaceId ?? "local") !== workspaceId) throw new Error(`Runtime not found: ${id}`);
       const activeAgents = this.ctx.agents().listActiveAgentsByRuntime(id);
       if (!activeAgentSetMatches(activeAgents, expected)) {
         return { status: "plan_changed" as const, activeAgents };
+      }
+      if (this.isLastManagedDaemonRuntime(current)) {
+        return { status: "daemon_last_runtime" as const, daemonId: current.daemonId! };
       }
 
       const activeAgentIds = activeAgents.map((agent) => agent.id);
@@ -411,12 +554,13 @@ export class RuntimesRepo {
       const tasksCancelled = this.cancelActiveTasksByRuntimeOrAgentIds(id, activeAgentIds);
       this.pauseAutopilotsByAgentIds([...activeAgentIds, ...this.listArchivedAgentIdsByRuntime(id)]);
       const agentsArchived = activeAgentIds.length;
-      this.deleteArchivedAgentsByRuntime(id);
-      const deleted = this.deleteRuntime(id);
+      clearedProjects = this.detachArchivedAgentsFromRuntime(id).clearedProjects;
+      const deleted = this.deleteRuntimeWithinTransaction(id);
       if (!deleted) throw new Error(`Runtime not found: ${id}`);
       return { status: "ok" as const, agentsArchived, tasksCancelled };
-    });
-    return tx();
+    })();
+    this.publishClearedProjectDefaults(clearedProjects);
+    return result;
   }
 
   private listArchivedAgentIdsByRuntime(runtimeId: string): string[] {
@@ -460,20 +604,101 @@ export class RuntimesRepo {
     return cancelled;
   }
 
-  private deleteArchivedAgentsByRuntime(runtimeId: string): number {
+  private hasInFlightTasksForRuntime(runtimeId: string): boolean {
+    return this.ctx.tasks().listTasks()
+      .some((task) => task.runtimeId === runtimeId && isInFlightTaskStatus(task.status));
+  }
+
+  private hasActiveTasksForAgents(agentIds: string[]): boolean {
+    if (!agentIds.length) return false;
+    const agents = new Set(agentIds);
+    return this.ctx.tasks().listTasks()
+      .some((task) => agents.has(task.agentId) && isActiveTaskStatus(task.status));
+  }
+
+  private hasUnrepoolableQueuedTasksForRuntime(runtimeId: string): boolean {
+    const rows = this.ctx.db.query(
+      "SELECT * FROM multiremi_tasks WHERE runtime_id = ? AND status = 'queued'",
+    ).all(runtimeId) as Row[];
+    for (const row of rows) {
+      const daemonId = this.ctx.localDirectoryDaemonForTask(row);
+      if (!daemonId) continue;
+      const agent = this.ctx.agents().getAgent(String(row.agent_id));
+      if (!agent) return true;
+      const target = this.getRuntimeByDaemonAndProvider(daemonId, agent.provider);
+      if (!target || target.id === runtimeId) return true;
+    }
+    return false;
+  }
+
+  private isLastManagedDaemonRuntime(runtime: MultiremiRuntime): boolean {
+    const daemonId = cleanOptionalString(runtime.daemonId);
+    if (!daemonId || runtime.runtimeMode !== "local") return false;
+    const row = this.ctx.db.query(
+      `SELECT COUNT(*) AS count
+       FROM multiremi_runtimes
+       WHERE COALESCE(workspace_id, 'local') = ? AND daemon_id = ? AND id != ?`,
+    ).get(runtime.workspaceId ?? "local", daemonId, runtime.id) as { count: number } | null;
+    return Number(row?.count ?? 0) === 0;
+  }
+
+  private detachArchivedAgentsFromRuntime(runtimeId: string): {
+    detached: number;
+    clearedProjects: Array<{ id: string; workspaceId: string; updatedAt: string }>;
+  } {
     const ids = this.listArchivedAgentIdsByRuntime(runtimeId);
-    if (!ids.length) return 0;
+    if (!ids.length) return { detached: 0, clearedProjects: [] };
     const placeholders = ids.map(() => "?").join(",");
-    this.ctx.db.run(`DELETE FROM multiremi_agent_skills WHERE agent_id IN (${placeholders})`, ids);
-    this.ctx.db.run(`DELETE FROM multiremi_squad_members WHERE member_type = 'agent' AND member_id IN (${placeholders})`, ids);
-    this.ctx.db.run(`DELETE FROM multiremi_session_agent_lanes WHERE agent_id IN (${placeholders})`, ids);
+    const now = nowIso();
+    const clearedProjects = (this.ctx.db.query(
+      `SELECT id, workspace_id
+       FROM multiremi_projects
+       WHERE default_assignee_type = 'agent' AND default_assignee_id IN (${placeholders})
+       ORDER BY id ASC`,
+    ).all(...ids) as Array<{ id: string; workspace_id: string }>).map((project) => ({
+      id: String(project.id),
+      workspaceId: String(project.workspace_id),
+      updatedAt: now,
+    }));
     this.ctx.db.run(
-      `UPDATE multiremi_squads
-       SET leader_id = NULL, updated_at = ?
-       WHERE leader_id IN (${placeholders})`,
-      [nowIso(), ...ids],
+      `UPDATE multiremi_projects
+       SET default_assignee_type = NULL, default_assignee_id = NULL, updated_at = ?
+       WHERE default_assignee_type = 'agent' AND default_assignee_id IN (${placeholders})`,
+      [now, ...ids],
     );
-    return this.ctx.db.run(`DELETE FROM multiremi_agents WHERE id IN (${placeholders})`, ids).changes;
+    // Archived agents remain first-class history: tasks, chats, issue events and
+    // configuration still reference them. Removing the machine only detaches
+    // their unavailable runtime; it must not hard-delete the Agent row.
+    const detached = this.ctx.db.run(
+      `UPDATE multiremi_agents
+       SET runtime_id = NULL, updated_at = ?
+       WHERE id IN (${placeholders}) AND archived_at IS NOT NULL`,
+      [now, ...ids],
+    ).changes;
+    const runtime = this.getRuntime(runtimeId);
+    if (runtime) this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(runtime.workspaceId ?? "local");
+    return { detached, clearedProjects };
+  }
+
+  private publishClearedProjectDefaults(
+    projects: Array<{ id: string; workspaceId: string; updatedAt: string }>,
+  ): void {
+    for (const project of projects) {
+      this.ctx.emitWorkspaceEvent({
+        type: "project:updated",
+        workspaceId: project.workspaceId,
+        actorType: "system",
+        actorId: null,
+        payload: {
+          project: {
+            id: project.id,
+            default_assignee_type: null,
+            default_assignee_id: null,
+            updated_at: project.updatedAt,
+          },
+        },
+      });
+    }
   }
 
   mergeRuntimeInto(oldRuntimeId: string, newRuntimeId: string): { agentsReassigned: number; tasksReassigned: number; deleted: boolean } {
@@ -487,6 +712,16 @@ export class RuntimesRepo {
 
     const now = nowIso();
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(oldRuntime.workspaceId ?? "local");
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(oldRuntime.workspaceId ?? "local");
+      const lockedOldRuntime = this.getRuntime(oldRuntimeId);
+      const lockedNewRuntime = this.getRuntime(newRuntimeId);
+      if (!lockedOldRuntime || !lockedNewRuntime) {
+        return { agentsReassigned: 0, tasksReassigned: 0, deleted: false };
+      }
+      if (lockedOldRuntime.workspaceId !== lockedNewRuntime.workspaceId || lockedOldRuntime.provider !== lockedNewRuntime.provider) {
+        return { agentsReassigned: 0, tasksReassigned: 0, deleted: false };
+      }
       const agents = this.ctx.db.run(
         "UPDATE multiremi_agents SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
@@ -502,7 +737,46 @@ export class RuntimesRepo {
         "UPDATE multiremi_chat_sessions SET session_runtime_id = ?, updated_at = ? WHERE session_runtime_id = ?",
         [newRuntimeId, now, oldRuntimeId],
       );
-      const deleted = this.deleteRuntime(oldRuntimeId);
+      this.ctx.db.run(
+        "UPDATE multiremi_session_agent_lanes SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
+      this.ctx.db.run(
+        "UPDATE multiremi_issue_workspaces SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
+
+      // The newly registered Runtime is authoritative for duplicate model ids;
+      // preserve every non-conflicting model learned under the legacy id.
+      this.ctx.db.run(
+        `DELETE FROM multiremi_runtime_models
+         WHERE runtime_id = ?
+           AND model_id IN (
+             SELECT model_id FROM multiremi_runtime_models WHERE runtime_id = ?
+           )`,
+        [oldRuntimeId, newRuntimeId],
+      );
+      this.ctx.db.run(
+        `UPDATE multiremi_runtime_models
+         SET is_default = 0, updated_at = ?
+         WHERE runtime_id = ?
+           AND EXISTS (
+             SELECT 1 FROM multiremi_runtime_models WHERE runtime_id = ? AND is_default = 1
+           )`,
+        [now, oldRuntimeId, newRuntimeId],
+      );
+      this.ctx.db.run(
+        "UPDATE multiremi_runtime_models SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?",
+        [newRuntimeId, now, oldRuntimeId],
+      );
+      for (const table of RUNTIME_REQUEST_TABLES) {
+        this.ctx.db.run(
+          `UPDATE ${table} SET runtime_id = ?, updated_at = ? WHERE runtime_id = ?`,
+          [newRuntimeId, now, oldRuntimeId],
+        );
+      }
+
+      const deleted = this.deleteRuntimeWithinTransaction(oldRuntimeId, { repoolQueuedTasks: false });
       return { agentsReassigned: agents, tasksReassigned: tasks, deleted };
     });
     return tx();
@@ -551,23 +825,25 @@ export class RuntimesRepo {
   }
 
   updateRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[]): MultiremiRuntimeModel[] {
-    const row = this.ctx.db.query("SELECT * FROM multiremi_runtimes WHERE id = ?").get(runtimeId) as Row | null;
-    if (!row) throw new Error(`Runtime not found: ${runtimeId}`);
-    this.replaceRuntimeModels(runtimeId, models, String(row.provider), nowIso());
-    return this.listRuntimeModels(runtimeId);
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, nowIso());
+      return this.listRuntimeModelsForExistingRuntime(runtimeId);
+    });
   }
 
   createRuntimeModelListRequest(runtimeId: string): MultiremiRuntimeModelListRequest {
-    this.requireOnlineRuntime(runtimeId);
-    const id = this.modelListQueue.nextId();
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_runtime_model_list_requests (
-        id, runtime_id, status, models, supported, created_at, updated_at
-      ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
-      [id, runtimeId, now, now],
-    );
-    return this.getRuntimeModelListRequest(runtimeId, id)!;
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const id = this.modelListQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_model_list_requests (
+          id, runtime_id, status, models, supported, created_at, updated_at
+        ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
+        [id, runtimeId, now, now],
+      );
+      return this.getRuntimeModelListRequest(runtimeId, id)!;
+    });
   }
 
   getRuntimeModelListRequest(runtimeId: string, requestId: string): MultiremiRuntimeModelListRequest | null {
@@ -585,18 +861,16 @@ export class RuntimesRepo {
     const status = normalizeRuntimeModelListStatus(input.status);
     const now = nowIso();
     if (status === "completed") {
-      const runtime = this.getRuntime(runtimeId);
-      if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
-      const models = normalizeRuntimeModels(input.models ?? [], runtime.provider);
-      this.ctx.db.transaction(() => {
-        this.replaceRuntimeModels(runtimeId, models, runtime.provider, now);
+      this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+        const models = normalizeRuntimeModels(input.models ?? [], runtime.provider);
+        this.replaceRuntimeModelsWithinTransaction(runtimeId, models, runtime.provider, now);
         this.ctx.db.run(
           `UPDATE multiremi_runtime_model_list_requests
            SET status = 'completed', models = ?, supported = ?, error = NULL, updated_at = ?
            WHERE id = ?`,
           [toJson(models), input.supported === false ? 0 : 1, now, requestId],
         );
-      })();
+      });
     } else {
       this.ctx.db.run(
         `UPDATE multiremi_runtime_model_list_requests
@@ -609,17 +883,19 @@ export class RuntimesRepo {
   }
 
   createRuntimeDirectoryScanRequest(runtimeId: string, params: { root?: string; maxDepth?: number; mode?: "scan" | "browse" } = {}): MultiremiRuntimeDirectoryScanRequest {
-    this.requireOnlineRuntime(runtimeId);
-    const normalizedParams = normalizeRuntimeDirectoryScanParams(params);
-    const id = this.directoryScanQueue.nextId();
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_runtime_directory_scan_requests (
-        id, runtime_id, status, params, candidates, supported, created_at, updated_at
-      ) VALUES (?, ?, 'pending', ?, '[]', 1, ?, ?)`,
-      [id, runtimeId, toJson(normalizedParams), now, now],
-    );
-    return this.getRuntimeDirectoryScanRequest(runtimeId, id)!;
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const normalizedParams = normalizeRuntimeDirectoryScanParams(params);
+      const id = this.directoryScanQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_directory_scan_requests (
+          id, runtime_id, status, params, candidates, supported, created_at, updated_at
+        ) VALUES (?, ?, 'pending', ?, '[]', 1, ?, ?)`,
+        [id, runtimeId, toJson(normalizedParams), now, now],
+      );
+      return this.getRuntimeDirectoryScanRequest(runtimeId, id)!;
+    });
   }
 
   getRuntimeDirectoryScanRequest(runtimeId: string, requestId: string): MultiremiRuntimeDirectoryScanRequest | null {
@@ -659,26 +935,28 @@ export class RuntimesRepo {
   }
 
   createRuntimeUpdateRequest(runtimeId: string, input: CreateRuntimeUpdateInput): MultiremiRuntimeUpdateRequest {
-    this.requireOnlineRuntime(runtimeId);
-    const scope = input.scope === "acp" || input.scope === "agent" ? input.scope : "cli";
-    // ACP/agent updates always pull @latest, so no target version is required.
-    const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim() || (scope !== "cli" ? "latest" : "");
-    if (!targetVersion) throw new Error("target_version is required");
-    const active = this.ctx.db.query(
-      `SELECT id FROM multiremi_runtime_update_requests
-       WHERE runtime_id = ? AND status IN ('pending', 'running')
-       LIMIT 1`,
-    ).get(runtimeId) as Row | null;
-    if (active) throw new Error("an update is already in progress for this runtime");
-    const id = this.updateQueue.nextId();
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_runtime_update_requests (
-        id, runtime_id, status, scope, target_version, created_at, updated_at
-      ) VALUES (?, ?, 'pending', ?, ?, ?, ?)`,
-      [id, runtimeId, scope, targetVersion, now, now],
-    );
-    return this.getRuntimeUpdateRequest(runtimeId, id)!;
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const scope = input.scope === "acp" || input.scope === "agent" ? input.scope : "cli";
+      // ACP/agent updates always pull @latest, so no target version is required.
+      const targetVersion = String(input.targetVersion ?? input.target_version ?? "").trim() || (scope !== "cli" ? "latest" : "");
+      if (!targetVersion) throw new Error("target_version is required");
+      const active = this.ctx.db.query(
+        `SELECT id FROM multiremi_runtime_update_requests
+         WHERE runtime_id = ? AND status IN ('pending', 'running')
+         LIMIT 1`,
+      ).get(runtimeId) as Row | null;
+      if (active) throw new Error("an update is already in progress for this runtime");
+      const id = this.updateQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_update_requests (
+          id, runtime_id, status, scope, target_version, created_at, updated_at
+        ) VALUES (?, ?, 'pending', ?, ?, ?, ?)`,
+        [id, runtimeId, scope, targetVersion, now, now],
+      );
+      return this.getRuntimeUpdateRequest(runtimeId, id)!;
+    });
   }
 
   getRuntimeUpdateRequest(runtimeId: string, requestId: string): MultiremiRuntimeUpdateRequest | null {
@@ -715,16 +993,18 @@ export class RuntimesRepo {
   }
 
   createRuntimeLocalSkillListRequest(runtimeId: string): MultiremiRuntimeLocalSkillListRequest {
-    this.requireOnlineRuntime(runtimeId);
-    const id = this.localSkillListQueue.nextId();
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_runtime_local_skill_list_requests (
-        id, runtime_id, status, skills, supported, created_at, updated_at
-      ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
-      [id, runtimeId, now, now],
-    );
-    return this.getRuntimeLocalSkillListRequest(runtimeId, id)!;
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const id = this.localSkillListQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_local_skill_list_requests (
+          id, runtime_id, status, skills, supported, created_at, updated_at
+        ) VALUES (?, ?, 'pending', '[]', 1, ?, ?)`,
+        [id, runtimeId, now, now],
+      );
+      return this.getRuntimeLocalSkillListRequest(runtimeId, id)!;
+    });
   }
 
   getRuntimeLocalSkillListRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillListRequest | null {
@@ -760,27 +1040,29 @@ export class RuntimesRepo {
   }
 
   createRuntimeLocalSkillImportRequest(runtimeId: string, input: CreateRuntimeLocalSkillImportInput): MultiremiRuntimeLocalSkillImportRequest {
-    this.requireOnlineRuntime(runtimeId);
-    const skillKey = String(input.skillKey ?? input.skill_key ?? "").trim();
-    if (!skillKey) throw new Error("skill_key is required");
-    const id = this.localSkillImportQueue.nextId();
-    const now = nowIso();
-    this.ctx.db.run(
-      `INSERT INTO multiremi_runtime_local_skill_import_requests (
-        id, runtime_id, skill_key, name, description, status, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-      [
-        id,
-        runtimeId,
-        skillKey,
-        cleanOptionalLocalSkillString(input.name),
-        cleanOptionalLocalSkillString(input.description),
-        input.createdBy ?? input.created_by ?? null,
-        now,
-        now,
-      ],
-    );
-    return this.getRuntimeLocalSkillImportRequest(runtimeId, id)!;
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      this.assertRuntimeOnline(runtime);
+      const skillKey = String(input.skillKey ?? input.skill_key ?? "").trim();
+      if (!skillKey) throw new Error("skill_key is required");
+      const id = this.localSkillImportQueue.nextId();
+      const now = nowIso();
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_local_skill_import_requests (
+          id, runtime_id, skill_key, name, description, status, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        [
+          id,
+          runtimeId,
+          skillKey,
+          cleanOptionalLocalSkillString(input.name),
+          cleanOptionalLocalSkillString(input.description),
+          input.createdBy ?? input.created_by ?? null,
+          now,
+          now,
+        ],
+      );
+      return this.getRuntimeLocalSkillImportRequest(runtimeId, id)!;
+    });
   }
 
   getRuntimeLocalSkillImportRequest(runtimeId: string, requestId: string): MultiremiRuntimeLocalSkillImportRequest | null {
@@ -814,45 +1096,121 @@ export class RuntimesRepo {
       );
       return this.getRuntimeLocalSkillImportRequest(runtimeId, requestId)!;
     }
-    const skillName = cleanOptionalLocalSkillString(current.name) ?? String(input.skill.name ?? current.skillKey).trim();
-    const description = cleanOptionalLocalSkillString(current.description) ?? String(input.skill.description ?? "");
-    const runtime = this.getRuntime(runtimeId);
-    const skill = this.ctx.agents().createSkill({
-      workspaceId: runtime?.workspaceId ?? "local",
-      name: skillName,
-      description,
-      content: input.skill.content ?? "",
-      createdBy: current.createdBy,
-      files: input.skill.files ?? [],
-      config: {
-        origin: {
-          type: "runtime_local",
-          runtime_id: runtimeId,
-          provider: input.skill.provider ?? runtime?.provider ?? "unknown",
-          source_path: input.skill.sourcePath ?? input.skill.source_path ?? "",
+    return this.withRuntimeLifecycleLock(runtimeId, (runtime) => {
+      const lockedRequest = this.getRuntimeLocalSkillImportRequest(runtimeId, requestId);
+      if (!lockedRequest) throw new Error("request not found");
+      if (isTerminalRuntimeRequestStatus(lockedRequest.status)) return lockedRequest;
+      const skillName = cleanOptionalLocalSkillString(lockedRequest.name)
+        ?? String(input.skill!.name ?? lockedRequest.skillKey).trim();
+      const description = cleanOptionalLocalSkillString(lockedRequest.description) ?? String(input.skill!.description ?? "");
+      const skill = this.ctx.agents().createSkillWithinTransaction({
+        workspaceId: runtime.workspaceId ?? "local",
+        name: skillName,
+        description,
+        content: input.skill!.content ?? "",
+        createdBy: lockedRequest.createdBy,
+        files: input.skill!.files ?? [],
+        config: {
+          origin: {
+            type: "runtime_local",
+            runtime_id: runtimeId,
+            provider: input.skill!.provider ?? runtime.provider,
+            source_path: input.skill!.sourcePath ?? input.skill!.source_path ?? "",
+          },
         },
-      },
+      });
+      const skillId = skill.id ?? "";
+      this.ctx.db.run(
+        `UPDATE multiremi_runtime_local_skill_import_requests
+         SET status = 'completed', skill_id = ?, skill = ?, error = NULL, updated_at = ?
+         WHERE id = ? AND runtime_id = ?`,
+        [skillId, toJson(skill), now, requestId, runtimeId],
+      );
+      return this.getRuntimeLocalSkillImportRequest(runtimeId, requestId)!;
     });
-    const skillId = skill.id ?? "";
-    this.ctx.db.run(
-      `UPDATE multiremi_runtime_local_skill_import_requests
-       SET status = 'completed', skill_id = ?, skill = ?, error = NULL, updated_at = ?
-       WHERE id = ?`,
-      [skillId, toJson(skill), now, requestId],
-    );
-    return this.getRuntimeLocalSkillImportRequest(runtimeId, requestId)!;
   }
 
-  heartbeatRuntime(runtimeId: string, options: { claimPending?: boolean; supportsBatchImport?: boolean; supportsDirectoryScan?: boolean } = {}): MultiremiDaemonHeartbeatAck {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) {
+  heartbeatRuntime(runtimeId: string, options: {
+    claimPending?: boolean;
+    supportsBatchImport?: boolean;
+    supportsDirectoryScan?: boolean;
+    agentPluginProtocol?: number;
+  } = {}): MultiremiDaemonHeartbeatAck {
+    const initialRuntime = this.getRuntime(runtimeId);
+    if (!initialRuntime) {
       return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
     }
-    const now = nowIso();
-    this.ctx.db.run(
-      "UPDATE multiremi_runtimes SET status = 'online', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
-      [now, now, runtimeId],
-    );
+    let runtime = initialRuntime;
+    let previousAgentPluginProtocol = readAgentPluginProtocol(runtime.metadata);
+    let agentPluginProtocol = previousAgentPluginProtocol;
+    let pluginStateChanges: MultiremiAgentPluginRuntimeState[] = [];
+    if (options.agentPluginProtocol !== undefined) {
+      const workspaceId = runtime.workspaceId ?? "local";
+      const result = this.ctx.db.transaction(() => {
+        this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+        this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+        const lockedRuntime = this.getRuntime(runtimeId);
+        if (!lockedRuntime || (lockedRuntime.workspaceId ?? "local") !== workspaceId) return null;
+        const previous = readAgentPluginProtocol(lockedRuntime.metadata);
+        const protocol = normalizeAgentPluginProtocol(options.agentPluginProtocol);
+        const now = nowIso();
+        this.ctx.db.run(
+          "UPDATE multiremi_runtimes SET status = 'online', metadata = ?, last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+          [toJson({ ...lockedRuntime.metadata, agent_plugin_protocol: protocol }), now, now, runtimeId],
+        );
+        const updatedRuntime = this.getRuntime(runtimeId)!;
+        const changes = this.ctx.agentPlugins().recordAgentPluginRuntimeHeartbeatWithinLock(runtimeId);
+        return { runtime: updatedRuntime, previous, protocol, changes };
+      })();
+      if (!result) return { runtime_id: runtimeId, status: "runtime_gone", runtime_gone: true };
+      runtime = result.runtime;
+      previousAgentPluginProtocol = result.previous;
+      agentPluginProtocol = result.protocol;
+      pluginStateChanges = result.changes;
+      for (const state of pluginStateChanges) {
+        this.ctx.emitWorkspaceEvent({
+          type: "agent_plugin:runtime_state",
+          workspaceId: state.workspaceId,
+          actorType: "daemon",
+          actorId: runtime.daemonId ?? runtime.id,
+          payload: {
+            state: {
+              id: state.id,
+              runtime_id: state.runtimeId,
+              plugin_id: state.pluginId,
+              version_id: state.pluginVersionId,
+              desired: state.desired,
+              desired_reason: state.desiredReason,
+              status: state.status,
+              last_error_code: state.lastErrorCode,
+              last_error: state.lastError,
+              updated_at: state.updatedAt,
+            },
+          },
+        });
+      }
+      if (previousAgentPluginProtocol !== agentPluginProtocol) {
+        this.ctx.emitWorkspaceEvent({
+          type: "agent_plugin:runtime_capability",
+          workspaceId: runtime.workspaceId ?? "local",
+          actorType: "daemon",
+          actorId: runtime.daemonId ?? runtime.id,
+          payload: {
+            runtime_id: runtime.id,
+            daemon_id: runtime.daemonId,
+            previous_agent_plugin_protocol: previousAgentPluginProtocol,
+            agent_plugin_protocol: agentPluginProtocol,
+            supported: (agentPluginProtocol ?? 0) >= MULTIREMI_AGENT_PLUGIN_PROTOCOL_VERSION,
+          },
+        });
+      }
+    } else {
+      const now = nowIso();
+      this.ctx.db.run(
+        "UPDATE multiremi_runtimes SET status = 'online', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, runtimeId],
+      );
+    }
     const ack: MultiremiDaemonHeartbeatAck = { runtime_id: runtimeId, status: "ok" };
     if (options.claimPending === false) return ack;
 
@@ -937,12 +1295,27 @@ export class RuntimesRepo {
     };
   }
 
-  /** Create-time guard shared by all five async-request families: the daemon must be reachable. */
-  private requireOnlineRuntime(runtimeId: string): MultiremiRuntime {
-    const runtime = this.getRuntime(runtimeId);
-    if (!runtime) throw new Error(`Runtime not found: ${runtimeId}`);
+  private assertRuntimeOnline(runtime: MultiremiRuntime): void {
     if (runtime.status !== "online") throw new Error("runtime is offline");
-    return runtime;
+  }
+
+  /**
+   * Serialize every new Runtime-owned row with daemon retirement. The initial
+   * read only finds the workspace row to lock; the Runtime is authoritative
+   * only after that lock has been acquired and must still belong to it.
+   */
+  private withRuntimeLifecycleLock<T>(runtimeId: string, callback: (runtime: MultiremiRuntime) => T): T {
+    const initial = this.getRuntime(runtimeId);
+    if (!initial) throw new Error(`Runtime not found: ${runtimeId}`);
+    const workspaceId = initial.workspaceId ?? "local";
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const runtime = this.getRuntime(runtimeId);
+      if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
+        throw new Error(`Runtime not found: ${runtimeId}`);
+      }
+      return callback(runtime);
+    })();
   }
 
   private hydrateRuntimeLocalSkillImportRequest(request: MultiremiRuntimeLocalSkillImportRequest): MultiremiRuntimeLocalSkillImportRequest {
@@ -957,28 +1330,32 @@ export class RuntimesRepo {
     return rows.map(toRuntimeModel);
   }
 
-  private replaceRuntimeModels(runtimeId: string, models: MultiremiRuntimeModel[], provider: string, now = nowIso()): void {
+  /** Caller already owns the transaction that protects this Runtime mutation. */
+  private replaceRuntimeModelsWithinTransaction(
+    runtimeId: string,
+    models: MultiremiRuntimeModel[],
+    provider: string,
+    now = nowIso(),
+  ): void {
     const normalized = normalizeRuntimeModels(models, provider);
-    this.ctx.db.transaction(() => {
-      this.ctx.db.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
-      for (const model of normalized) {
-        this.ctx.db.run(
-          `INSERT INTO multiremi_runtime_models (
-            runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            runtimeId,
-            model.id,
-            model.label,
-            model.provider,
-            model.default ? 1 : 0,
-            model.thinking ? toJson(model.thinking) : null,
-            now,
-            now,
-          ],
-        );
-      }
-    })();
+    this.ctx.db.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
+    for (const model of normalized) {
+      this.ctx.db.run(
+        `INSERT INTO multiremi_runtime_models (
+          runtime_id, model_id, label, provider, is_default, thinking, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          runtimeId,
+          model.id,
+          model.label,
+          model.provider,
+          model.default ? 1 : 0,
+          model.thinking ? toJson(model.thinking) : null,
+          now,
+          now,
+        ],
+      );
+    }
   }
 
   private runtimeUsageSummary(runtimeId: string): Pick<MultiremiRuntime,
@@ -1018,6 +1395,16 @@ export class RuntimesRepo {
     }
     return stats;
   }
+}
+
+function normalizeAgentPluginProtocol(value: unknown): number {
+  const protocol = Number(value);
+  return Number.isSafeInteger(protocol) && protocol >= 0 ? protocol : 0;
+}
+
+function readAgentPluginProtocol(metadata: Record<string, unknown>): number | null {
+  if (!("agent_plugin_protocol" in metadata || "agentPluginProtocol" in metadata)) return null;
+  return normalizeAgentPluginProtocol(metadata.agent_plugin_protocol ?? metadata.agentPluginProtocol);
 }
 
 function normalizeRuntimeVisibility(value: string | undefined): MultiremiRuntimeVisibility {
@@ -1320,12 +1707,17 @@ function cleanOptionalLocalSkillString(value: string | null | undefined): string
   return trimmed || null;
 }
 
-function withRuntimeLiveness(runtime: MultiremiRuntime): MultiremiRuntime {
-  if (runtime.status === "offline") return runtime;
-  if (!runtime.lastHeartbeatAt) return { ...runtime, status: "offline" };
+export function isRuntimeEffectivelyOnline(
+  runtime: Pick<MultiremiRuntime, "status" | "lastHeartbeatAt">,
+  nowMs = Date.now(),
+): boolean {
+  if (runtime.status === "offline" || !runtime.lastHeartbeatAt) return false;
   const heartbeat = Date.parse(runtime.lastHeartbeatAt);
-  if (!Number.isFinite(heartbeat)) return { ...runtime, status: "offline" };
-  return Date.now() - heartbeat > RUNTIME_HEARTBEAT_STALE_MS ? { ...runtime, status: "offline" } : runtime;
+  return Number.isFinite(heartbeat) && nowMs - heartbeat <= RUNTIME_HEARTBEAT_STALE_MS;
+}
+
+export function withRuntimeLiveness(runtime: MultiremiRuntime): MultiremiRuntime {
+  return isRuntimeEffectivelyOnline(runtime) ? runtime : { ...runtime, status: "offline" };
 }
 
 function toRuntimeModel(row: Row): MultiremiRuntimeModel {

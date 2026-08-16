@@ -36,7 +36,7 @@ import type {
 import type { RouterDeps } from "./deps.js";
 
 export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
-  const { store } = deps;
+  const { store, authToken } = deps;
 
   app.get("/api/multiremi/agent-plugins", (c) => {
     const workspaceId = requestedWorkspaceId(c);
@@ -333,7 +333,7 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.get("/api/daemon/runtimes/:runtimeId/agent-plugins/desired", (c) => {
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"));
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"), authToken);
     if (denied) return denied;
     try {
       return c.json(daemonAgentPluginDesiredResponse(
@@ -345,15 +345,21 @@ export function registerAgentPluginRoutes(app: Hono, deps: RouterDeps): void {
   });
 
   app.post("/api/daemon/runtimes/:runtimeId/agent-plugins/:versionId/state", async (c) => {
-    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"));
+    const denied = denyDaemonRuntimeObservedStateAccess(c, store, c.req.param("runtimeId"), authToken);
     if (denied) return denied;
     const body = await readJsonStrict<ReportAgentPluginRuntimeStateInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
     try {
-      const state = store.reportAgentPluginRuntimeState(c.req.param("runtimeId"), c.req.param("versionId"), body);
-      publishWorkspaceEvent(c, store, "agent_plugin:runtime_state", state.workspaceId, {
-        state: daemonAgentPluginStateResponse(state),
-      });
+      const { state, changed } = store.reportAgentPluginRuntimeStateResult(
+        c.req.param("runtimeId"),
+        c.req.param("versionId"),
+        body,
+      );
+      if (changed) {
+        publishWorkspaceEvent(c, store, "agent_plugin:runtime_state", state.workspaceId, {
+          state: daemonAgentPluginStateResponse(state),
+        });
+      }
       return c.json({ state: daemonAgentPluginStateResponse(state) });
     } catch (error) {
       return pluginErrorResponse(c, error);

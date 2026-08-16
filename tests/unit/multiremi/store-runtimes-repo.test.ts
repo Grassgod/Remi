@@ -95,4 +95,179 @@ describe("RuntimesRepo", () => {
     expect(repo.deleteRuntime("rt_gamma")).toBe(true);
     expect(repo.getRuntime("rt_gamma")).toBeNull();
   });
+
+  it("deletes every Runtime auxiliary row through the shared transaction cleanup", () => {
+    const repo = createRepo();
+    const runtime = repo.registerRuntime({
+      id: "rt_cleanup",
+      name: "Cleanup",
+      provider: "claude",
+      workspaceId: "local",
+      models: [{ id: "cleanup-model", label: "Cleanup model", provider: "claude", default: true }],
+    });
+    const agent = store!.createAgent({
+      name: "Cleanup agent",
+      provider: "claude",
+      runtimeId: runtime.id,
+    });
+    const issue = store!.createIssue({ title: "Cleanup issue" });
+    store!.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: "/tmp/cleanup",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const chat = store!.createChatSession({ agentId: agent.id, title: "Cleanup chat" });
+    db!.run(
+      `UPDATE multiremi_chat_sessions
+       SET session_id = ?, session_runtime_id = ?, session_provider = ?, work_dir = ?
+       WHERE id = ?`,
+      ["sess-cleanup", runtime.id, "claude", "/tmp/cleanup", chat.id],
+    );
+    const issueSession = store!.getOrCreateDefaultIssueSession(issue.id);
+    store!.getOrCreateSessionAgentLane(issueSession.id, agent.id);
+    db!.run(
+      `UPDATE multiremi_session_agent_lanes
+       SET provider_session_id = ?, runtime_id = ?, provider = ?, work_dir = ?
+       WHERE session_id = ? AND agent_id = ?`,
+      ["sess-cleanup", runtime.id, "claude", "/tmp/cleanup", issueSession.id, agent.id],
+    );
+    repo.createRuntimeModelListRequest(runtime.id);
+    repo.createRuntimeUpdateRequest(runtime.id, { targetVersion: "2.0.0" });
+    repo.createRuntimeLocalSkillListRequest(runtime.id);
+    repo.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "cleanup-skill" });
+    repo.createRuntimeDirectoryScanRequest(runtime.id, { root: "/tmp" });
+    const now = new Date().toISOString();
+    db!.run(
+      `INSERT INTO multiremi_agent_plugin_runtime_states (
+        id, workspace_id, runtime_id, plugin_id, plugin_version_id,
+        desired, desired_reason, status, created_at, updated_at
+      ) VALUES (?, 'local', ?, ?, ?, 1, 'active_binding', 'pending', ?, ?)`,
+      ["aprs_cleanup", runtime.id, "apl_cleanup", "apv_cleanup", now, now],
+    );
+
+    const runningTask = store!.createTask({
+      agentId: agent.id,
+      runtimeId: runtime.id,
+      prompt: "keep the runtime alive while work is in flight",
+    });
+    expect(store!.claimTask(runtime.id)?.id).toBe(runningTask.id);
+    store!.startTask(runningTask.id);
+    expect(repo.deleteRuntime(runtime.id)).toBeFalse();
+    expect(repo.getRuntime(runtime.id)).not.toBeNull();
+    expect(store!.getAgent(agent.id)?.runtimeId).toBe(runtime.id);
+    expect(store!.getIssueWorkspace(issue.id)?.runtimeId).toBe(runtime.id);
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ?",
+    ).get(runtime.id) as any).count)).toBe(1);
+
+    store!.cancelTask(runningTask.id);
+    expect(repo.deleteRuntime(runtime.id)).toBeTrue();
+    expect(store!.getAgent(agent.id)?.runtimeId).toBeNull();
+    expect(store!.getIssueWorkspace(issue.id)).toMatchObject({
+      runtimeId: null,
+      status: "runtime_offline",
+    });
+    expect(store!.getChatSession(chat.id)).toMatchObject({
+      sessionId: null,
+      sessionRuntimeId: null,
+      workDir: null,
+    });
+    expect(store!.getSessionAgentLane(issueSession.id, agent.id)).toMatchObject({
+      providerSessionId: null,
+      runtimeId: null,
+      workDir: null,
+    });
+    for (const table of [
+      "multiremi_agent_plugin_runtime_states",
+      "multiremi_runtime_models",
+      "multiremi_runtime_model_list_requests",
+      "multiremi_runtime_update_requests",
+      "multiremi_runtime_local_skill_list_requests",
+      "multiremi_runtime_local_skill_import_requests",
+      "multiremi_runtime_directory_scan_requests",
+    ]) {
+      expect(Number((db!.query(`SELECT COUNT(*) AS count FROM ${table} WHERE runtime_id = ?`).get(runtime.id) as any).count))
+        .toBe(0);
+    }
+  });
+
+  it("archives and detaches Agents while preserving their historical references", () => {
+    const repo = createRepo();
+    const runtime = repo.registerRuntime({
+      id: "rt_agent_reference_cleanup",
+      name: "Agent reference cleanup",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store!.createAgent({
+      name: "Reference cleanup agent",
+      provider: "claude",
+      runtimeId: runtime.id,
+    });
+    const plugin = store!.importAgentPlugin({
+      provider: "claude",
+      manifest: { name: "reference-cleanup", version: "1.0.0" },
+      files: [{ path: "skills/reference-cleanup/SKILL.md", content: "# Reference cleanup\n" }],
+    });
+    store!.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const project = store!.createProject({
+      title: "Reference cleanup project",
+      defaultAssigneeType: "agent",
+      defaultAssigneeId: agent.id,
+    });
+    const issue = store!.createIssue({
+      title: "Reference cleanup issue",
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+
+    expect(repo.archiveAgentsAndDeleteRuntime(runtime.id, [agent.id])).toMatchObject({ status: "ok" });
+    expect(store!.getAgent(agent.id)).toMatchObject({ runtimeId: null });
+    expect(store!.getAgent(agent.id)?.archivedAt).not.toBeNull();
+    expect(Number((db!.query(
+      "SELECT COUNT(*) AS count FROM multiremi_agent_plugin_bindings WHERE agent_id = ?",
+    ).get(agent.id) as any).count)).toBe(1);
+    expect(store!.getProject(project.id)).toMatchObject({
+      defaultAssigneeType: null,
+      defaultAssigneeId: null,
+    });
+    expect(store!.getIssue(issue.id)).toMatchObject({
+      assigneeType: "agent",
+      assigneeId: agent.id,
+    });
+  });
+
+  it("keeps an archived Agent and its Runtime while the Agent still has queued work", () => {
+    const repo = createRepo();
+    const runtime = repo.registerRuntime({
+      id: "rt_archived_agent_queued_task",
+      name: "Archived Agent queued task",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const agent = store!.createAgent({
+      name: "Archived Agent with queued work",
+      provider: "claude",
+      runtimeId: runtime.id,
+    });
+    const task = store!.createTask({
+      agentId: agent.id,
+      runtimeId: runtime.id,
+      prompt: "do not orphan me",
+    });
+    store!.archiveAgent(agent.id);
+
+    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id)).toEqual({ status: "active_tasks" });
+    expect(repo.getRuntime(runtime.id)).not.toBeNull();
+    expect(store!.getAgent(agent.id)).not.toBeNull();
+    expect(store!.getTask(task.id)?.status).toBe("queued");
+
+    store!.cancelTask(task.id);
+    expect(repo.deleteRuntimeWithArchivedAgentCleanup(runtime.id)).toEqual({ status: "deleted" });
+    expect(repo.getRuntime(runtime.id)).toBeNull();
+    expect(store!.getAgent(agent.id)).toMatchObject({ runtimeId: null });
+    expect(store!.getAgent(agent.id)?.archivedAt).not.toBeNull();
+  });
 });

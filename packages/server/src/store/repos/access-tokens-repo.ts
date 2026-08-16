@@ -16,7 +16,10 @@ type Row = Record<string, unknown>;
 export class AccessTokensRepo {
   constructor(private db: SqlDatabase) {}
 
-  async createAccessToken(input: CreateAccessTokenInput): Promise<MultiremiCreatedAccessToken> {
+  async createAccessToken(
+    input: CreateAccessTokenInput,
+    beforeInsert?: () => void,
+  ): Promise<MultiremiCreatedAccessToken> {
     const name = input.name?.trim();
     if (!name) throw new Error("Token name is required");
     const type = normalizeAccessTokenType(input.type);
@@ -32,16 +35,20 @@ export class AccessTokensRepo {
     const id = input.id ?? createId(type === "daemon" ? "dtk" : type === "task" ? "atk" : "pat");
     const now = nowIso();
     const expiresAt = normalizeAccessTokenExpiry(input.expiresInDays ?? input.expires_in_days ?? null);
-    this.db.run(
-      `INSERT INTO multiremi_access_tokens (
-        id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, purpose, token_hash, token_prefix, expires_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, workspaceId, daemonId, taskId, agentId, userId, name, type, purpose, hash, token.slice(0, 12), expiresAt, now],
-    );
-    return {
-      ...this.getAccessToken(id)!,
-      token,
+    const insert = (): MultiremiCreatedAccessToken => {
+      beforeInsert?.();
+      this.db.run(
+        `INSERT INTO multiremi_access_tokens (
+          id, workspace_id, daemon_id, task_id, agent_id, user_id, name, type, purpose, token_hash, token_prefix, expires_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, workspaceId, daemonId, taskId, agentId, userId, name, type, purpose, hash, token.slice(0, 12), expiresAt, now],
+      );
+      return {
+        ...this.getAccessToken(id)!,
+        token,
+      };
     };
+    return beforeInsert ? this.db.transaction(insert)() : insert();
   }
 
   async createTaskAccessToken(
@@ -101,6 +108,38 @@ export class AccessTokensRepo {
     }
     const bound = this.getAccessToken(id);
     return bound?.daemonId === normalizedDaemonId ? bound : null;
+  }
+
+  /**
+   * One-way compatibility upgrade for credentials minted by the historical
+   * "add computer" dialog. Those credentials were PATs with purpose=cli even
+   * though the daemon execution surface now requires a machine identity.
+   */
+  promoteCliAccessTokenToDaemon(
+    id: string,
+    workspaceId: string,
+    daemonId: string,
+  ): MultiremiAccessToken | null {
+    const normalizedWorkspaceId = cleanOptionalString(workspaceId);
+    const normalizedDaemonId = cleanOptionalString(daemonId);
+    if (!normalizedWorkspaceId || !normalizedDaemonId) return null;
+    const result = this.db.run(
+      `UPDATE multiremi_access_tokens
+       SET type = 'daemon', purpose = 'daemon', daemon_id = ?
+       WHERE id = ?
+         AND workspace_id = ?
+         AND type = 'pat'
+         AND purpose = 'cli'
+         AND daemon_id IS NULL
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > ?)`,
+      [normalizedDaemonId, id, normalizedWorkspaceId, nowIso()],
+    );
+    if (result.changes !== 1) return null;
+    const promoted = this.getAccessToken(id);
+    return promoted?.type === "daemon" && promoted.daemonId === normalizedDaemonId
+      ? promoted
+      : null;
   }
 
   revokeAccessToken(id: string): MultiremiAccessToken | null {

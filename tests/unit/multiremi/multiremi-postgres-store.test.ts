@@ -183,6 +183,80 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     }
   });
 
+  it("registers daemon runtimes with models under one lifecycle transaction (PG)", () => {
+    const ws = freshWorkspace();
+    const runtime = store.registerRuntime({
+      id: `rt_pg_models_${wsCounter}`,
+      name: "PG daemon models",
+      provider: "claude",
+      daemonId: `daemon-pg-models-${wsCounter}`,
+      workspaceId: ws,
+      metadata: { agent_plugin_protocol: 1 },
+      models: [
+        { id: "claude-pg-default", label: "Claude PG", provider: "anthropic", default: true },
+        { id: "claude-pg-fast", label: "Claude PG Fast", provider: "anthropic", default: false },
+      ],
+    });
+
+    expect(runtime.models.map((model) => model.id)).toEqual([
+      "claude-pg-default",
+      "claude-pg-fast",
+    ]);
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
+  });
+
+  it("serializes competing daemon owner claims while allowing same-owner tokens (PG)", async () => {
+    const ws = freshWorkspace();
+    const daemonId = `daemon-pg-owner-race-${wsCounter}`;
+    const results = await Promise.allSettled([
+      store.createAccessToken({
+        name: "PG daemon owner A",
+        type: "daemon",
+        workspaceId: ws,
+        daemonId,
+        userId: "pg-owner-a",
+      }),
+      store.createAccessToken({
+        name: "PG daemon owner B",
+        type: "daemon",
+        workspaceId: ws,
+        daemonId,
+        userId: "pg-owner-b",
+      }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const ownerUserId = store.getDaemonIdentityOwnerUserId(ws, daemonId);
+    expect(ownerUserId).not.toBeNull();
+    expect(["pg-owner-a", "pg-owner-b"]).toContain(ownerUserId!);
+    expect(store.listAccessTokens(ws).filter((token) => token.daemonId === daemonId)).toHaveLength(1);
+
+    const sameOwner = await store.createAccessToken({
+      name: "PG same owner second token",
+      type: "daemon",
+      workspaceId: ws,
+      daemonId,
+      userId: ownerUserId!,
+    });
+    expect(sameOwner.daemonId).toBe(daemonId);
+    expect(store.registerRuntime({
+      id: `rt-pg-owner-race-${wsCounter}`,
+      name: "PG same owner runtime",
+      provider: "claude",
+      workspaceId: ws,
+      daemonId,
+      ownerId: ownerUserId,
+    }).ownerId).toBe(ownerUserId);
+    expect(() => store.registerRuntime({
+      id: `rt-pg-owner-race-conflict-${wsCounter}`,
+      name: "PG conflicting owner runtime",
+      provider: "codex",
+      workspaceId: ws,
+      daemonId,
+      ownerId: ownerUserId === "pg-owner-a" ? "pg-owner-b" : "pg-owner-a",
+    })).toThrow("already owned by another user");
+  });
+
   it("reports Agent Plugin Runtime state without untyped nullable parameters (PG)", () => {
     const ws = freshWorkspace();
     const runtime = store.registerRuntime({
@@ -465,6 +539,196 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     const ownedTask = store.createTask({ agentId: agent.id, issueId: ownedIssue.id, prompt: "owned", workspaceId: ws });
     expect(store.claimTask(privateRt.id)).toBeNull();
     expect(store.claimTask(publicRt.id)?.id).toBe(ownedTask.id);
+  });
+
+  it("serializes Runtime-affine project, token, and Issue workspace writes with daemon retirement", async () => {
+    const ws = freshWorkspace();
+    const daemonId = `daemon-pg-retire-${wsCounter}`;
+    const runtime = store.registerRuntime({
+      id: daemonRuntimeId(daemonId, "claude"),
+      name: "PG retiring runtime",
+      provider: "claude",
+      workspaceId: ws,
+      daemonId,
+    });
+    const unboundDaemonToken = await store.createAccessToken({
+      name: "PG unbound daemon",
+      type: "daemon",
+      workspaceId: ws,
+    });
+    const project = store.createProject({
+      title: "PG lifecycle lock",
+      workspaceId: ws,
+      resources: [{
+        resourceType: "local_directory",
+        resourceRef: { localPath: "/abs/pg-other-machine", daemonId: "daemon-pg-other" },
+      }],
+    });
+    const localDirectory = store.listProjectResources(project.id)[0]!;
+    const issue = store.createIssue({ title: "PG clean workspace", workspaceId: ws });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: "/abs/pg-issue",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    store.markIssueWorkspaceCleaned(issue.id, runtime.id);
+    const deletedIssue = store.createIssue({ title: "PG deleted workspace", workspaceId: ws });
+    store.reportIssueWorkspace({
+      issueId: deletedIssue.id,
+      runtimeId: runtime.id,
+      rootPath: "/abs/pg-deleted-issue",
+      branchName: `agent/${deletedIssue.key}`,
+      status: "in_use",
+    });
+    expect(store.deleteIssue(deletedIssue.id)).toBeTrue();
+    expect(store.getIssueWorkspace(deletedIssue.id)).toBeNull();
+    expect(Number((db.query(
+      "SELECT COUNT(*) AS count FROM multiremi_issue_workspaces WHERE issue_id = ?",
+    ).get(deletedIssue.id) as { count: number }).count)).toBe(0);
+    const completedSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "pg-completed-skill" });
+    const completedSkill = store.reportRuntimeLocalSkillImportResult(runtime.id, completedSkillImport.id, {
+      status: "completed",
+      skill: { name: "PG imported skill", content: "# PG imported skill" },
+    });
+    expect(completedSkill.status).toBe("completed");
+    expect(completedSkill.skill?.name).toBe("PG imported skill");
+    const localSkillImport = store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "pg-retired-skill" });
+    const skillCountBeforeRetirement = store.listSkills(ws).length;
+
+    const plan = store.getDaemonRetirementPlan(ws, daemonId);
+    expect(plan.canRetire).toBeTrue();
+    expect(store.retireDaemon(ws, daemonId, plan.snapshot, null).status).toBe("retired");
+    expect(() => store.updateProjectResource(project.id, localDirectory.id, {
+      resourceRef: { localPath: "/abs/pg-retired-machine", daemonId },
+    })).toThrow("has been retired");
+    expect(() => store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: runtime.id,
+      rootPath: "/abs/pg-resurrected",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    })).toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.updateRuntimeModels(runtime.id, [{ id: "late-pg-model", label: "Late PG", provider: "anthropic", default: false }]))
+      .toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.createRuntimeDirectoryScanRequest(runtime.id)).toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.createRuntimeModelListRequest(runtime.id)).toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.createRuntimeUpdateRequest(runtime.id, { targetVersion: "9.9.9" }))
+      .toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.createRuntimeLocalSkillListRequest(runtime.id)).toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.createRuntimeLocalSkillImportRequest(runtime.id, { skillKey: "late-pg-skill" }))
+      .toThrow(`Runtime not found: ${runtime.id}`);
+    expect(() => store.reportRuntimeLocalSkillImportResult(runtime.id, localSkillImport.id, {
+      status: "completed",
+      skill: { name: "Dangling PG skill", content: "Never persisted" },
+    })).toThrow("request not found");
+    expect(store.listSkills(ws)).toHaveLength(skillCountBeforeRetirement);
+    expect(() => store.bindDaemonAccessToken(unboundDaemonToken.id, daemonId)).toThrow("has been retired");
+    expect(store.getAccessToken(unboundDaemonToken.id)?.daemonId).toBeNull();
+    await expect(store.createAccessToken({
+      name: "PG rejected retired daemon",
+      type: "daemon",
+      workspaceId: ws,
+      daemonId,
+    })).rejects.toThrow("has been retired");
+  });
+
+  it("migrates and cleans complete Runtime auxiliary state on Postgres", () => {
+    const ws = freshWorkspace();
+    const oldRuntime = store.registerRuntime({
+      id: `rt-pg-merge-old-${wsCounter}`,
+      name: "PG old Runtime",
+      provider: "claude",
+      workspaceId: ws,
+      daemonId: `daemon-pg-old-${wsCounter}`,
+      models: [
+        { id: "old-only", label: "Old only", provider: "claude", default: false },
+        { id: "shared", label: "Old shared", provider: "claude", default: true },
+      ],
+    });
+    const newRuntime = store.registerRuntime({
+      id: `rt-pg-merge-new-${wsCounter}`,
+      name: "PG new Runtime",
+      provider: "claude",
+      workspaceId: ws,
+      daemonId: `daemon-pg-new-${wsCounter}`,
+      models: [
+        { id: "shared", label: "New shared", provider: "claude", default: true },
+        { id: "new-only", label: "New only", provider: "claude", default: false },
+      ],
+    });
+    const agent = store.createAgent({
+      name: "PG merged agent",
+      provider: "claude",
+      workspaceId: ws,
+      runtimeId: oldRuntime.id,
+    });
+    const issue = store.createIssue({ title: "PG merged workspace", workspaceId: ws });
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: oldRuntime.id,
+      rootPath: "/tmp/pg-merged",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const requests = [
+      ["multiremi_runtime_model_list_requests", store.createRuntimeModelListRequest(oldRuntime.id).id],
+      ["multiremi_runtime_update_requests", store.createRuntimeUpdateRequest(oldRuntime.id, { targetVersion: "2.0.0" }).id],
+      ["multiremi_runtime_local_skill_list_requests", store.createRuntimeLocalSkillListRequest(oldRuntime.id).id],
+      ["multiremi_runtime_local_skill_import_requests", store.createRuntimeLocalSkillImportRequest(oldRuntime.id, { skillKey: "pg-merge" }).id],
+      ["multiremi_runtime_directory_scan_requests", store.createRuntimeDirectoryScanRequest(oldRuntime.id, { root: "/tmp" }).id],
+    ] as const;
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO multiremi_agent_plugin_runtime_states (
+        id, workspace_id, runtime_id, plugin_id, plugin_version_id,
+        desired, desired_reason, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 1, 'active_binding', 'pending', ?, ?)`,
+      [`aprs-pg-merge-${wsCounter}`, ws, oldRuntime.id, `apl-pg-${wsCounter}`, `apv-pg-${wsCounter}`, now, now],
+    );
+
+    expect(store.mergeRuntimeInto(oldRuntime.id, newRuntime.id).deleted).toBeTrue();
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(newRuntime.id);
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: newRuntime.id, status: "ready" });
+    expect(store.listRuntimeModels(newRuntime.id).map((model) => model.id).sort())
+      .toEqual(["new-only", "old-only", "shared"]);
+    expect(store.listRuntimeModels(newRuntime.id).find((model) => model.id === "shared")?.label).toBe("New shared");
+    for (const [table, requestId] of requests) {
+      expect(Number((db.query(`SELECT COUNT(*) AS count FROM ${table} WHERE runtime_id = ? AND id = ?`).get(
+        newRuntime.id,
+        requestId,
+      ) as { count: number }).count)).toBe(1);
+      expect(Number((db.query(`SELECT COUNT(*) AS count FROM ${table} WHERE runtime_id = ?`).get(
+        oldRuntime.id,
+      ) as { count: number }).count)).toBe(0);
+    }
+    expect(Number((db.query(
+      "SELECT COUNT(*) AS count FROM multiremi_agent_plugin_runtime_states WHERE runtime_id = ?",
+    ).get(oldRuntime.id) as { count: number }).count)).toBe(0);
+
+    // Runtime cleanup is still exercised directly, but keep one sibling for
+    // this managed daemon so the last-Runtime guard correctly reserves whole
+    // machine removal for the daemon retirement flow.
+    store.registerRuntime({
+      id: `rt-pg-merge-sibling-${wsCounter}`,
+      name: "PG sibling Runtime",
+      provider: "codex",
+      workspaceId: ws,
+      daemonId: newRuntime.daemonId,
+    });
+    expect(store.deleteRuntime(newRuntime.id)).toBeTrue();
+    expect(store.getAgent(agent.id)?.runtimeId).toBeNull();
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: null, status: "runtime_offline" });
+    for (const table of [
+      "multiremi_agent_plugin_runtime_states",
+      "multiremi_runtime_models",
+      ...requests.map(([table]) => table),
+    ]) {
+      expect(Number((db.query(`SELECT COUNT(*) AS count FROM ${table} WHERE runtime_id = ?`).get(
+        newRuntime.id,
+      ) as { count: number }).count)).toBe(0);
+    }
   });
 
   it("re-pins a local_directory task when its runtime re-registers under a new engine", () => {

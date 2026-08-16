@@ -140,9 +140,13 @@
     "last_attempt": "最新の試行 {{when}}",
     "retry_success": "再試行を予約しました",
     "retry_failed": "再試行を予約できませんでした",
+    "daemon_upgrade_description": "この daemon バージョンではプラグインをインストールできません。daemon をアップグレードしてから再試行してください。",
+    "daemon_reconcile_timeout_description": "daemon がプラグインのセットアップを開始しませんでした。daemon が実行中であることを確認してから再試行してください。",
+    "daemon_cli_version": "Daemon CLI v{{version}}",
+    "upgrade_daemon_action": "daemon をアップグレード",
     "version": "v{{version}}",
     "statuses": {
-      "pending": "保留中",
+      "pending": "daemon を待機中",
       "preflight": "確認中",
       "downloading": "ダウンロード中",
       "verifying": "検証中",
@@ -150,6 +154,7 @@
       "ready": "準備完了",
       "retry_scheduled": "再試行予定",
       "setup_required": "設定が必要",
+      "daemon_upgrade_required": "daemon のアップグレードが必要",
       "blocked": "ブロック中",
       "offline": "オフライン",
       "unknown": "不明"

@@ -2,6 +2,7 @@
 
 import {
   AlertCircle,
+  ArrowUpRight,
   CheckCircle2,
   CircleHelp,
   Clock3,
@@ -9,7 +10,6 @@ import {
   Loader2,
   RefreshCw,
   Settings2,
-  ShieldAlert,
   WifiOff,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -21,36 +21,69 @@ import { useRetryAgentPluginRuntime } from "@multiremi/core/plugins";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { Badge } from "@multiremi/ui/components/ui/badge";
-import { Button } from "@multiremi/ui/components/ui/button";
+import { Button, buttonVariants } from "@multiremi/ui/components/ui/button";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { cn } from "@multiremi/ui/lib/utils";
 import { AppLink } from "../../navigation";
 import { useT } from "../../i18n";
 
-export type DisplayPluginRuntimeStatus = AgentPluginRuntimeStatus | "offline" | "unknown";
+export type DisplayPluginRuntimeStatus =
+  AgentPluginRuntimeStatus | "daemon_upgrade_required" | "offline" | "unknown";
 
 const STATUS_CONFIG: Record<
   DisplayPluginRuntimeStatus,
   { icon: typeof CheckCircle2; className: string; busy?: boolean }
 > = {
-  pending: { icon: Clock3, className: "text-muted-foreground bg-muted" },
-  preflight: { icon: ShieldAlert, className: "text-brand bg-brand/10", busy: true },
-  downloading: { icon: Download, className: "text-brand bg-brand/10", busy: true },
-  verifying: { icon: ShieldAlert, className: "text-brand bg-brand/10", busy: true },
-  installing: { icon: Download, className: "text-brand bg-brand/10", busy: true },
+  pending: {
+    icon: Loader2,
+    className: "text-muted-foreground bg-muted",
+    busy: true,
+  },
+  preflight: {
+    icon: Loader2,
+    className: "text-brand bg-brand/10",
+    busy: true,
+  },
+  downloading: { icon: Download, className: "text-brand bg-brand/10" },
+  verifying: {
+    icon: Loader2,
+    className: "text-brand bg-brand/10",
+    busy: true,
+  },
+  installing: {
+    icon: Loader2,
+    className: "text-brand bg-brand/10",
+    busy: true,
+  },
   ready: { icon: CheckCircle2, className: "text-success bg-success/10" },
-  retry_scheduled: { icon: RefreshCw, className: "text-warning bg-warning/10", busy: true },
+  retry_scheduled: {
+    icon: Clock3,
+    className: "text-warning bg-warning/10",
+  },
   setup_required: { icon: Settings2, className: "text-warning bg-warning/10" },
-  blocked: { icon: AlertCircle, className: "text-destructive bg-destructive/10" },
+  daemon_upgrade_required: {
+    icon: ArrowUpRight,
+    className: "text-warning bg-warning/10",
+  },
+  blocked: {
+    icon: AlertCircle,
+    className: "text-destructive bg-destructive/10",
+  },
   offline: { icon: WifiOff, className: "text-muted-foreground bg-muted" },
   unknown: { icon: CircleHelp, className: "text-muted-foreground bg-muted" },
 };
 
-function effectiveStatus(state: AgentPluginRuntimeState): DisplayPluginRuntimeStatus {
+function effectiveStatus(
+  state: AgentPluginRuntimeState,
+): DisplayPluginRuntimeStatus {
   if (state.runtime?.status === "offline") return "offline";
-  return state.status in STATUS_CONFIG
-    ? state.status
-    : "unknown";
+  if (
+    state.status === "setup_required" &&
+    state.lastErrorCode === "daemon_upgrade_required"
+  ) {
+    return "daemon_upgrade_required";
+  }
+  return state.status in STATUS_CONFIG ? state.status : "unknown";
 }
 
 function canRetry(state: AgentPluginRuntimeState): boolean {
@@ -60,6 +93,11 @@ function canRetry(state: AgentPluginRuntimeState): boolean {
     status === "setup_required" ||
     status === "retry_scheduled"
   );
+}
+
+function runtimeCliVersion(state: AgentPluginRuntimeState): string | null {
+  const version = state.runtime?.metadata?.cli_version;
+  return typeof version === "string" && version.trim() ? version.trim() : null;
 }
 
 function formatDateTime(value: string): string {
@@ -155,9 +193,16 @@ export function PluginReadinessList({
     <ul className={cn("divide-y", !compact && "rounded-md border")}>
       {states.map((state) => {
         const status = effectiveStatus(state);
+        const requiresDaemonUpgrade = status === "daemon_upgrade_required";
         const runtimeName = state.runtime?.name || state.runtimeId;
         const runtimeVersion = state.version?.version || state.pluginVersionId;
-        const detail = state.lastError || state.lastErrorCode;
+        let detail = state.lastError || state.lastErrorCode;
+        if (requiresDaemonUpgrade) {
+          detail = t(($) => $.readiness.daemon_upgrade_description);
+        } else if (state.lastErrorCode === "daemon_plugin_reconcile_timeout") {
+          detail = t(($) => $.readiness.daemon_reconcile_timeout_description);
+        }
+        const cliVersion = runtimeCliVersion(state);
         const isCurrentRetry =
           retry.isPending &&
           retry.variables?.runtimeId === state.runtimeId &&
@@ -197,11 +242,26 @@ export function PluginReadinessList({
                 )}
               </div>
               {detail && (
-                <p className="mt-1 break-words text-xs text-destructive">
-                  {t(($) => $.readiness.last_error)}: {detail}
+                <p
+                  className={cn(
+                    "mt-1 break-words text-xs",
+                    requiresDaemonUpgrade ? "text-warning" : "text-destructive",
+                  )}
+                >
+                  {!requiresDaemonUpgrade && (
+                    <>{t(($) => $.readiness.last_error)}: </>
+                  )}
+                  {detail}
                 </p>
               )}
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                {requiresDaemonUpgrade && cliVersion && (
+                  <span>
+                    {t(($) => $.readiness.daemon_cli_version, {
+                      version: cliVersion,
+                    })}
+                  </span>
+                )}
                 {state.nextRetryAt && (
                   <span>
                     {t(($) => $.readiness.next_retry, {
@@ -218,6 +278,15 @@ export function PluginReadinessList({
                 )}
               </div>
             </div>
+            {requiresDaemonUpgrade && allowRetry && (
+              <AppLink
+                href={paths.runtimeDetail(state.runtimeId)}
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <ArrowUpRight />
+                {t(($) => $.readiness.upgrade_daemon_action)}
+              </AppLink>
+            )}
             {allowRetry && canRetry(state) && (
               <Button
                 type="button"

@@ -14,6 +14,7 @@ import {
   toJson,
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
+import { DaemonRetiredError } from "@multiremi/store/repos/daemon-retirement-repo.js";
 import type {
   CreatePinnedItemInput,
   CreateProjectDocInput,
@@ -80,7 +81,12 @@ export class ProjectsRepo {
       input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId,
       workspaceId,
     );
+    const resources = input.resources ?? [];
+    const hasLocalDirectory = resources.some((resource) =>
+      String(resource.resourceType ?? resource.resource_type ?? "").trim() === "local_directory"
+    );
     const tx = this.ctx.db.transaction(() => {
+      if (hasLocalDirectory) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
       this.ctx.db.run(
         `INSERT INTO multiremi_projects (
           id, title, description, icon, status, priority, workspace_id,
@@ -104,8 +110,9 @@ export class ProjectsRepo {
           now,
         ],
       );
-      for (const resource of input.resources ?? []) {
-        this.createProjectResource(id, resource);
+      const project = this.getProject(id)!;
+      for (const resource of resources) {
+        this.createProjectResourceForProject(project, resource);
       }
       return this.getProject(id)!;
     });
@@ -306,8 +313,30 @@ export class ProjectsRepo {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const resourceType = String(input.resourceType ?? input.resource_type ?? "").trim();
+    if (resourceType !== "local_directory") {
+      return this.createProjectResourceForProject(project, input);
+    }
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      const currentProject = this.getProject(projectId);
+      if (!currentProject || currentProject.workspaceId !== project.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      return this.createProjectResourceForProject(currentProject, input);
+    });
+    return tx();
+  }
+
+  /** Caller holds the workspace lifecycle lock when input is local_directory. */
+  private createProjectResourceForProject(
+    project: MultiremiProject,
+    input: CreateProjectResourceInput,
+  ): MultiremiProjectResource {
+    const projectId = project.id;
+    const resourceType = String(input.resourceType ?? input.resource_type ?? "").trim();
     const rawRef = input.resourceRef ?? input.resource_ref ?? {};
     const resourceRef = normalizeProjectResourceRef(resourceType, rawRef);
+    this.assertLocalDirectoryDaemonNotRetired(project.workspaceId, resourceType, resourceRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, resourceType, resourceRef, null, "create");
     if (resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, project.workspaceId);
     const id = input.id ?? createId("res");
@@ -339,12 +368,40 @@ export class ProjectsRepo {
   }
 
   updateProjectResource(projectId: string, resourceId: string, input: UpdateProjectResourceInput): MultiremiProjectResource {
-    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
     const existing = this.getProjectResource(resourceId);
     if (!existing || existing.projectId !== projectId) throw new Error(`Project resource not found: ${resourceId}`);
+    if (existing.resourceType !== "local_directory") {
+      return this.updateProjectResourceWithinLifecycleLock(project, existing, input);
+    }
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      const currentProject = this.getProject(projectId);
+      if (!currentProject || currentProject.workspaceId !== project.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const currentResource = this.getProjectResource(resourceId);
+      if (!currentResource || currentResource.projectId !== projectId) {
+        throw new Error(`Project resource not found: ${resourceId}`);
+      }
+      return this.updateProjectResourceWithinLifecycleLock(currentProject, currentResource, input);
+    });
+    return tx();
+  }
+
+  /** Caller holds the workspace lifecycle lock when existing is local_directory. */
+  private updateProjectResourceWithinLifecycleLock(
+    project: MultiremiProject,
+    existing: MultiremiProjectResource,
+    input: UpdateProjectResourceInput,
+  ): MultiremiProjectResource {
+    const projectId = project.id;
+    const resourceId = existing.id;
     const hasRef = hasAnyField(input, "resourceRef", "resource_ref");
     const rawRef = hasRef ? input.resourceRef ?? input.resource_ref ?? {} : existing.resourceRef;
     const resourceRef = normalizeProjectResourceRef(existing.resourceType, rawRef);
+    this.assertLocalDirectoryDaemonNotRetired(project.workspaceId, existing.resourceType, resourceRef);
     this.assertNoLocalDirectoryDaemonConflict(projectId, existing.resourceType, resourceRef, resourceId, "update");
     if (existing.resourceType === "project_ref") this.assertValidProjectRef(projectId, resourceRef, existing.workspaceId);
     const label = hasAnyField(input, "label") ? cleanProjectResourceLabel(input.label) : existing.label;
@@ -364,7 +421,31 @@ export class ProjectsRepo {
   }
 
   deleteProjectResource(projectId: string, resourceId: string): void {
-    if (!this.getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    const existing = this.getProjectResource(resourceId);
+    if (!existing || existing.projectId !== projectId) throw new Error(`Project resource not found: ${resourceId}`);
+    if (existing.resourceType !== "local_directory") {
+      this.deleteProjectResourceWithinLifecycleLock(projectId, resourceId);
+      return;
+    }
+    const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(project.workspaceId);
+      const currentProject = this.getProject(projectId);
+      if (!currentProject || currentProject.workspaceId !== project.workspaceId) {
+        throw new Error(`Project not found: ${projectId}`);
+      }
+      const currentResource = this.getProjectResource(resourceId);
+      if (!currentResource || currentResource.projectId !== projectId) {
+        throw new Error(`Project resource not found: ${resourceId}`);
+      }
+      this.deleteProjectResourceWithinLifecycleLock(projectId, resourceId);
+    });
+    tx();
+  }
+
+  /** Caller holds the workspace lifecycle lock when deleting local_directory. */
+  private deleteProjectResourceWithinLifecycleLock(projectId: string, resourceId: string): void {
     const now = nowIso();
     const result = this.ctx.db.run(
       "DELETE FROM multiremi_project_resources WHERE project_id = ? AND id = ?",
@@ -679,6 +760,20 @@ export class ProjectsRepo {
       }
       throw new Error("another local_directory on this daemon is already attached to the project");
     }
+  }
+
+  private assertLocalDirectoryDaemonNotRetired(
+    workspaceId: string,
+    resourceType: string,
+    resourceRef: Record<string, unknown>,
+  ): void {
+    if (resourceType !== "local_directory") return;
+    const daemonId = String(resourceRef.daemonId ?? resourceRef.daemon_id ?? "").trim();
+    if (!daemonId) return;
+    const retired = this.ctx.db.query(
+      "SELECT 1 FROM multiremi_daemon_retirements WHERE workspace_id = ? AND daemon_id = ?",
+    ).get(workspaceId, daemonId);
+    if (retired) throw new DaemonRetiredError(workspaceId, daemonId);
   }
 
   private assertValidProjectRef(owningProjectId: string, resourceRef: Record<string, unknown>, workspaceId: string): void {

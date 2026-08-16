@@ -16,6 +16,7 @@ import type { AgentTask } from "@daemon/contracts/types.js";
 import type { AgentPluginCache } from "./cache.js";
 import { normalizeSha256Digest } from "./cache.js";
 import type {
+  AgentPluginArtifactSpec,
   AgentPluginSnapshot,
   PreparedAgentPluginRuntime,
 } from "./types.js";
@@ -23,6 +24,8 @@ import { AgentPluginError, PluginCacheMissError } from "./types.js";
 
 const RUNTIME_DIR = ".remi-runtime";
 const MATERIALIZED_MARKER = ".remi-materialized.json";
+const materializationFlights = new Map<string, Promise<void>>();
+const marketplaceFlights = new Map<string, Promise<{ name: string; pluginNames: string[] }>>();
 
 export interface MaterializeTaskPluginsOptions {
   signal?: AbortSignal;
@@ -31,6 +34,54 @@ export interface MaterializeTaskPluginsOptions {
    * user's Git cwd is never polluted with Runtime state.
    */
   runtimeBase?: string;
+}
+
+/**
+ * Build the same native marketplace shape used by task execution for one
+ * Runtime desired artifact. The caller installs it into the returned isolated
+ * CODEX_HOME before reporting this digest Ready.
+ */
+export async function prepareCodexPluginReadinessRuntime(
+  snapshot: AgentPluginArtifactSpec,
+  payloadPath: string,
+  readinessRoot: string,
+  signal?: AbortSignal,
+): Promise<PreparedAgentPluginRuntime> {
+  if (snapshot.provider !== "codex") {
+    throw new AgentPluginError(
+      `Codex Plugin readiness cannot prepare provider ${snapshot.provider}`,
+      "plugin_provider_mismatch",
+      "blocked",
+    );
+  }
+  throwIfAborted(signal);
+  const digest = normalizeSha256Digest(snapshot.digest);
+  const executionFingerprint = `sha256:${digest}`;
+  const runtimeRoot = join(resolve(readinessRoot), digest);
+  const codexHome = join(runtimeRoot, "home");
+  const codexMarketplaceRoot = join(runtimeRoot, "marketplace");
+  const readinessSnapshot: AgentPluginSnapshot = {
+    ...snapshot,
+    bindingId: `runtime-${snapshot.pluginId}`,
+  };
+  const marketplace = await buildCodexMarketplace(
+    codexMarketplaceRoot,
+    digest,
+    [readinessSnapshot],
+    [resolve(payloadPath)],
+  );
+  throwIfAborted(signal);
+  await mkdir(dirname(codexHome), { recursive: true, mode: 0o700 });
+  return {
+    runtimeRoot,
+    pluginPaths: [resolve(payloadPath)],
+    pluginFingerprint: executionFingerprint,
+    executionFingerprint,
+    codexHome,
+    codexMarketplaceRoot,
+    codexMarketplaceName: marketplace.name,
+    codexPluginNames: marketplace.pluginNames,
+  };
 }
 
 /**
@@ -72,7 +123,11 @@ export async function materializeTaskPlugins(
     ?? pluginFingerprint;
   const fingerprintSegment = safeFingerprintSegment(executionFingerprint);
   const runtimeBase = resolveRuntimeBase(task, workDir, options.runtimeBase);
-  const runtimeRoot = join(runtimeBase, RUNTIME_DIR);
+  const ownerRuntimeRoot = join(runtimeBase, RUNTIME_DIR);
+  // Plugin payloads and generated marketplaces are execution-private. The
+  // surrounding Issue/session runtime remains the GC boundary, but one task
+  // can never persist mutations into a later task's provider inputs.
+  const runtimeRoot = join(ownerRuntimeRoot, "executions", safePathSegment(task.id));
   const pluginsRoot = join(runtimeRoot, "plugins");
   await mkdir(pluginsRoot, { recursive: true, mode: 0o700 });
 
@@ -96,8 +151,10 @@ export async function materializeTaskPlugins(
   let codexMarketplaceName: string | undefined;
   let codexPluginNames: string[] | undefined;
   if (provider === "codex" && snapshots.length) {
-    codexHome = join(runtimeRoot, "codex-home", fingerprintSegment);
-    codexMarketplaceRoot = join(runtimeRoot, "codex-marketplaces", fingerprintSegment);
+    // CODEX_HOME is deliberately session-stable for an exact server-frozen
+    // execution fingerprint. Marketplace input remains task-private.
+    codexHome = join(ownerRuntimeRoot, "codex-home", fingerprintSegment);
+    codexMarketplaceRoot = join(runtimeRoot, "codex-marketplace");
     const marketplace = await buildCodexMarketplace(
       codexMarketplaceRoot,
       fingerprintSegment,
@@ -192,9 +249,20 @@ export function resolveTaskPluginRuntimeBase(
 }
 
 async function materializeOne(source: string, destination: string, digest: string): Promise<void> {
+  const existing = materializationFlights.get(destination);
+  if (existing) return existing;
+  const flight = publishMaterializedPlugin(source, destination, digest);
+  materializationFlights.set(destination, flight);
+  try {
+    await flight;
+  } finally {
+    if (materializationFlights.get(destination) === flight) materializationFlights.delete(destination);
+  }
+}
+
+async function publishMaterializedPlugin(source: string, destination: string, digest: string): Promise<void> {
   assertDirectChild(dirname(destination), destination, basename(destination));
-  await makeTreeWritable(destination);
-  await rm(destination, { recursive: true, force: true });
+  if (await validatePublishedMaterialization(destination, digest)) return;
   const temp = join(dirname(destination), `.${basename(destination)}-${randomUUID()}.tmp`);
   try {
     await cloneTree(source, temp);
@@ -202,10 +270,59 @@ async function materializeOne(source: string, destination: string, digest: strin
       mode: 0o444,
     });
     await freezeDirectories(temp);
-    await rename(temp, destination);
+    try {
+      await rename(temp, destination);
+    } catch (error) {
+      // Another task or daemon process may have published the same immutable
+      // digest while this copy was being built. Reuse only a fully validated
+      // winner; never remove or replace an already-published directory.
+      if (!(await validatePublishedMaterialization(destination, digest))) throw error;
+    }
   } finally {
     await makeTreeWritable(temp).catch(() => {});
     await rm(temp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function validatePublishedMaterialization(destination: string, digest: string): Promise<boolean> {
+  try {
+    const info = await lstat(destination);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Agent Plugin materialization is not a safe directory: ${destination}`,
+        "plugin_materialization_invalid",
+        "blocked",
+      );
+    }
+    const markerInfo = await lstat(join(destination, MATERIALIZED_MARKER));
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Agent Plugin materialization marker is invalid: ${destination}`,
+        "plugin_materialization_invalid",
+        "blocked",
+      );
+    }
+    const marker = JSON.parse(await readFile(join(destination, MATERIALIZED_MARKER), "utf8")) as {
+      schemaVersion?: unknown;
+      digest?: unknown;
+    };
+    if (marker.schemaVersion !== 1 || marker.digest !== digest) {
+      throw new AgentPluginError(
+        `Agent Plugin materialization digest mismatch at ${destination}`,
+        "plugin_materialization_mismatch",
+        "blocked",
+      );
+    }
+    return true;
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    if (error instanceof AgentPluginError) throw error;
+    throw new AgentPluginError(
+      `Cannot validate Agent Plugin materialization ${destination}`,
+      "plugin_materialization_invalid",
+      "blocked",
+      { cause: error },
+    );
   }
 }
 
@@ -283,41 +400,79 @@ async function buildCodexMarketplace(
   pluginPaths: string[],
 ): Promise<{ name: string; pluginNames: string[] }> {
   const name = `remi-${fingerprintSegment.slice(0, 16)}`;
-  const temp = `${marketplaceRoot}.${randomUUID()}.tmp`;
+  const expectedPluginNames = await readCodexPluginNames(snapshots, pluginPaths);
+  const existing = marketplaceFlights.get(marketplaceRoot);
+  if (existing) return existing;
+  const flight = publishCodexMarketplace(
+    marketplaceRoot,
+    fingerprintSegment,
+    snapshots,
+    pluginPaths,
+    name,
+    expectedPluginNames,
+  );
+  marketplaceFlights.set(marketplaceRoot, flight);
+  try {
+    return await flight;
+  } finally {
+    if (marketplaceFlights.get(marketplaceRoot) === flight) marketplaceFlights.delete(marketplaceRoot);
+  }
+}
+
+async function readCodexPluginNames(
+  snapshots: AgentPluginSnapshot[],
+  pluginPaths: string[],
+): Promise<string[]> {
   const pluginNames: string[] = [];
+  for (let index = 0; index < snapshots.length; index++) {
+    const manifestPath = join(pluginPaths[index]!, ".codex-plugin", "plugin.json");
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    } catch (error) {
+      throw new AgentPluginError(
+        `Cannot read Codex Plugin manifest for ${snapshots[index]!.name}`,
+        "plugin_manifest_invalid",
+        "blocked",
+        { cause: error },
+      );
+    }
+    const pluginName = cleanString(manifest.name);
+    if (!pluginName || !/^[A-Za-z0-9._-]+$/.test(pluginName)) {
+      throw new AgentPluginError(
+        `Codex Plugin ${snapshots[index]!.name} has an invalid native name`,
+        "plugin_manifest_invalid",
+        "blocked",
+      );
+    }
+    if (pluginNames.includes(pluginName)) {
+      throw new AgentPluginError(
+        `Codex Plugin name collision in execution snapshot: ${pluginName}`,
+        "plugin_name_collision",
+        "blocked",
+      );
+    }
+    pluginNames.push(pluginName);
+  }
+  return pluginNames;
+}
+
+async function publishCodexMarketplace(
+  marketplaceRoot: string,
+  fingerprintSegment: string,
+  snapshots: AgentPluginSnapshot[],
+  pluginPaths: string[],
+  name: string,
+  pluginNames: string[],
+): Promise<{ name: string; pluginNames: string[] }> {
+  if (await validatePublishedMarketplace(marketplaceRoot, name, pluginNames)) return { name, pluginNames };
+  const temp = `${marketplaceRoot}.${randomUUID()}.tmp`;
   const entries: Array<Record<string, unknown>> = [];
   try {
     await mkdir(join(temp, ".agents", "plugins"), { recursive: true, mode: 0o700 });
     await mkdir(join(temp, "plugins"), { recursive: true, mode: 0o700 });
     for (let index = 0; index < snapshots.length; index++) {
-      const manifestPath = join(pluginPaths[index]!, ".codex-plugin", "plugin.json");
-      let manifest: Record<string, unknown>;
-      try {
-        manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
-      } catch (error) {
-        throw new AgentPluginError(
-          `Cannot read Codex Plugin manifest for ${snapshots[index]!.name}`,
-          "plugin_manifest_invalid",
-          "blocked",
-          { cause: error },
-        );
-      }
-      const pluginName = cleanString(manifest.name);
-      if (!pluginName || !/^[A-Za-z0-9._-]+$/.test(pluginName)) {
-        throw new AgentPluginError(
-          `Codex Plugin ${snapshots[index]!.name} has an invalid native name`,
-          "plugin_manifest_invalid",
-          "blocked",
-        );
-      }
-      if (pluginNames.includes(pluginName)) {
-        throw new AgentPluginError(
-          `Codex Plugin name collision in execution snapshot: ${pluginName}`,
-          "plugin_name_collision",
-          "blocked",
-        );
-      }
-      pluginNames.push(pluginName);
+      const pluginName = pluginNames[index]!;
       await cloneTree(pluginPaths[index]!, join(temp, "plugins", pluginName));
       entries.push({
         name: pluginName,
@@ -332,13 +487,66 @@ async function buildCodexMarketplace(
     });
     await freezeDirectories(temp);
     await mkdir(dirname(marketplaceRoot), { recursive: true, mode: 0o700 });
-    await makeTreeWritable(marketplaceRoot);
-    await rm(marketplaceRoot, { recursive: true, force: true });
-    await rename(temp, marketplaceRoot);
+    try {
+      await rename(temp, marketplaceRoot);
+    } catch (error) {
+      if (!(await validatePublishedMarketplace(marketplaceRoot, name, pluginNames))) throw error;
+    }
     return { name, pluginNames };
   } finally {
     await makeTreeWritable(temp).catch(() => {});
     await rm(temp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function validatePublishedMarketplace(
+  marketplaceRoot: string,
+  name: string,
+  pluginNames: string[],
+): Promise<boolean> {
+  try {
+    const info = await lstat(marketplaceRoot);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Codex marketplace is not a safe directory: ${marketplaceRoot}`,
+        "plugin_codex_marketplace_invalid",
+        "blocked",
+      );
+    }
+    const manifestPath = join(marketplaceRoot, ".agents", "plugins", "marketplace.json");
+    const markerInfo = await lstat(manifestPath);
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Codex marketplace manifest is invalid: ${marketplaceRoot}`,
+        "plugin_codex_marketplace_invalid",
+        "blocked",
+      );
+    }
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      name?: unknown;
+      plugins?: Array<{ name?: unknown }>;
+    };
+    const actualNames = Array.isArray(manifest.plugins)
+      ? manifest.plugins.map((entry) => cleanString(entry?.name))
+      : [];
+    if (manifest.name !== name || actualNames.length !== pluginNames.length
+      || actualNames.some((pluginName, index) => pluginName !== pluginNames[index])) {
+      throw new AgentPluginError(
+        `Codex marketplace fingerprint mismatch at ${marketplaceRoot}`,
+        "plugin_codex_marketplace_mismatch",
+        "blocked",
+      );
+    }
+    return true;
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    if (error instanceof AgentPluginError) throw error;
+    throw new AgentPluginError(
+      `Cannot validate Codex marketplace ${marketplaceRoot}`,
+      "plugin_codex_marketplace_invalid",
+      "blocked",
+      { cause: error },
+    );
   }
 }
 
@@ -460,4 +668,8 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new AgentPluginError("Agent Plugin materialization cancelled", "plugin_cancelled", "transient");
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }

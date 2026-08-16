@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 528,
+    "routeCount": 531,
     "routeCountByPrefix": {
-      "native": 190,
+      "native": 193,
       "compat": 325,
       "root": 13
     },
-    "getRoutes": 232,
-    "getRoutesWithBody": 229,
+    "getRoutes": 234,
+    "getRoutesWithBody": 231,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 296,
-    "mutationRoutesCovered": 275,
+    "mutationRoutes": 297,
+    "mutationRoutesCovered": 276,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -28,6 +28,7 @@
       "comments-compat",
       "comments-native",
       "daemon",
+      "daemon-retirement",
       "daemon-task-lifecycle",
       "inbox",
       "issue-relations-compat",
@@ -233,6 +234,8 @@
     "GET /api/multiremi/chats/:id/messages",
     "GET /api/multiremi/comments/:id/attachments",
     "GET /api/multiremi/comments/:id/reactions",
+    "GET /api/multiremi/daemons",
+    "GET /api/multiremi/daemons/:daemonId/retirement-plan",
     "GET /api/multiremi/feedback",
     "GET /api/multiremi/github/pull-requests",
     "GET /api/multiremi/github/settings",
@@ -487,6 +490,7 @@
     "POST /api/multiremi/chats/:id/messages",
     "POST /api/multiremi/comments/:id/reactions",
     "POST /api/multiremi/comments/:id/resolve",
+    "POST /api/multiremi/daemons/:daemonId/retire",
     "POST /api/multiremi/feedback",
     "POST /api/multiremi/github/pull-requests",
     "POST /api/multiremi/github/webhook",
@@ -760,6 +764,8 @@
     "GET /api/multiremi/chats/:id/messages",
     "GET /api/multiremi/comments/:id/attachments",
     "GET /api/multiremi/comments/:id/reactions",
+    "GET /api/multiremi/daemons",
+    "GET /api/multiremi/daemons/:daemonId/retirement-plan",
     "GET /api/multiremi/feedback",
     "GET /api/multiremi/github/pull-requests",
     "GET /api/multiremi/github/settings",
@@ -1000,6 +1006,7 @@
     "POST /api/multiremi/chats/:id/messages",
     "POST /api/multiremi/comments/:id/reactions",
     "POST /api/multiremi/comments/:id/resolve",
+    "POST /api/multiremi/daemons/:daemonId/retire",
     "POST /api/multiremi/feedback",
     "POST /api/multiremi/github/pull-requests",
     "POST /api/multiremi/github/webhook",
@@ -2830,7 +2837,7 @@
       "path": "/api/cloud-billing/checkout-sessions",
       "status": 201,
       "body": {
-        "order_id": "local-1767225600205",
+        "order_id": "local-1767225600223",
         "session_id": "local-disabled",
         "url": "",
         "tier_id": "local-disabled",
@@ -3302,6 +3309,105 @@
       "status": 200,
       "body": {
         "ok": true
+      }
+    },
+    {
+      "key": "daemon-retirement#000 GET /api/multiremi/daemons/:daemonId/retirement-plan",
+      "route": "GET /api/multiremi/daemons/:daemonId/retirement-plan",
+      "path": "/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=local",
+      "status": 200,
+      "body": {
+        "plan": {
+          "workspace_id": "local",
+          "daemon_id": "dmn_snapshot",
+          "owner_user_id": "local",
+          "snapshot": "695520e2e54f23c9ef415e74882aecdfb55e5a700a739f1acedb297e636baa39",
+          "already_retired": false,
+          "can_retire": true,
+          "can_abandon_issue_workspaces": false,
+          "blocking_reasons": [],
+          "runtimes": [
+            {
+              "id": "rt_snapshot",
+              "name": "snapshot-runtime",
+              "provider": "claude",
+              "status": "online"
+            }
+          ],
+          "agents": [
+            {
+              "id": "agt_snapshot",
+              "name": "Snapshot Agent",
+              "provider": "claude",
+              "runtime_id": "rt_snapshot",
+              "archived": false
+            }
+          ],
+          "active_tasks": [],
+          "queued_tasks": [
+            {
+              "id": "tsk_0ts9yveh51cp",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_snapshot"
+            },
+            {
+              "id": "tsk_sv8e5p1ut6x0",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_isk151lv85f3"
+            },
+            {
+              "id": "tsk_ttgbd5jebyjy",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": null
+            },
+            {
+              "id": "tsk_u4c9m3gewz2d",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_ebtova4a347t"
+            }
+          ],
+          "local_directory_resources": [],
+          "issue_workspaces": [],
+          "impact": {
+            "runtimes_removed": 1,
+            "agents_detached": 1,
+            "queued_tasks_requeued": 4,
+            "session_lanes_reset": 0,
+            "chat_sessions_reset": 0,
+            "issue_workspaces_abandoned": 0,
+            "tokens_revoked": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "daemon-retirement#001 POST /api/multiremi/daemons/:daemonId/retire",
+      "route": "POST /api/multiremi/daemons/:daemonId/retire",
+      "path": "/api/multiremi/daemons/dmn_snapshot/retire",
+      "status": 200,
+      "body": {
+        "status": "retired",
+        "workspace_id": "local",
+        "daemon_id": "dmn_snapshot",
+        "retired_at": "<timestamp>",
+        "already_retired": false,
+        "impact": {
+          "runtimes_removed": 1,
+          "agents_detached": 1,
+          "queued_tasks_requeued": 4,
+          "session_lanes_reset": 0,
+          "chat_sessions_reset": 0,
+          "issue_workspaces_abandoned": 0,
+          "tokens_revoked": 0
+        }
       }
     },
     {
@@ -4281,7 +4387,8 @@
             "metadata": {
               "version": "9.9.9",
               "cli_version": "9.9.9",
-              "launched_by": ""
+              "launched_by": "",
+              "agent_plugin_protocol": 0
             },
             "owner_id": null,
             "visibility": "private",
@@ -4516,30 +4623,38 @@
       "key": "daemon#003 PUT /api/daemon/runtimes/:runtimeId/models",
       "route": "PUT /api/daemon/runtimes/:runtimeId/models",
       "path": "/api/daemon/runtimes/rt_snapshot/models",
-      "status": 403,
+      "status": 200,
       "body": {
-        "error": "daemon token required",
-        "code": "daemon_token_required"
+        "runtime_id": "rt_snapshot",
+        "supported": true,
+        "models": [
+          {
+            "id": "claude-sonnet-4",
+            "label": "Claude Sonnet 4",
+            "provider": "claude",
+            "default": false,
+            "createdAt": "<timestamp>",
+            "updatedAt": "<timestamp>"
+          }
+        ]
       }
     },
     {
       "key": "daemon#004 POST /api/daemon/runtimes/:runtimeId/models/claim",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/claim",
       "path": "/api/daemon/runtimes/rt_snapshot/models/claim",
-      "status": 403,
+      "status": 200,
       "body": {
-        "error": "daemon token required",
-        "code": "daemon_token_required"
+        "request": null
       }
     },
     {
       "key": "daemon#005 POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "route": "POST /api/daemon/runtimes/:runtimeId/models/:requestId/result",
       "path": "/api/daemon/runtimes/rt_snapshot/models/rml_9i3epsr6j5hf/result",
-      "status": 403,
+      "status": 200,
       "body": {
-        "error": "daemon token required",
-        "code": "daemon_token_required"
+        "status": "ok"
       }
     },
     {
@@ -6308,10 +6423,11 @@
       "key": "get-sweep GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
       "route": "GET /api/daemon/runtimes/:runtimeId/agent-plugins/desired",
       "path": "/api/daemon/runtimes/rt_snapshot/agent-plugins/desired",
-      "status": 403,
+      "status": 200,
       "body": {
-        "error": "daemon token required",
-        "code": "daemon_token_required"
+        "runtime_id": "rt_snapshot",
+        "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "plugins": []
       }
     },
     {
@@ -9917,6 +10033,102 @@
       }
     },
     {
+      "key": "get-sweep GET /api/multiremi/daemons",
+      "route": "GET /api/multiremi/daemons",
+      "path": "/api/multiremi/daemons",
+      "status": 200,
+      "body": {
+        "workspace_id": "local",
+        "daemons": [
+          {
+            "daemon_id": "dmn_snapshot",
+            "owner_user_id": "local",
+            "runtime_count": 1,
+            "token_count": 0,
+            "last_seen": "<timestamp>",
+            "name": "snapshot-runtime"
+          }
+        ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/multiremi/daemons/:daemonId/retirement-plan",
+      "route": "GET /api/multiremi/daemons/:daemonId/retirement-plan",
+      "path": "/api/multiremi/daemons/dmn_snapshot/retirement-plan?workspace_id=local",
+      "status": 200,
+      "body": {
+        "plan": {
+          "workspace_id": "local",
+          "daemon_id": "dmn_snapshot",
+          "owner_user_id": "local",
+          "snapshot": "695520e2e54f23c9ef415e74882aecdfb55e5a700a739f1acedb297e636baa39",
+          "already_retired": false,
+          "can_retire": true,
+          "can_abandon_issue_workspaces": false,
+          "blocking_reasons": [],
+          "runtimes": [
+            {
+              "id": "rt_snapshot",
+              "name": "snapshot-runtime",
+              "provider": "claude",
+              "status": "online"
+            }
+          ],
+          "agents": [
+            {
+              "id": "agt_snapshot",
+              "name": "Snapshot Agent",
+              "provider": "claude",
+              "runtime_id": "rt_snapshot",
+              "archived": false
+            }
+          ],
+          "active_tasks": [],
+          "queued_tasks": [
+            {
+              "id": "tsk_0ts9yveh51cp",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_snapshot"
+            },
+            {
+              "id": "tsk_sv8e5p1ut6x0",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_isk151lv85f3"
+            },
+            {
+              "id": "tsk_ttgbd5jebyjy",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": null
+            },
+            {
+              "id": "tsk_u4c9m3gewz2d",
+              "status": "queued",
+              "agent_id": "agt_snapshot",
+              "runtime_id": "rt_snapshot",
+              "issue_id": "iss_ebtova4a347t"
+            }
+          ],
+          "local_directory_resources": [],
+          "issue_workspaces": [],
+          "impact": {
+            "runtimes_removed": 1,
+            "agents_detached": 1,
+            "queued_tasks_requeued": 4,
+            "session_lanes_reset": 0,
+            "chat_sessions_reset": 0,
+            "issue_workspaces_abandoned": 0,
+            "tokens_revoked": 0
+          }
+        }
+      }
+    },
+    {
       "key": "get-sweep GET /api/multiremi/feedback",
       "route": "GET /api/multiremi/feedback",
       "path": "/api/multiremi/feedback",
@@ -10077,6 +10289,7 @@
         "provider": "auto",
         "token": null,
         "tokenId": null,
+        "daemonId": null,
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
         "installCommand": "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash",
@@ -16676,7 +16889,7 @@
       "path": "/api/contact-sales",
       "status": 201,
       "body": {
-        "id": "local-contact-1767225600208",
+        "id": "local-contact-1767225600226",
         "status": "received",
         "mode": "local",
         "request": {
@@ -16696,12 +16909,13 @@
         "serverUrl": "https://snapshot.invalid",
         "workspaceId": "local",
         "provider": "claude",
-        "token": "mdt_0000000000004000800000000000000300000000000040008000000000000004",
+        "token": "mdt_0000000000004000800000000000000400000000000040008000000000000005",
         "tokenId": "dtk_m21cp1q6gys4",
+        "daemonId": "dmn_00000000000040008000000000000003",
         "installScriptUrl": "https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh",
         "releaseArtifactPattern": "multiremi-${version}-${os}-${arch}.tar.gz",
         "installCommand": "curl -fsSL https://github.com/Grassgod/remi/releases/latest/download/install-remi.sh | bash",
-        "setupCommand": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000300000000000040008000000000000004 --provider claude",
+        "setupCommand": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000400000000000040008000000000000005 --provider claude --daemon-id dmn_00000000000040008000000000000003",
         "daemonCommand": "multiremi daemon",
         "daemonStartCommand": "multiremi daemon start",
         "commands": [
@@ -16713,7 +16927,7 @@
           {
             "key": "setup",
             "label": "Configure this computer",
-            "command": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000300000000000040008000000000000004 --provider claude"
+            "command": "multiremi setup --server https://snapshot.invalid --workspace local --token mdt_0000000000004000800000000000000400000000000040008000000000000005 --provider claude --daemon-id dmn_00000000000040008000000000000003"
           },
           {
             "key": "daemon",
@@ -17945,7 +18159,7 @@
       "path": "/api/workspaces/ws_bbo9f1dxazyr/lark/install/begin",
       "status": 202,
       "body": {
-        "session_id": "local-lark-1767225600213",
+        "session_id": "local-lark-1767225600231",
         "qr_code_url": "",
         "expires_in_seconds": 0,
         "poll_interval_seconds": 5,

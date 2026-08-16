@@ -60,6 +60,10 @@ export interface DeleteRuntimeDialogProps {
   // Called after a successful delete. List page closes the dialog and
   // toasts; detail page additionally navigates back to /runtimes.
   onDeleted: () => void;
+  // The backend protects the last Runtime owned by a daemon. When either
+  // delete path returns that conflict, hand off to the machine-level retire
+  // flow instead of surfacing a generic runtime deletion error.
+  onRetireDaemon: (daemonId: string) => void;
 }
 
 export function DeleteRuntimeDialog({
@@ -68,6 +72,7 @@ export function DeleteRuntimeDialog({
   runtime,
   wsId,
   onDeleted,
+  onRetireDaemon,
 }: DeleteRuntimeDialogProps) {
   const { t } = useT("runtimes");
   // Pull cached workspace data — every consumer page already has these
@@ -162,6 +167,12 @@ export function DeleteRuntimeDialog({
         }
       }
     } catch (err) {
+      const daemonId = parseDaemonLastRuntimeConflict(err);
+      if (daemonId) {
+        onOpenChange(false);
+        onRetireDaemon(daemonId);
+        return;
+      }
       // Cascade-side plan-changed: the user confirmed plan A but the live
       // set is now plan B. Refresh the displayed list with the server
       // snapshot, force the user to re-tick the checkbox.
@@ -233,6 +244,16 @@ export function DeleteRuntimeDialog({
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+function parseDaemonLastRuntimeConflict(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  if (!err.body || typeof err.body !== "object") return null;
+  const body = err.body as Record<string, unknown>;
+  if (body.code !== "daemon_last_runtime") return null;
+  return typeof body.daemon_id === "string" && body.daemon_id.trim()
+    ? body.daemon_id.trim()
+    : null;
 }
 
 // ---------------------------------------------------------------------------

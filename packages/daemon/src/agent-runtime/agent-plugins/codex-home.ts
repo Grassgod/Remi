@@ -6,12 +6,16 @@ import type { PreparedAgentPluginRuntime } from "./types.js";
 import { AgentPluginError } from "./types.js";
 
 const INSTALL_MARKER = ".remi-plugins.json";
+const DEFAULT_CODEX_PLUGIN_COMMAND_TIMEOUT_MS = 60_000;
+const installFlights = new Map<string, Promise<string>>();
 
 export interface CodexPluginCommand {
   executable: string;
   args: string[];
   cwd: string;
   env: Record<string, string>;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface InstallCodexPluginHomeOptions {
@@ -20,6 +24,8 @@ export interface InstallCodexPluginHomeOptions {
   /** Copy/link authentication and approved base config into the isolated home. */
   seedHome?: (home: string) => Promise<void>;
   runCommand?: (command: CodexPluginCommand) => Promise<void>;
+  signal?: AbortSignal;
+  commandTimeoutMs?: number;
 }
 
 export interface SeedCodexHomeFromBaseOptions {
@@ -139,29 +145,29 @@ export async function installCodexPluginHome(
   const pluginNames = prepared.codexPluginNames;
   if (!home || !marketplaceRoot || !marketplaceName || !pluginNames?.length) return null;
 
+  const existing = installFlights.get(home);
+  if (existing) return existing;
+  const flight = publishCodexPluginHome(prepared, options, home, marketplaceRoot, marketplaceName, pluginNames);
+  installFlights.set(home, flight);
   try {
-    const marker = JSON.parse(await readFile(join(home, INSTALL_MARKER), "utf8")) as {
-      executionFingerprint?: unknown;
-    };
-    if (marker.executionFingerprint === prepared.executionFingerprint) return home;
-    throw new AgentPluginError(
-      `Codex home fingerprint mismatch at ${home}`,
-      "plugin_codex_home_mismatch",
-      "blocked",
-    );
-  } catch (error) {
-    if (error instanceof AgentPluginError) throw error;
-    if (!isNotFound(error)) {
-      throw new AgentPluginError(
-        `Cannot validate isolated Codex home ${home}`,
-        "plugin_codex_home_invalid",
-        "blocked",
-        { cause: error },
-      );
-    }
+    return await flight;
+  } finally {
+    if (installFlights.get(home) === flight) installFlights.delete(home);
   }
+}
+
+async function publishCodexPluginHome(
+  prepared: PreparedAgentPluginRuntime,
+  options: InstallCodexPluginHomeOptions,
+  home: string,
+  marketplaceRoot: string,
+  marketplaceName: string,
+  pluginNames: string[],
+): Promise<string> {
+  if (await validatePublishedCodexHome(home, prepared.executionFingerprint)) return home;
 
   const parent = dirname(home);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = join(parent, `.${basename(home)}-${randomUUID()}.tmp`);
   const executable = options.codexExecutable ?? "codex";
   const runCommand = options.runCommand ?? defaultRunCommand;
@@ -173,19 +179,19 @@ export async function installCodexPluginHome(
       ...options.env,
       CODEX_HOME: staging,
     };
-    await runCommand({
+    await runCodexPluginCommand(runCommand, {
       executable,
       args: ["plugin", "marketplace", "add", marketplaceRoot, "--json"],
       cwd: marketplaceRoot,
       env,
-    });
+    }, options);
     for (const pluginName of pluginNames) {
-      await runCommand({
+      await runCodexPluginCommand(runCommand, {
         executable,
         args: ["plugin", "add", `${pluginName}@${marketplaceName}`, "--json"],
         cwd: marketplaceRoot,
         env,
-      });
+      }, options);
     }
     await writeFile(join(staging, INSTALL_MARKER), `${JSON.stringify({
       schemaVersion: 1,
@@ -196,15 +202,87 @@ export async function installCodexPluginHome(
     })}\n`, { mode: 0o600 });
 
     assertContained(parent, home);
-    await rm(home, { recursive: true, force: true });
-    await rename(staging, home);
+    try {
+      await rename(staging, home);
+    } catch (error) {
+      // The home is immutable for an execution fingerprint. A concurrent
+      // publisher wins; validate and reuse it rather than deleting it.
+      if (!(await validatePublishedCodexHome(home, prepared.executionFingerprint))) throw error;
+    }
     return home;
   } finally {
     await rm(staging, { recursive: true, force: true }).catch(() => {});
   }
 }
 
+async function runCodexPluginCommand(
+  runCommand: (command: CodexPluginCommand) => Promise<void>,
+  command: CodexPluginCommand,
+  options: InstallCodexPluginHomeOptions,
+): Promise<void> {
+  const timeoutMs = Math.max(1, options.commandTimeoutMs ?? DEFAULT_CODEX_PLUGIN_COMMAND_TIMEOUT_MS);
+  const scope = commandAbortScope(options.signal, timeoutMs);
+  try {
+    await raceWithAbort(
+      runCommand({ ...command, signal: scope.signal, timeoutMs }),
+      scope.signal,
+    );
+  } catch (error) {
+    if (error instanceof AgentPluginError) throw error;
+    throw new AgentPluginError(
+      `Codex Plugin install failed: ${error instanceof Error ? error.message : String(error)}`,
+      "plugin_codex_install_failed",
+      "blocked",
+      { cause: error },
+    );
+  } finally {
+    scope.dispose();
+  }
+}
+
+async function validatePublishedCodexHome(home: string, executionFingerprint: string): Promise<boolean> {
+  try {
+    const info = await lstat(home);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Isolated Codex home is not a safe directory: ${home}`,
+        "plugin_codex_home_invalid",
+        "blocked",
+      );
+    }
+    const markerInfo = await lstat(join(home, INSTALL_MARKER));
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) {
+      throw new AgentPluginError(
+        `Isolated Codex home marker is invalid: ${home}`,
+        "plugin_codex_home_invalid",
+        "blocked",
+      );
+    }
+    const marker = JSON.parse(await readFile(join(home, INSTALL_MARKER), "utf8")) as {
+      executionFingerprint?: unknown;
+    };
+    if (marker.executionFingerprint !== executionFingerprint) {
+      throw new AgentPluginError(
+        `Codex home fingerprint mismatch at ${home}`,
+        "plugin_codex_home_mismatch",
+        "blocked",
+      );
+    }
+    return true;
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    if (error instanceof AgentPluginError) throw error;
+    throw new AgentPluginError(
+      `Cannot validate isolated Codex home ${home}`,
+      "plugin_codex_home_invalid",
+      "blocked",
+      { cause: error },
+    );
+  }
+}
+
 async function defaultRunCommand(command: CodexPluginCommand): Promise<void> {
+  if (command.signal?.aborted) throw command.signal.reason;
   let processHandle: ReturnType<typeof Bun.spawn>;
   try {
     processHandle = Bun.spawn([command.executable, ...command.args], {
@@ -222,17 +300,88 @@ async function defaultRunCommand(command: CodexPluginCommand): Promise<void> {
       { cause: error },
     );
   }
-  const [exitCode, stdout, stderr] = await Promise.all([
-    processHandle.exited,
-    readSpawnOutput(processHandle.stdout),
-    readSpawnOutput(processHandle.stderr),
-  ]);
+  let result: [number, string, string];
+  try {
+    result = await raceWithAbort(Promise.all([
+      processHandle.exited,
+      readSpawnOutput(processHandle.stdout),
+      readSpawnOutput(processHandle.stderr),
+    ]), command.signal);
+  } catch (error) {
+    try {
+      processHandle.kill();
+    } catch {}
+    const exited = await Promise.race([
+      processHandle.exited.then(() => true, () => true),
+      new Promise<false>((resolveTimeout) => {
+        const timer = setTimeout(() => resolveTimeout(false), 250);
+        timer.unref?.();
+      }),
+    ]);
+    if (!exited) {
+      try {
+        processHandle.kill(9);
+      } catch {}
+    }
+    throw error;
+  }
+  const [exitCode, stdout, stderr] = result;
   if (exitCode !== 0) {
     throw new AgentPluginError(
       `Codex Plugin install failed (exit ${exitCode}): ${(stderr || stdout).trim().slice(0, 1000)}`,
       "plugin_codex_install_failed",
       "blocked",
     );
+  }
+}
+
+function commandAbortScope(parent: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (controller.signal.aborted) return;
+    controller.abort(new AgentPluginError(
+      "Codex Plugin installation was cancelled",
+      "plugin_cancelled",
+      "transient",
+    ));
+  };
+  if (parent?.aborted) cancel();
+  else parent?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    controller.abort(new AgentPluginError(
+      `Codex Plugin install timed out after ${timeoutMs}ms`,
+      "plugin_codex_install_timeout",
+      "setup_required",
+    ));
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", cancel);
+    },
+  };
+}
+
+async function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) throw signal.reason;
+  let abort: (() => void) | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (abort) signal.removeEventListener("abort", abort);
   }
 }
 

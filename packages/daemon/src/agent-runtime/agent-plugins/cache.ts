@@ -17,6 +17,7 @@ import { AgentPluginError } from "./types.js";
 const READY_MARKER = "ready.json";
 const PAYLOAD_DIR = "payload";
 const SHA256_RE = /^[a-f0-9]{64}$/;
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 60_000;
 
 interface ReadyMarker {
   schemaVersion: 1;
@@ -36,6 +37,7 @@ export interface AgentPluginCacheOptions {
   lockPollMs?: number;
   lockWaitMs?: number;
   staleLockMs?: number;
+  downloadTimeoutMs?: number;
 }
 
 export interface EnsurePluginOptions {
@@ -59,7 +61,7 @@ export class AgentPluginCache {
   readonly root: string;
   private readonly options: Required<Pick<
     AgentPluginCacheOptions,
-    "maxArchiveBytes" | "maxExtractedBytes" | "maxFiles" | "lockPollMs" | "lockWaitMs" | "staleLockMs"
+    "maxArchiveBytes" | "maxExtractedBytes" | "maxFiles" | "lockPollMs" | "lockWaitMs" | "staleLockMs" | "downloadTimeoutMs"
   >> & AgentPluginCacheOptions;
   private readonly inflight = new Map<string, Promise<string>>();
 
@@ -73,6 +75,7 @@ export class AgentPluginCache {
       lockPollMs: options.lockPollMs ?? 100,
       lockWaitMs: options.lockWaitMs ?? 2 * 60 * 1000,
       staleLockMs: options.staleLockMs ?? 5 * 60 * 1000,
+      downloadTimeoutMs: Math.max(1, options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS),
     };
   }
 
@@ -204,46 +207,73 @@ export class AgentPluginCache {
       if (token?.trim()) headers.set("Authorization", `Bearer ${token.trim()}`);
     }
 
-    let response: Response;
+    const scope = downloadAbortScope(signal, this.options.downloadTimeoutMs);
     try {
-      response = await (this.options.fetch ?? globalThis.fetch)(url, { headers, signal });
-    } catch (error) {
-      throw new AgentPluginError(
-        `Agent Plugin download failed: ${error instanceof Error ? error.message : String(error)}`,
-        "plugin_download_failed",
-        "transient",
-        { cause: error },
-      );
-    }
-    if (!response.ok) {
-      const retryKind = response.status >= 500 || response.status === 408 || response.status === 429
-        ? "transient"
-        : "blocked";
-      throw new AgentPluginError(
-        `Agent Plugin download returned HTTP ${response.status}`,
-        "plugin_download_http_error",
-        retryKind,
-      );
-    }
+      let response: Response;
+      try {
+        response = await raceWithAbort(
+          (this.options.fetch ?? globalThis.fetch)(url, { headers, signal: scope.signal }),
+          scope.signal,
+        );
+      } catch (error) {
+        if (error instanceof AgentPluginError) throw error;
+        if (scope.signal.aborted && scope.signal.reason instanceof AgentPluginError) {
+          throw scope.signal.reason;
+        }
+        throw new AgentPluginError(
+          `Agent Plugin download failed: ${error instanceof Error ? error.message : String(error)}`,
+          "plugin_download_failed",
+          "transient",
+          { cause: error },
+        );
+      }
+      if (!response.ok) {
+        const retryKind = response.status >= 500 || response.status === 408 || response.status === 429
+          ? "transient"
+          : "blocked";
+        throw new AgentPluginError(
+          `Agent Plugin download returned HTTP ${response.status}`,
+          "plugin_download_http_error",
+          retryKind,
+        );
+      }
 
-    const declaredSize = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredSize) && declaredSize > this.options.maxArchiveBytes) {
-      throw new AgentPluginError(
-        `Agent Plugin artifact is too large (${declaredSize} bytes)`,
-        "plugin_artifact_too_large",
-        "blocked",
-      );
+      const declaredSize = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declaredSize) && declaredSize > this.options.maxArchiveBytes) {
+        throw new AgentPluginError(
+          `Agent Plugin artifact is too large (${declaredSize} bytes)`,
+          "plugin_artifact_too_large",
+          "blocked",
+        );
+      }
+      let buffer: ArrayBuffer;
+      try {
+        buffer = await raceWithAbort(response.arrayBuffer(), scope.signal);
+      } catch (error) {
+        if (error instanceof AgentPluginError) throw error;
+        if (scope.signal.aborted && scope.signal.reason instanceof AgentPluginError) {
+          throw scope.signal.reason;
+        }
+        throw new AgentPluginError(
+          `Agent Plugin response body failed: ${error instanceof Error ? error.message : String(error)}`,
+          "plugin_download_failed",
+          "transient",
+          { cause: error },
+        );
+      }
+      const bytes = new Uint8Array(buffer);
+      if (bytes.byteLength > this.options.maxArchiveBytes) {
+        throw new AgentPluginError(
+          `Agent Plugin artifact is too large (${bytes.byteLength} bytes)`,
+          "plugin_artifact_too_large",
+          "blocked",
+        );
+      }
+      if (scope.signal.aborted) throw scope.signal.reason;
+      await writeFile(destination, bytes, { mode: 0o600 });
+    } finally {
+      scope.dispose();
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > this.options.maxArchiveBytes) {
-      throw new AgentPluginError(
-        `Agent Plugin artifact is too large (${bytes.byteLength} bytes)`,
-        "plugin_artifact_too_large",
-        "blocked",
-      );
-    }
-    throwIfAborted(signal);
-    await writeFile(destination, bytes, { mode: 0o600 });
   }
 
   private async acquireDigestLock(
@@ -286,6 +316,55 @@ export class AgentPluginCache {
 
   private entryPath(digest: string): string {
     return join(this.root, digest);
+  }
+}
+
+function downloadAbortScope(parent: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const cancel = () => {
+    if (controller.signal.aborted) return;
+    controller.abort(new AgentPluginError(
+      "Agent Plugin download was cancelled",
+      "plugin_cancelled",
+      "transient",
+    ));
+  };
+  if (parent?.aborted) cancel();
+  else parent?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => {
+    if (controller.signal.aborted) return;
+    controller.abort(new AgentPluginError(
+      `Agent Plugin download timed out after ${timeoutMs}ms`,
+      "plugin_download_timeout",
+      "transient",
+    ));
+  }, timeoutMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", cancel);
+    },
+  };
+}
+
+async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  let abort: (() => void) | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (abort) signal.removeEventListener("abort", abort);
   }
 }
 

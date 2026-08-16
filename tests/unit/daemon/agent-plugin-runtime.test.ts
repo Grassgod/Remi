@@ -25,6 +25,7 @@ import {
   cleanupNonIssueTaskPluginRuntime,
   cleanupTaskPluginRuntime,
   materializeTaskPlugins,
+  prepareCodexPluginReadinessRuntime,
   resolveTaskPluginRuntimeBase,
 } from "@daemon/agent-runtime/agent-plugins/materialize.js";
 import {
@@ -143,6 +144,55 @@ describe("AgentPluginCache canonical bundle", () => {
 
     expect(await first).toBe(await second);
     expect(fetches).toBe(1);
+  });
+
+  it("times out an artifact fetch and aborts its transport signal", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    let transportSignal: AbortSignal | null = null;
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      downloadTimeoutMs: 15,
+      fetch: async (_input, init) => {
+        transportSignal = init?.signal ?? null;
+        return await new Promise<Response>(() => {});
+      },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    await expect(cache.ensure(snapshot)).rejects.toMatchObject({
+      code: "plugin_download_timeout",
+      retryKind: "transient",
+    });
+    expect((transportSignal as unknown as AbortSignal).aborted).toBe(true);
+    expect(await cache.getReadyPath(snapshot)).toBeNull();
+  });
+
+  it("times out a stalled artifact response body", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    let transportSignal: AbortSignal | null = null;
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      downloadTimeoutMs: 15,
+      fetch: async (_input, init) => {
+        transportSignal = init?.signal ?? null;
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          arrayBuffer: async () => await new Promise<ArrayBuffer>(() => {}),
+        } as Response;
+      },
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    await expect(cache.ensure(snapshot)).rejects.toMatchObject({
+      code: "plugin_download_timeout",
+      retryKind: "transient",
+    });
+    expect((transportSignal as unknown as AbortSignal).aborted).toBe(true);
+    expect(await cache.getReadyPath(snapshot)).toBeNull();
   });
 });
 
@@ -349,6 +399,115 @@ describe("AgentPluginRuntimeReconciler", () => {
       retryGeneration: 1,
     });
   });
+
+  it("reports Codex ready only after an isolated native Plugin install", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("codex");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const baseHome = join(root, "base-codex");
+    mkdirSync(baseHome);
+    writeFileSync(join(baseHome, "auth.json"), '{"token":"test"}\n');
+    const commands: CodexPluginCommand[] = [];
+    const reports: RuntimePluginState[] = [];
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      reportState: (state) => { reports.push(state); },
+      preflight: async (snapshot, payloadPath, signal) => {
+        const prepared = await prepareCodexPluginReadinessRuntime(
+          snapshot,
+          payloadPath,
+          join(root, "readiness"),
+          signal,
+        );
+        await installCodexPluginHome(prepared, {
+          signal,
+          seedHome: (targetHome) => seedCodexHomeFromBase({ baseHome, targetHome }),
+          runCommand: async (command) => { commands.push(command); },
+        });
+      },
+    });
+    const snapshot = { ...makeSnapshot("codex", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    const state = (await reconciler.reconcile([snapshot]))[0]!;
+
+    expect(state.status).toBe("ready");
+    expect(commands.map((command) => command.args.slice(0, 3))).toEqual([
+      ["plugin", "marketplace", "add"],
+      ["plugin", "add", expect.stringContaining("demo@remi-")],
+    ]);
+    expect(commands.every((command) => command.env.CODEX_HOME.includes(".tmp"))).toBe(true);
+    expect(reports.findIndex((report) => report.status === "ready")).toBeGreaterThan(
+      reports.findIndex((report) => report.status === "preflight"),
+    );
+  });
+
+  it("reports a stalled Codex native install as setup_required instead of ready", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("codex");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      preflight: async (snapshot, payloadPath, signal) => {
+        const prepared = await prepareCodexPluginReadinessRuntime(
+          snapshot,
+          payloadPath,
+          join(root, "readiness"),
+          signal,
+        );
+        await installCodexPluginHome(prepared, {
+          signal,
+          commandTimeoutMs: 15,
+          runCommand: async () => await new Promise<void>(() => {}),
+        });
+      },
+    });
+    const snapshot = { ...makeSnapshot("codex", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    expect((await reconciler.reconcile([snapshot]))[0]).toMatchObject({
+      status: "setup_required",
+      lastErrorCode: "plugin_codex_install_timeout",
+      installedDigest: null,
+    });
+  });
+
+  it("reports a rejected Codex native install as blocked instead of ready", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("codex");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const reconciler = new AgentPluginRuntimeReconciler({
+      cache,
+      preflight: async (snapshot, payloadPath, signal) => {
+        const prepared = await prepareCodexPluginReadinessRuntime(
+          snapshot,
+          payloadPath,
+          join(root, "readiness"),
+          signal,
+        );
+        await installCodexPluginHome(prepared, {
+          signal,
+          runCommand: async () => {
+            throw new Error("native plugin rejected");
+          },
+        });
+      },
+    });
+    const snapshot = { ...makeSnapshot("codex", artifact.digest), artifactUrl: "https://example.test/a" };
+
+    expect((await reconciler.reconcile([snapshot]))[0]).toMatchObject({
+      status: "blocked",
+      lastErrorCode: "plugin_codex_install_failed",
+      installedDigest: null,
+    });
+  });
 });
 
 describe("task-private Agent Plugin runtime", () => {
@@ -371,8 +530,10 @@ describe("task-private Agent Plugin runtime", () => {
 
     const prepared = await materializeTaskPlugins(task, issueRoot, cache);
 
-    expect(prepared.runtimeRoot).toBe(join(issueRoot, ".remi-runtime"));
-    expect(prepared.pluginPaths[0]).toBe(join(issueRoot, ".remi-runtime", "plugins", artifact.digest));
+    expect(prepared.runtimeRoot).toBe(join(issueRoot, ".remi-runtime", "executions", task.id));
+    expect(prepared.pluginPaths[0]).toBe(
+      join(issueRoot, ".remi-runtime", "executions", task.id, "plugins", artifact.digest),
+    );
     expect(existsSync(join(issueRoot, "remi", ".remi-runtime"))).toBe(false);
     expect(readFileSync(join(prepared.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
     const execution = readFileSync(join(prepared.runtimeRoot, "execution.json"), "utf8");
@@ -383,6 +544,45 @@ describe("task-private Agent Plugin runtime", () => {
     await cleanupTaskPluginRuntime(issueRoot);
     expect(existsSync(prepared.runtimeRoot)).toBe(false);
     expect(existsSync(join(issueRoot, "remi"))).toBe(true);
+  });
+
+  it("publishes concurrent calls for one task once and isolates later tasks using the same digest", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("claude");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const snapshot = { ...makeSnapshot("claude", artifact.digest), artifactUrl: "https://example.test/a" };
+    await cache.ensure(snapshot);
+    const originalGetReadyPath = cache.getReadyPath.bind(cache);
+    let arrivals = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    cache.getReadyPath = async (value) => {
+      arrivals += 1;
+      if (arrivals === 2) release();
+      await gate;
+      return originalGetReadyPath(value);
+    };
+    const issueRoot = join(root, "MUL-44");
+    mkdirSync(issueRoot);
+    const task = makeTask("claude", snapshot, { issueId: "iss_44", issueKey: "MUL-44" });
+
+    const [first, duplicate] = await Promise.all([
+      materializeTaskPlugins(task, issueRoot, cache),
+      materializeTaskPlugins(task, issueRoot, cache),
+    ]);
+
+    expect(first.pluginPaths).toEqual(duplicate.pluginPaths);
+    expect(readFileSync(join(first.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
+    writeFileSync(join(first.pluginPaths[0]!, "injected.txt"), "must not persist\n");
+
+    const second = await materializeTaskPlugins({ ...task, id: "task_2" }, issueRoot, cache);
+
+    expect(second.pluginPaths).not.toEqual(first.pluginPaths);
+    expect(existsSync(join(second.pluginPaths[0]!, "injected.txt"))).toBe(false);
+    expect(readFileSync(join(second.pluginPaths[0]!, "skills", "demo", "SKILL.md"), "utf8")).toBe("# Demo\n");
   });
 
   it("requires daemon-owned runtimeBase for non-Issue tasks and leaves ACP cwd untouched", async () => {
@@ -403,7 +603,9 @@ describe("task-private Agent Plugin runtime", () => {
     });
     const runtimeBase = resolveTaskPluginRuntimeBase(task, userRepo, join(root, "workspaces"));
     const prepared = await materializeTaskPlugins(task, userRepo, cache, { runtimeBase });
-    expect(prepared.runtimeRoot).toBe(join(root, "workspaces", ".task-runtime", task.id, ".remi-runtime"));
+    expect(prepared.runtimeRoot).toBe(
+      join(root, "workspaces", ".task-runtime", task.id, ".remi-runtime", "executions", task.id),
+    );
     expect(existsSync(join(userRepo, ".remi-runtime"))).toBe(false);
     await cleanupNonIssueTaskPluginRuntime(task, join(root, "workspaces"));
     expect(existsSync(runtimeBase)).toBe(false);
@@ -434,6 +636,7 @@ describe("task-private Agent Plugin runtime", () => {
     const secondBase = resolveTaskPluginRuntimeBase(secondTask, userRepo, workspacesRoot);
     const changedBase = resolveTaskPluginRuntimeBase(changedTask, userRepo, workspacesRoot);
     const first = await materializeTaskPlugins(firstTask, userRepo, cache, { runtimeBase: firstBase });
+    writeFileSync(join(first.codexMarketplaceRoot!, "injected.txt"), "must not persist\n");
     const second = await materializeTaskPlugins(secondTask, userRepo, cache, { runtimeBase: secondBase });
     const changed = await materializeTaskPlugins(changedTask, userRepo, cache, { runtimeBase: changedBase });
 
@@ -441,6 +644,8 @@ describe("task-private Agent Plugin runtime", () => {
     expect(secondBase).toBe(firstBase);
     expect(changedBase).toBe(firstBase);
     expect(second.codexHome).toBe(first.codexHome);
+    expect(second.codexMarketplaceRoot).not.toBe(first.codexMarketplaceRoot);
+    expect(existsSync(join(second.codexMarketplaceRoot!, "injected.txt"))).toBe(false);
     expect(changed.codexHome).not.toBe(first.codexHome);
   });
 
@@ -489,6 +694,68 @@ describe("task-private Agent Plugin runtime", () => {
 
     await installCodexPluginHome(prepared, { runCommand: async (command) => { commands.push(command); } });
     expect(commands).toHaveLength(2);
+  });
+
+  it("shares a concurrent Codex home installation for the same execution fingerprint", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("codex");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const snapshot = { ...makeSnapshot("codex", artifact.digest), artifactUrl: "https://example.test/a" };
+    await cache.ensure(snapshot);
+    const issueRoot = join(root, "MUL-45");
+    mkdirSync(issueRoot);
+    const prepared = await materializeTaskPlugins(
+      makeTask("codex", snapshot, { issueId: "iss_45", issueKey: "MUL-45" }),
+      issueRoot,
+      cache,
+    );
+    let commands = 0;
+    const options = {
+      runCommand: async () => {
+        commands += 1;
+        await Bun.sleep(5);
+      },
+    };
+
+    const [first, second] = await Promise.all([
+      installCodexPluginHome(prepared, options),
+      installCodexPluginHome(prepared, options),
+    ]);
+
+    expect(first).toBe(prepared.codexHome!);
+    expect(second).toBe(first);
+    expect(commands).toBe(2);
+  });
+
+  it("aborts a stalled native Codex CLI process at the command deadline", async () => {
+    const root = tempRoot();
+    const artifact = makeArtifact("codex");
+    const cache = new AgentPluginCache({
+      root: join(root, "cache"),
+      fetch: async () => artifactResponse(artifact.bytes),
+    });
+    const snapshot = { ...makeSnapshot("codex", artifact.digest), artifactUrl: "https://example.test/a" };
+    const payloadPath = await cache.ensure(snapshot);
+    const prepared = await prepareCodexPluginReadinessRuntime(
+      snapshot,
+      payloadPath,
+      join(root, "readiness"),
+    );
+    const executable = join(root, "stalled-codex");
+    writeFileSync(executable, "#!/bin/sh\nexec sleep 30\n", { mode: 0o700 });
+
+    const started = Date.now();
+    await expect(installCodexPluginHome(prepared, {
+      codexExecutable: executable,
+      commandTimeoutMs: 25,
+    })).rejects.toMatchObject({
+      code: "plugin_codex_install_timeout",
+      retryKind: "setup_required",
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("inherits only Codex execution settings when no workspace Relay overrides them", async () => {

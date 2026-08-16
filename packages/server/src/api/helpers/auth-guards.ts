@@ -4,6 +4,7 @@
 // ready-made Response when access is refused and null when it is allowed.
 import type { Context } from "hono";
 import { MultiremiStore } from "@multiremi/store/store.js";
+import { daemonRuntimeId } from "@multiremi/store/helpers.js";
 import {
   authenticatedRequestUserId,
   cleanString,
@@ -57,6 +58,160 @@ export function isTaskTokenForbiddenRequest(request: Request): boolean {
   if (path === "/api/multiremi/runtimes" && method === "POST") return true;
   if (/^\/api\/multiremi\/runtimes\/[^/]+\/heartbeat$/.test(path) && method === "POST") return true;
   return false;
+}
+
+/**
+ * The daemon execution surface is machine-to-server control plane traffic.
+ * Human PAT/JWT credentials may bootstrap/register a daemon, but must never
+ * claim work or mutate daemon-owned state. The deployment master credential
+ * and explicitly open local mode retain their historical compatibility.
+ */
+export function denyNonDaemonOperationalAccess(
+  c: Context,
+  authToken: string,
+  store: MultiremiStore,
+): Response | null {
+  if (c.req.path === "/api/daemon/register") return null;
+  if (!authToken) return null;
+  if (c.req.header("Authorization") === `Bearer ${authToken}`) return null;
+  const token = currentAccessToken(c);
+  if (
+    c.req.path === "/api/daemon/heartbeat" &&
+    token?.type === "pat" &&
+    token.purpose === "cli"
+  ) {
+    return null;
+  }
+  if (token?.type === "daemon" && cleanString(token.daemonId)) {
+    return denyDaemonOwnerWorkspaceMembership(c, store);
+  }
+  return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+}
+
+export function isDaemonOwnerWorkspaceMember(
+  store: MultiremiStore,
+  token: Pick<MultiremiAccessToken, "type" | "userId" | "workspaceId"> | null,
+): boolean {
+  if (!token || token.type !== "daemon") return true;
+  const ownerUserId = cleanString(token.userId);
+  return !ownerUserId
+    || ownerUserId === "local"
+    || Boolean(store.getUserRoleInWorkspace(ownerUserId, token.workspaceId));
+}
+
+export function denyDaemonOwnerWorkspaceMembership(
+  c: Context,
+  store: MultiremiStore,
+): Response | null {
+  if (isDaemonOwnerWorkspaceMember(store, currentAccessToken(c))) return null;
+  return c.json(
+    {
+      error: "daemon owner is no longer a workspace member",
+      code: "daemon_owner_membership_required",
+    },
+    403,
+  );
+}
+
+/**
+ * An ownerless daemon found in persistent state is a recovery case, not an
+ * invitation for the first workspace member who knows its id to claim it.
+ * Managers may recover it; a credential that was already bound to the exact
+ * daemon remains usable for rolling upgrades.
+ */
+export function denyUnprivilegedOwnerlessDaemonClaim(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  daemonId: string | null | undefined,
+): Response | null {
+  const normalizedDaemonId = cleanString(daemonId);
+  if (!normalizedDaemonId) return null;
+  const token = currentAccessToken(c);
+  const role = currentWorkspaceRoleStrict(c, store, workspaceId);
+  const callerUserId = authenticatedRequestUserId(c);
+  const boundDaemonCredential = token?.type === "daemon"
+    && cleanString(token.daemonId) === normalizedDaemonId;
+  const legacyRuntimeConflict = store.listRuntimes().find((runtime) =>
+    (runtime.workspaceId ?? "local") === workspaceId
+    && !cleanString(runtime.daemonId)
+    && runtime.id === daemonRuntimeId(normalizedDaemonId, runtime.provider)
+    && (
+      runtime.ownerId
+        ? runtime.ownerId !== callerUserId
+        : !boundDaemonCredential && role !== "owner" && role !== "admin"
+    )
+  );
+  if (legacyRuntimeConflict) {
+    return c.json({
+      error: "legacy runtime recovery requires its owner or a workspace administrator",
+      code: "legacy_runtime_owner_conflict",
+    }, 403);
+  }
+  const plan = store.getDaemonRetirementPlan(workspaceId, normalizedDaemonId);
+  if (!plan.exists || plan.ownerUserId) return null;
+  if (boundDaemonCredential) return null;
+  if (role === "owner" || role === "admin") return null;
+  return c.json({
+    error: "ownerless daemon recovery requires a workspace administrator",
+    code: "daemon_owner_recovery_required",
+  }, 403);
+}
+
+/**
+ * Upgrade the legacy add-computer CLI PAT in-place during its first daemon
+ * registration. The raw token stays unchanged on disk, while its server-side
+ * authority becomes a workspace-scoped, daemon-bound machine credential.
+ */
+export function promoteLegacyCliPatForDaemonRegistration(
+  c: Context,
+  store: MultiremiStore,
+  workspaceId: string,
+  daemonId: string,
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "pat" || token.purpose !== "cli") return null;
+  const normalizedWorkspaceId = cleanString(workspaceId) ?? "local";
+  const normalizedDaemonId = cleanString(daemonId);
+  if (!normalizedDaemonId) {
+    return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
+  }
+  if (token.workspaceId !== normalizedWorkspaceId) {
+    return c.json({ error: "forbidden for token workspace" }, 403);
+  }
+  const membershipDenied = denyCurrentUserWorkspaceAccess(c, store, normalizedWorkspaceId);
+  if (membershipDenied) return membershipDenied;
+  const promoted = store.promoteCliAccessTokenToDaemon(
+    token.id,
+    normalizedWorkspaceId,
+    normalizedDaemonId,
+  );
+  if (!promoted) {
+    return c.json({ error: "daemon credential upgrade failed", code: "daemon_credential_upgrade_failed" }, 403);
+  }
+  c.set("multiremiAuth", buildRequestAuth(promoted, currentAuth(c).jwtUserId));
+  return null;
+}
+
+/** Rolling-upgrade companion to registration promotion for already-running daemons. */
+export function promoteLegacyCliPatForDaemonHeartbeat(
+  c: Context,
+  store: MultiremiStore,
+  runtimeId: string,
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "pat" || token.purpose !== "cli") return null;
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime) return c.json({ error: "runtime not found" }, 404);
+  const workspaceId = cleanString(runtime.workspaceId) ?? "local";
+  const membershipDenied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
+  if (membershipDenied) return membershipDenied;
+  const promoted = store.promoteCliAccessTokenForRuntime(token.id, runtimeId);
+  if (!promoted) {
+    return c.json({ error: "daemon credential upgrade failed", code: "daemon_credential_upgrade_failed" }, 403);
+  }
+  c.set("multiremiAuth", buildRequestAuth(promoted, currentAuth(c).jwtUserId));
+  return null;
 }
 
 export function isTaskTokenCreateInput(input: Pick<CreateAccessTokenInput, "type">): boolean {
@@ -421,9 +576,36 @@ export function denyDaemonTokenRuntimeWorkspace(
 }
 
 /**
- * Strict authority boundary for Runtime-observed state. Unlike the legacy
- * daemon route guard, this surface is never available to a human JWT/PAT,
- * master token, task token, or auth-disabled anonymous caller.
+ * Runtime mutation guard for a daemon credential. Workspace scope alone is not
+ * enough: every daemon token is a machine identity and may only mutate the
+ * runtimes registered by that same daemon.
+ */
+export function denyDaemonTokenRuntimeIdentity(
+  c: Context,
+  store: MultiremiStore,
+  runtimeId: string,
+  options: DaemonWorkspaceDenyOptions = {},
+): Response | null {
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
+  const runtime = store.getRuntime(runtimeId);
+  if (!runtime) return c.json({ error: "runtime not found" }, 404);
+  const workspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
+  if (workspaceDenied) return workspaceDenied;
+  const tokenDaemonId = cleanString(token.daemonId);
+  const runtimeDaemonId = cleanString(runtime.daemonId);
+  if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
+    if (options.hideForbiddenAsNotFound) return c.json({ error: "runtime not found" }, 404);
+    return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+  }
+  return null;
+}
+
+/**
+ * Strict authority boundary for Runtime-observed state. A bound daemon token
+ * must own the Runtime. The deployment master token and auth-disabled open
+ * mode remain compatible with the historical daemon bootstrap flow, while
+ * human JWT/PAT and task credentials are rejected.
  *
  * Legacy unbound tokens must first be atomically bound by a Runtime registration;
  * observed state itself never accepts a workspace-wide daemon credential.
@@ -432,13 +614,18 @@ export function denyDaemonRuntimeObservedStateAccess(
   c: Context,
   store: MultiremiStore,
   runtimeId: string,
+  authToken?: string | null,
 ): Response | null {
   const token = currentAccessToken(c);
-  if (token?.type !== "daemon") {
-    return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
-  }
   const runtime = store.getRuntime(runtimeId);
   if (!runtime) return c.json({ error: "runtime not found", code: "runtime_not_found" }, 404);
+  if (!token) {
+    if (!authToken || c.req.header("Authorization") === `Bearer ${authToken}`) return null;
+    return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+  }
+  if (token.type !== "daemon") {
+    return c.json({ error: "daemon token required", code: "daemon_token_required" }, 403);
+  }
   const workspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local");
   if (workspaceDenied) return workspaceDenied;
   const tokenDaemonId = cleanString(token.daemonId);
@@ -464,16 +651,30 @@ export function bindDaemonTokenIdentityOrDeny(
   return null;
 }
 
-export function denyDaemonTokenTaskWorkspace(
+export function denyDaemonTokenTaskRuntimeIdentity(
   c: Context,
   store: MultiremiStore,
   taskId: string,
   options: DaemonWorkspaceDenyOptions = {},
 ): Response | null {
-  if (currentAccessToken(c)?.type !== "daemon") return null;
+  const token = currentAccessToken(c);
+  if (token?.type !== "daemon") return null;
   const task = store.getTask(taskId);
   if (!task) return c.json({ error: "task not found" }, 404);
-  return denyDaemonTokenWorkspace(c, task.workspaceId, options);
+  const workspaceDenied = denyDaemonTokenWorkspace(c, task.workspaceId, options);
+  if (workspaceDenied) return workspaceDenied;
+  const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
+  if (runtime) {
+    const runtimeWorkspaceDenied = denyDaemonTokenWorkspace(c, runtime.workspaceId ?? "local", options);
+    if (runtimeWorkspaceDenied) return runtimeWorkspaceDenied;
+  }
+  const tokenDaemonId = cleanString(token.daemonId);
+  const runtimeDaemonId = cleanString(runtime?.daemonId);
+  if (!tokenDaemonId || !runtimeDaemonId || tokenDaemonId !== runtimeDaemonId) {
+    if (options.hideForbiddenAsNotFound) return c.json({ error: "task not found" }, 404);
+    return c.json({ error: "forbidden for daemon identity", code: "daemon_identity_forbidden" }, 403);
+  }
+  return null;
 }
 
 export function denyDaemonTokenIssueWorkspace(

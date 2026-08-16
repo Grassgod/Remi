@@ -218,6 +218,59 @@ describe("useRealtimeSync — registration / teardown parity", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
+  it("invalidates plugin queries for agent_plugin events", () => {
+    vi.useFakeTimers();
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    mock.emit("agent_plugin:runtime_state", {});
+    vi.advanceTimersByTime(100);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["workspaces", "ws-1", "agent-plugins"],
+    });
+  });
+
+  it("invalidates plugin readiness when Agent bindings or task lifecycle changes", () => {
+    vi.useFakeTimers();
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    mock.emit("agent:status", {});
+    vi.advanceTimersByTime(100);
+    mock.emit("task:queued", {});
+    vi.advanceTimersByTime(100);
+
+    const pluginInvalidations = invalidateSpy.mock.calls.filter(
+      (call) => JSON.stringify(call[0]?.queryKey) === JSON.stringify(["workspaces", "ws-1", "agent-plugins"]),
+    );
+    expect(pluginInvalidations).toHaveLength(2);
+  });
+
+  it("invalidates all daemon-owned state when a daemon is retired", () => {
+    vi.useFakeTimers();
+    const mock = createRecordingWs();
+    renderHook(() => useRealtimeSync(mock.ws, stores), { wrapper: createWrapper(qc) });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    mock.emit("daemon:retired", { daemon_id: "daemon-1" });
+    vi.advanceTimersByTime(100);
+
+    const calls = invalidateSpy.mock.calls.map((call) => call[0]?.queryKey);
+    expect(calls).toContainEqual(["runtimes", "ws-1"]);
+    expect(calls).toContainEqual(["runtimes", "models", "fleet", "ws-1"]);
+    expect(calls).toContainEqual(["runtimes", "daemons", "inventory", "ws-1"]);
+    expect(calls).toContainEqual(["workspaces", "ws-1", "agents"]);
+    expect(calls).toContainEqual(["workspaces", "ws-1", "agent-task-snapshot"]);
+    expect(calls).toContainEqual(["workspaces", "ws-1", "agent-plugins"]);
+    expect(calls).toContainEqual(["chat", "ws-1"]);
+    expect(calls).toContainEqual(["issues", "workspace"]);
+    expect(calls).toContainEqual(["issues", "tasks"]);
+    expect(calls).toContainEqual(["issues", "sessions"]);
+  });
+
   it("invalidates every cached Product Session timeline when a comment arrives before IssueDetail mounts", () => {
     const issueId = "issue-1";
     const mainTimeline = issueKeys.timeline(issueId, "session-main");

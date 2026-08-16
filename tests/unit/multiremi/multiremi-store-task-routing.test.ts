@@ -548,7 +548,17 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
 
   it("moves chat-session runtime metadata when a runtime id is merged", () => {
     const store = createStore();
-    const oldRuntime = store.registerRuntime({ id: "rt_merge_old", name: "old", provider: "codex", daemonId: "daemon-old", legacyDaemonId: "legacy-x" });
+    const oldRuntime = store.registerRuntime({
+      id: "rt_merge_old",
+      name: "old",
+      provider: "codex",
+      daemonId: "daemon-old",
+      legacyDaemonId: "legacy-x",
+      models: [
+        { id: "old-only", label: "Old only", provider: "codex", default: false },
+        { id: "shared", label: "Old shared", provider: "codex", default: true },
+      ],
+    });
     const agent = store.createAgent({ name: "Merger", provider: "codex" });
     const session = store.createChatSession({ agentId: agent.id, title: "s" });
     const task = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "hi" });
@@ -556,10 +566,65 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     store.startTask(task.id);
     store.completeTask(task.id, { output: "ok", sessionId: "sess_merge", workDir: "/tmp/merge" });
     expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(oldRuntime.id);
+    const issue = store.createIssue({ title: "Merged lane" });
+    const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
+    store.getOrCreateSessionAgentLane(issueSession.id, agent.id);
+    db!.run(
+      "UPDATE multiremi_session_agent_lanes SET runtime_id = ? WHERE session_id = ? AND agent_id = ?",
+      [oldRuntime.id, issueSession.id, agent.id],
+    );
+    store.reportIssueWorkspace({
+      issueId: issue.id,
+      runtimeId: oldRuntime.id,
+      rootPath: "/tmp/merge-issue",
+      branchName: `agent/${issue.key}`,
+      status: "ready",
+    });
+    const modelListRequest = store.createRuntimeModelListRequest(oldRuntime.id);
+    const updateRequest = store.createRuntimeUpdateRequest(oldRuntime.id, { targetVersion: "2.0.0" });
+    const skillListRequest = store.createRuntimeLocalSkillListRequest(oldRuntime.id);
+    const skillImportRequest = store.createRuntimeLocalSkillImportRequest(oldRuntime.id, { skillKey: "legacy-skill" });
+    const directoryScanRequest = store.createRuntimeDirectoryScanRequest(oldRuntime.id, { root: "/tmp" });
     // Merge the old runtime id into a new one; the session metadata follows.
-    const newRuntime = store.registerRuntime({ id: "rt_merge_new", name: "new", provider: "codex", daemonId: "daemon-old" });
+    const newRuntime = store.registerRuntime({
+      id: "rt_merge_new",
+      name: "new",
+      provider: "codex",
+      daemonId: "daemon-old",
+      models: [
+        { id: "shared", label: "New shared", provider: "codex", default: true },
+        { id: "new-only", label: "New only", provider: "codex", default: false },
+      ],
+    });
     store.mergeRuntimeInto(oldRuntime.id, newRuntime.id);
     expect(store.getChatSession(session.id)?.sessionRuntimeId).toBe(newRuntime.id);
+    expect(store.getSessionAgentLane(issueSession.id, agent.id)?.runtimeId).toBe(newRuntime.id);
+    expect(store.getIssueWorkspace(issue.id)).toMatchObject({ runtimeId: newRuntime.id, status: "ready" });
+    expect(store.listRuntimeModels(newRuntime.id).map((model) => ({
+      id: model.id,
+      label: model.label,
+      default: model.default,
+    })).sort((left, right) => left.id.localeCompare(right.id))).toEqual([
+      { id: "new-only", label: "New only", default: false },
+      { id: "old-only", label: "Old only", default: false },
+      { id: "shared", label: "New shared", default: true },
+    ]);
+    expect(store.getRuntimeModelListRequest(newRuntime.id, modelListRequest.id)?.id).toBe(modelListRequest.id);
+    expect(store.getRuntimeUpdateRequest(newRuntime.id, updateRequest.id)?.id).toBe(updateRequest.id);
+    expect(store.getRuntimeLocalSkillListRequest(newRuntime.id, skillListRequest.id)?.id).toBe(skillListRequest.id);
+    expect(store.getRuntimeLocalSkillImportRequest(newRuntime.id, skillImportRequest.id)?.id).toBe(skillImportRequest.id);
+    expect(store.getRuntimeDirectoryScanRequest(newRuntime.id, directoryScanRequest.id)?.id).toBe(directoryScanRequest.id);
+    for (const table of [
+      "multiremi_runtime_models",
+      "multiremi_runtime_model_list_requests",
+      "multiremi_runtime_update_requests",
+      "multiremi_runtime_local_skill_list_requests",
+      "multiremi_runtime_local_skill_import_requests",
+      "multiremi_runtime_directory_scan_requests",
+    ]) {
+      expect(Number((db!.query(`SELECT COUNT(*) AS count FROM ${table} WHERE runtime_id = ?`).get(oldRuntime.id) as any).count))
+        .toBe(0);
+    }
     // A follow-up still resumes the session (its machine didn't "vanish").
     const next = store.createTask({ agentId: agent.id, chatSessionId: session.id, prompt: "again" });
     expect(next.runtimeId).toBe(newRuntime.id);

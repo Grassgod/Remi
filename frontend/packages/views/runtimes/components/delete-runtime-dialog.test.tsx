@@ -162,10 +162,13 @@ function renderDialog(opts: {
   runtime?: AgentRuntime;
   cachedAgents?: Agent[];
   onDeleted?: () => void;
+  onRetireDaemon?: (daemonId: string) => void;
 } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onOpenChange = vi.fn();
   const onDeleted = opts.onDeleted ?? vi.fn();
+  const onRetireDaemon = opts.onRetireDaemon ?? vi.fn();
+  const cachedAgents = opts.cachedAgents ?? [];
 
   // Wire useQuery mock: agentListOptions returns the cached agents,
   // memberListOptions returns an empty list (Owner cell renders the dash).
@@ -174,7 +177,7 @@ function renderDialog(opts: {
     const key = q?.queryKey ?? [];
     const tail = key[key.length - 1];
     if (tail === "agents") {
-      return { data: opts.cachedAgents ?? [], isLoading: false } as unknown as ReturnType<typeof useQuery>;
+      return { data: cachedAgents, isLoading: false } as unknown as ReturnType<typeof useQuery>;
     }
     return { data: [], isLoading: false } as unknown as ReturnType<typeof useQuery>;
   }) as unknown as typeof useQuery);
@@ -188,11 +191,12 @@ function renderDialog(opts: {
           runtime={opts.runtime ?? makeRuntime()}
           wsId="ws-1"
           onDeleted={onDeleted}
+          onRetireDaemon={onRetireDaemon}
         />
       </QueryClientProvider>
     </I18nProvider>,
   );
-  return { ...utils, onOpenChange, onDeleted };
+  return { ...utils, onOpenChange, onDeleted, onRetireDaemon };
 }
 
 describe("DeleteRuntimeDialog", () => {
@@ -317,5 +321,48 @@ describe("DeleteRuntimeDialog", () => {
     expect(
       screen.getByText(/active agent set changed/i),
     ).toBeInTheDocument();
+  });
+
+  it("hands light delete off to daemon retirement for the last runtime", async () => {
+    apiDeleteRuntime.mockRejectedValueOnce(
+      new ApiError("retire machine", 409, {
+        code: "daemon_last_runtime",
+        daemon_id: "daemon-1",
+      }),
+    );
+    const { onOpenChange, onRetireDaemon, onDeleted } = renderDialog();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete runtime" }));
+
+    await waitFor(() =>
+      expect(onRetireDaemon).toHaveBeenCalledWith("daemon-1"),
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("hands cascade delete off to daemon retirement for the last runtime", async () => {
+    apiArchiveAgentsAndDeleteRuntime.mockRejectedValueOnce(
+      new ApiError("retire machine", 409, {
+        code: "daemon_last_runtime",
+        daemon_id: "daemon-1",
+      }),
+    );
+    const { onOpenChange, onRetireDaemon, onDeleted } = renderDialog({
+      cachedAgents: [makeAgent("a-1")],
+    });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Archive 1 agent and delete runtime/,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(onRetireDaemon).toHaveBeenCalledWith("daemon-1"),
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 });

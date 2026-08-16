@@ -19,6 +19,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { PROJECT_REF_MAX_DEPTH } from "@multiremi/store/repos/projects-repo.js";
+import { runtimeSupportsAgentPlugins } from "@multiremi/store/repos/agent-plugins-repo.js";
 import { runtimeDaemonAliases } from "@multiremi/store/runtime-affinity.js";
 import { createLogger } from "@shared/logger.js";
 import type {
@@ -96,6 +97,31 @@ export class TasksRepo {
   }
 
   createTask(input: CreateTaskInput): MultiremiTask {
+    const initialAgent = this.ctx.agents().getAgent(input.agentId);
+    if (!initialAgent) throw new Error(`Agent not found: ${input.agentId}`);
+    if (initialAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
+    const workspaceId = initialAgent.workspaceId;
+    const tx = this.ctx.db.transaction(() => {
+      // Daemon retirement and Runtime claims take this same row lock. A task
+      // creation that started before retirement must therefore either commit
+      // first (and be included in the retirement plan) or re-read state after
+      // retirement commits; it can never insert a stale Runtime pin mid-cleanup.
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const currentAgent = this.ctx.agents().getAgent(input.agentId);
+      if (!currentAgent) throw new Error(`Agent not found: ${input.agentId}`);
+      if (currentAgent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
+      if (currentAgent.workspaceId !== workspaceId) {
+        throw new Error(`Agent workspace changed while creating task: ${input.agentId}`);
+      }
+      return this.createTaskWithinWorkspaceLock(input);
+    });
+    const task = tx();
+    this.ctx.notifyTaskEnqueued(task);
+    return task;
+  }
+
+  /** Caller holds the task workspace row lock in an open transaction. */
+  private createTaskWithinWorkspaceLock(input: CreateTaskInput): MultiremiTask {
     const agent = this.ctx.agents().getAgent(input.agentId);
     if (!agent) throw new Error(`Agent not found: ${input.agentId}`);
     if (agent.archivedAt) throw new Error(`Agent is archived: ${input.agentId}`);
@@ -276,7 +302,7 @@ export class TasksRepo {
         participantId: agent.id,
       });
       if (!cleanOptionalString(input.assignmentEventId ?? input.assignment_event_id)) {
-        const assignment = this.ctx.issueSessions().appendSessionEvent(issueSession.id, {
+        const assignment = this.ctx.issueSessions().appendSessionEventWithinTransaction(issueSession.id, {
           authorType: input.assignmentAuthorType ?? input.assignment_author_type ?? "system",
           authorId: input.assignmentAuthorId ?? input.assignment_author_id ?? null,
           kind: "task_assigned",
@@ -300,7 +326,6 @@ export class TasksRepo {
     if (task.issueId && !parentTaskId && !this.hasInFlightTaskForIssue(task.issueId)) {
       this.syncIssueStatusFromTask(task, "todo");
     }
-    this.ctx.notifyTaskEnqueued(task);
     return task;
   }
 
@@ -627,21 +652,22 @@ export class TasksRepo {
       // makes the second claimant wait and re-read committed state. On
       // SQLite the single writer already guarantees this; the self-write is
       // a no-op there.
-      this.ctx.db.run(
-        "UPDATE multiremi_workspaces SET updated_at = updated_at WHERE id = ?",
-        [runtime.workspaceId ?? "local"],
-      );
+      this.ctx.lockWorkspaceRuntimeLifecycle(runtime.workspaceId ?? "local");
       // Plugin bindings/version activation and Agent provider updates use the
       // same workspace lock. Holding it through claim + snapshot prevents a
       // mutable capability change from slipping between dispatch and freeze.
       this.ctx.agentPlugins().lockAgentPluginWorkspace(runtime.workspaceId ?? "local");
+      const lockedRuntime = this.ctx.runtimes().getRuntime(runtimeId);
+      if (!lockedRuntime || (lockedRuntime.workspaceId ?? "local") !== (runtime.workspaceId ?? "local")) {
+        throw new AgentPluginReadinessChangedError("Runtime changed during task claim");
+      }
       this.ctx.runtimes().heartbeatRuntime(runtimeId, { claimPending: false });
 
       const stale = this.reclaimStaleDispatchedTaskForRuntime(runtimeId);
-      if (stale) return this.snapshotTaskExecution(stale, runtime);
+      if (stale) return this.snapshotTaskExecution(stale, lockedRuntime);
 
-      const claimed = this.claimNextTaskForRuntime(runtime);
-      return claimed ? this.snapshotTaskExecution(claimed, runtime) : null;
+      const claimed = this.claimNextTaskForRuntime(lockedRuntime);
+      return claimed ? this.snapshotTaskExecution(claimed, lockedRuntime) : null;
     });
     try {
       return tx();
@@ -694,7 +720,7 @@ export class TasksRepo {
     const executionFingerprint = createHash("sha256")
       .update(canonicalJson(pluginSnapshot))
       .digest("hex");
-    if (!this.runtimeHasReadyPluginSnapshot(runtime.id, pluginSnapshot)) {
+    if (!this.runtimeHasReadyPluginSnapshot(runtime, pluginSnapshot)) {
       throw new AgentPluginReadinessChangedError("Agent Plugin readiness changed during task claim");
     }
     let keepProviderSession = true;
@@ -760,17 +786,18 @@ export class TasksRepo {
     }
   }
 
-  private runtimeHasReadyTaskPlugins(runtimeId: string, task: MultiremiTask): boolean {
+  private runtimeHasReadyTaskPlugins(runtime: MultiremiRuntime, task: MultiremiTask): boolean {
     if (!task.executionFingerprint) {
-      return this.ctx.agentPlugins().runtimeHasReadyAgentPlugins(runtimeId, task.agentId);
+      return this.ctx.agentPlugins().runtimeHasReadyAgentPlugins(runtime.id, task.agentId);
     }
-    return this.runtimeHasReadyPluginSnapshot(runtimeId, task.pluginSnapshot);
+    return this.runtimeHasReadyPluginSnapshot(runtime, task.pluginSnapshot);
   }
 
   private runtimeHasReadyPluginSnapshot(
-    runtimeId: string,
+    runtime: MultiremiRuntime,
     snapshot: MultiremiTaskPluginSnapshotEntry[],
   ): boolean {
+    if (snapshot.length > 0 && !runtimeSupportsAgentPlugins(runtime)) return false;
     for (const entry of snapshot) {
       const row = this.ctx.db.query(
         `SELECT s.status, s.desired, s.observed_digest, v.artifact_digest
@@ -778,7 +805,7 @@ export class TasksRepo {
          LEFT JOIN multiremi_agent_plugin_runtime_states s
            ON s.runtime_id = ? AND s.plugin_version_id = v.id
          WHERE v.id = ?`,
-      ).get(runtimeId, entry.versionId) as Row | null;
+      ).get(runtime.id, entry.versionId) as Row | null;
       if (!row
         || Number(row.desired) !== 1
         || row.status !== "ready"
@@ -822,7 +849,7 @@ export class TasksRepo {
       && !task.agent.archivedAt
       && runtime != null
       && this.ctx.runtimes().runtimeCanRunAgent(runtime, task.agent)
-      && this.runtimeHasReadyTaskPlugins(runtime.id, task)
+      && this.runtimeHasReadyTaskPlugins(runtime, task)
       && (!task.issueId || runtimeSupportsIssueWorkspaces(runtime));
     if (task && !eligible) {
       const now = nowIso();
@@ -959,7 +986,7 @@ export class TasksRepo {
                )
            )
            AND (
-             EXISTS (SELECT 1 FROM multiremi_task_plugin_snapshots frozen_plugin WHERE frozen_plugin.task_id = t.id)
+             t.execution_fingerprint IS NOT NULL
              OR NOT EXISTS (
                SELECT 1
                FROM multiremi_agent_plugin_bindings agent_plugin
@@ -1245,25 +1272,35 @@ export class TasksRepo {
     sessionId?: string | null;
     workDir?: string | null;
   }): MultiremiTask {
-    const now = nowIso();
-    const storedResult = toJson(taskCompletionResultPayload(input));
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'completed',
-           result = ?,
-           branch_name = ?,
-           session_id = COALESCE(?, session_id),
-           work_dir = COALESCE(?, work_dir),
-           wait_reason = NULL,
-           failure_reason = NULL,
-           completed_at = ?,
-           updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
-      [storedResult, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
-    );
-    if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    const task = this.getTask(taskId)!;
-    this.afterTaskTerminal(task, "completed", input.output);
+    const initial = this.getTask(taskId);
+    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    const task = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const current = this.getTask(taskId);
+      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      const now = nowIso();
+      const storedResult = toJson(taskCompletionResultPayload(input));
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'completed',
+             result = ?,
+             branch_name = ?,
+             session_id = COALESCE(?, session_id),
+             work_dir = COALESCE(?, work_dir),
+             wait_reason = NULL,
+             failure_reason = NULL,
+             completed_at = ?,
+             updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
+        [storedResult, input.branchName ?? null, input.sessionId ?? null, input.workDir ?? null, now, now, taskId],
+      );
+      if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      const completed = this.getTask(taskId)!;
+      this.afterTaskTerminal(completed, "completed", input.output, true);
+      return completed;
+    })();
+    this.postAgentReplyComment(task, input.output);
     this.ctx.notifyTaskEvent("task:completed", task);
     return task;
   }
@@ -1275,25 +1312,36 @@ export class TasksRepo {
     failureReason?: string | null;
     failure_reason?: string | null;
   }): MultiremiTask {
-    const now = nowIso();
-    const failureReason = cleanOptionalString(input.failureReason ?? input.failure_reason) ?? "agent_error";
-    const result = this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'failed',
-           error = ?,
-           failure_reason = ?,
-           session_id = COALESCE(?, session_id),
-           work_dir = COALESCE(?, work_dir),
-           wait_reason = NULL,
-           completed_at = ?,
-           failed_at = ?,
-           updated_at = ?
-       WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
-      [input.error, failureReason, input.sessionId ?? null, input.workDir ?? null, now, now, now, taskId],
-    );
-    if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
-    const task = this.getTask(taskId)!;
-    this.afterTaskTerminal(task, "failed", input.error);
+    const initial = this.getTask(taskId);
+    if (!initial) throw new Error(`Task not found or terminal: ${taskId}`);
+    const terminal = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      const current = this.getTask(taskId);
+      if (!current || current.workspaceId !== initial.workspaceId) throw new Error(`Task not found or terminal: ${taskId}`);
+      this.assertTaskRuntimeAvailableWithinWorkspaceLock(current);
+      const now = nowIso();
+      const failureReason = cleanOptionalString(input.failureReason ?? input.failure_reason) ?? "agent_error";
+      const result = this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'failed',
+             error = ?,
+             failure_reason = ?,
+             session_id = COALESCE(?, session_id),
+             work_dir = COALESCE(?, work_dir),
+             wait_reason = NULL,
+             completed_at = ?,
+             failed_at = ?,
+             updated_at = ?
+         WHERE id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')`,
+        [input.error, failureReason, input.sessionId ?? null, input.workDir ?? null, now, now, now, taskId],
+      );
+      if (result.changes === 0) throw new Error(`Task not found or terminal: ${taskId}`);
+      const failed = this.getTask(taskId)!;
+      const retry = this.afterTaskTerminal(failed, "failed", input.error, true);
+      return { task: failed, retry };
+    })();
+    if (terminal.retry) this.ctx.notifyTaskEnqueued(terminal.retry);
+    const task = terminal.task;
     this.ctx.notifyTaskEvent("task:failed", task);
     return task;
   }
@@ -1337,40 +1385,51 @@ export class TasksRepo {
   }
 
   recoverOrphans(runtimeId: string): { orphaned: number; retried: number } {
-    const orphanRows = this.ctx.db.query(
-      "SELECT id FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
-    ).all(runtimeId) as Array<{ id: string }>;
-    if (!orphanRows.length) return { orphaned: 0, retried: 0 };
+    const initialRuntime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!initialRuntime) throw new Error(`Runtime not found: ${runtimeId}`);
+    const workspaceId = initialRuntime.workspaceId ?? "local";
+    const recovered = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+      if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
+        throw new Error(`Runtime not found: ${runtimeId}`);
+      }
+      const orphanRows = this.ctx.db.query(
+        "SELECT id FROM multiremi_tasks WHERE runtime_id = ? AND status IN ('dispatched', 'running', 'waiting_local_directory', 'awaiting_human')",
+      ).all(runtimeId) as Array<{ id: string }>;
+      if (!orphanRows.length) return { failedTasks: [] as MultiremiTask[], retries: [] as MultiremiTask[] };
 
-    const now = nowIso();
-    const orphanIds = orphanRows.map((row) => String(row.id));
-    const placeholders = orphanIds.map(() => "?").join(", ");
-    this.ctx.db.run(
-      `UPDATE multiremi_tasks
-       SET status = 'failed',
-           error = 'daemon restarted while task was in flight',
-           failure_reason = 'runtime_recovery',
-           wait_reason = NULL,
-           completed_at = ?,
-           failed_at = ?,
-           updated_at = ?
-       WHERE id IN (${placeholders})`,
-      [now, now, now, ...orphanIds],
-    );
-    const failedRows = this.ctx.db.query(`SELECT * FROM multiremi_tasks WHERE id IN (${placeholders})`).all(...orphanIds) as Row[];
-    const failedTasks = this.withTaskAutopilotRuns(failedRows.map(toTask));
-    let retried = 0;
+      const now = nowIso();
+      const orphanIds = orphanRows.map((row) => String(row.id));
+      const placeholders = orphanIds.map(() => "?").join(", ");
+      this.ctx.db.run(
+        `UPDATE multiremi_tasks
+         SET status = 'failed',
+             error = 'daemon restarted while task was in flight',
+             failure_reason = 'runtime_recovery',
+             wait_reason = NULL,
+             completed_at = ?,
+             failed_at = ?,
+             updated_at = ?
+         WHERE id IN (${placeholders})`,
+        [now, now, now, ...orphanIds],
+      );
+      const failedRows = this.ctx.db.query(`SELECT * FROM multiremi_tasks WHERE id IN (${placeholders})`).all(...orphanIds) as Row[];
+      const failedTasks = this.withTaskAutopilotRuns(failedRows.map(toTask));
+      const retries: MultiremiTask[] = [];
+      for (const task of failedTasks) {
+        const retry = this.afterTaskTerminal(task, "failed", task.error, true);
+        if (retry) retries.push(retry);
+      }
+      return { failedTasks, retries };
+    })();
 
-    for (const task of failedTasks) {
-      const retry = this.afterTaskTerminal(task, "failed", task.error);
-      this.ctx.notifyTaskEvent("task:failed", task);
-      if (retry) retried++;
-    }
-
-    return { orphaned: orphanIds.length, retried };
+    for (const retry of recovered.retries) this.ctx.notifyTaskEnqueued(retry);
+    for (const task of recovered.failedTasks) this.ctx.notifyTaskEvent("task:failed", task);
+    return { orphaned: recovered.failedTasks.length, retried: recovered.retries.length };
   }
 
-  private maybeRetryFailedTask(parent: MultiremiTask): MultiremiTask | null {
+  private maybeRetryFailedTask(parent: MultiremiTask, workspaceLockHeld = false): MultiremiTask | null {
     if (parent.status !== "failed") return null;
     if (!parent.failureReason || !AUTO_RETRY_FAILURE_REASONS.has(parent.failureReason)) return null;
     if (parent.attempt >= parent.maxAttempts) return null;
@@ -1409,7 +1468,7 @@ export class TasksRepo {
     // atomically instead, so neither ordering can mix providers.
     const inheritExecutionSnapshot = agent != null && parent.provider === agent.provider;
     if (resumeSafe && parent.issueSessionId) this.promoteSessionAgentLane(parent);
-    const retry = this.createTask({
+    const retryInput: CreateTaskInput = {
       agentId: parent.agentId,
       taskKind: parent.taskKind,
       provider: inheritExecutionSnapshot ? parent.provider : null,
@@ -1434,7 +1493,10 @@ export class TasksRepo {
       attempt: parent.attempt + 1,
       maxAttempts: parent.maxAttempts,
       parentTaskId: parent.id,
-    });
+    };
+    const retry = workspaceLockHeld
+      ? this.createTaskWithinWorkspaceLock(retryInput)
+      : this.createTask(retryInput);
     if (retry.chatSessionId) {
       this.ctx.db.run(
         "UPDATE multiremi_chat_sessions SET latest_task_id = ?, updated_at = ? WHERE id = ?",
@@ -1487,9 +1549,14 @@ export class TasksRepo {
     return Number(row?.count ?? 0);
   }
 
-  private afterTaskTerminal(task: MultiremiTask, status: "completed" | "failed" | "cancelled", body: string | null): MultiremiTask | null {
+  private afterTaskTerminal(
+    task: MultiremiTask,
+    status: "completed" | "failed" | "cancelled",
+    body: string | null,
+    workspaceLockHeld = false,
+  ): MultiremiTask | null {
     const now = nowIso();
-    const retry = status === "failed" ? this.maybeRetryFailedTask(task) : null;
+    const retry = status === "failed" ? this.maybeRetryFailedTask(task, workspaceLockHeld) : null;
     this.ctx.accessTokens().revokeTaskAccessTokens(task.id);
     if (task.chatSessionId && (status === "completed" || (status === "failed" && !retry))) {
       const role = "assistant";
@@ -1568,9 +1635,9 @@ export class TasksRepo {
         body,
         data: { taskId: task.id, runtimeId: task.runtimeId },
       });
-      if (status === "completed") this.postAgentReplyComment(task, body);
+      if (status === "completed" && !workspaceLockHeld) this.postAgentReplyComment(task, body);
       if (task.issueSessionId) {
-        this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, {
+        const event = {
           authorType: status === "completed" ? "agent" : "system",
           authorId: status === "completed" ? task.agentId : null,
           kind: `task_${status}`,
@@ -1582,7 +1649,12 @@ export class TasksRepo {
             result_available: status === "completed" && Boolean(body?.trim()),
             failure_reason: task.failureReason,
           },
-        });
+        };
+        if (workspaceLockHeld) {
+          this.ctx.issueSessions().appendSessionEventWithinTransaction(task.issueSessionId, event);
+        } else {
+          this.ctx.issueSessions().appendSessionEvent(task.issueSessionId, event);
+        }
         if (status === "completed") this.promoteSessionAgentLane(task);
         else if (!retry) this.resetSessionAgentLane(task.issueSessionId, task.agentId);
       }
@@ -1615,6 +1687,15 @@ export class TasksRepo {
       }
     }
     return retry;
+  }
+
+  /** Caller holds the task workspace lifecycle lock. */
+  private assertTaskRuntimeAvailableWithinWorkspaceLock(task: MultiremiTask): void {
+    if (!task.runtimeId) return;
+    const runtime = this.ctx.runtimes().getRuntime(task.runtimeId);
+    if (!runtime || (runtime.workspaceId ?? "local") !== task.workspaceId) {
+      throw new Error(`Runtime not found: ${task.runtimeId}`);
+    }
   }
 
   private promoteSessionAgentLane(task: MultiremiTask): void {

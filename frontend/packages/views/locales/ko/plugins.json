@@ -140,9 +140,13 @@
     "last_attempt": "최근 시도 {{when}}",
     "retry_success": "재시도가 예약되었습니다",
     "retry_failed": "재시도를 예약하지 못했습니다",
+    "daemon_upgrade_description": "이 daemon 버전은 플러그인을 설치할 수 없습니다. daemon을 업그레이드한 후 다시 시도하세요.",
+    "daemon_reconcile_timeout_description": "daemon이 플러그인 설정을 시작하지 않았습니다. daemon이 실행 중인지 확인한 후 다시 시도하세요.",
+    "daemon_cli_version": "Daemon CLI v{{version}}",
+    "upgrade_daemon_action": "daemon 업그레이드",
     "version": "v{{version}}",
     "statuses": {
-      "pending": "대기 중",
+      "pending": "daemon 대기 중",
       "preflight": "확인 중",
       "downloading": "다운로드 중",
       "verifying": "검증 중",
@@ -150,6 +154,7 @@
       "ready": "준비됨",
       "retry_scheduled": "재시도 예약됨",
       "setup_required": "설정 필요",
+      "daemon_upgrade_required": "daemon 업그레이드 필요",
       "blocked": "차단됨",
       "offline": "오프라인",
       "unknown": "알 수 없음"

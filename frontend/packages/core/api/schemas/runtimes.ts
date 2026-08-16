@@ -3,6 +3,11 @@ import type {
   FleetModelsResponse,
   RuntimeDirectoryScanRequest,
 } from "../../types";
+import type {
+  DaemonInventoryResponse,
+  DaemonRetirementPlanResponse,
+  RetireDaemonResponse,
+} from "../../runtimes/types";
 import type { CloudRuntimeNode } from "../../runtimes/cloud-runtime";
 
 export const CloudRuntimeNodeSchema = z.object({
@@ -200,4 +205,182 @@ export const EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST: RuntimeDirectoryScanRequest =
   run_started_at: null,
   created_at: "",
   updated_at: "",
+};
+
+// ---------------------------------------------------------------------------
+// Daemon inventory — workspace-wide for managers and owner-scoped for regular
+// members, including daemons that have a provisioned token but no registered
+// runtime. This schema intentionally has no field defaults: partial or
+// type-invalid inventory must fail closed rather than inventing a manageable
+// machine.
+// ---------------------------------------------------------------------------
+
+const DaemonInventoryEntrySchema = z
+  .object({
+    daemon_id: z.string().min(1),
+    runtime_count: z.number().int().nonnegative(),
+    token_count: z.number().int().nonnegative(),
+    last_seen: z.string().min(1).nullable(),
+    name: z.string().min(1).nullable(),
+  })
+  .loose();
+
+export const DaemonInventoryResponseSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    daemons: z.array(DaemonInventoryEntrySchema),
+  })
+  .loose();
+
+export const EMPTY_DAEMON_INVENTORY_RESPONSE: DaemonInventoryResponse = {
+  workspace_id: "",
+  daemons: [],
+};
+
+// ---------------------------------------------------------------------------
+// Daemon retirement — machine-level impact preview and execution result.
+// Fallbacks always fail closed: a malformed preview cannot enable the
+// destructive action, and an unreadable execution response cannot claim that
+// the daemon was retired.
+// ---------------------------------------------------------------------------
+
+const DaemonRetirementImpactSchema = z
+  .object({
+    runtimes_removed: z.number().int().nonnegative(),
+    agents_detached: z.number().int().nonnegative(),
+    queued_tasks_requeued: z.number().int().nonnegative(),
+    session_lanes_reset: z.number().int().nonnegative(),
+    chat_sessions_reset: z.number().int().nonnegative(),
+    issue_workspaces_abandoned: z.number().int().nonnegative().default(0),
+    tokens_revoked: z.number().int().nonnegative(),
+  })
+  .loose();
+
+const DaemonRetirementTaskSchema = z
+  .object({
+    id: z.string().min(1),
+    status: z.string().min(1),
+    agent_id: z.string().min(1),
+    runtime_id: z.string().min(1),
+    issue_id: z.string().min(1).nullable(),
+  })
+  .loose();
+
+export const DaemonRetirementPlanSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    daemon_id: z.string().min(1),
+    snapshot: z.string().min(1),
+    already_retired: z.boolean(),
+    can_retire: z.boolean(),
+    can_abandon_issue_workspaces: z.boolean().default(false),
+    blocking_reasons: z.array(z.string()),
+    runtimes: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string(),
+            provider: z.string().min(1),
+            status: z.string().min(1),
+          })
+          .loose(),
+      ),
+    agents: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string(),
+            provider: z.string().min(1),
+            runtime_id: z.string().min(1),
+          })
+          .loose(),
+      ),
+    active_tasks: z.array(DaemonRetirementTaskSchema),
+    queued_tasks: z.array(DaemonRetirementTaskSchema),
+    local_directory_resources: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            project_id: z.string().min(1),
+            project_title: z.string(),
+            label: z.string().nullable(),
+            local_path: z.string(),
+          })
+          .loose(),
+      ),
+    issue_workspaces: z
+      .array(
+        z
+          .object({
+            issue_id: z.string().min(1),
+            status: z.string().min(1),
+            runtime_id: z.string().min(1),
+            root_path: z.string(),
+          })
+          .loose(),
+      ),
+    impact: DaemonRetirementImpactSchema,
+  })
+  .loose();
+
+export const DaemonRetirementPlanResponseSchema = z
+  .object({ plan: DaemonRetirementPlanSchema })
+  .loose();
+
+export const EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE: DaemonRetirementPlanResponse = {
+  plan: {
+    workspace_id: "",
+    daemon_id: "",
+    snapshot: "",
+    already_retired: false,
+    can_retire: false,
+    can_abandon_issue_workspaces: false,
+    blocking_reasons: ["invalid_response"],
+    runtimes: [],
+    agents: [],
+    active_tasks: [],
+    queued_tasks: [],
+    local_directory_resources: [],
+    issue_workspaces: [],
+    impact: {
+      runtimes_removed: 0,
+      agents_detached: 0,
+      queued_tasks_requeued: 0,
+      session_lanes_reset: 0,
+      chat_sessions_reset: 0,
+      issue_workspaces_abandoned: 0,
+      tokens_revoked: 0,
+    },
+  },
+};
+
+export const RetireDaemonResponseSchema = z
+  .object({
+    status: z.literal("retired"),
+    workspace_id: z.string().min(1),
+    daemon_id: z.string().min(1),
+    retired_at: z.string().min(1),
+    already_retired: z.boolean(),
+    impact: DaemonRetirementImpactSchema,
+  })
+  .loose();
+
+export const EMPTY_RETIRE_DAEMON_RESPONSE: RetireDaemonResponse = {
+  status: "",
+  workspace_id: "",
+  daemon_id: "",
+  retired_at: "",
+  already_retired: false,
+  impact: {
+    runtimes_removed: 0,
+    agents_detached: 0,
+    queued_tasks_requeued: 0,
+    session_lanes_reset: 0,
+    chat_sessions_reset: 0,
+    issue_workspaces_abandoned: 0,
+    tokens_revoked: 0,
+  },
 };

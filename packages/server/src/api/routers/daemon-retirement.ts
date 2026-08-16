@@ -1,0 +1,235 @@
+import type { Context, Hono } from "hono";
+import {
+  denyCurrentUserWorkspaceAccess,
+  isJsonApiError,
+  readJsonStrict,
+} from "../helpers.js";
+import {
+  currentAccessToken,
+  currentRequestUserId,
+  currentWorkspaceRoleStrict,
+} from "../wire/index.js";
+import type {
+  DaemonRetirementImpact,
+  DaemonRetirementPlan,
+} from "@multiremi/store/repos/daemon-retirement-repo.js";
+import type { RouterDeps } from "./deps.js";
+
+export function registerDaemonRetirementRoutes(app: Hono, deps: RouterDeps): void {
+  const { store } = deps;
+
+  app.get("/api/multiremi/daemons", (c) => {
+    const workspaceId = requestedWorkspaceId(c);
+    const access = loadHumanWorkspaceAccess(c, deps, workspaceId);
+    if (access instanceof Response) return access;
+    const actorId = currentRequestUserId(c);
+    const daemons = store.listDaemonInventory(workspaceId).filter((daemon) => (
+      access.isManager || daemon.ownerUserId === actorId
+    ));
+    return c.json({
+      workspace_id: workspaceId,
+      daemons: daemons.map((daemon) => ({
+        daemon_id: daemon.daemonId,
+        owner_user_id: daemon.ownerUserId,
+        runtime_count: daemon.runtimeCount,
+        token_count: daemon.tokenCount,
+        last_seen: daemon.lastSeen,
+        name: daemon.name,
+      })),
+    });
+  });
+
+  app.get("/api/multiremi/daemons/:daemonId/retirement-plan", (c) => {
+    const workspaceId = requestedWorkspaceId(c);
+    const daemonId = String(c.req.param("daemonId") ?? "").trim();
+    if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
+    const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
+    if (access instanceof Response) return access;
+    const plan = store.getDaemonRetirementPlan(workspaceId, daemonId);
+    if (!plan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
+    return c.json({ plan: retirementPlanResponse(plan) });
+  });
+
+  app.post("/api/multiremi/daemons/:daemonId/retire", async (c) => {
+    const body = await readJsonStrict<{
+      workspaceId?: string | null;
+      workspace_id?: string | null;
+      expectedSnapshot?: string | null;
+      expected_snapshot?: string | null;
+      abandonIssueWorkspaces?: boolean | null;
+      abandon_issue_workspaces?: boolean | null;
+    }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const workspaceId = requestedWorkspaceId(c, body);
+    const daemonId = String(c.req.param("daemonId") ?? "").trim();
+    if (!daemonId) return c.json({ error: "daemon_id is required", code: "daemon_id_required" }, 400);
+    const access = authorizeDaemonRetirement(c, deps, workspaceId, daemonId);
+    if (access instanceof Response) return access;
+    const expectedSnapshot = String(body.expectedSnapshot ?? body.expected_snapshot ?? "").trim();
+    if (!expectedSnapshot) {
+      return c.json({ error: "expected_snapshot is required", code: "expected_snapshot_required" }, 400);
+    }
+    const currentPlan = store.getDaemonRetirementPlan(workspaceId, daemonId);
+    if (!currentPlan.exists) return c.json({ error: "daemon not found", code: "daemon_not_found" }, 404);
+
+    const result = store.retireDaemon(
+      workspaceId,
+      daemonId,
+      expectedSnapshot,
+      currentRequestUserId(c),
+      access.requiredOwnerUserId,
+      {
+        abandonIssueWorkspaces:
+          body.abandonIssueWorkspaces === true || body.abandon_issue_workspaces === true,
+      },
+    );
+    if (result.status === "forbidden") {
+      return c.json({ error: "daemon is owned by another user", code: "daemon_owner_required" }, 403);
+    }
+    if (result.status === "plan_changed") {
+      return c.json({
+        error: "daemon retirement plan changed; review and confirm again",
+        code: "daemon_retirement_plan_changed",
+        plan: retirementPlanResponse(result.plan),
+      }, 409);
+    }
+    if (result.status === "blocked") {
+      return c.json({
+        error: "daemon retirement is blocked by active dependencies",
+        code: "daemon_retirement_blocked",
+        plan: retirementPlanResponse(result.plan),
+      }, 409);
+    }
+    if (!result.alreadyRetired) {
+      store.emitWorkspaceEvent({
+        type: "daemon:retired",
+        workspaceId,
+        payload: {
+          daemon_id: daemonId,
+          runtime_ids: currentPlan.runtimes.map((runtime) => runtime.id),
+          impact: retirementImpactResponse(result.impact),
+          retired_at: result.retiredAt,
+        },
+        actorType: "member",
+        actorId: currentRequestUserId(c),
+      });
+    }
+    return c.json({
+      status: "retired",
+      workspace_id: workspaceId,
+      daemon_id: daemonId,
+      retired_at: result.retiredAt,
+      already_retired: result.alreadyRetired,
+      impact: retirementImpactResponse(result.impact),
+    });
+  });
+}
+
+function requestedWorkspaceId(
+  c: Context,
+  input: { workspaceId?: string | null; workspace_id?: string | null } = {},
+): string {
+  return String(
+    input.workspaceId
+      ?? input.workspace_id
+      ?? c.req.query("workspace_id")
+      ?? c.req.query("workspaceId")
+      ?? "local",
+  ).trim() || "local";
+}
+
+function loadHumanWorkspaceAccess(
+  c: Context,
+  deps: RouterDeps,
+  workspaceId: string,
+): { isManager: boolean } | Response {
+  const accessToken = currentAccessToken(c);
+  if (accessToken?.type === "task") {
+    return c.json({ error: "forbidden for task token", code: "human_admin_required" }, 403);
+  }
+  if (accessToken?.type === "daemon") {
+    return c.json({ error: "forbidden for daemon token", code: "human_admin_required" }, 403);
+  }
+  const denied = denyCurrentUserWorkspaceAccess(c, deps.store, workspaceId);
+  if (denied) return denied;
+  const role = currentWorkspaceRoleStrict(c, deps.store, workspaceId);
+  if (!role) return c.json({ error: "workspace not found" }, 404);
+  return { isManager: role === "owner" || role === "admin" };
+}
+
+function authorizeDaemonRetirement(
+  c: Context,
+  deps: RouterDeps,
+  workspaceId: string,
+  daemonId: string,
+): { requiredOwnerUserId: string | null } | Response {
+  const access = loadHumanWorkspaceAccess(c, deps, workspaceId);
+  if (access instanceof Response) return access;
+  if (access.isManager) return { requiredOwnerUserId: null };
+  const actorId = currentRequestUserId(c);
+  if (deps.store.getDaemonIdentityOwnerUserId(workspaceId, daemonId) === actorId) {
+    return { requiredOwnerUserId: actorId };
+  }
+  return c.json({ error: "daemon is owned by another user", code: "daemon_owner_required" }, 403);
+}
+
+function retirementPlanResponse(plan: DaemonRetirementPlan) {
+  return {
+    workspace_id: plan.workspaceId,
+    daemon_id: plan.daemonId,
+    owner_user_id: plan.ownerUserId,
+    snapshot: plan.snapshot,
+    already_retired: plan.alreadyRetired,
+    can_retire: plan.canRetire,
+    can_abandon_issue_workspaces: plan.canAbandonIssueWorkspaces,
+    blocking_reasons: plan.blockingReasons,
+    runtimes: plan.runtimes,
+    agents: plan.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      provider: agent.provider,
+      runtime_id: agent.runtimeId,
+      archived: agent.archived,
+    })),
+    active_tasks: plan.activeTasks.map((task) => ({
+      id: task.id,
+      status: task.status,
+      agent_id: task.agentId,
+      runtime_id: task.runtimeId,
+      issue_id: task.issueId,
+    })),
+    queued_tasks: plan.queuedTasks.map((task) => ({
+      id: task.id,
+      status: task.status,
+      agent_id: task.agentId,
+      runtime_id: task.runtimeId,
+      issue_id: task.issueId,
+    })),
+    local_directory_resources: plan.localDirectoryResources.map((resource) => ({
+      id: resource.id,
+      project_id: resource.projectId,
+      project_title: resource.projectTitle,
+      label: resource.label,
+      local_path: resource.localPath,
+    })),
+    issue_workspaces: plan.issueWorkspaces.map((workspace) => ({
+      issue_id: workspace.issueId,
+      status: workspace.status,
+      runtime_id: workspace.runtimeId,
+      root_path: workspace.rootPath,
+    })),
+    impact: retirementImpactResponse(plan.impact),
+  };
+}
+
+function retirementImpactResponse(impact: DaemonRetirementImpact) {
+  return {
+    runtimes_removed: impact.runtimesRemoved,
+    agents_detached: impact.agentsDetached,
+    queued_tasks_requeued: impact.queuedTasksRequeued,
+    session_lanes_reset: impact.sessionLanesReset,
+    chat_sessions_reset: impact.chatSessionsReset,
+    issue_workspaces_abandoned: impact.issueWorkspacesAbandoned,
+    tokens_revoked: impact.tokensRevoked,
+  };
+}

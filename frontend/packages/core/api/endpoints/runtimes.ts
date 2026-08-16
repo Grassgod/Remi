@@ -14,6 +14,11 @@ import type {
   RuntimeUsageByHour,
 } from "../../types";
 import type {
+  DaemonInventoryResponse,
+  DaemonRetirementPlan,
+  RetireDaemonResponse,
+} from "../../runtimes/types";
+import type {
   CloudRuntimeNode,
   CreateCloudRuntimeNodeRequest,
   ListCloudRuntimeNodesParams,
@@ -25,12 +30,17 @@ import {
   CliLatestVersionResponseSchema,
   CloudRuntimeNodeListSchema,
   CloudRuntimeNodeSchema,
+  DaemonInventoryResponseSchema,
+  DaemonRetirementPlanResponseSchema,
+  EMPTY_DAEMON_INVENTORY_RESPONSE,
+  EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE,
   EMPTY_CLI_LATEST_VERSION,
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_FLEET_MODELS,
   EMPTY_RELAY_CONFIG,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
+  EMPTY_RETIRE_DAEMON_RESPONSE,
   FleetModelsResponseSchema,
   type RelayConfigResponse,
   RelayConfigResponseSchema,
@@ -39,6 +49,7 @@ import {
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
+  RetireDaemonResponseSchema,
 } from "../schemas/runtimes";
 
 export class RuntimesEndpoints {
@@ -147,6 +158,77 @@ export class RuntimesEndpoints {
 
   async deleteRuntime(runtimeId: string): Promise<void> {
     await this.http.fetch(`/api/runtimes/${runtimeId}`, { method: "DELETE" });
+  }
+
+  async getDaemonInventory(workspaceId: string): Promise<DaemonInventoryResponse> {
+    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const raw = await this.http.fetch<unknown>(
+      `/api/multiremi/daemons?${search}`,
+    );
+    const response = parseWithFallback(
+      raw,
+      DaemonInventoryResponseSchema,
+      EMPTY_DAEMON_INVENTORY_RESPONSE,
+      { endpoint: "GET /api/multiremi/daemons" },
+    );
+    return response.workspace_id === workspaceId
+      ? response
+      : EMPTY_DAEMON_INVENTORY_RESPONSE;
+  }
+
+  async getDaemonRetirementPlan(
+    workspaceId: string,
+    daemonId: string,
+  ): Promise<DaemonRetirementPlan> {
+    const search = new URLSearchParams({ workspace_id: workspaceId });
+    const raw = await this.http.fetch<unknown>(
+      `/api/multiremi/daemons/${encodeURIComponent(daemonId)}/retirement-plan?${search}`,
+    );
+    const response = parseWithFallback(
+      raw,
+      DaemonRetirementPlanResponseSchema,
+      EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE,
+      { endpoint: "GET /api/multiremi/daemons/:daemonId/retirement-plan" },
+    ).plan;
+    if (response.workspace_id !== workspaceId || response.daemon_id !== daemonId) {
+      return EMPTY_DAEMON_RETIREMENT_PLAN_RESPONSE.plan;
+    }
+    return response;
+  }
+
+  async retireDaemon(
+    workspaceId: string,
+    daemonId: string,
+    expectedSnapshot: string,
+    abandonIssueWorkspaces = false,
+  ): Promise<RetireDaemonResponse> {
+    const raw = await this.http.fetch<unknown>(
+      `/api/multiremi/daemons/${encodeURIComponent(daemonId)}/retire`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          expected_snapshot: expectedSnapshot,
+          ...(abandonIssueWorkspaces
+            ? { abandon_issue_workspaces: true }
+            : {}),
+        }),
+      },
+    );
+    const response = parseWithFallback(
+      raw,
+      RetireDaemonResponseSchema,
+      EMPTY_RETIRE_DAEMON_RESPONSE,
+      { endpoint: "POST /api/multiremi/daemons/:daemonId/retire" },
+    );
+    if (
+      response.workspace_id !== workspaceId ||
+      response.daemon_id !== daemonId ||
+      response.retired_at.length === 0
+    ) {
+      return EMPTY_RETIRE_DAEMON_RESPONSE;
+    }
+    return response;
   }
 
   // Cascade variant of deleteRuntime. The strict DELETE refuses with

@@ -1601,7 +1601,10 @@ describe("Bun Multiremi daemon smoke", () => {
     store.heartbeatRuntime = ((runtimeId, options) => {
       if (!injectedRuntimeGone) {
         injectedRuntimeGone = true;
-        store.deleteRuntime(runtimeId);
+        // Simulate the server losing the row unexpectedly. The product delete
+        // path intentionally protects a daemon's last Runtime and therefore is
+        // not the right primitive for a runtime_gone recovery test.
+        db!.run("DELETE FROM multiremi_runtimes WHERE id = ?", [runtimeId]);
       }
       return originalHeartbeat(runtimeId, options);
     }) as typeof store.heartbeatRuntime;
@@ -1665,7 +1668,8 @@ describe("Bun Multiremi daemon smoke", () => {
         store.listRuntimeModels(runtimeId).some((model) => model.id === "claude-cached")
       ) {
         injectedRuntimeGone = true;
-        store.deleteRuntime(runtimeId);
+        db!.run("DELETE FROM multiremi_runtime_models WHERE runtime_id = ?", [runtimeId]);
+        db!.run("DELETE FROM multiremi_runtimes WHERE id = ?", [runtimeId]);
       }
       return originalHeartbeat(runtimeId, options);
     }) as typeof store.heartbeatRuntime;

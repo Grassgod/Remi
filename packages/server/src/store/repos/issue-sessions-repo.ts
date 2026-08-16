@@ -20,6 +20,16 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 type Row = Record<string, unknown>;
+type AppendSessionEventInput = {
+  authorType: string;
+  authorId?: string | null;
+  kind?: string;
+  body?: string;
+  taskId?: string | null;
+  sourceCommentId?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+};
 
 export class IssueSessionsRepo {
   constructor(private ctx: StoreContext) {}
@@ -180,50 +190,43 @@ export class IssueSessionsRepo {
     return rows.map(toSessionParticipant);
   }
 
-  appendSessionEvent(sessionId: string, input: {
-    authorType: string;
-    authorId?: string | null;
-    kind?: string;
-    body?: string;
-    taskId?: string | null;
-    sourceCommentId?: string | null;
-    metadata?: Record<string, unknown>;
-    createdAt?: string;
-  }): MultiremiSessionEvent {
-    const tx = this.ctx.db.transaction(() => {
-      const session = this.getIssueSession(sessionId);
-      if (!session) throw new Error(`Issue session not found: ${sessionId}`);
-      // Row self-write serializes sequence allocation across server processes.
-      this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
-      const max = this.ctx.db.query(
-        "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
-      ).get(sessionId) as { seq: number } | null;
-      const seq = Number(max?.seq ?? 0) + 1;
-      const id = createId("sevt");
-      const now = input.createdAt ?? nowIso();
-      this.ctx.db.run(
-        `INSERT INTO multiremi_session_events (
-           id, session_id, seq, author_type, author_id, kind, body,
-           task_id, source_comment_id, metadata, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          sessionId,
-          seq,
-          input.authorType,
-          input.authorId ?? null,
-          input.kind ?? "message",
-          input.body ?? "",
-          input.taskId ?? null,
-          input.sourceCommentId ?? null,
-          toJson(input.metadata ?? {}),
-          now,
-        ],
-      );
-      this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?", [now, sessionId]);
-      return toSessionEvent(this.ctx.db.query("SELECT * FROM multiremi_session_events WHERE id = ?").get(id) as Row);
-    });
-    return tx();
+  appendSessionEvent(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
+    return this.ctx.db.transaction(() => this.appendSessionEventWithinTransaction(sessionId, input))();
+  }
+
+  /** Caller already owns the transaction that serializes this session write. */
+  appendSessionEventWithinTransaction(sessionId: string, input: AppendSessionEventInput): MultiremiSessionEvent {
+    const session = this.getIssueSession(sessionId);
+    if (!session) throw new Error(`Issue session not found: ${sessionId}`);
+    // Row self-write serializes sequence allocation across server processes.
+    this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = updated_at WHERE id = ?", [sessionId]);
+    const max = this.ctx.db.query(
+      "SELECT COALESCE(MAX(seq), 0) AS seq FROM multiremi_session_events WHERE session_id = ?",
+    ).get(sessionId) as { seq: number } | null;
+    const seq = Number(max?.seq ?? 0) + 1;
+    const id = createId("sevt");
+    const now = input.createdAt ?? nowIso();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_session_events (
+         id, session_id, seq, author_type, author_id, kind, body,
+         task_id, source_comment_id, metadata, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        sessionId,
+        seq,
+        input.authorType,
+        input.authorId ?? null,
+        input.kind ?? "message",
+        input.body ?? "",
+        input.taskId ?? null,
+        input.sourceCommentId ?? null,
+        toJson(input.metadata ?? {}),
+        now,
+      ],
+    );
+    this.ctx.db.run("UPDATE multiremi_issue_sessions SET updated_at = ? WHERE id = ?", [now, sessionId]);
+    return toSessionEvent(this.ctx.db.query("SELECT * FROM multiremi_session_events WHERE id = ?").get(id) as Row);
   }
 
   listSessionEvents(sessionId: string, input: { sinceSeq?: number | null; toSeq?: number | null } = {}): MultiremiSessionEvent[] {

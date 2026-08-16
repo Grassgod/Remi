@@ -127,6 +127,52 @@ describe("store migrations", () => {
     expect(row?.name).toBe("Keep me");
   });
 
+  it("backfills a daemon owner claim only when existing active identities agree", () => {
+    const database = freshDb();
+    migrate(database);
+    const createdAt = "2026-08-01T00:00:00.000Z";
+    database.run(
+      `INSERT INTO multiremi_runtimes (
+         id, name, provider, daemon_id, workspace_id, owner_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["rt_owner_backfill", "Backfill runtime", "claude", "daemon-owner-backfill", "local", "owner-a", createdAt, createdAt],
+    );
+    database.run(
+      `INSERT INTO multiremi_access_tokens (
+         id, workspace_id, daemon_id, user_id, name, type, purpose,
+         token_hash, token_prefix, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["dtk_owner_backfill", "local", "daemon-owner-backfill", "owner-a", "Backfill token", "daemon", "daemon", "hash-owner-a", "mdt_owner_a", createdAt],
+    );
+
+    migrate(database);
+    expect(database.query(
+      `SELECT owner_user_id
+       FROM multiremi_daemon_lifecycle_locks
+       WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get("local", "daemon-owner-backfill")).toEqual({ owner_user_id: "owner-a" });
+
+    database.run(
+      `INSERT INTO multiremi_access_tokens (
+         id, workspace_id, daemon_id, user_id, name, type, purpose,
+         token_hash, token_prefix, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ["dtk_owner_conflict", "local", "daemon-owner-backfill", "owner-b", "Conflicting token", "daemon", "daemon", "hash-owner-b", "mdt_owner_b", createdAt],
+    );
+    database.run(
+      `UPDATE multiremi_daemon_lifecycle_locks
+       SET owner_user_id = NULL
+       WHERE workspace_id = ? AND daemon_id = ?`,
+      ["local", "daemon-owner-backfill"],
+    );
+    migrate(database);
+    expect(database.query(
+      `SELECT owner_user_id
+       FROM multiremi_daemon_lifecycle_locks
+       WHERE workspace_id = ? AND daemon_id = ?`,
+    ).get("local", "daemon-owner-backfill")).toEqual({ owner_user_id: null });
+  });
+
   it("adds Plugin source subdirectories without losing existing catalog rows", () => {
     const database = freshDb();
     database.exec(`

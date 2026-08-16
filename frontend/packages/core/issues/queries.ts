@@ -57,7 +57,10 @@ export const issueKeys = {
     [...issueKeys.all(wsId), "detail", id] as const,
   generated: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "generated", id] as const,
-  workspace: (issueId: string) => ["issues", "workspace", issueId] as const,
+  /** Prefix for every per-Issue workspace checkout, regardless of workspace. */
+  workspacesAll: () => ["issues", "workspace"] as const,
+  workspace: (issueId: string) =>
+    [...issueKeys.workspacesAll(), issueId] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
   /** Prefix for invalidating all batched-children queries in a workspace. */

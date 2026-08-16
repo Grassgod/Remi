@@ -63,6 +63,11 @@ describe("Multiremi API — authentication and token scoping", () => {
 
   it("protects APIs with bearer auth and scopes daemon tokens to daemon routes", async () => {
     const store = createStore();
+    store.createWorkspaceMember({
+      id: "usr_runtime_owner",
+      name: "Runtime owner",
+      role: "member",
+    });
     const app = createMultiremiApp({ store, authToken: "root-secret" });
 
     const unauthorized = await app.request("/api/multiremi/agents");
@@ -89,7 +94,12 @@ describe("Multiremi API — authentication and token scoping", () => {
     const daemonCreated = await app.request("/api/multiremi/tokens", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer root-secret" },
-      body: JSON.stringify({ name: "Local daemon", type: "daemon", workspaceId: "local" }),
+      body: JSON.stringify({
+        name: "Local daemon",
+        type: "daemon",
+        workspaceId: "local",
+        userId: "usr_runtime_owner",
+      }),
     });
     expect(daemonCreated.status).toBe(201);
     const daemonBody = await daemonCreated.json();
@@ -339,6 +349,199 @@ describe("Multiremi API — authentication and token scoping", () => {
     });
     expect(localHeartbeat.status).toBe(200);
 
+    const otherDaemonRuntime = store.registerRuntime({
+      id: "rt_other_daemon_same_workspace",
+      name: "Other daemon in local workspace",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-other",
+    });
+    const otherDaemonAgent = store.createAgent({
+      name: "Other daemon agent",
+      provider: "codex",
+      workspaceId: "local",
+      runtimeId: otherDaemonRuntime.id,
+    });
+    const otherDaemonTask = store.createTask({ agentId: otherDaemonAgent.id, prompt: "stay on the other machine" });
+    const otherDaemonIssue = store.createIssue({
+      title: "Other daemon issue",
+      assigneeType: "agent",
+      assigneeId: otherDaemonAgent.id,
+      workspaceId: "local",
+    });
+    const otherDaemonIssueTask = store.createTask({
+      agentId: otherDaemonAgent.id,
+      issueId: otherDaemonIssue.id,
+      prompt: "prepare the other machine workspace",
+    });
+    const forgedLegacyMigration = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${daemonBody.token.token}`,
+      },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-owner",
+        legacy_daemon_ids: ["daemon-other"],
+        runtimes: [{ type: "codex", version: "1.0.2" }],
+      }),
+    });
+    expect(forgedLegacyMigration.status).toBe(200);
+    expect(store.getRuntime(otherDaemonRuntime.id)?.daemonId).toBe("daemon-other");
+    expect(store.getTask(otherDaemonTask.id)?.runtimeId).toBe(otherDaemonRuntime.id);
+    const humanLegacyMigration = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${ownerPatBody.token.token}`,
+      },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-human-legacy-hint",
+        legacy_daemon_ids: ["daemon-other"],
+        runtimes: [{ type: "codex", version: "1.0.2" }],
+      }),
+    });
+    expect(humanLegacyMigration.status).toBe(200);
+    expect(store.getRuntime(otherDaemonRuntime.id)?.daemonId).toBe("daemon-other");
+    expect(store.getTask(otherDaemonTask.id)?.runtimeId).toBe(otherDaemonRuntime.id);
+    const crossDaemonRuntimeRoutes = [
+      { method: "POST", path: `/api/daemon/runtimes/${otherDaemonRuntime.id}/tasks/claim` },
+      { method: "GET", path: `/api/daemon/runtimes/${otherDaemonRuntime.id}/tasks/pending` },
+      { method: "POST", path: `/api/daemon/runtimes/${otherDaemonRuntime.id}/recover-orphans` },
+      { method: "POST", path: `/api/multiremi/runtimes/${otherDaemonRuntime.id}/heartbeat` },
+    ];
+    for (const route of crossDaemonRuntimeRoutes) {
+      const response = await app.request(route.path, {
+        method: route.method,
+        headers: { Authorization: `Bearer ${daemonBody.token.token}` },
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "forbidden for daemon identity",
+        code: "daemon_identity_forbidden",
+      });
+    }
+    expect(store.getTask(otherDaemonTask.id)?.status).toBe("queued");
+    expect(store.claimTask(otherDaemonRuntime.id)?.id).toBe(otherDaemonTask.id);
+    const crossDaemonClaimedTaskRoutes: Array<{ method: string; path: string; body?: unknown }> = [
+      { method: "POST", path: `/api/daemon/tasks/${otherDaemonTask.id}/start` },
+      {
+        method: "POST",
+        path: `/api/daemon/tasks/${otherDaemonTask.id}/messages`,
+        body: { messages: [{ seq: 1, type: "assistant", content: "hijacked" }] },
+      },
+      { method: "GET", path: `/api/daemon/tasks/${otherDaemonTask.id}/messages` },
+      {
+        method: "POST",
+        path: `/api/daemon/tasks/${otherDaemonTask.id}/session`,
+        body: { session_id: "sess-hijacked", work_dir: "/tmp/hijacked" },
+      },
+      {
+        method: "POST",
+        path: `/api/daemon/tasks/${otherDaemonTask.id}/complete`,
+        body: { output: "hijacked" },
+      },
+      {
+        method: "POST",
+        path: `/api/daemon/tasks/${otherDaemonTask.id}/fail`,
+        body: { error: "hijacked" },
+      },
+      {
+        method: "POST",
+        path: `/api/daemon/tasks/${otherDaemonTask.id}/usage`,
+        body: { usage: [{ provider: "codex", model: "hijacked", input_tokens: 99 }] },
+      },
+      { method: "GET", path: `/api/daemon/tasks/${otherDaemonTask.id}/status` },
+    ];
+    for (const route of crossDaemonClaimedTaskRoutes) {
+      const response = await app.request(route.path, {
+        method: route.method,
+        headers: {
+          Authorization: `Bearer ${daemonBody.token.token}`,
+          ...(route.body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: route.body ? JSON.stringify(route.body) : undefined,
+      });
+      expect(response.status, route.path).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "forbidden for daemon identity",
+        code: "daemon_identity_forbidden",
+      });
+    }
+    const hiddenCrossDaemonGc = await app.request(`/api/daemon/tasks/${otherDaemonTask.id}/gc-check`, {
+      headers: { Authorization: `Bearer ${daemonBody.token.token}` },
+    });
+    expect(hiddenCrossDaemonGc.status).toBe(404);
+    expect(await hiddenCrossDaemonGc.json()).toEqual({ error: "task not found" });
+    expect(store.getTask(otherDaemonTask.id)).toMatchObject({
+      status: "dispatched",
+      sessionId: null,
+      workDir: null,
+    });
+    expect(store.listTaskMessages(otherDaemonTask.id)).toEqual([]);
+    expect(store.listRuntimeUsage(otherDaemonRuntime.id)).toEqual([]);
+
+    const masterCanReadOtherDaemonTask = await app.request(`/api/daemon/tasks/${otherDaemonTask.id}/status`, {
+      headers: { Authorization: "Bearer root-secret" },
+    });
+    expect(masterCanReadOtherDaemonTask.status).toBe(200);
+    const openApp = createMultiremiApp({ store, authToken: "" });
+    expect((await openApp.request(`/api/daemon/tasks/${otherDaemonTask.id}/status`)).status).toBe(200);
+    expect((await app.request(`/api/multiremi/runtimes/${otherDaemonRuntime.id}/heartbeat`, {
+      method: "POST",
+      headers: { Authorization: "Bearer root-secret" },
+    })).status).toBe(200);
+    expect((await openApp.request(`/api/multiremi/runtimes/${otherDaemonRuntime.id}/heartbeat`, {
+      method: "POST",
+    })).status).toBe(200);
+
+    const crossDaemonWorkspaceReport = await app.request(
+      `/api/daemon/tasks/${otherDaemonIssueTask.id}/workspace`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${daemonBody.token.token}`,
+        },
+        body: JSON.stringify({
+          runtime_id: otherDaemonRuntime.id,
+          root_path: "/tmp/other-daemon",
+          branch_name: "feat/other-daemon",
+          status: "ready",
+        }),
+      },
+    );
+    expect(crossDaemonWorkspaceReport.status).toBe(403);
+    expect(await crossDaemonWorkspaceReport.json()).toEqual({
+      error: "forbidden for daemon identity",
+      code: "daemon_identity_forbidden",
+    });
+    expect(store.getIssueWorkspace(otherDaemonIssue.id)).toBeNull();
+
+    const crossDaemonWorkspaceCleanup = await app.request(
+      `/api/daemon/issues/${otherDaemonIssue.id}/workspace/cleaned`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${daemonBody.token.token}`,
+        },
+        body: JSON.stringify({ runtime_id: otherDaemonRuntime.id }),
+      },
+    );
+    expect(crossDaemonWorkspaceCleanup.status).toBe(403);
+    expect(await crossDaemonWorkspaceCleanup.json()).toEqual({
+      error: "forbidden for daemon identity",
+      code: "daemon_identity_forbidden",
+    });
+    const masterCanInspectOtherDaemon = await app.request(
+      `/api/daemon/runtimes/${otherDaemonRuntime.id}/tasks/pending`,
+      { headers: { Authorization: "Bearer root-secret" } },
+    );
+    expect(masterCanInspectOtherDaemon.status).toBe(200);
+
     store.registerRuntime({ id: "rt_remote_auth", name: "Remote runtime", provider: "codex", workspaceId: "remote" });
     // The agent lives in the remote workspace, so its task does too — a task
     // always inherits its agent's workspace (see createTask).
@@ -351,6 +554,29 @@ describe("Multiremi API — authentication and token scoping", () => {
       body: JSON.stringify({ id: "rt_bad_remote", name: "Bad remote", provider: "codex", workspaceId: "remote" }),
     });
     expect(remoteRuntimeRegister.status).toBe(403);
+
+    for (const [label, token] of [
+      ["PAT", ownerPatBody.token.token],
+      ["JWT", jwtToken],
+    ] as const) {
+      const humanPending = await app.request("/api/daemon/runtimes/rt_remote_auth/tasks/pending", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(humanPending.status, `${label} pending`).toBe(403);
+      expect(await humanPending.json()).toEqual({
+        error: "daemon token required",
+        code: "daemon_token_required",
+      });
+      const humanTaskWrite = await app.request(`/api/daemon/tasks/${remoteTask.id}/start`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(humanTaskWrite.status, `${label} task write`).toBe(403);
+      expect(await humanTaskWrite.json()).toEqual({
+        error: "daemon token required",
+        code: "daemon_token_required",
+      });
+    }
 
     const remoteDaemonRegister = await app.request("/api/daemon/register", {
       method: "POST",
@@ -421,11 +647,14 @@ describe("Multiremi API — authentication and token scoping", () => {
     const scopedDeregister = await app.request("/api/daemon/deregister", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${daemonBody.token.token}` },
-      body: JSON.stringify({ runtime_ids: ["rt_auth_daemon", "rt_remote_auth", "rt_missing_auth"] }),
+      body: JSON.stringify({
+        runtime_ids: ["rt_auth_daemon", otherDaemonRuntime.id, "rt_remote_auth", "rt_missing_auth"],
+      }),
     });
     expect(scopedDeregister.status).toBe(200);
     expect((await scopedDeregister.json()).status).toBe("ok");
     expect(store.getRuntime("rt_auth_daemon")?.status).toBe("offline");
+    expect(store.getRuntime(otherDaemonRuntime.id)?.status).toBe("online");
     expect(store.getRuntime("rt_remote_auth")?.status).toBe("online");
 
     const listed = await app.request("/api/tokens", {
@@ -445,5 +674,49 @@ describe("Multiremi API — authentication and token scoping", () => {
       headers: { Authorization: `Bearer ${patBody.token.token}` },
     });
     expect(afterRevoke.status).toBe(401);
+  });
+
+  it("allows the deployment master token to perform an explicit legacy daemon migration", async () => {
+    const store = createStore();
+    const legacyRuntime = store.registerRuntime({
+      id: "rt_master_legacy_daemon",
+      name: "Master legacy daemon",
+      provider: "codex",
+      workspaceId: "local",
+      daemonId: "daemon-master-legacy",
+    });
+    const agent = store.createAgent({
+      name: "Master migration agent",
+      provider: "codex",
+      workspaceId: "local",
+      runtimeId: legacyRuntime.id,
+    });
+    const task = store.createTask({
+      agentId: agent.id,
+      runtimeId: legacyRuntime.id,
+      prompt: "migrate with trusted credentials",
+    });
+    const app = createMultiremiApp({ store, authToken: "root-secret" });
+
+    const response = await app.request("/api/daemon/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer root-secret",
+      },
+      body: JSON.stringify({
+        workspace_id: "local",
+        daemon_id: "daemon-master-current",
+        legacy_daemon_ids: ["daemon-master-legacy"],
+        runtimes: [{ type: "codex", version: "2.0.0" }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const currentRuntimeId = (await response.json()).runtimes[0].id;
+    expect(currentRuntimeId).not.toBe(legacyRuntime.id);
+    expect(store.getRuntime(legacyRuntime.id)).toBeNull();
+    expect(store.getAgent(agent.id)?.runtimeId).toBe(currentRuntimeId);
+    expect(store.getTask(task.id)?.runtimeId).toBe(currentRuntimeId);
   });
 });

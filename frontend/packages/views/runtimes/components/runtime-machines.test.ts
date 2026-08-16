@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multiremi/core/types";
+import type { DaemonInventoryEntry } from "@multiremi/core/runtimes";
 import {
   buildRuntimeMachines,
   filterRuntimeMachines,
@@ -26,6 +27,19 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     last_seen_at: new Date(NOW - 10_000).toISOString(),
     created_at: "2026-05-17T11:00:00Z",
     updated_at: "2026-05-17T11:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeDaemon(
+  overrides: Partial<DaemonInventoryEntry> = {},
+): DaemonInventoryEntry {
+  return {
+    daemon_id: "daemon-token-only-123456789",
+    runtime_count: 0,
+    token_count: 1,
+    last_seen: "2026-05-17T11:00:00Z",
+    name: "Provisioning token",
     ...overrides,
   };
 }
@@ -304,6 +318,51 @@ describe("runtime machine grouping", () => {
       subtitle: "Cloud worker",
       section: "cloud",
     });
+  });
+
+  it("materializes token-only inventory as an offline remote machine", () => {
+    const machines = buildRuntimeMachines([], {
+      now: NOW,
+      daemonInventory: [makeDaemon()],
+    });
+
+    expect(machines).toEqual([
+      expect.objectContaining({
+        id: "local:daemon-token-only-123456789",
+        daemonId: "daemon-token-only-123456789",
+        title: "daemon-t...",
+        mode: "local",
+        section: "remote",
+        health: "offline",
+        runtimes: [],
+        issueCount: 1,
+        lastSeenAt: "2026-05-17T11:00:00Z",
+      }),
+    ]);
+    expect(machines[0]?.title).not.toBe("Provisioning token");
+    expect(runtimeMachineCounts(machines)).toEqual({
+      all: 1,
+      online: 0,
+      issues: 1,
+    });
+  });
+
+  it("does not duplicate an inventory daemon that already has runtimes", () => {
+    const machines = buildRuntimeMachines(
+      [makeRuntime({ daemon_id: "daemon-1" })],
+      {
+        now: NOW,
+        daemonInventory: [
+          makeDaemon({
+            daemon_id: "daemon-1",
+            runtime_count: 1,
+          }),
+        ],
+      },
+    );
+
+    expect(machines).toHaveLength(1);
+    expect(machines[0]?.runtimes).toHaveLength(1);
   });
 });
 

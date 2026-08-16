@@ -13,7 +13,27 @@ export const runtimeKeys = {
   usageByHour: (rid: string, days: number, tz: string) =>
     ["runtimes", "usage", "by-hour", rid, days, tz] as const,
   latestVersion: () => ["runtimes", "latestVersion"] as const,
+  daemonInventory: (wsId: string) =>
+    ["runtimes", "daemons", "inventory", wsId] as const,
+  daemonRetirementPlan: (wsId: string, daemonId: string) =>
+    ["runtimes", wsId, "daemons", daemonId, "retirement-plan"] as const,
 };
+
+export function daemonInventoryOptions(wsId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.daemonInventory(wsId),
+    queryFn: () => api.getDaemonInventory(wsId),
+    staleTime: 30_000,
+  });
+}
+
+export function daemonRetirementPlanOptions(wsId: string, daemonId: string) {
+  return queryOptions({
+    queryKey: runtimeKeys.daemonRetirementPlan(wsId, daemonId),
+    queryFn: () => api.getDaemonRetirementPlan(wsId, daemonId),
+    staleTime: 0,
+  });
+}
 
 // `tz` is the viewer's IANA name — all reports follow the viewer's tz.
 export function runtimeUsageOptions(

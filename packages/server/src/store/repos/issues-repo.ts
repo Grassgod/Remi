@@ -424,6 +424,9 @@ export class IssuesRepo {
     const issue = this.getIssue(id);
     if (!issue) return false;
     this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(issue.workspaceId);
+      const current = this.getIssue(id);
+      if (!current || current.workspaceId !== issue.workspaceId) return;
       this.cancelActiveIssueTasks(id, "issue_deleted");
       this.ctx.db.run("UPDATE multiremi_autopilot_runs SET status = 'failed', completed_at = ?, failure_reason = ? WHERE issue_id = ? AND completed_at IS NULL", [
         nowIso(),
@@ -431,6 +434,10 @@ export class IssuesRepo {
         id,
       ]);
       this.ctx.db.run("UPDATE multiremi_autopilot_runs SET issue_id = NULL WHERE issue_id = ?", [id]);
+      // PostgreSQL intentionally does not rely on FK cascades and SQLite tests
+      // may run with them disabled. Remove the machine-local checkout record
+      // explicitly so deleting an Issue cannot leave a retirement blocker.
+      this.ctx.db.run("DELETE FROM multiremi_issue_workspaces WHERE issue_id = ?", [id]);
       this.ctx.db.run("DELETE FROM multiremi_issues WHERE id = ?", [id]);
       if (issue.projectId) this.ctx.db.run("UPDATE multiremi_projects SET updated_at = ? WHERE id = ?", [nowIso(), issue.projectId]);
     })();

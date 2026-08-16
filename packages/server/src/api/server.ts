@@ -6,6 +6,11 @@ import { MultiremiScheduler } from "@multiremi/scheduler.js";
 import { SkillImportError } from "@daemon/agent-runtime/skills/skill-import.js";
 import { MultiremiStore } from "@multiremi/store/store.js";
 import { AgentPluginStoreError } from "@multiremi/store/repos/agent-plugins-repo.js";
+import {
+  DaemonIdentityOwnerConflictError,
+  DaemonRetiredError,
+} from "@multiremi/store/repos/daemon-retirement-repo.js";
+import { RuntimeRegistrationIdentityConflictError } from "@multiremi/store/repos/runtimes-repo.js";
 // Domain routers, listed in the order createMultiremiApp registers them.
 import { registerAuthRoutes } from "./routers/auth.js";
 import { registerGithubRoutes } from "./routers/github.js";
@@ -25,6 +30,7 @@ import { registerSkillRoutes } from "./routers/skills.js";
 import { registerTokenRoutes } from "./routers/tokens.js";
 import { registerNotificationPreferenceRoutes } from "./routers/notification-preferences.js";
 import { registerRuntimeRoutes } from "./routers/runtimes.js";
+import { registerDaemonRetirementRoutes } from "./routers/daemon-retirement.js";
 import { registerDashboardRoutes } from "./routers/dashboard.js";
 import { registerProjectRoutes } from "./routers/projects.js";
 import { registerSquadRoutes } from "./routers/squads.js";
@@ -59,11 +65,13 @@ import {
   createFeedbackOrApiError,
   createWebhookRateLimiter,
   denyCurrentUserWorkspaceAccess,
+  isDaemonOwnerWorkspaceMember,
   denyDaemonTokenAutopilotRunWorkspace,
   denyDaemonTokenChatSessionWorkspace,
   denyDaemonTokenIssueWorkspace,
-  denyDaemonTokenRuntimeWorkspace,
-  denyDaemonTokenTaskWorkspace,
+  denyNonDaemonOperationalAccess,
+  denyDaemonTokenRuntimeIdentity,
+  denyDaemonTokenTaskRuntimeIdentity,
   isDaemonGcCheckRequest,
   isDaemonTokenAllowedRequest,
   isTaskTokenForbiddenRequest,
@@ -234,6 +242,15 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   }
 
   app.onError((err, c) => {
+    if (err instanceof RuntimeRegistrationIdentityConflictError) {
+      return c.json({ error: err.message, code: err.code }, 409);
+    }
+    if (err instanceof DaemonIdentityOwnerConflictError) {
+      return c.json({ error: "daemon is owned by another user", code: err.code }, 403);
+    }
+    if (err instanceof DaemonRetiredError) {
+      return c.json({ error: "daemon has been retired", code: err.code }, 410);
+    }
     if (err instanceof AgentPluginStoreError) {
       const body = { error: err.message, code: err.code };
       if (err.status === 404) return c.json(body, 404);
@@ -278,15 +295,20 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   // The `/api/daemon/*` prefix guards stay in the skeleton and MUST stay above
   // registerDaemonRoutes: Hono only wraps handlers registered after a
   // middleware, so moving them below would silently drop the workspace checks.
+  app.use("/api/daemon/*", async (c, next) => {
+    const denied = denyNonDaemonOperationalAccess(c, authToken, store);
+    if (denied) return denied;
+    await next();
+  });
   app.use("/api/daemon/runtimes/:runtimeId/*", async (c, next) => {
-    const denied = denyDaemonTokenRuntimeWorkspace(c, store, c.req.param("runtimeId"), {
+    const denied = denyDaemonTokenRuntimeIdentity(c, store, c.req.param("runtimeId"), {
       hideForbiddenAsNotFound: isDaemonGcCheckRequest(c),
     });
     if (denied) return denied;
     await next();
   });
   app.use("/api/daemon/tasks/:taskId/*", async (c, next) => {
-    const denied = denyDaemonTokenTaskWorkspace(c, store, c.req.param("taskId"), {
+    const denied = denyDaemonTokenTaskRuntimeIdentity(c, store, c.req.param("taskId"), {
       hideForbiddenAsNotFound: isDaemonGcCheckRequest(c),
     });
     if (denied) return denied;
@@ -384,6 +406,7 @@ export function createMultiremiApp(options: MultiremiApiOptions = {}): Hono {
   });
 
   registerRuntimeRoutes(app, deps);
+  registerDaemonRetirementRoutes(app, deps);
 
   registerDashboardRoutes(app, deps);
 
@@ -461,6 +484,8 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
               runtimeId: runtimeIds[0] ?? null,
               runtimeIds,
               accessToken: authorization.accessToken,
+              canReportAgentPluginProtocol:
+                authorization.canReportAgentPluginProtocol,
             },
           });
           if (upgraded) return undefined;
@@ -539,15 +564,36 @@ export function startMultiremiServer(options: MultiremiApiOptions & { port?: num
           if (event.type === "ping") ws.sendText(JSON.stringify({ type: "pong" }));
           return;
         }
+        if (!isDaemonOwnerWorkspaceMember(store, ws.data.accessToken)) {
+          ws.sendText(JSON.stringify({
+            type: "error",
+            error: "daemon owner is no longer a workspace member",
+            code: "daemon_owner_membership_required",
+          }));
+          ws.close();
+          return;
+        }
         const event = parseDaemonWebSocketMessage(message);
         if (event.type === "daemon:heartbeat") {
           const heartbeat = parseDaemonWebSocketHeartbeat(event);
           if (!heartbeat.runtimeId) return;
           if (!ws.data.runtimeIds.includes(heartbeat.runtimeId)) return;
+          if (
+            heartbeat.agentPluginProtocol !== undefined &&
+            !ws.data.canReportAgentPluginProtocol
+          ) {
+            ws.sendText(JSON.stringify({
+              type: "error",
+              error: "daemon token required",
+              code: "daemon_token_required",
+            }));
+            return;
+          }
           ws.data.runtimeId = heartbeat.runtimeId;
           const ack = store.heartbeatRuntime(heartbeat.runtimeId, {
             supportsBatchImport: heartbeat.supportsBatchImport,
             supportsDirectoryScan: heartbeat.supportsDirectoryScan,
+            agentPluginProtocol: heartbeat.agentPluginProtocol,
           });
           ws.sendText(JSON.stringify({
             type: "daemon:heartbeat_ack",

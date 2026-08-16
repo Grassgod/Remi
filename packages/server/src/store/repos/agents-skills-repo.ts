@@ -36,50 +36,64 @@ export class AgentsSkillsRepo {
     const workspaceId = cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local";
     const ownerId = cleanOptionalString(input.ownerId ?? input.owner_id) ?? "local";
     const visibility = normalizeAgentVisibility(input.visibility);
-    this.ctx.db.run(
-      `INSERT INTO multiremi_agents (
-        id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, cwd, executable, model,
-        max_concurrent_tasks, allowed_tools, custom_env, custom_args, mcp_config, thinking_level,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        workspaceId,
-        input.name,
-        input.description ?? "",
-        input.avatarUrl ?? input.avatar_url ?? null,
-        input.provider,
-        ownerId,
-        visibility,
-        cleanOptionalString(input.runtimeId ?? input.runtime_id),
-        input.instructions ?? "",
-        toJson(input.skills ?? []),
-        input.cwd ?? null,
-        input.executable ?? null,
-        input.model ?? null,
-        normalizeRuntimeConcurrency(input.maxConcurrentTasks ?? input.max_concurrent_tasks ?? 6),
-        toJson(input.allowedTools ?? input.allowed_tools ?? []),
-        toJson(input.customEnv ?? input.custom_env ?? {}),
-        toJson(input.customArgs ?? input.custom_args ?? []),
-        (input.mcpConfig ?? input.mcp_config) == null ? null : toJson(input.mcpConfig ?? input.mcp_config),
-        input.thinkingLevel ?? input.thinking_level ?? null,
-        now,
-        now,
-      ],
-    );
-    return this.getAgent(id)!;
+    const runtimeId = cleanOptionalString(input.runtimeId ?? input.runtime_id);
+    return this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
+      this.ctx.db.run(
+        `INSERT INTO multiremi_agents (
+          id, workspace_id, name, description, avatar_url, provider, owner_id, visibility, runtime_id, instructions, skills, cwd, executable, model,
+          max_concurrent_tasks, allowed_tools, custom_env, custom_args, mcp_config, thinking_level,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          workspaceId,
+          input.name,
+          input.description ?? "",
+          input.avatarUrl ?? input.avatar_url ?? null,
+          input.provider,
+          ownerId,
+          visibility,
+          runtimeId,
+          input.instructions ?? "",
+          toJson(input.skills ?? []),
+          input.cwd ?? null,
+          input.executable ?? null,
+          input.model ?? null,
+          normalizeRuntimeConcurrency(input.maxConcurrentTasks ?? input.max_concurrent_tasks ?? 6),
+          toJson(input.allowedTools ?? input.allowed_tools ?? []),
+          toJson(input.customEnv ?? input.custom_env ?? {}),
+          toJson(input.customArgs ?? input.custom_args ?? []),
+          (input.mcpConfig ?? input.mcp_config) == null ? null : toJson(input.mcpConfig ?? input.mcp_config),
+          input.thinkingLevel ?? input.thinking_level ?? null,
+          now,
+          now,
+        ],
+      );
+      return this.getAgent(id)!;
+    })();
   }
 
   updateAgent(id: string, input: UpdateAgentInput): MultiremiAgent {
+    const initial = this.getAgent(id);
+    if (!initial) throw new Error(`Agent not found: ${id}`);
+    const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+      ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
+      : initial.workspaceId;
+    const workspaceIds = [...new Set([initial.workspaceId, requestedWorkspaceId])].sort();
     const transaction = this.ctx.db.transaction(() => {
+      for (const workspaceId of workspaceIds) this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
+      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
       this.lockAgentRow(id);
       const current = this.getAgent(id);
       if (!current) throw new Error(`Agent not found: ${id}`);
-      const requestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
+      const lockedRequestedWorkspaceId = hasAnyField(input, "workspaceId", "workspace_id")
         ? cleanOptionalString(input.workspaceId ?? input.workspace_id) ?? "local"
         : current.workspaceId;
-      const workspaceIds = [...new Set([current.workspaceId, requestedWorkspaceId])].sort();
-      for (const workspaceId of workspaceIds) this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      if (!workspaceIds.includes(current.workspaceId) || !workspaceIds.includes(lockedRequestedWorkspaceId)) {
+        throw new Error("Agent workspace changed concurrently; retry the update");
+      }
       return this.updateAgentWithinPluginLock(id, input);
     });
     return transaction();
@@ -101,6 +115,10 @@ export class AgentsSkillsRepo {
     const visibility = hasAnyField(input, "visibility")
       ? normalizeAgentVisibility(input.visibility)
       : current.visibility;
+    const runtimeId = hasAnyField(input, "runtimeId", "runtime_id")
+      ? cleanOptionalString(input.runtimeId ?? input.runtime_id)
+      : current.runtimeId;
+    if (runtimeId) this.assertRuntimeBinding(runtimeId, workspaceId);
     if (input.provider !== undefined && input.provider !== current.provider) {
       this.ctx.agentPlugins().assertAgentPluginProviderCompatible(id, input.provider);
     }
@@ -137,9 +155,7 @@ export class AgentsSkillsRepo {
         input.provider ?? current.provider,
         ownerId,
         visibility,
-        hasAnyField(input, "runtimeId", "runtime_id")
-          ? cleanOptionalString(input.runtimeId ?? input.runtime_id)
-          : current.runtimeId,
+        runtimeId,
         input.instructions ?? current.instructions,
         input.skills === undefined ? toJson(current.skills) : toJson(input.skills),
         input.cwd === undefined ? current.cwd : input.cwd,
@@ -250,11 +266,17 @@ export class AgentsSkillsRepo {
   archiveAgent(id: string): MultiremiAgent {
     const now = nowIso();
     const affectedProjects: Array<{ id: string; workspace_id: string }> = [];
+    const initial = this.getAgent(id);
+    if (!initial) throw new Error(`Agent not found: ${id}`);
     const tx = this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(initial.workspaceId);
       this.lockAgentRow(id);
       const agent = this.getAgent(id);
       if (!agent) throw new Error(`Agent not found: ${id}`);
-      this.ctx.agentPlugins().lockAgentPluginWorkspace(agent.workspaceId);
+      if (agent.workspaceId !== initial.workspaceId) {
+        throw new Error("Agent workspace changed concurrently; retry the archive");
+      }
       affectedProjects.push(...this.ctx.db.query(
         `SELECT id, workspace_id FROM multiremi_projects
          WHERE default_assignee_type = 'agent' AND default_assignee_id = ?`,
@@ -271,6 +293,13 @@ export class AgentsSkillsRepo {
     tx();
     this.publishClearedProjectDefaults(affectedProjects, now);
     return this.getAgent(id)!;
+  }
+
+  private assertRuntimeBinding(runtimeId: string, workspaceId: string): void {
+    const runtime = this.ctx.runtimes().getRuntime(runtimeId);
+    if (!runtime || (runtime.workspaceId ?? "local") !== workspaceId) {
+      throw new Error(`Runtime not found: ${runtimeId}`);
+    }
   }
 
   private publishClearedProjectDefaults(
@@ -297,12 +326,18 @@ export class AgentsSkillsRepo {
 
   restoreAgent(id: string): MultiremiAgent {
     const now = nowIso();
+    const initial = this.getAgent(id);
+    if (!initial) throw new Error(`Agent not found: ${id}`);
     this.ctx.db.transaction(() => {
+      this.ctx.lockWorkspaceRuntimeLifecycle(initial.workspaceId);
+      this.ctx.agentPlugins().lockAgentPluginWorkspace(initial.workspaceId);
       this.lockAgentRow(id);
       const row = this.ctx.db.query("SELECT id, workspace_id FROM multiremi_agents WHERE id = ?").get(id) as Row | null;
       if (!row) throw new Error(`Agent not found: ${id}`);
       const workspaceId = String(row.workspace_id ?? "local");
-      this.ctx.agentPlugins().lockAgentPluginWorkspace(workspaceId);
+      if (workspaceId !== initial.workspaceId) {
+        throw new Error("Agent workspace changed concurrently; retry the restore");
+      }
       this.ctx.db.run("UPDATE multiremi_agents SET archived_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
       this.ctx.agentPlugins().reconcileAgentPluginDesiredStateWithinLock(workspaceId);
     })();
@@ -328,31 +363,34 @@ export class AgentsSkillsRepo {
   }
 
   createSkill(input: CreateSkillInput): MultiremiSkill {
+    return this.ctx.db.transaction(() => this.createSkillWithinTransaction(input))();
+  }
+
+  /** Caller already owns the transaction that protects the importing Runtime. */
+  createSkillWithinTransaction(input: CreateSkillInput): MultiremiSkill {
     const name = input.name?.trim();
     if (!name) throw new Error("Skill name is required");
     const id = input.id ?? createId("skl");
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
     const now = nowIso();
     const files = normalizeSkillFiles(input.files ?? []);
-    this.ctx.db.transaction(() => {
-      this.ctx.db.run(
-        `INSERT INTO multiremi_skills (
-          id, workspace_id, name, description, content, config, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          id,
-          workspaceId,
-          name,
-          input.description ?? "",
-          input.content ?? "",
-          toJson(input.config ?? {}),
-          input.createdBy ?? input.created_by ?? null,
-          now,
-          now,
-        ],
-      );
-      this.replaceSkillFiles(id, files, now);
-    })();
+    this.ctx.db.run(
+      `INSERT INTO multiremi_skills (
+        id, workspace_id, name, description, content, config, created_by, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        workspaceId,
+        name,
+        input.description ?? "",
+        input.content ?? "",
+        toJson(input.config ?? {}),
+        input.createdBy ?? input.created_by ?? null,
+        now,
+        now,
+      ],
+    );
+    this.replaceSkillFiles(id, files, now);
     return this.getSkill(id)!;
   }
 

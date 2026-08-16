@@ -223,6 +223,53 @@ describe("AgentPluginsRepo", () => {
     })).toEqual([]);
   });
 
+  it("requires a fresh Runtime acknowledgement after a Plugin is rebound", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude rebound", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_rebound",
+      name: "Runtime rebound",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const binding = store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const versionId = plugin.activeVersionId!;
+    const digest = plugin.activeVersion!.artifactDigest;
+    store.reportAgentPluginRuntimeState(runtime.id, versionId, {
+      status: "ready",
+      observedDigest: digest,
+      retryGeneration: 0,
+    });
+    expect(store.runtimeHasReadyAgentPlugins(runtime.id, agent.id)).toBe(true);
+
+    expect(store.deleteAgentPluginBinding(agent.id, binding.id)).toBe(true);
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const desired = store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins[0]!;
+    expect(desired).toMatchObject({ status: "pending", retryGeneration: 1 });
+    expect(store.runtimeHasReadyAgentPlugins(runtime.id, agent.id)).toBe(false);
+
+    const task = store.createTask({ agentId: agent.id, prompt: "wait for rebound" });
+    expect(store.claimTask(runtime.id)).toBeNull();
+    store.reportAgentPluginRuntimeState(runtime.id, versionId, {
+      status: "ready",
+      observedDigest: digest,
+      retryGeneration: 0,
+    });
+    expect(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins[0]).toMatchObject({
+      status: "pending",
+      retryGeneration: 1,
+    });
+    expect(store.claimTask(runtime.id)).toBeNull();
+
+    store.reportAgentPluginRuntimeState(runtime.id, versionId, {
+      status: "ready",
+      observedDigest: digest,
+      retryGeneration: 1,
+    });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+  });
+
   it("preflights candidates before activation and keeps exact versions rollback-safe", () => {
     const store = createStore();
     const agent = store.createAgent({ name: "Claude", provider: "claude" });
@@ -265,6 +312,19 @@ describe("AgentPluginsRepo", () => {
     expect(activated.activeVersionId).toBe(candidate.id);
     expect(activated.candidateVersionId).toBeNull();
 
+    const stagedRollback = store.rollbackAgentPluginVersion(plugin.id, plugin.activeVersionId);
+    expect(stagedRollback.activeVersionId).toBe(candidate.id);
+    expect(stagedRollback.candidateVersionId).toBe(plugin.activeVersionId);
+    for (const targetRuntime of [runtime, anyRuntime]) {
+      const desiredRollback = store.getRuntimeAgentPluginDesiredSnapshot(targetRuntime.id).plugins
+        .find((entry) => entry.versionId === plugin.activeVersionId)!;
+      expect(desiredRollback.status).toBe("pending");
+      store.reportAgentPluginRuntimeState(targetRuntime.id, plugin.activeVersionId!, {
+        status: "ready",
+        observedDigest: plugin.activeVersion!.artifactDigest,
+        retryGeneration: desiredRollback.retryGeneration,
+      });
+    }
     const rolledBack = store.rollbackAgentPluginVersion(plugin.id, plugin.activeVersionId);
     expect(rolledBack.activeVersionId).toBe(plugin.activeVersionId);
     expect(rolledBack.candidateVersionId).toBe(candidate.id);
@@ -330,6 +390,164 @@ describe("AgentPluginsRepo", () => {
     expect(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins.map((entry) => entry.versionId)).toEqual([
       candidate.id,
     ]);
+  });
+
+  it("classifies legacy daemons and times out capable daemons that never reconcile", () => {
+    const store = createStore();
+    const capabilityEvents: any[] = [];
+    store.onWorkspaceEvent((event) => {
+      if (event.type === "agent_plugin:runtime_capability") capabilityEvents.push(event);
+    });
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_protocol",
+      name: "Protocol runtime",
+      provider: "claude",
+      daemonId: "daemon-protocol",
+      workspaceId: "local",
+      metadata: { cli_version: "0.2.26", agent_plugin_protocol: 0 },
+    });
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({
+      status: "setup_required",
+      retryCount: 0,
+      lastErrorCode: "daemon_upgrade_required",
+    });
+
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(store.getRuntime(runtime.id)?.metadata.agent_plugin_protocol).toBe(1);
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({
+      status: "pending",
+      lastErrorCode: null,
+      lastAttemptAt: null,
+    });
+    expect(capabilityEvents).toHaveLength(1);
+    expect(capabilityEvents[0]?.payload).toMatchObject({
+      runtime_id: runtime.id,
+      daemon_id: "daemon-protocol",
+      previous_agent_plugin_protocol: 0,
+      agent_plugin_protocol: 1,
+      supported: true,
+    });
+
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]?.status).toBe("pending");
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({
+      status: "blocked",
+      lastErrorCode: "daemon_plugin_reconcile_timeout",
+      lastAttemptAt: null,
+    });
+    expect(capabilityEvents).toHaveLength(1);
+
+    expect(store.retryAgentPluginRuntime(plugin.id, runtime.id)[0]).toMatchObject({
+      status: "pending",
+      lastErrorCode: null,
+      lastAttemptAt: null,
+    });
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 0 });
+    expect(store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]).toMatchObject({
+      status: "setup_required",
+      lastErrorCode: "daemon_upgrade_required",
+    });
+    expect(capabilityEvents).toHaveLength(2);
+    expect(capabilityEvents[1]?.payload).toMatchObject({
+      runtime_id: runtime.id,
+      previous_agent_plugin_protocol: 1,
+      agent_plugin_protocol: 0,
+      supported: false,
+    });
+  });
+
+  it("treats a stale Runtime heartbeat as offline for readiness and activation", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude stale", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_stale",
+      name: "Stale plugin Runtime",
+      provider: "claude",
+      daemonId: "daemon-plugin-stale",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    db!.run(
+      "UPDATE multiremi_runtimes SET status = 'online', last_heartbeat_at = ? WHERE id = ?",
+      ["2020-01-01T00:00:00.000Z", runtime.id],
+    );
+
+    expect(store.getRuntime(runtime.id)?.status).toBe("offline");
+    const runtimeState = store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]!;
+    expect(runtimeState.runtime.status).toBe("offline");
+    expect(store.getAgentPlugin(plugin.id)?.runtimeSummary).toMatchObject({
+      desired: 1,
+      pending: 0,
+      offline: 1,
+    });
+
+    const candidate = store.createAgentPluginVersion(plugin.id, {
+      manifest: claudePluginInput("4.0.0").manifest,
+      files: claudePluginInput("4.0.0").files,
+      sourceRevision: "commit-4.0.0",
+    });
+    expect(store.activateAgentPluginVersion(plugin.id, candidate.id).activeVersionId)
+      .toBe(candidate.id);
+  });
+
+  it("does not move the desired-state wait origin during no-op reconciliation", async () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_wait_origin",
+      name: "Wait origin runtime",
+      provider: "claude",
+      workspaceId: "local",
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    const before = store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]!;
+
+    await Bun.sleep(5);
+    store.reconcileAgentPluginDesiredState("local");
+    const after = store.listAgentPluginRuntimeStates({ runtimeId: runtime.id })[0]!;
+
+    expect(after.status).toBe("pending");
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  it("reports desired-state removals discovered during a Runtime heartbeat", () => {
+    const store = createStore();
+    const events: any[] = [];
+    store.onWorkspaceEvent((event) => {
+      if (event.type === "agent_plugin:runtime_state") events.push(event);
+    });
+    const agent = store.createAgent({ name: "Claude", provider: "claude" });
+    const runtime = store.registerRuntime({
+      id: "rt_plugin_desired_removed",
+      name: "Runtime",
+      provider: "claude",
+      daemonId: "daemon-desired-removed",
+      workspaceId: "local",
+      metadata: { agent_plugin_protocol: 1 },
+    });
+    const plugin = store.importAgentPlugin(claudePluginInput());
+    store.createAgentPluginBinding(agent.id, { pluginId: plugin.id });
+    expect(store.getRuntimeAgentPluginDesiredSnapshot(runtime.id).plugins).toHaveLength(1);
+
+    // Simulate a control-plane change that has not yet run reconciliation.
+    db!.run("UPDATE multiremi_agents SET archived_at = ? WHERE id = ?", [new Date().toISOString(), agent.id]);
+    store.heartbeatRuntime(runtime.id, { agentPluginProtocol: 1 });
+
+    const state = store.listAgentPluginRuntimeStates({ runtimeId: runtime.id, includeHistorical: true })[0]!;
+    expect(state.desired).toBe(false);
+    expect(events.at(-1)?.payload.state).toMatchObject({
+      id: state.id,
+      runtime_id: runtime.id,
+      desired: false,
+    });
   });
 
   it("removes observed Plugin state when a Runtime is deleted", () => {

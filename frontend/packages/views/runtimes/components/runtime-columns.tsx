@@ -34,6 +34,7 @@ import { WorkloadChip } from "../../agents/components/agent-presence-indicator";
 import { ProviderLogo } from "./provider-logo";
 import { HealthIcon, useHealthLabel } from "./shared";
 import { DeleteRuntimeDialog } from "./delete-runtime-dialog";
+import { RetireDaemonDialog } from "./retire-daemon-dialog";
 import {
   computeCostInWindow,
   formatLastSeen,
@@ -516,6 +517,7 @@ function RowMenu({
 }) {
   const { t } = useT("runtimes");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [retiringDaemonId, setRetiringDaemonId] = useState<string | null>(null);
   // Delete is currently the only row action; if the row can't run it, drop
   // the kebab entirely so the column doesn't render an empty popover. The
   // self-healing case (local + online) is the runtime-detail parity fix —
@@ -566,7 +568,23 @@ function RowMenu({
           setDeleteOpen(false);
           toast.success(t(($) => $.detail.toast_deleted));
         }}
+        onRetireDaemon={(daemonId) => {
+          setDeleteOpen(false);
+          setRetiringDaemonId(daemonId);
+        }}
       />
+      {retiringDaemonId && (
+        <RetireDaemonDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setRetiringDaemonId(null);
+          }}
+          wsId={wsId}
+          daemonId={retiringDaemonId}
+          machineName={splitRuntimeName(runtime.name).hostname ?? runtime.name}
+          onRetired={() => setRetiringDaemonId(null)}
+        />
+      )}
     </>
   );
 }

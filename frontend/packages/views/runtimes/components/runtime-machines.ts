@@ -1,4 +1,5 @@
 import { deriveRuntimeHealth, type RuntimeHealth } from "@multiremi/core/runtimes";
+import type { DaemonInventoryEntry } from "@multiremi/core/runtimes";
 import type { AgentRuntime } from "@multiremi/core/types";
 import { formatDeviceInfo } from "../utils";
 
@@ -43,6 +44,13 @@ interface RuntimeMachineOptions {
    */
   currentUserId?: string | null;
   workloadByRuntimeId?: Map<string, RuntimeWorkloadSummary>;
+  /**
+   * Server-authorized daemon inventory. Managers receive the workspace fleet;
+   * regular members receive only their own daemons. Entries without any
+   * registered runtime are materialized as offline machines so provisioned
+   * daemon tokens remain visible and can be retired before first connection.
+   */
+  daemonInventory?: DaemonInventoryEntry[];
   /**
    * When true, guarantee that the result contains a machine flagged
    * `isCurrent`. If no server-side runtime matches the local daemon
@@ -101,11 +109,46 @@ export function buildRuntimeMachines(
     finalizeRuntimeMachine(draft, options),
   );
 
+  for (const daemon of options.daemonInventory ?? []) {
+    if (drafts.has(`local:${daemon.daemon_id}`)) continue;
+    machines.push(inventoryOnlyMachine(daemon, options));
+  }
+
   if (options.ensureLocalMachine && !machines.some((m) => m.isCurrent)) {
     machines.push(placeholderLocalMachine(options));
   }
 
   return machines.sort(compareRuntimeMachines);
+}
+
+function inventoryOnlyMachine(
+  daemon: DaemonInventoryEntry,
+  options: RuntimeMachineOptions,
+): RuntimeMachine {
+  const isCurrent =
+    !!options.localDaemonId && daemon.daemon_id === options.localDaemonId;
+  return {
+    id: `local:${daemon.daemon_id}`,
+    daemonId: daemon.daemon_id,
+    title:
+      isCurrent && options.localMachineName
+        ? options.localMachineName
+        : shortDaemonId(daemon.daemon_id),
+    subtitle: null,
+    deviceInfo: null,
+    cliVersion: null,
+    mode: "local",
+    section: isCurrent ? "local" : "remote",
+    isCurrent,
+    health: "offline",
+    runtimes: [],
+    onlineCount: 0,
+    issueCount: 1,
+    runningCount: 0,
+    queuedCount: 0,
+    providerNames: [],
+    lastSeenAt: daemon.last_seen,
+  };
 }
 
 function placeholderLocalMachine(

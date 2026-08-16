@@ -140,9 +140,13 @@
     "last_attempt": "最近尝试 {{when}}",
     "retry_success": "已安排重试",
     "retry_failed": "安排重试失败",
+    "daemon_upgrade_description": "当前 daemon 版本不支持安装插件。升级 daemon 后再重试。",
+    "daemon_reconcile_timeout_description": "daemon 未开始安装插件。请确认 daemon 正在运行，然后重试。",
+    "daemon_cli_version": "Daemon CLI v{{version}}",
+    "upgrade_daemon_action": "升级 daemon",
     "version": "v{{version}}",
     "statuses": {
-      "pending": "等待中",
+      "pending": "等待 daemon",
       "preflight": "检查中",
       "downloading": "下载中",
       "verifying": "校验中",
@@ -150,6 +154,7 @@
       "ready": "就绪",
       "retry_scheduled": "已安排重试",
       "setup_required": "需要设置",
+      "daemon_upgrade_required": "需要升级 daemon",
       "blocked": "已阻塞",
       "offline": "离线",
       "unknown": "未知"

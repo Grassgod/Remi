@@ -22,6 +22,19 @@ export type WSEventType =
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
+  | "agent_plugin:imported"
+  | "agent_plugin:updated"
+  | "agent_plugin:archived"
+  | "agent_plugin:restored"
+  | "agent_plugin:version_created"
+  | "agent_plugin:activated"
+  | "agent_plugin:rolled_back"
+  | "agent_plugin:runtime_retry"
+  | "agent_plugin:bound"
+  | "agent_plugin:binding_updated"
+  | "agent_plugin:unbound"
+  | "agent_plugin:runtime_state"
+  | "agent_plugin:runtime_capability"
   | "task:queued"
   | "task:dispatch"
   | "task:awaiting_human"
@@ -44,6 +57,7 @@ export type WSEventType =
   | "member:removed"
   | "daemon:heartbeat"
   | "daemon:register"
+  | "daemon:retired"
   | "skill:created"
   | "skill:updated"
   | "skill:deleted"
@@ -468,6 +482,19 @@ export interface WSEventPayloadMap {
   "agent:created": AgentCreatedPayload;
   "agent:archived": AgentArchivedPayload;
   "agent:restored": AgentRestoredPayload;
+  "agent_plugin:imported": unknown;
+  "agent_plugin:updated": unknown;
+  "agent_plugin:archived": unknown;
+  "agent_plugin:restored": unknown;
+  "agent_plugin:version_created": unknown;
+  "agent_plugin:activated": unknown;
+  "agent_plugin:rolled_back": unknown;
+  "agent_plugin:runtime_retry": unknown;
+  "agent_plugin:bound": unknown;
+  "agent_plugin:binding_updated": unknown;
+  "agent_plugin:unbound": unknown;
+  "agent_plugin:runtime_state": unknown;
+  "agent_plugin:runtime_capability": unknown;
   "task:queued": TaskQueuedPayload;
   "task:dispatch": TaskDispatchPayload;
   "task:running": TaskRunningPayload;
@@ -510,6 +537,7 @@ export interface WSEventPayloadMap {
   // currently consume as opaque triggers (refetch on receipt).
   "daemon:heartbeat": unknown;
   "daemon:register": unknown;
+  "daemon:retired": unknown;
   "skill:created": unknown;
   "skill:updated": unknown;
   "skill:deleted": unknown;
