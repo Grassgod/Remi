@@ -103,6 +103,7 @@ vi.mock("@multiremi/core/paths", () => ({
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
+    workbench: () => "/acme/workbench",
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
     repositories: () => "/acme/repos",
@@ -131,6 +132,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
 });
 vi.mock("@multiremi/core/inbox/queries", () => ({ deduplicateInboxItems: (items: unknown[]) => items, inboxKeys: { list: () => ["inbox"] } }));
 vi.mock("@multiremi/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
+vi.mock("@multiremi/core/issues/workbench", () => ({ useWorkbenchPendingCount: () => 0 }));
 vi.mock("@multiremi/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
   openCreateIssueWithPreference: vi.fn(),

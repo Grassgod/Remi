@@ -29,6 +29,7 @@ import {
   BookOpenText,
   SquarePen,
   CircleUser,
+  ClipboardCheck,
   FolderKanban,
   GitFork,
   Library,
@@ -78,6 +79,7 @@ import { useMyRuntimesNeedUpdate } from "@multiremi/core/runtimes/hooks";
 import { pinListOptions } from "@multiremi/core/pins/queries";
 import { useDeletePin, useReorderPins } from "@multiremi/core/pins/mutations";
 import { issueDetailOptions } from "@multiremi/core/issues/queries";
+import { useWorkbenchPendingCount } from "@multiremi/core/issues/workbench";
 import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import type { PinnedItem } from "@multiremi/core/types";
 import { useLogout } from "../auth";
@@ -108,6 +110,7 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 type NavKey =
   | "inbox"
   | "myIssues"
+  | "workbench"
   | "issues"
   | "projects"
   | "repositories"
@@ -125,6 +128,7 @@ type NavKey =
 type NavLabelKey =
   | "inbox"
   | "my_issues"
+  | "workbench"
   | "issues"
   | "projects"
   | "repositories"
@@ -141,6 +145,7 @@ type NavLabelKey =
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
   { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
+  { key: "workbench", labelKey: "workbench", icon: ClipboardCheck },
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
@@ -374,6 +379,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     [inboxItems],
   );
   const hasRuntimeUpdates = useMyRuntimesNeedUpdate(wsId);
+  const workbenchPendingCount = useWorkbenchPendingCount(wsId);
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
     ...pinListOptions(wsId ?? "", userId ?? ""),
     enabled: !!wsId && !!userId,
@@ -649,6 +655,11 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         {item.key === "inbox" && unreadCount > 0 && (
                           <span className="ml-auto text-xs">
                             {unreadCount > 99 ? "99+" : unreadCount}
+                          </span>
+                        )}
+                        {item.key === "workbench" && workbenchPendingCount > 0 && (
+                          <span className="ml-auto text-xs">
+                            {workbenchPendingCount > 99 ? "99+" : workbenchPendingCount}
                           </span>
                         )}
                       </SidebarMenuButton>

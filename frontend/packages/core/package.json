@@ -27,6 +27,7 @@
     "./workspace/avatar-url": "./workspace/avatar-url.ts",
     "./issues": "./issues/index.ts",
     "./issues/queries": "./issues/queries.ts",
+    "./issues/workbench": "./issues/workbench.ts",
     "./issues/mutations": "./issues/mutations.ts",
     "./issues/comment-mutations": "./issues/comment-mutations.ts",
     "./issues/session-mutations": "./issues/session-mutations.ts",

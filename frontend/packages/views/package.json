@@ -25,6 +25,7 @@
     "./modals/create-issue": "./modals/create-issue.tsx",
     "./my-issues": "./my-issues/index.ts",
     "./plugins": "./plugins/index.ts",
+    "./workbench": "./workbench/index.ts",
     "./skills": "./skills/index.ts",
     "./knowledge": "./knowledge/index.ts",
     "./agents": "./agents/index.ts",
