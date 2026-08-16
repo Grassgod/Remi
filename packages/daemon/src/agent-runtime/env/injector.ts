@@ -22,14 +22,17 @@ export interface BuildTaskEnvOptions {
 /**
  * Build the spawn env for a task's agent process.
  *
- * The agent's custom env is the base; the Multiremi coordinates are layered on
- * top (so they win on key clashes, exactly as the inline code did). The token
- * key is only set when a token is available.
+ * The workspace env (claim payload) is the base, the agent's custom env is
+ * layered over it, and the Multiremi coordinates go on top (so they win on key
+ * clashes). Merged over the daemon machine env at spawn, this yields the
+ * documented precedence: agent customEnv > workspace env > machine env. The
+ * token key is only set when a token is available.
  */
 export function buildTaskEnv(task: AgentTask, opts: BuildTaskEnvOptions): Record<string, string> {
   const agent = task.agent;
   const taskAuthToken = task.authToken ?? task.auth_token ?? opts.fallbackToken;
   return {
+    ...(task.workspaceEnv ?? task.workspace_env),
     ...agent?.customEnv,
     MULTIREMI_DAEMON_PORT: String(opts.daemonPort),
     MULTIREMI_WORKSPACE_ID: task.workspaceId,

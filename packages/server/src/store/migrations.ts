@@ -382,6 +382,7 @@ export function runMigrations(db: SqlDatabase): void {
       settings TEXT NOT NULL DEFAULT '{}',
       repos TEXT NOT NULL DEFAULT '[]',
       issue_prefix TEXT NOT NULL DEFAULT 'MUL',
+      env TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1228,6 +1229,7 @@ export function runMigrations(db: SqlDatabase): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_multiremi_messages_task_seq_unique
       ON multiremi_task_messages(task_id, seq);
   `);
+  addColumnIfMissing(db, "multiremi_workspaces", "env TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, "multiremi_agents", "workspace_id TEXT NOT NULL DEFAULT 'local'");
   addColumnIfMissing(db, "multiremi_agents", "description TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing(db, "multiremi_agents", "avatar_url TEXT");

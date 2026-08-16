@@ -161,6 +161,26 @@
     "confirm_cancel": "Cancel",
     "confirm_action": "Confirm"
   },
+  "workspace_env": {
+    "section_title": "Environment Variables",
+    "section_hint": "Injected into every newly dispatched task session in this workspace. Agent-level variables with the same name take precedence.",
+    "not_revealed_hint": "Values stay masked until you reveal them.",
+    "reveal_action": "Reveal & edit",
+    "revealing": "Revealing…",
+    "reveal_failed_toast": "Failed to load env values",
+    "key_placeholder": "KEY",
+    "value_placeholder": "value",
+    "show_value_aria": "Show value",
+    "hide_value_aria": "Hide value",
+    "remove_aria": "Remove variable",
+    "add": "Add",
+    "save": "Save",
+    "unsaved_changes": "Unsaved changes",
+    "empty_editable": "No environment variables configured. Add one to inject it into every task session.",
+    "duplicate_keys_toast": "Duplicate environment variable keys",
+    "saved_toast": "Environment variables saved",
+    "save_failed_toast": "Failed to save environment variables"
+  },
   "delete_workspace_dialog": {
     "title": "Delete workspace",
     "description": "This cannot be undone. All issues, agents, and data will be permanently removed.",

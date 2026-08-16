@@ -678,6 +678,14 @@ runMigrations(this.db);
     return this.workspaces.ensureLocalWorkspace();
   }
 
+  getWorkspaceEnv(workspaceId: string): Record<string, string> {
+    return this.workspaces.getWorkspaceEnv(workspaceId);
+  }
+
+  setWorkspaceEnv(workspaceId: string, env: Record<string, string>): Record<string, string> {
+    return this.workspaces.setWorkspaceEnv(workspaceId, env);
+  }
+
   getRelayConfigForDaemon(workspaceId: string): RelayConfigForDaemon {
     return this.workspaces.getRelayConfigForDaemon(workspaceId);
   }

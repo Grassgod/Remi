@@ -161,6 +161,26 @@
     "confirm_cancel": "取消",
     "confirm_action": "确认"
   },
+  "workspace_env": {
+    "section_title": "环境变量",
+    "section_hint": "注入到本工作区所有新派发任务的会话中。同名变量以智能体级配置优先。",
+    "not_revealed_hint": "在解锁前所有值保持隐藏。",
+    "reveal_action": "解锁并编辑",
+    "revealing": "正在解锁…",
+    "reveal_failed_toast": "加载环境变量值失败",
+    "key_placeholder": "KEY",
+    "value_placeholder": "值",
+    "show_value_aria": "显示值",
+    "hide_value_aria": "隐藏值",
+    "remove_aria": "移除变量",
+    "add": "新增",
+    "save": "保存",
+    "unsaved_changes": "有未保存的更改",
+    "empty_editable": "尚未配置环境变量。新增一条即可注入到所有任务会话。",
+    "duplicate_keys_toast": "环境变量 key 重复",
+    "saved_toast": "已保存环境变量",
+    "save_failed_toast": "保存环境变量失败"
+  },
   "delete_workspace_dialog": {
     "title": "删除工作区",
     "description": "此操作不可撤销。所有 issue、智能体和数据都将被永久删除。",

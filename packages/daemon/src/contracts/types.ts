@@ -231,6 +231,9 @@ export interface AgentTask {
   // Claim-context fields (read via stringField/arrayField/unknownField).
   workspaceContext?: string | null;
   workspace_context?: string | null;
+  /** Workspace-level env (env/injector.ts): below agent customEnv, above machine env. */
+  workspaceEnv?: Record<string, string>;
+  workspace_env?: Record<string, string>;
   requestingUserName?: string | null;
   requesting_user_name?: string | null;
   requestingUserProfileDescription?: string | null;

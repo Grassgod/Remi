@@ -8,6 +8,7 @@ import {
   isGitHubAppConfigured,
   isJsonApiError,
   loadCurrentWorkspaceMember,
+  mergeAgentEnv,
   publishWorkspaceEvent,
   readJson,
   readJsonStrict,
@@ -197,6 +198,30 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const deleted = store.deleteWorkspace(c.req.param("id"));
     if (!deleted) return c.json({ error: "workspace not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ── Workspace env (owner/admin only) ───────────────────────────
+  // Same contract as the agent env endpoints: GET returns plaintext to admins
+  // (the UI masks by default), PUT replaces the whole map where a "****" value
+  // keeps the currently stored value for that key.
+  app.get("/api/workspaces/:id/env", (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    c.header("Cache-Control", "no-store");
+    return c.json({ workspace_id: workspaceId, env: store.getWorkspaceEnv(workspaceId) });
+  });
+  app.put("/api/workspaces/:id/env", async (c) => {
+    const workspaceId = c.req.param("id");
+    const denied = requireWorkspaceAdmin(c, store, workspaceId);
+    if (denied) return denied;
+    if (!store.getWorkspace(workspaceId)) return c.json({ error: "workspace not found" }, 404);
+    const body = await readJsonStrict<{ env?: Record<string, string> }>(c);
+    if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
+    const nextEnv = mergeAgentEnv(store.getWorkspaceEnv(workspaceId), body.env ?? {});
+    c.header("Cache-Control", "no-store");
+    return c.json({ workspace_id: workspaceId, env: store.setWorkspaceEnv(workspaceId, nextEnv) });
   });
 
   // ── Model gateway: relay config (owner/admin only) ─────────────

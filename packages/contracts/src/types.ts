@@ -993,6 +993,9 @@ export interface MultiremiTask {
   quick_create_prompt?: string | null;
   workspaceContext?: string | null;
   workspace_context?: string | null;
+  /** Workspace-level env for the task session, injected below agent customEnv. */
+  workspaceEnv?: Record<string, string>;
+  workspace_env?: Record<string, string>;
   requestingUserName?: string | null;
   requesting_user_name?: string | null;
   requestingUserProfileDescription?: string | null;

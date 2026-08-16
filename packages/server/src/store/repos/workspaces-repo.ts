@@ -482,6 +482,33 @@ export class WorkspacesRepo {
     return this.createWorkspace({ id: "local", name: "Local Workspace", slug: "local", issuePrefix: "MUL" });
   }
 
+  // ── Workspace env (task-session environment variables) ─────────
+  // Stored in a dedicated column, NOT in `settings`: the settings object is
+  // serialized verbatim to every member (GET /api/workspaces/:id) and to
+  // daemons (workspaceReposResponse), while env values are secrets that only
+  // workspace admins and the task claim path may read.
+
+  getWorkspaceEnv(workspaceId: string): Record<string, string> {
+    const row = this.ctx.db.query("SELECT env FROM multiremi_workspaces WHERE id = ?").get(workspaceId) as Row | null;
+    if (!row) return {};
+    const parsed = parseJson<Record<string, unknown>>(row.env, {});
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.trim()) env[key] = String(value ?? "");
+    }
+    return env;
+  }
+
+  setWorkspaceEnv(workspaceId: string, env: Record<string, string>): Record<string, string> {
+    const workspace = this.getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Workspace not found: ${workspaceId}`);
+    this.ctx.db.run(
+      "UPDATE multiremi_workspaces SET env = ?, updated_at = ? WHERE id = ?",
+      [toJson(env), nowIso(), workspaceId],
+    );
+    return this.getWorkspaceEnv(workspaceId);
+  }
+
   // ── Model gateway: relay config ────────────────────────────────
 
   private relayRow(workspaceId: string, engine: RelayEngine): RelayEngineConfig | null {
