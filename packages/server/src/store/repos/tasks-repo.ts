@@ -40,6 +40,7 @@ import type {
   MultiremiTaskHumanRequestKind,
   MultiremiTaskHumanRequestStatus,
   MultiremiTaskMessage,
+  MultiremiTaskPromptArtifact,
   MultiremiTaskProjectContext,
   MultiremiTaskPluginSnapshotEntry,
   MultiremiTaskStatus,
@@ -47,6 +48,7 @@ import type {
   MultiremiTaskWithAgent,
   TaskMessageInput,
   TaskUsageEntry,
+  RecordTaskPromptInput,
 } from "@multiremi/contracts/types.js";
 
 const log = createLogger("multiremi-store");
@@ -70,6 +72,7 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 ]);
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
+const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
 class AgentPluginReadinessChangedError extends Error {}
@@ -1265,6 +1268,41 @@ export class TasksRepo {
         "SELECT * FROM multiremi_task_messages WHERE task_id = ? ORDER BY seq ASC",
       ).all(taskId) as Row[];
     return rows.map(toTaskMessage);
+  }
+
+  recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    if (input.mode !== "bootstrap" && input.mode !== "delta") throw new Error("prompt mode must be bootstrap or delta");
+    if (!input.prompt) throw new Error("assembled prompt is required");
+    if (Buffer.byteLength(input.prompt, "utf8") > TASK_PROMPT_MAX_BYTES) {
+      throw new Error(`assembled prompt exceeds ${TASK_PROMPT_MAX_BYTES} bytes`);
+    }
+    const sha256 = createHash("sha256").update(input.prompt).digest("hex");
+    if (input.sha256 !== sha256) throw new Error("assembled prompt sha256 mismatch");
+    this.ctx.db.run(
+      `INSERT OR IGNORE INTO multiremi_task_prompts (task_id, mode, prompt, sha256, assembled_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [taskId, input.mode, input.prompt, sha256, nowIso()],
+    );
+    const recorded = this.getTaskPrompt(taskId);
+    if (!recorded) throw new Error("assembled prompt was not recorded");
+    if (recorded.sha256 !== sha256 || recorded.mode !== input.mode) {
+      throw new Error("assembled prompt is immutable once recorded");
+    }
+    return recorded;
+  }
+
+  getTaskPrompt(taskId: string): MultiremiTaskPromptArtifact | null {
+    const row = this.ctx.db.query("SELECT * FROM multiremi_task_prompts WHERE task_id = ?").get(taskId) as Row | null;
+    if (!row) return null;
+    return {
+      taskId: String(row.task_id),
+      mode: String(row.mode) as MultiremiTaskPromptArtifact["mode"],
+      prompt: String(row.prompt),
+      sha256: String(row.sha256),
+      assembledAt: String(row.assembled_at),
+    };
   }
 
   completeTask(taskId: string, input: {

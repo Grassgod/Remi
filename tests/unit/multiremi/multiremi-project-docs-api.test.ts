@@ -564,7 +564,7 @@ describe("Bun Multiremi project docs API", () => {
     expect(await listed.json()).toEqual({ error: "forbidden" });
   });
 
-  it("attaches the project knowledge index to a daemon claim", async () => {
+  it("keeps project knowledge out of the daemon claim so agents retrieve it on demand", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const project = store.createProject({ title: "Claim docs" });
@@ -578,22 +578,10 @@ describe("Bun Multiremi project docs API", () => {
     const claim = await app.request(`/api/daemon/runtimes/${runtime.id}/tasks/claim`, { method: "POST" });
     expect(claim.status).toBe(200);
     const claimed = (await claim.json()).task;
-    expect(claimed.project_docs.memory).toEqual([
-      expect.objectContaining({
-        slug: "build-needs-bun-1-2",
-        title: "Build needs bun 1.2",
-        body: "install via curl",
-        kind: "memory",
-        pinned: true,
-        source_issue_id: null,
-      }),
-    ]);
-    // `_schema` rides the schema field instead of taking a wiki slot.
-    expect(claimed.project_docs.wiki.map((entry: any) => entry.slug)).toEqual(["architecture"]);
-    expect(claimed.project_docs.wiki[0]).toMatchObject({ summary: "Hub and spoke", body: null, kind: "wiki" });
-    expect(claimed.project_docs.schema).toContain("Wiki Schema");
+    expect(claimed.project_docs).toBeUndefined();
 
-    // The daemon client normalizes the wire shape back to camelCase entries.
+    // The daemon client keeps backward-compatible parsing for old servers, but
+    // new claims do not transport a bulk knowledge index or document bodies.
     store.completeTask(claimed.id, { output: "done" });
     store.createTask({ agentId: agent.id, issueId: issue.id, workspaceId: "local", prompt: "go again" });
     mockFetch((url, init) => {
@@ -601,19 +589,7 @@ describe("Bun Multiremi project docs API", () => {
       return app.request(`${parsed.pathname}${parsed.search}`, init);
     });
     const normalized = await new MultiremiDaemonClient("https://remi.example").claimTask(runtime.id);
-    const memoryEntry = normalized?.projectDocs?.memory[0];
-    const wikiEntry = normalized?.projectDocs?.wiki[0];
-    expect(memoryEntry).toMatchObject({
-      slug: "build-needs-bun-1-2",
-      title: "Build needs bun 1.2",
-      body: "install via curl",
-      kind: "memory",
-      pinned: true,
-      sourceIssueId: null,
-    });
-    expect(memoryEntry?.updatedAt).toBeString();
-    expect(wikiEntry).toMatchObject({ slug: "architecture", summary: "Hub and spoke", body: null, kind: "wiki" });
-    expect(normalized?.projectDocs?.schema).toContain("Wiki Schema");
+    expect(normalized?.projectDocs).toBeNull();
   });
 
   it("fails and retries a claimed task when project knowledge cannot be hydrated", async () => {

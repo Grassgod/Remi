@@ -84,7 +84,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     const issue = store.createIssue({ title: "Projection", workspaceId: "local" });
     const session = store.getOrCreateDefaultIssueSession(issue.id);
 
-    store.createIssueComment(issue.id, {
+    const agentAComment = store.createIssueComment(issue.id, {
       issueSessionId: session.id,
       authorType: "agent",
       authorId: agentA.id,
@@ -105,8 +105,9 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(firstProjection.mode).toBe("bootstrap");
     expect(firstProjection.jsonl).toContain('"perspective":"external_agent"');
     expect(firstProjection.jsonl).toContain('"author_name":"Agent A"');
+    expect(firstProjection.jsonl).toContain(`"source_comment_id":"${agentAComment.id}"`);
     expect(firstProjection.jsonl).toContain('"perspective":"assistant_history"');
-    expect(firstProjection.jsonl).toContain("Implement the projection.");
+    expect(firstProjection.jsonl).not.toContain("Implement the projection.");
     const firstPrompt = buildTaskPrompt({
       ...store.getTaskWithAgent(firstTask.id)!,
       issueSession: session,
@@ -114,6 +115,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
       issueSessionResults: [],
     } as any);
     expect(firstPrompt).toContain("Sibling Session transcripts are private");
+    expect(firstPrompt).toContain("## Current Request\nImplement the projection.");
     expect(firstPrompt).toContain(
       `remi issue session result publish ${issue.id} --session ${session.id}`,
     );
@@ -155,7 +157,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(secondProjection.mode).toBe("delta");
     expect(secondProjection.fromSeq).toBe(lane.cursorSeq);
     expect(secondProjection.jsonl).toContain("Please add deterministic ordering.");
-    expect(secondProjection.jsonl).toContain("Add deterministic ordering.");
+    expect(secondProjection.jsonl).not.toContain("Add deterministic ordering.");
     expect(secondProjection.jsonl).not.toContain("Projection implemented.");
   });
 

@@ -1193,6 +1193,15 @@ export function runMigrations(db: SqlDatabase): void {
 
     CREATE INDEX IF NOT EXISTS idx_multiremi_messages_task ON multiremi_task_messages(task_id, seq);
 
+    CREATE TABLE IF NOT EXISTS multiremi_task_prompts (
+      task_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      assembled_at TEXT NOT NULL,
+      FOREIGN KEY(task_id) REFERENCES multiremi_tasks(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS multiremi_task_human_requests (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,

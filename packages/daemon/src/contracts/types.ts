@@ -170,6 +170,18 @@ export interface AgentTaskProjectContext {
   repos: AgentTaskRepo[];
 }
 
+export interface AgentTaskSquadContext {
+  id: string;
+  name: string;
+  leaderAgentId: string;
+  members: Array<{
+    agentId: string;
+    name: string;
+    role: string;
+    description?: string | null;
+  }>;
+}
+
 /** Repo available to a task. */
 export interface AgentTaskRepo {
   url: string;
@@ -213,6 +225,8 @@ export interface AgentTask {
   project_docs?: AgentTaskProjectDocsIndex | null;
   projectContexts?: AgentTaskProjectContext[];
   project_contexts?: AgentTaskProjectContext[];
+  squadContext?: AgentTaskSquadContext | null;
+  squad_context?: AgentTaskSquadContext | null;
   repos: AgentTaskRepo[];
 
   /** Exact immutable Agent Plugin versions frozen for this execution. */

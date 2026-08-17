@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
 import { AgentTranscriptDialog } from "./agent-transcript-dialog";
@@ -29,14 +30,17 @@ const task: AgentTask = {
 };
 
 function renderTranscript(items: TimelineItem[]) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderWithI18n(
-    <AgentTranscriptDialog
-      open
-      onOpenChange={() => {}}
-      task={task}
-      items={items}
-      agentName="Remi"
-    />,
+    <QueryClientProvider client={queryClient}>
+      <AgentTranscriptDialog
+        open
+        onOpenChange={() => {}}
+        task={task}
+        items={items}
+        agentName="Remi"
+      />
+    </QueryClientProvider>,
   );
 }
 

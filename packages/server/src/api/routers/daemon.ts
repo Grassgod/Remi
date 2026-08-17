@@ -412,6 +412,29 @@ export function registerDaemonRoutes(app: Hono, deps: RouterDeps): void {
     store.appendTaskMessages(taskId, rawMessages.map(daemonTaskMessageInput));
     return c.json({ status: "ok" });
   });
+  app.post("/api/daemon/tasks/:taskId/prompt", async (c) => {
+    const body = await readJsonStrict<{ mode?: string; prompt?: string; sha256?: string }>(c);
+    if ("apiError" in body) return c.json({ error: body.apiError }, body.statusCode);
+    const taskId = c.req.param("taskId");
+    const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);
+    if (identityDenied) return identityDenied;
+    if (!store.getTask(taskId)) return c.json({ error: "task not found" }, 404);
+    try {
+      const artifact = store.recordTaskPrompt(taskId, {
+        mode: body.mode as "bootstrap" | "delta",
+        prompt: body.prompt ?? "",
+        sha256: body.sha256 ?? "",
+      });
+      return c.json({
+        task_id: artifact.taskId,
+        mode: artifact.mode,
+        sha256: artifact.sha256,
+        assembled_at: artifact.assembledAt,
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
   app.get("/api/daemon/tasks/:taskId/messages", (c) => {
     const taskId = c.req.param("taskId");
     const identityDenied = denyDaemonTokenTaskRuntimeIdentity(c, store, taskId);

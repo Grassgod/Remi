@@ -68,6 +68,7 @@ export type {
   RuntimeDirectoryScanRequest,
   CreateRuntimeDirectoryScanRequest,
   IssueUsageSummary,
+  TaskPromptArtifact,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
 export type {

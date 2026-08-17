@@ -19,6 +19,7 @@
  * the file is safe on machines without the configured MULTIREMI_DATABASE_URL.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { PostgresSyncDatabase, translateSqliteToPg } from "@multiremi/store/db/postgres.js";
 import { daemonRuntimeId, MultiremiStore } from "@multiremi/store.js";
 
@@ -462,6 +463,13 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       targetAgentId: agent.id,
     });
     expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    const prompt = "# Bootstrap Prompt\n\n## Current Request\nUse the main context";
+    const recordedPrompt = store.recordTaskPrompt(task.id, {
+      mode: "bootstrap",
+      prompt,
+      sha256: createHash("sha256").update(prompt).digest("hex"),
+    });
+    expect(store.getTaskPrompt(task.id)).toEqual(recordedPrompt);
     store.startTask(task.id);
     store.completeTask(task.id, {
       output: "Main answer",

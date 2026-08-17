@@ -1,21 +1,21 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 539,
+    "routeCount": 541,
     "routeCountByPrefix": {
       "native": 193,
-      "compat": 333,
+      "compat": 335,
       "root": 13
     },
-    "getRoutes": 238,
-    "getRoutesWithBody": 235,
+    "getRoutes": 239,
+    "getRoutesWithBody": 236,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 301,
-    "mutationRoutesCovered": 276,
+    "mutationRoutes": 302,
+    "mutationRoutesCovered": 277,
     "flows": [
       "agents-compat",
       "agents-native",
@@ -336,6 +336,7 @@
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:taskId/messages",
+    "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
@@ -432,6 +433,7 @@
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "POST /api/daemon/tasks/:taskId/messages",
     "POST /api/daemon/tasks/:taskId/progress",
+    "POST /api/daemon/tasks/:taskId/prompt",
     "POST /api/daemon/tasks/:taskId/session",
     "POST /api/daemon/tasks/:taskId/start",
     "POST /api/daemon/tasks/:taskId/usage",
@@ -874,6 +876,7 @@
     "GET /api/squads/:id/members/status",
     "GET /api/tasks/:id/human-requests",
     "GET /api/tasks/:taskId/messages",
+    "GET /api/tasks/:taskId/prompt",
     "GET /api/tokens",
     "GET /api/workspaces",
     "GET /api/workspaces/:id",
@@ -965,6 +968,7 @@
     "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
     "POST /api/daemon/tasks/:taskId/messages",
     "POST /api/daemon/tasks/:taskId/progress",
+    "POST /api/daemon/tasks/:taskId/prompt",
     "POST /api/daemon/tasks/:taskId/session",
     "POST /api/daemon/tasks/:taskId/start",
     "POST /api/daemon/tasks/:taskId/usage",
@@ -3515,7 +3519,7 @@
           "trigger_comment_content": "Snapshot comment body",
           "trigger_author_type": "member",
           "trigger_author_name": "Snapshot Member",
-          "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+          "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
           "agent": {
             "id": "agt_snapshot",
             "name": "Snapshot Agent",
@@ -3611,7 +3615,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 5,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":4,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"A teammate commented on an issue assigned to you. Respond as the issue's assignee.\\n\\n## Triggering Comment\\nSnapshot comment body\",\"task_id\":\"tsk_0ts9yveh51cp\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_bbo9f1dxazyr\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":5}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_0yjz7la3olrb\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":5,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot lifecycle task\",\"task_id\":\"tsk_bbo9f1dxazyr\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
           },
           "issue_session_results": [
             {
@@ -3659,23 +3663,6 @@
               "created_by": null
             }
           ],
-          "project_docs": {
-            "memory": [],
-            "wiki": [
-              {
-                "id": "pdoc_snapshot",
-                "slug": "spec",
-                "title": "Snapshot Spec",
-                "summary": null,
-                "body": null,
-                "kind": "wiki",
-                "pinned": false,
-                "source_issue_id": null,
-                "updated_at": "<timestamp>"
-              }
-            ],
-            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
-          },
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -3864,7 +3851,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_nq4cfmaunci5\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"snapshot run\",\"task_id\":\"tsk_sv8e5p1ut6x0\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_nq4cfmaunci5\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -3903,23 +3890,6 @@
               "created_by": null
             }
           ],
-          "project_docs": {
-            "memory": [],
-            "wiki": [
-              {
-                "id": "pdoc_snapshot",
-                "slug": "spec",
-                "title": "Snapshot Spec",
-                "summary": null,
-                "body": null,
-                "kind": "wiki",
-                "pinned": false,
-                "source_issue_id": null,
-                "updated_at": "<timestamp>"
-              }
-            ],
-            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
-          },
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -4046,7 +4016,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 1,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_ksk9u210lmg0\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot {{title}}\",\"task_id\":\"tsk_u4c9m3gewz2d\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_ksk9u210lmg0\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":1}"
           },
           "issue_session_results": [],
           "project_id": "prj_snapshot",
@@ -4085,23 +4055,6 @@
               "created_by": null
             }
           ],
-          "project_docs": {
-            "memory": [],
-            "wiki": [
-              {
-                "id": "pdoc_snapshot",
-                "slug": "spec",
-                "title": "Snapshot Spec",
-                "summary": null,
-                "body": null,
-                "kind": "wiki",
-                "pinned": false,
-                "source_issue_id": null,
-                "updated_at": "<timestamp>"
-              }
-            ],
-            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
-          },
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -4180,14 +4133,39 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/session",
+      "key": "daemon-task-lifecycle#011 POST /api/daemon/tasks/:taskId/prompt",
+      "route": "POST /api/daemon/tasks/:taskId/prompt",
+      "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/prompt",
+      "status": 200,
+      "body": {
+        "task_id": "tsk_bbo9f1dxazyr",
+        "mode": "bootstrap",
+        "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
+        "assembled_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "daemon-task-lifecycle#012 GET /api/tasks/:taskId/prompt",
+      "route": "GET /api/tasks/:taskId/prompt",
+      "path": "/api/tasks/tsk_bbo9f1dxazyr/prompt",
+      "status": 200,
+      "body": {
+        "task_id": "tsk_bbo9f1dxazyr",
+        "mode": "bootstrap",
+        "prompt": "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task",
+        "sha256": "6e3d9e63c19d1f802e18f4d59fe08e3eb4bfc6965e7f5065a0cac94ceefc22af",
+        "assembled_at": "<timestamp>"
+      }
+    },
+    {
+      "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/session",
       "route": "POST /api/daemon/tasks/:taskId/session",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/session",
       "status": 204,
       "body": ""
     },
     {
-      "key": "daemon-task-lifecycle#012 POST /api/daemon/tasks/:taskId/usage",
+      "key": "daemon-task-lifecycle#014 POST /api/daemon/tasks/:taskId/usage",
       "route": "POST /api/daemon/tasks/:taskId/usage",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/usage",
       "status": 200,
@@ -4196,7 +4174,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#013 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/human-requests",
       "status": 201,
@@ -4217,7 +4195,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#014 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#016 POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
       "path": "/api/multiremi/tasks/tsk_bbo9f1dxazyr/human-requests/hrq_o45b2ryujm2j/respond",
       "status": 200,
@@ -4238,7 +4216,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#015 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/human-requests",
       "status": 201,
@@ -4259,7 +4237,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#016 POST /api/tasks/:id/human-requests/:requestId/respond",
+      "key": "daemon-task-lifecycle#018 POST /api/tasks/:id/human-requests/:requestId/respond",
       "route": "POST /api/tasks/:id/human-requests/:requestId/respond",
       "path": "/api/tasks/tsk_bbo9f1dxazyr/human-requests/hrq_4i6hpiqp1rpc/respond",
       "status": 200,
@@ -4280,7 +4258,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#017 POST /api/daemon/tasks/:taskId/human-requests",
+      "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/human-requests",
       "route": "POST /api/daemon/tasks/:taskId/human-requests",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/human-requests",
       "status": 201,
@@ -4301,7 +4279,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#018 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
+      "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "route": "POST /api/daemon/tasks/:taskId/human-requests/:requestId/expire",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/human-requests/hrq_1xalq5010won/expire",
       "status": 200,
@@ -4322,7 +4300,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#019 POST /api/daemon/tasks/:taskId/complete",
+      "key": "daemon-task-lifecycle#021 POST /api/daemon/tasks/:taskId/complete",
       "route": "POST /api/daemon/tasks/:taskId/complete",
       "path": "/api/daemon/tasks/tsk_bbo9f1dxazyr/complete",
       "status": 200,
@@ -4350,7 +4328,7 @@
       }
     },
     {
-      "key": "daemon-task-lifecycle#020 POST /api/daemon/tasks/:taskId/fail",
+      "key": "daemon-task-lifecycle#022 POST /api/daemon/tasks/:taskId/fail",
       "route": "POST /api/daemon/tasks/:taskId/fail",
       "path": "/api/daemon/tasks/tsk_snapshot/fail",
       "status": 200,
@@ -4460,7 +4438,7 @@
           "trigger_comment_content": "Snapshot comment body",
           "trigger_author_type": "member",
           "trigger_author_name": "Snapshot Member",
-          "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+          "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
           "agent": {
             "id": "agt_snapshot",
             "name": "Snapshot Agent",
@@ -4556,7 +4534,7 @@
             "mode": "bootstrap",
             "from_seq": 0,
             "to_seq": 4,
-            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":4,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"A teammate commented on an issue assigned to you. Respond as the issue's assignee.\\n\\n## Triggering Comment\\nSnapshot comment body\",\"task_id\":\"tsk_0ts9yveh51cp\",\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}"
+            "jsonl": "{\"type\":\"session_projection\",\"version\":1,\"mode\":\"bootstrap\",\"session_id\":\"ises_cdyoy133keds\",\"target_agent_id\":\"agt_snapshot\",\"from_seq\":0,\"to_seq\":4}\n{\"type\":\"session_event\",\"seq\":1,\"kind\":\"task_assigned\",\"perspective\":\"operator\",\"author_type\":\"system\",\"author_id\":null,\"author_name\":null,\"body\":\"Snapshot prompt\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"attempt\":1,\"parent_task_id\":null,\"source_event_id\":null},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":2,\"kind\":\"task_completed\",\"perspective\":\"assistant_history\",\"author_type\":\"agent\",\"author_id\":\"agt_snapshot\",\"author_name\":\"Snapshot Agent\",\"body\":\"\",\"task_id\":\"tsk_snapshot\",\"source_comment_id\":null,\"metadata\":{\"assignee_agent_id\":\"agt_snapshot\",\"failure_reason\":null,\"result_available\":false,\"status\":\"completed\"},\"created_at\":\"<timestamp>\"}\n{\"type\":\"session_event\",\"seq\":3,\"kind\":\"message\",\"perspective\":\"user\",\"author_type\":\"member\",\"author_id\":\"mem_snapshot_one\",\"author_name\":\"Snapshot Member\",\"body\":\"Snapshot comment body\",\"task_id\":null,\"source_comment_id\":\"cmt_0yjz7la3olrb\",\"metadata\":{\"parent_comment_id\":null},\"created_at\":\"<timestamp>\"}"
           },
           "issue_session_results": [
             {
@@ -4604,23 +4582,6 @@
               "created_by": null
             }
           ],
-          "project_docs": {
-            "memory": [],
-            "wiki": [
-              {
-                "id": "pdoc_snapshot",
-                "slug": "spec",
-                "title": "Snapshot Spec",
-                "summary": null,
-                "body": null,
-                "kind": "wiki",
-                "pinned": false,
-                "source_issue_id": null,
-                "updated_at": "<timestamp>"
-              }
-            ],
-            "schema": "# Wiki Schema（本项目知识库维护规则）\n\n本文档约束 agent 如何维护本项目的 wiki 与 memory，人和 agent 都可修订本文档。\n\n## 分层\n- 原始来源（issue 讨论、task transcript、代码库）不可修改；wiki/memory 是从来源蒸馏出的知识。\n- memory 条目 = 未整合的快速记录；wiki 页 = 整合后的长期知识。\n\n## 维护纪律\n- 写入前先 `doc search` / `doc get` 查已有条目；能 update 就不要 create。\n- 新事实与旧条目矛盾时：更新旧条目并在正文注明变化与依据（引用 issue/task），不要静默并存两个版本。\n- 写入时用 --ref 引用来源（issue/task/url）；页面间用 [[slug]] 交叉链接。\n- 一次性细节、只对当前 issue 有效的信息不要入库。\n"
-          },
           "repos": [
             {
               "url": "https://example.invalid/snapshot.git"
@@ -5002,7 +4963,7 @@
           "workspaceId": "local",
           "status": "queued",
           "priority": 0,
-          "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+          "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
@@ -5750,7 +5711,7 @@
           "workspaceId": "local",
           "status": "queued",
           "priority": 0,
-          "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+          "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
@@ -7020,7 +6981,7 @@
             "workspaceId": "local",
             "status": "queued",
             "priority": 0,
-            "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+            "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
@@ -7628,7 +7589,7 @@
           "workspaceId": "local",
           "status": "queued",
           "priority": 0,
-          "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+          "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
           "attempt": 1,
           "maxAttempts": 3,
           "parentTaskId": null,
@@ -8633,7 +8594,7 @@
             "workspaceId": "local",
             "status": "queued",
             "priority": 0,
-            "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+            "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
@@ -9453,7 +9414,7 @@
             "workspaceId": "local",
             "status": "queued",
             "priority": 0,
-            "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+            "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
@@ -10556,7 +10517,7 @@
               "workspaceId": "local",
               "status": "queued",
               "priority": 0,
-              "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+              "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
               "attempt": 1,
               "maxAttempts": 3,
               "parentTaskId": null,
@@ -12807,7 +12768,7 @@
             "workspaceId": "local",
             "status": "queued",
             "priority": 0,
-            "prompt": "A teammate commented on an issue assigned to you. Respond as the issue's assignee.\n\n## Triggering Comment\nSnapshot comment body",
+            "prompt": "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.",
             "attempt": 1,
             "maxAttempts": 3,
             "parentTaskId": null,
@@ -14060,6 +14021,15 @@
           "createdAt": "<timestamp>"
         }
       ]
+    },
+    {
+      "key": "get-sweep GET /api/tasks/:taskId/prompt",
+      "route": "GET /api/tasks/:taskId/prompt",
+      "path": "/api/tasks/tsk_snapshot/prompt",
+      "status": 404,
+      "body": {
+        "error": "prompt not recorded"
+      }
     },
     {
       "key": "get-sweep GET /api/tokens",

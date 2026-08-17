@@ -16,7 +16,6 @@ import { issueCompatibilityResponse } from "./issues.js";
 import {
   projectCompatibilityResponse,
   projectDocCompatibilityResponse,
-  projectDocIndexEntryCompatibilityResponse,
   projectResourceCompatibilityResponse,
 } from "./projects.js";
 
@@ -245,6 +244,7 @@ export function daemonTaskClaimResponse(
   triggerMetadata: MultiremiTaskTriggerMetadata | null = null,
 ): Record<string, unknown> {
   const response = daemonTaskWireResponse(task, triggerMetadata);
+  let projectionMode: "bootstrap" | "delta" | null = null;
   response.prompt = task.prompt;
   if (task.sessionId) {
     response.session_id = task.sessionId;
@@ -260,6 +260,7 @@ export function daemonTaskClaimResponse(
       response.issue_session = issueSession;
       const projection = store.buildTaskSessionProjection(task.id);
       if (projection) {
+        projectionMode = projection.mode;
         response.session_projection = {
           session_id: projection.sessionId,
           target_agent_id: projection.targetAgentId,
@@ -271,8 +272,14 @@ export function daemonTaskClaimResponse(
       }
     }
     if (task.issueId) {
+      const since = projectionMode === "delta"
+        ? latestRecordedPromptForLane(store, task)?.assembledAt ?? null
+        : null;
       response.issue_session_results = store.listIssueSessionResults(task.issueId)
         .filter((result) => result.sourceSessionId !== task.issueSessionId)
+        // Millisecond timestamps can tie. Re-sending one result is safer than
+        // dropping a result published at the exact prompt assembly instant.
+        .filter((result) => !since || result.createdAt >= since)
         .map((result) => ({
           id: result.id,
           source_session_id: result.sourceSessionId,
@@ -291,13 +298,6 @@ export function daemonTaskClaimResponse(
   if (task.projectResources.length) {
     response.project_resources = task.projectResources.map(projectResourceCompatibilityResponse);
   }
-  if (task.projectDocs) {
-    response.project_docs = {
-      memory: task.projectDocs.memory.map(projectDocIndexEntryCompatibilityResponse),
-      wiki: task.projectDocs.wiki.map(projectDocIndexEntryCompatibilityResponse),
-      schema: task.projectDocs.schema,
-    };
-  }
   if (task.projectContexts.length) {
     response.project_contexts = task.projectContexts.map((context) => ({
       project: projectCompatibilityResponse(context.project),
@@ -315,8 +315,56 @@ export function daemonTaskClaimResponse(
       ...(repo.description ? { description: repo.description } : {}),
     }));
   }
+  appendDaemonClaimSquadContext(store, task, response);
   appendDaemonClaimExecutionContext(store, task, response);
   return response;
+}
+
+function latestRecordedPromptForLane(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+) {
+  if (!task.issueId || !task.issueSessionId) return null;
+  let latest: ReturnType<MultiremiStore["getTaskPrompt"]> = null;
+  for (const candidate of store.listTasksForIssue(task.issueId)) {
+    if (
+      candidate.id === task.id
+      || candidate.agentId !== task.agentId
+      || candidate.issueSessionId !== task.issueSessionId
+    ) continue;
+    const artifact = store.getTaskPrompt(candidate.id);
+    if (artifact && (!latest || artifact.assembledAt > latest.assembledAt)) latest = artifact;
+  }
+  // Upgraded installations may have a resumable provider lane but no prompt
+  // audit row for its prior task. The caller then includes all published
+  // results once so an upgrade cannot silently lose collaboration context.
+  return latest;
+}
+
+function appendDaemonClaimSquadContext(
+  store: MultiremiStore,
+  task: MultiremiTaskWithAgent,
+  response: Record<string, unknown>,
+): void {
+  if (task.issue?.assigneeType !== "squad" || !task.issue.assigneeId || !task.agent) return;
+  const squad = store.getSquad(task.issue.assigneeId);
+  if (!squad || squad.archivedAt || squad.leaderId !== task.agent.id) return;
+  const members = store.listSquadMembers(squad.id)
+    .filter((member) => member.memberType === "agent")
+    .map((member) => ({ member, agent: store.getAgent(member.memberId) }))
+    .filter(({ agent }) => Boolean(agent && !agent.archivedAt))
+    .map(({ member, agent }) => ({
+      agentId: agent!.id,
+      name: agent!.name,
+      role: member.role,
+      description: agent!.description,
+    }));
+  response.squad_context = {
+    id: squad.id,
+    name: squad.name,
+    leaderAgentId: task.agent.id,
+    members,
+  };
 }
 
 function appendDaemonClaimExecutionContext(

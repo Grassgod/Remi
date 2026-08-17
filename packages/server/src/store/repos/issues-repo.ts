@@ -2304,22 +2304,12 @@ function formatIssueKey(number: number): string {
   return `MUL-${number}`;
 }
 
-function commentMentionPrompt(comment: MultiremiIssueComment): string {
-  return [
-    "A teammate mentioned you in an issue comment.",
-    "",
-    "## Triggering Comment",
-    comment.body,
-  ].join("\n");
+function commentMentionPrompt(_comment: MultiremiIssueComment): string {
+  return "A teammate mentioned you in an issue comment. Respond to the current triggering comment.";
 }
 
-function assigneeCommentPrompt(comment: MultiremiIssueComment): string {
-  return [
-    "A teammate commented on an issue assigned to you. Respond as the issue's assignee.",
-    "",
-    "## Triggering Comment",
-    comment.body,
-  ].join("\n");
+function assigneeCommentPrompt(_comment: MultiremiIssueComment): string {
+  return "A teammate commented on an issue assigned to you. Respond to the current triggering comment as the issue's assignee.";
 }
 
 function childDoneParentTaskPrompt(comment: MultiremiIssueComment): string {

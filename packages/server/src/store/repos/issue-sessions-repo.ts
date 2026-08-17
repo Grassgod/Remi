@@ -281,6 +281,7 @@ export class IssueSessionsRepo {
       events,
       cursorSeq: lane.cursorSeq,
       providerSessionId: task.sessionId && task.sessionId === lane.providerSessionId ? task.sessionId : null,
+      currentTaskId: task.id,
       resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
     });
     this.ctx.db.run(

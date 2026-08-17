@@ -1,4 +1,5 @@
-import type { AgentTask, AgentTaskProjectDocEntry } from "@daemon/contracts/types.js";
+import { createHash } from "node:crypto";
+import type { AgentTask } from "@daemon/contracts/types.js";
 
 /** A repo the daemon pre-checked-out into the task workDir before the run. */
 export interface TaskRepoCheckout {
@@ -12,13 +13,28 @@ export interface BuildTaskPromptOptions {
   repoCheckouts?: TaskRepoCheckout[];
 }
 
+export type TaskPromptMode = "bootstrap" | "delta";
+
+export interface TaskPromptArtifact {
+  mode: TaskPromptMode;
+  prompt: string;
+  sha256: string;
+}
+
 export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = {}): string {
+  return buildTaskPromptArtifact(task, opts).prompt;
+}
+
+export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOptions = {}): TaskPromptArtifact {
+  const mode = taskPromptMode(task);
   const sections: string[] = [];
 
-  sections.push("# Task");
-  sections.push(task.prompt.trim());
+  sections.push(mode === "bootstrap" ? "# Bootstrap Prompt" : "# Delta Prompt");
+  sections.push("");
+  sections.push("## Current Request");
+  sections.push(currentTaskRequest(task));
 
-  appendClaimContextSections(sections, task);
+  appendClaimContextSections(sections, task, mode);
   appendSessionContextSections(sections, task);
 
   if (task.issue) {
@@ -26,21 +42,23 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
     sections.push("## Issue");
     sections.push(`Key: ${task.issue.key}`);
     sections.push(`Title: ${task.issue.title}`);
-    if (task.issue.description) sections.push(task.issue.description);
-    const metadata = Object.entries(task.issue.metadata).sort(([left], [right]) => left.localeCompare(right));
-    if (metadata.length) {
-      sections.push("");
-      sections.push("## Issue Metadata");
-      sections.push("Pinned facts for this issue:");
-      for (const [key, value] of metadata) {
-        sections.push(`- ${key}: ${String(value)}`);
+    if (mode === "bootstrap") {
+      if (task.issue.description) sections.push(task.issue.description);
+      const metadata = Object.entries(task.issue.metadata).sort(([left], [right]) => left.localeCompare(right));
+      if (metadata.length) {
+        sections.push("");
+        sections.push("## Issue Metadata");
+        sections.push("Pinned facts for this issue:");
+        for (const [key, value] of metadata) {
+          sections.push(`- ${key}: ${String(value)}`);
+        }
       }
     }
   }
 
   appendTriggerCommentSection(sections, task);
 
-  if (task.project) {
+  if (mode === "bootstrap" && task.project) {
     const gitResources = task.projectResources.filter((resource) => resource.resourceType === "github_repo");
     sections.push("");
     sections.push("## Project Context");
@@ -53,10 +71,10 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
         sections.push(formatProjectResource(resource));
       }
     }
-    appendProjectKnowledgeSections(sections, task, task.project.id);
+    appendProjectKnowledgeSections(sections, task.project.id);
   }
 
-  if (task.repos.length) {
+  if (mode === "bootstrap" && task.repos.length) {
     const checkouts = opts.repoCheckouts ?? [];
     const checkoutByUrl = new Map(checkouts.map((checkout) => [checkout.repoUrl.trim(), checkout]));
     sections.push("");
@@ -76,13 +94,15 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
     }
   }
 
-  if (task.agent?.instructions) {
+  if (mode === "bootstrap") appendSquadContextSection(sections, task);
+
+  if (mode === "bootstrap" && task.agent?.instructions) {
     sections.push("");
     sections.push("## Agent Instructions");
     sections.push(task.agent.instructions);
   }
 
-  if (task.agent?.skills.length) {
+  if (mode === "bootstrap" && task.agent?.skills.length) {
     sections.push("");
     sections.push("## Skills");
     for (const skill of task.agent.skills) {
@@ -98,16 +118,40 @@ export function buildTaskPrompt(task: AgentTask, opts: BuildTaskPromptOptions = 
     }
   }
 
-  sections.push("");
-  sections.push("## Output");
-  sections.push("When finished, summarize what changed, how it was verified, and any remaining risks.");
+  if (mode === "bootstrap") {
+    sections.push("");
+    sections.push("## Output");
+    sections.push("When finished, summarize what changed, how it was verified, and any remaining risks.");
+  }
 
-  return sections.join("\n");
+  const prompt = sections.join("\n");
+  return {
+    mode,
+    prompt,
+    sha256: createHash("sha256").update(prompt).digest("hex"),
+  };
 }
 
-function appendClaimContextSections(sections: string[], task: AgentTask): void {
+function taskPromptMode(task: AgentTask): TaskPromptMode {
+  const projection = task.sessionProjection ?? task.session_projection ?? null;
+  return projection?.mode === "delta" ? "delta" : "bootstrap";
+}
+
+function currentTaskRequest(task: AgentTask): string {
+  let prompt = task.prompt.trim();
+  const triggerCommentId = stringField(task, "triggerCommentId", "trigger_comment_id");
+  if (triggerCommentId) {
+    // Tasks created before the canonical trigger section existed embedded the
+    // comment in `task.prompt`. Keep the instruction, but let the structured
+    // trigger/session section own the comment body exactly once.
+    prompt = prompt.replace(/\n*## Triggering Comment\s*[\s\S]*$/i, "").trim();
+  }
+  return prompt || "Handle the current issue update.";
+}
+
+function appendClaimContextSections(sections: string[], task: AgentTask, mode: TaskPromptMode): void {
   const workspaceContext = stringField(task, "workspaceContext", "workspace_context");
-  if (workspaceContext) {
+  if (mode === "bootstrap" && workspaceContext) {
     sections.push("");
     sections.push("## Workspace Context");
     sections.push(workspaceContext);
@@ -184,7 +228,9 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
   const results = task.issueSessionResults ?? task.issue_session_results ?? [];
   if (results.length) {
     sections.push("");
-    sections.push("## Published Results From Other Sessions");
+    sections.push(projection?.mode === "delta"
+      ? "## New Published Results From Other Sessions"
+      : "## Published Results From Other Sessions");
     sections.push("These are read-only published outputs. They do not include the other sessions' private working transcripts.");
     for (const result of results) {
       const title = result.title?.trim() || result.id;
@@ -196,7 +242,7 @@ function appendSessionContextSections(sections: string[], task: AgentTask): void
 
   const issueId = stringField(task, "issueId", "issue_id") ?? task.issue?.id ?? "";
   const sessionId = issueSession?.id ?? "";
-  if (issueId && sessionId) {
+  if (issueId && sessionId && projection?.mode !== "delta") {
     sections.push("");
     sections.push("## Sharing Results Across Sessions");
     sections.push("Sibling Session transcripts are private. If you produce a durable decision, artifact, or finding that other Sessions should reuse, explicitly publish only that result. Do not republish an unchanged result.");
@@ -232,16 +278,18 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask): void 
   sections.push("");
   sections.push("## Triggering Comment");
   sections.push(`${commentAuthorLabel(authorType, authorName)} just left a new comment. Focus on this comment and do not confuse it with previous comments.`);
-  if (triggerContent) {
+  const projection = task.sessionProjection ?? task.session_projection ?? null;
+  if (triggerContent && !projection?.jsonl?.trim()) {
     sections.push("");
     sections.push(blockquote(triggerContent));
+  } else if (triggerContent) {
+    sections.push("The comment body appears once in Current Session Context; use the event with this trigger comment ID as the authoritative text.");
   }
   if (authorType === "agent") {
     sections.push("");
     sections.push("The triggering comment was posted by another agent. If it is only an acknowledgment, thanks, or sign-off and you produced no work this turn, do not reply. If you did real work, post the result as a normal reply. Do not mention the other agent as a sign-off.");
   }
 
-  const projection = task.sessionProjection ?? task.session_projection ?? null;
   if (projection?.jsonl?.trim()) {
     sections.push("");
     sections.push("The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
@@ -358,109 +406,36 @@ function formatProjectResource(resource: AgentTask["projectResources"][number]):
   return `- ${resource.resourceType}: ${JSON.stringify(resource.resourceRef)}`;
 }
 
-const PROJECT_MEMORY_BUDGET = 4000;
-const PROJECT_MEMORY_BODY_LIMIT = 200;
-const PROJECT_WIKI_BUDGET = 2000;
-const PROJECT_WIKI_SUMMARY_LIMIT = 120;
-const PROJECT_ENTRY_TITLE_LIMIT = 200;
-
-function appendProjectKnowledgeSections(sections: string[], task: AgentTask, projectId: string): void {
-  const docs = task.projectDocs ?? task.project_docs ?? null;
-
-  const memoryLines = budgetedEntryLines((docs?.memory ?? []).map(formatProjectMemoryEntry), PROJECT_MEMORY_BUDGET);
-  if (memoryLines.length) {
-    sections.push("");
-    sections.push("## Project Memory");
-    sections.push("Durable facts recorded by earlier work on this project:");
-    for (const line of memoryLines) sections.push(line);
-  }
-
-  const wikiLines = budgetedEntryLines((docs?.wiki ?? []).map(formatProjectWikiEntry), PROJECT_WIKI_BUDGET);
-  if (wikiLines.length) {
-    sections.push("");
-    sections.push("## Project Wiki");
-    sections.push("Wiki pages for this project (titles only — read a page before relying on it):");
-    for (const line of wikiLines) sections.push(line);
-  }
-
+function appendProjectKnowledgeSections(sections: string[], projectId: string): void {
   sections.push("");
-  sections.push("## Project Knowledge Commands");
-  sections.push(`Read a page: \`remi project doc get ${projectId} <slug-or-id>\``);
-  sections.push(`Search project knowledge: \`remi project doc search ${projectId} "<query>"\``);
+  sections.push("## Project Knowledge");
+  sections.push("Project Memory and Wiki bodies are intentionally not embedded in this prompt. Retrieve only what this task needs.");
+  sections.push("Preferred path: use the `multiremi-project-knowledge` MCP tools in two steps: call `recall` with a focused query, then call `read` for relevant hits before relying on them.");
+  sections.push(`CLI fallback: \`remi project memory recall ${projectId} "<query>"\`, then \`remi project doc get ${projectId} <slug-or-id>\`.`);
   sections.push("");
-  sections.push("When you finish, write back what you learned that other issues in this project will reuse — build/test commands, architecture decisions, pitfalls. Integrate it into what is already here instead of piling up new entries:");
-  sections.push(`1. Search first: \`remi project doc search ${projectId} "<query>"\`, then \`remi project doc get ${projectId} <slug-or-id>\` on anything related.`);
-  sections.push(`2. Update, do not create: when a related entry exists, revise it with \`remi project doc update ${projectId} <slug-or-id> --content-stdin\`. If your finding contradicts it, say in the body what changed and on what evidence — never leave both versions standing.`);
-  sections.push(`3. Only genuinely new facts get a new entry: \`remi project memory add ${projectId} --title 'One-sentence fact'\` (template below).`);
-  sections.push(`4. Durable syntheses — architecture notes, runbooks — belong in a wiki page: \`remi project doc create ${projectId} --kind wiki --title "<title>" --content-stdin\`.`);
-  sections.push("5. Cite sources on every write with `--ref issue:<id>` / `--ref task:<id>` / `--ref url:<url>`, and cross-link related pages with `[[slug]]` links in the body.");
-  sections.push("6. Do not record one-off details that only matter for this issue.");
-  sections.push("");
-  sections.push([
-    "Use --content-stdin with a quoted HEREDOC for the body, and single-quote the title, so the shell cannot rewrite backticks, $(), variables, quotes, or formatting:",
-    "",
-    `    cat <<'MEMORY' | remi project memory add ${projectId} --title 'One-sentence fact' --content-stdin`,
-    "    Supporting detail worth keeping.",
-    "    MEMORY",
-  ].join("\n"));
-
-  const schema = typeof docs?.schema === "string" ? docs.schema.trim() : "";
-  if (schema) {
-    sections.push("");
-    sections.push("Maintenance rules for this project's wiki (from _schema):");
-    sections.push(schema);
-    sections.push(`Revise these rules with \`remi project doc update ${projectId} _schema --content-stdin\` when the project's conventions change.`);
-  }
-}
-
-function budgetedEntryLines(lines: string[], budget: number): string[] {
-  const kept: string[] = [];
-  let used = 0;
-  for (const line of lines) {
-    if (kept.length && used + line.length > budget) {
-      kept.push("(more entries exist — use search)");
-      break;
-    }
-    kept.push(line);
-    used += line.length;
-  }
-  return kept;
-}
-
-/**
- * Titles are agent-written free text landing verbatim in the prompt. Flattening
- * whitespace stops an embedded newline from forging a `##` section of its own,
- * and the cap stops one title from eating a whole section: budgetedEntryLines
- * always keeps the first line, so an unbounded title bypasses the budget.
- */
-function entryTitle(entry: AgentTaskProjectDocEntry): string {
-  const flattened = entry.title.replace(/\s+/g, " ").trim();
-  return truncateText(flattened || entry.slug, PROJECT_ENTRY_TITLE_LIMIT);
-}
-
-function formatProjectMemoryEntry(entry: AgentTaskProjectDocEntry): string {
-  const title = entryTitle(entry);
-  // `memory add --summary` is stored and shipped but has no other rendering, so
-  // it stands in for a missing body rather than being dropped on the floor.
-  const detail = firstLine(entry.body) || firstLine(entry.summary);
-  return detail ? `- ${title}: ${truncateText(detail, PROJECT_MEMORY_BODY_LIMIT)}` : `- ${title}`;
-}
-
-function formatProjectWikiEntry(entry: AgentTaskProjectDocEntry): string {
-  const head = `- ${entryTitle(entry)} (slug: ${entry.slug})`;
-  const summary = firstLine(entry.summary);
-  return summary ? `${head} - ${truncateText(summary, PROJECT_WIKI_SUMMARY_LIMIT)}` : head;
+  sections.push("When durable knowledge changes, search before writing. Update an existing entry rather than creating a duplicate; use MCP `remember`/`update` or the equivalent `remi project doc` commands, cite `issue:`/`task:`/`url:` provenance, and skip one-off details.");
 }
 
 function lastPathSegment(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 }
 
-function firstLine(text: string | null | undefined): string {
-  if (typeof text !== "string") return "";
-  return text.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
-}
-
-function truncateText(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+function appendSquadContextSection(sections: string[], task: AgentTask): void {
+  const squad = task.squadContext ?? task.squad_context ?? null;
+  if (!squad || !task.agent || squad.leaderAgentId !== task.agent.id) return;
+  sections.push("");
+  sections.push("## Squad Coordination");
+  sections.push(`You are the lead agent for squad ${squad.name}. You own the final answer and integration.`);
+  const teammates = squad.members.filter((member) => member.agentId !== task.agent!.id);
+  if (teammates.length) {
+    sections.push("Available agent teammates:");
+    for (const member of teammates) {
+      const details = [member.role, member.description].filter(Boolean).join(" - ");
+      sections.push(`- ${member.name} (agent: ${member.agentId})${details ? ` - ${details}` : ""}`);
+    }
+  } else {
+    sections.push("No other runnable agent teammates are currently configured.");
+  }
+  sections.push("Delegate when there are independent workstreams, a teammate has relevant specialization, or parallel work will materially shorten delivery. Keep small or tightly coupled work yourself.");
+  sections.push(`Create bounded child issues with \`remi issue create --title <title> --parent ${task.issue?.id ?? "<issue-id>"} --assignee-id <agent-id> --assignee-type agent\`. State the deliverable, constraints, and verification in each child description, then integrate the returned results.`);
 }

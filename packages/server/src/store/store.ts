@@ -192,6 +192,7 @@ import type {
   MultiremiTaskActivityByHour,
   MultiremiTaskHumanRequest,
   MultiremiTaskMessage,
+  MultiremiTaskPromptArtifact,
   MultiremiTaskStatus,
   MultiremiTaskTriggerMetadata,
   MultiremiTaskWithAgent,
@@ -206,6 +207,7 @@ import type {
   MultiremiWorkspaceInvitation,
   MultiremiWorkspaceMember,
   RegisterRuntimeInput,
+  RecordTaskPromptInput,
   ReportAgentPluginRuntimeStateInput,
   ReportIssueWorkspaceInput,
   ReorderPinnedItemInput,
@@ -2216,6 +2218,14 @@ runMigrations(this.db);
 
   listTaskMessages(taskId: string, sinceSeq?: number | null): MultiremiTaskMessage[] {
     return this.tasks.listTaskMessages(taskId, sinceSeq);
+  }
+
+  recordTaskPrompt(taskId: string, input: RecordTaskPromptInput): MultiremiTaskPromptArtifact {
+    return this.tasks.recordTaskPrompt(taskId, input);
+  }
+
+  getTaskPrompt(taskId: string): MultiremiTaskPromptArtifact | null {
+    return this.tasks.getTaskPrompt(taskId);
   }
 
   completeTask(taskId: string, input: {

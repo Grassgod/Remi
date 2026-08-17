@@ -1298,6 +1298,13 @@ flow("daemon-task-lifecycle", async (rec, refs) => {
   await rec.json("POST", `/api/daemon/tasks/${id}/start`, {});
   await rec.json("POST", `/api/daemon/tasks/${id}/progress`, { summary: "half", step: 1, total: 2 });
   await rec.json("POST", `/api/daemon/tasks/${id}/messages`, { messages: [{ type: "assistant", content: "hello" }] });
+  const assembledPrompt = "# Bootstrap Prompt\n\n## Current Request\nSnapshot lifecycle task";
+  await rec.json("POST", `/api/daemon/tasks/${id}/prompt`, {
+    mode: "bootstrap",
+    prompt: assembledPrompt,
+    sha256: createHash("sha256").update(assembledPrompt).digest("hex"),
+  });
+  await rec.call("GET", `/api/tasks/${id}/prompt`);
   await rec.json("POST", `/api/daemon/tasks/${id}/session`, { session_id: "ses_snapshot", work_dir: "/snapshot/work" });
   await rec.json("POST", `/api/daemon/tasks/${id}/usage`, { usage: [{ model: "claude-sonnet-4", input_tokens: 3, output_tokens: 4 }] });
   const human = await rec.json("POST", `/api/daemon/tasks/${id}/human-requests`, {

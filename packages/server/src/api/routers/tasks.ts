@@ -140,4 +140,22 @@ export function registerTaskRoutes(app: Hono, deps: RouterDeps): void {
     if (typeof since === "object" && since && "error" in since) return c.json({ error: since.error }, 400);
     return c.json(store.listTaskMessages(task.id, since));
   });
+  app.get("/api/tasks/:taskId/prompt", (c) => {
+    const task = taskFromParam(store, c, "taskId");
+    if (!task) return c.json({ error: "task not found" }, 404);
+    const taskDenied = denyTaskTokenTaskAccess(c, task);
+    if (taskDenied) return taskDenied;
+    if (!canUserViewTaskMessages(store, authenticatedRequestUserId(c), task)) {
+      return c.json({ error: "forbidden" }, 403);
+    }
+    const artifact = store.getTaskPrompt(task.id);
+    if (!artifact) return c.json({ error: "prompt not recorded" }, 404);
+    return c.json({
+      task_id: artifact.taskId,
+      mode: artifact.mode,
+      prompt: artifact.prompt,
+      sha256: artifact.sha256,
+      assembled_at: artifact.assembledAt,
+    });
+  });
 }

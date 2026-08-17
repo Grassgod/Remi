@@ -30,7 +30,7 @@ import {
   localSkillRootForProvider,
   scanRuntimeDirectories,
 } from "./local-skills.js";
-import { buildTaskPrompt, type TaskRepoCheckout } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact, type TaskRepoCheckout } from "@multiremi/prompt.js";
 import { MultiremiRepoCache, normalizeRepoList } from "@multiremi/repo-cache.js";
 import { classifyDaemonTaskFailure, classifyPoisonedOutput } from "./task-failure.js";
 import { multiremiVersion } from "@multiremi/version.js";
@@ -1500,8 +1500,9 @@ export class MultiremiDaemon {
 
     try {
       const session = new AgentSession(provider as any, config);
-      const prompt = buildTaskPrompt(task, { repoCheckouts: preparedWorkspace.checkouts });
-      for await (const event of session.run(prompt)) {
+      const promptArtifact = buildTaskPromptArtifact(task, { repoCheckouts: preparedWorkspace.checkouts });
+      await this.client.reportTaskPrompt(task.id, promptArtifact);
+      for await (const event of session.run(promptArtifact.prompt)) {
         // One event may yield several messages (e.g. a completed tool_call →
         // tool_use + tool_result). Each gets its own seq so none collides.
         const emitted = toMessages(event).map((m) => ({ ...m, seq: nextSeq() }));

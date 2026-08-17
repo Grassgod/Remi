@@ -920,6 +920,22 @@ export interface MultiremiTaskHumanRequest {
   respondedAt: string | null;
 }
 
+export type MultiremiTaskPromptMode = "bootstrap" | "delta";
+
+export interface MultiremiTaskPromptArtifact {
+  taskId: string;
+  mode: MultiremiTaskPromptMode;
+  prompt: string;
+  sha256: string;
+  assembledAt: string;
+}
+
+export interface RecordTaskPromptInput {
+  mode: MultiremiTaskPromptMode;
+  prompt: string;
+  sha256: string;
+}
+
 export interface CreateTaskHumanRequestInput {
   id?: string;
   taskId: string;

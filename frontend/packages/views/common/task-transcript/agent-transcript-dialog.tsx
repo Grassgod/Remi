@@ -16,7 +16,10 @@ import {
   Filter,
   Folder,
   Coins,
+  FileInput,
+  ScrollText,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
@@ -91,6 +94,8 @@ export function AgentTranscriptDialog({
   const [elapsed, setElapsed] = useState("");
   const [copied, setCopied] = useState(false);
   const [copiedWorkdir, setCopiedWorkdir] = useState(false);
+  const [activeView, setActiveView] = useState<"execution" | "prompt">("execution");
+  const [promptCopied, setPromptCopied] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent | null>(null);
   const [runtimeInfo, setRuntimeInfo] = useState<AgentRuntime | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
@@ -98,6 +103,19 @@ export function AgentTranscriptDialog({
   const setSortDirection = useTranscriptViewStore((s) => s.setSortDirection);
   const eventRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const promptQuery = useQuery({
+    queryKey: ["task-prompt", task.id],
+    queryFn: () => api.getTaskPrompt(task.id),
+    enabled: open && activeView === "prompt",
+    retry: false,
+    staleTime: Infinity,
+  });
+  const promptNotRecorded = Boolean(
+    promptQuery.error
+    && typeof promptQuery.error === "object"
+    && "status" in promptQuery.error
+    && promptQuery.error.status === 404,
+  );
 
   // Derive filter options from each item:
   //   tool_use / tool_result → filter value = tool, display = "tool:Bash"
@@ -237,6 +255,16 @@ export function AgentTranscriptDialog({
     });
   }, [displayItems]);
 
+  const handleCopyPrompt = useCallback(() => {
+    const prompt = promptQuery.data?.prompt;
+    if (!prompt) return;
+    void copyText(prompt).then((ok) => {
+      if (!ok) return;
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    });
+  }, [promptQuery.data?.prompt]);
+
   // Toggle tool filter
   const toggleTool = useCallback((tool: string) => {
     setSelectedTools((prev) => {
@@ -358,7 +386,7 @@ export function AgentTranscriptDialog({
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="border-b px-4 py-3 shrink-0 space-y-2">
           {/* Top row: agent name, status, actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               {task.agent_id ? (
                 <ActorAvatar actorType="agent" actorId={task.agent_id} size={24} />
@@ -372,8 +400,35 @@ export function AgentTranscriptDialog({
 
             {statusBadge}
 
+            <div className="inline-flex h-8 items-center rounded-md bg-muted p-[3px] text-xs">
+              <button
+                type="button"
+                onClick={() => setActiveView("execution")}
+                aria-pressed={activeView === "execution"}
+                className={cn(
+                  "inline-flex h-full items-center gap-1.5 rounded px-2.5 text-muted-foreground transition-colors",
+                  activeView === "execution" && "bg-background text-foreground shadow-sm",
+                )}
+              >
+                <ScrollText className="h-3.5 w-3.5" />
+                {t(($) => $.transcript.execution_view)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveView("prompt")}
+                aria-pressed={activeView === "prompt"}
+                className={cn(
+                  "inline-flex h-full items-center gap-1.5 rounded px-2.5 text-muted-foreground transition-colors",
+                  activeView === "prompt" && "bg-background text-foreground shadow-sm",
+                )}
+              >
+                <FileInput className="h-3.5 w-3.5" />
+                {t(($) => $.transcript.prompt_view)}
+              </button>
+            </div>
+
             <div className="ml-auto flex items-center gap-1">
-              {items.length > 1 && (
+              {activeView === "execution" && items.length > 1 && (
                 <SortDirectionToggle
                   value={sortDirection}
                   onChange={handleSortDirectionChange}
@@ -384,7 +439,7 @@ export function AgentTranscriptDialog({
                   }}
                 />
               )}
-              {filterOptions.length > 0 && (
+              {activeView === "execution" && filterOptions.length > 0 && (
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     className={cn(
@@ -423,14 +478,25 @@ export function AgentTranscriptDialog({
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
-              <button
-                type="button"
-                onClick={handleCopyAll}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
-                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : t(($) => $.transcript.copy_all)}
-              </button>
+              {activeView === "execution" ? (
+                <button
+                  type="button"
+                  onClick={handleCopyAll}
+                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  {copied ? t(($) => $.transcript.copied) : selectedTools.size > 0 ? t(($) => $.transcript.copy_filtered) : t(($) => $.transcript.copy_all)}
+                </button>
+              ) : promptQuery.data?.prompt ? (
+                <button
+                  type="button"
+                  onClick={handleCopyPrompt}
+                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                >
+                  {promptCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                  {promptCopied ? t(($) => $.transcript.copied) : t(($) => $.transcript.copy_prompt)}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
@@ -536,6 +602,43 @@ export function AgentTranscriptDialog({
           </div>
         </div>
 
+        {activeView === "prompt" ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {promptQuery.isLoading ? (
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t(($) => $.transcript.prompt_loading)}
+              </div>
+            ) : promptQuery.data ? (
+              <>
+                <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
+                  <span className="rounded border bg-muted/50 px-2 py-0.5 font-medium uppercase text-foreground">
+                    {promptQuery.data.mode}
+                  </span>
+                  <span>{new Date(promptQuery.data.assembled_at).toLocaleString()}</span>
+                  <span className="ml-auto max-w-56 truncate font-mono" title={promptQuery.data.sha256}>
+                    {t(($) => $.transcript.prompt_hash, { hash: promptQuery.data.sha256.slice(0, 12) })}
+                  </span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
+                    {promptQuery.data.prompt}
+                  </pre>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
+                <FileInput className="h-5 w-5" />
+                <span>
+                  {promptNotRecorded
+                    ? t(($) => $.transcript.prompt_not_recorded)
+                    : t(($) => $.transcript.prompt_load_failed)}
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+        <>
         {/* ── Timeline progress bar ─────────────────────────────── */}
         {displayItems.length > 0 && (
           <div className="border-b px-4 py-2.5 shrink-0">
@@ -657,6 +760,8 @@ export function AgentTranscriptDialog({
             </div>
           )}
         </div>
+        </>
+        )}
       </DialogContent>
     </Dialog>
   );

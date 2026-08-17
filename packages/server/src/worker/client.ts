@@ -286,6 +286,10 @@ export class MultiremiDaemonClient {
     await this.post(`/api/daemon/tasks/${taskId}/messages`, { messages });
   }
 
+  async reportTaskPrompt(taskId: string, input: { mode: "bootstrap" | "delta"; prompt: string; sha256: string }): Promise<void> {
+    await this.post(`/api/daemon/tasks/${taskId}/prompt`, input);
+  }
+
   async pinTaskSession(taskId: string, sessionId?: string | null, workDir?: string | null): Promise<void> {
     await this.post(`/api/daemon/tasks/${taskId}/session`, {
       session_id: sessionId ?? undefined,
@@ -541,10 +545,28 @@ function normalizeDaemonClaimTask(raw: any | null): MultiremiTaskWithAgent | nul
     projectResources: normalizeDaemonClaimProjectResources(raw.project_resources ?? raw.projectResources),
     projectDocs: normalizeDaemonClaimProjectDocs(raw.project_docs ?? raw.projectDocs),
     projectContexts: normalizeDaemonClaimProjectContexts(raw.project_contexts ?? raw.projectContexts),
+    squadContext: normalizeDaemonClaimSquadContext(raw.squad_context ?? raw.squadContext),
     repos: Array.isArray(raw.repos) ? raw.repos : [],
     usage: Array.isArray(raw.usage) ? raw.usage : [],
   };
   return normalized as MultiremiTaskWithAgent;
+}
+
+function normalizeDaemonClaimSquadContext(raw: any): any | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return {
+    id: stringOrNull(raw.id) ?? "",
+    name: stringOrNull(raw.name) ?? "",
+    leaderAgentId: stringOrNull(raw.leader_agent_id ?? raw.leaderAgentId) ?? "",
+    members: Array.isArray(raw.members)
+      ? raw.members.map((member: any) => ({
+        agentId: stringOrNull(member.agent_id ?? member.agentId) ?? "",
+        name: stringOrNull(member.name) ?? "",
+        role: stringOrNull(member.role) ?? "member",
+        description: stringOrNull(member.description),
+      })).filter((member: any) => member.agentId && member.name)
+      : [],
+  };
 }
 
 function normalizeDaemonClaimAgent(raw: any): MultiremiTaskWithAgent["agent"] {
