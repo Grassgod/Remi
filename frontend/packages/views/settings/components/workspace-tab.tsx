@@ -40,6 +40,7 @@ import type { Workspace } from "@multiremi/core/types";
 import { AvatarUploadButton } from "../../common/avatar-upload-button";
 import { useNavigation } from "../../navigation";
 import { DeleteWorkspaceDialog } from "./delete-workspace-dialog";
+import { WorkspaceEnvSection } from "./workspace-env-section";
 import { useT } from "../../i18n";
 
 export function WorkspaceTab() {
@@ -351,6 +352,13 @@ export function WorkspaceTab() {
           </CardContent>
         </Card>
       </section>
+
+      {/* Workspace env — the backend endpoint is owner/admin only, so hide the
+          section (rather than render a 403 toast trap) for plain members.
+          Gated on membersFetched like Danger Zone so it doesn't flash in. */}
+      {membersFetched && canManageWorkspace && (
+        <WorkspaceEnvSection workspaceId={workspace.id} />
+      )}
 
       {/* Danger Zone — gated on the member query settling so the owner-only
           Delete button and the sole-owner Leave guidance don't flash in

@@ -336,6 +336,12 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
   const workspace = store.getWorkspace(task.workspaceId);
   if (workspace?.context?.trim()) response.workspace_context = workspace.context.trim();
 
+  // Read at claim time so a saved workspace env applies to the next dispatched
+  // task without a daemon restart. Precedence is resolved daemon-side:
+  // agent customEnv > workspace env > daemon machine env.
+  const workspaceEnv = store.getWorkspaceEnv(task.workspaceId);
+  if (Object.keys(workspaceEnv).length) response.workspace_env = workspaceEnv;
+
   const runtime = task.runtimeId ? store.getRuntime(task.runtimeId) : null;
   const owner = runtime?.ownerId ? store.getUser(runtime.ownerId) : null;
   if (owner?.name?.trim()) response.requesting_user_name = owner.name.trim();

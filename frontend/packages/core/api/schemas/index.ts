@@ -18,5 +18,6 @@ export * from "./project-docs";
 export * from "./projects";
 export * from "./lark";
 export * from "./repositories";
+export * from "./workspaces";
 export * from "./tokens";
 export * from "./issue-shares";
