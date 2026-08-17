@@ -44,6 +44,7 @@ import {
   shellQuote,
 } from "./multiremi/service.js";
 import { showHelp } from "./multiremi/help.js";
+import { prepareDaemonEnvironment } from "./multiremi/environment.js";
 import { repo } from "./multiremi/commands/repo.js";
 import { attachment } from "./multiremi/commands/attachment.js";
 import { agent } from "./multiremi/commands/agent.js";
@@ -269,6 +270,7 @@ async function daemon(options: CliOptions, positional: string[], programName: st
  * is an error — e.g. the unified agent tolerates it when Feishu is configured).
  */
 export async function resolveWorkerDaemons(options: CliOptions): Promise<MultiremiDaemon[]> {
+  await prepareDaemonEnvironment();
   const config = loadMultiremiConfig();
   const serverUrl = stringOpt(options.server, undefined)
     ?? stringOpt(options["server-url"], undefined)
