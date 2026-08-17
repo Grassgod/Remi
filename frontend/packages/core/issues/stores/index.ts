@@ -1,4 +1,5 @@
 export { useIssueSelectionStore } from "./selection-store";
+export { useIssueDetailPreferencesStore } from "./detail-preferences-store";
 export {
   useCreateModeStore,
   openCreateIssueWithPreference,

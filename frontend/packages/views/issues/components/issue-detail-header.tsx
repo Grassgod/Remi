@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Archive, CircleCheck, MoreHorizontal, PanelRight, Pin, PinOff, Share2 } from "lucide-react";
+import {
+  Archive,
+  CircleCheck,
+  MoreHorizontal,
+  PanelLeft,
+  PanelRight,
+  Pin,
+  PinOff,
+  Share2,
+} from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Tooltip,
@@ -34,6 +43,8 @@ interface IssueDetailHeaderProps {
   onTogglePin: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  sessionSidebarOpen: boolean;
+  onToggleSessionSidebar: () => void;
 }
 
 /**
@@ -57,6 +68,8 @@ export function IssueDetailHeader({
   onTogglePin,
   sidebarOpen,
   onToggleSidebar,
+  sessionSidebarOpen,
+  onToggleSessionSidebar,
 }: IssueDetailHeaderProps) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
@@ -169,6 +182,25 @@ export function IssueDetailHeader({
             </Button>
           }
         />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant={sessionSidebarOpen ? "secondary" : "ghost"}
+                size="icon-sm"
+                className={sessionSidebarOpen ? "" : "text-muted-foreground"}
+                aria-label={t(($) => $.detail.sessions_sidebar_tooltip)}
+                aria-pressed={sessionSidebarOpen}
+                onClick={onToggleSessionSidebar}
+              >
+                <PanelLeft />
+              </Button>
+            }
+          />
+          <TooltipContent side="bottom">
+            {t(($) => $.detail.sessions_sidebar_tooltip)}
+          </TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger
             render={

@@ -274,6 +274,7 @@
     "archive_tooltip": "归档",
     "pin_tooltip": "固定到侧边栏",
     "unpin_tooltip": "从侧边栏取消固定",
+    "sessions_sidebar_tooltip": "切换会话栏",
     "sidebar_tooltip": "切换侧边栏",
     "cmdf_toast_title": "页面内查找仅覆盖可见区",
     "cmdf_toast_description": "评论列表已虚拟滚动,⌘F 找不到视口外的评论。完整应用内搜索即将推出。",

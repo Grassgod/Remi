@@ -24,6 +24,7 @@ import { projectDetailOptions } from "@multiremi/core/projects/queries";
 import { issueLabelsOptions } from "@multiremi/core/labels";
 import { memberListOptions, agentListOptions } from "@multiremi/core/workspace/queries";
 import { useRecentIssuesStore } from "@multiremi/core/issues/stores";
+import { useIssueDetailPreferencesStore } from "@multiremi/core/issues/stores";
 import { useIssueSelectionStore } from "@multiremi/core/issues/stores/selection-store";
 import { useIssueActions } from "../actions";
 import { useIssueSessionSelection } from "../hooks/use-issue-session-selection";
@@ -94,6 +95,12 @@ export function IssueDetail({
   });
   const sidebarRef = usePanelRef();
   const isMobile = useIsMobile();
+  const sessionSidebarOpen = useIssueDetailPreferencesStore(
+    (state) => state.sessionSidebarOpen,
+  );
+  const toggleSessionSidebar = useIssueDetailPreferencesStore(
+    (state) => state.toggleSessionSidebar,
+  );
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(defaultSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -274,6 +281,8 @@ export function IssueDetail({
       onDeletedNavigateTo={onDelete ? undefined : paths.issues()}
       sidebarOpen={sidebarOpen}
       onToggleSidebar={handleToggleSidebar}
+      sessionSidebarOpen={sessionSidebarOpen}
+      onToggleSessionSidebar={toggleSessionSidebar}
       sessions={sessions}
       members={members}
       agents={agents}

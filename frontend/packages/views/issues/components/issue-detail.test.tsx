@@ -276,6 +276,11 @@ vi.mock("@multiremi/core/issues/config", () => ({
 // Mock recent issues store
 const mockRecordVisit = vi.fn();
 vi.mock("@multiremi/core/issues/stores", () => ({
+  useIssueDetailPreferencesStore: (selector: any) =>
+    selector({
+      sessionSidebarOpen: true,
+      toggleSessionSidebar: vi.fn(),
+    }),
   useRecentIssuesStore: Object.assign(
     (selector?: any) => {
       const state = { byWorkspace: {}, recordVisit: mockRecordVisit, pruneWorkspaces: vi.fn() };

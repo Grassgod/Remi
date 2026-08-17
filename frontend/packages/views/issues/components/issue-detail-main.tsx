@@ -19,6 +19,8 @@ interface IssueDetailMainProps {
   onDeletedNavigateTo?: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  sessionSidebarOpen: boolean;
+  onToggleSessionSidebar: () => void;
   sessions: IssueSessionSelection;
   members: MemberWithUser[];
   agents: Agent[];
@@ -51,6 +53,8 @@ export function IssueDetailMain({
   onDeletedNavigateTo,
   sidebarOpen,
   onToggleSidebar,
+  sessionSidebarOpen,
+  onToggleSessionSidebar,
   sessions,
   members,
   agents,
@@ -63,67 +67,71 @@ export function IssueDetailMain({
 }: IssueDetailMainProps) {
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-        <IssueDetailHeader
-          issue={issue}
-          parentIssue={parentIssue}
-          breadcrumbProject={breadcrumbProject}
-          onUpdateField={actions.updateField}
-          onDone={onDone}
-          onDeletedNavigateTo={onDeletedNavigateTo}
-          isPinned={actions.isPinned}
-          onTogglePin={actions.togglePin}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={onToggleSidebar}
-        />
+      <IssueDetailHeader
+        issue={issue}
+        parentIssue={parentIssue}
+        breadcrumbProject={breadcrumbProject}
+        onUpdateField={actions.updateField}
+        onDone={onDone}
+        onDeletedNavigateTo={onDeletedNavigateTo}
+        isPinned={actions.isPinned}
+        onTogglePin={actions.togglePin}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={onToggleSidebar}
+        sessionSidebarOpen={sessionSidebarOpen}
+        onToggleSessionSidebar={onToggleSessionSidebar}
+      />
 
-        <div className="flex min-h-0 flex-1">
-        <IssueSessionList
-          issueId={issueId}
-          sessions={sessions.list}
-          selectedSessionId={sessions.activeId}
-          agents={agents}
-          onSelectSession={sessions.select}
-        />
+      <div className="flex min-h-0 flex-1">
+        {sessionSidebarOpen && (
+          <IssueSessionList
+            issueId={issueId}
+            sessions={sessions.list}
+            selectedSessionId={sessions.activeId}
+            agents={agents}
+            onSelectSession={sessions.select}
+          />
+        )}
         <div
           ref={onScrollContainerRef}
           data-tab-scroll-root
           className="relative min-w-0 flex-1 overflow-y-auto"
         >
-        <div className="mx-auto w-full max-w-4xl px-8 py-8">
-          <IssueDescriptionSection
-            issue={issue}
-            issueId={issueId}
-            parentIssue={parentIssue}
-            onUpdateField={actions.updateField}
-            currentUserId={currentUserId}
-          />
+          <div className="mx-auto w-full max-w-4xl px-8 py-8">
+            <IssueDescriptionSection
+              issue={issue}
+              issueId={issueId}
+              parentIssue={parentIssue}
+              onUpdateField={actions.updateField}
+              currentUserId={currentUserId}
+            />
 
-          <IssueSubIssuesSection
-            issueId={issueId}
-            onCreateSubIssue={actions.openCreateSubIssue}
-          />
+            <IssueSubIssuesSection
+              issueId={issueId}
+              onCreateSubIssue={actions.openCreateSubIssue}
+            />
 
-          <div className="my-8 border-t" />
+            <div className="my-8 border-t" />
 
-          <IssueActivitySection
-            issueId={issueId}
-            projectId={issue.project_id}
-            currentUserId={currentUserId}
-            canModerateComments={canModerateComments}
-            members={members}
-            agents={agents}
-            activeIssueSessionId={sessions.activeId}
-            activeIssueSession={sessions.active}
-            sessionsPending={sessions.pending}
-            sessionsFetching={sessions.fetching}
-            onRetrySessions={sessions.refetch}
-            scrollContainerEl={scrollContainerEl}
-            highlightCommentId={highlightCommentId}
-            onShowKeyResults={onShowKeyResults}
-          />
-        </div>
-        </div>
+            <IssueActivitySection
+              issueId={issueId}
+              projectId={issue.project_id}
+              currentUserId={currentUserId}
+              canModerateComments={canModerateComments}
+              members={members}
+              agents={agents}
+              activeIssueSessionId={sessions.activeId}
+              activeIssueSession={sessions.active}
+              sessionsPending={sessions.pending}
+              sessionsFetching={sessions.fetching}
+              onRetrySessions={sessions.refetch}
+              scrollContainerEl={scrollContainerEl}
+              highlightCommentId={highlightCommentId}
+              onShowKeyResults={onShowKeyResults}
+            />
+          </div>
         </div>
       </div>
+    </div>
   );
 }
