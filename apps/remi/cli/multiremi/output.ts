@@ -55,6 +55,21 @@ export function printProjectDocCollection(value: unknown, options: CliOptions): 
   ], "No project docs found.");
 }
 
+export function printProjectKnowledgeHits(value: unknown, options: CliOptions): void {
+  if (outputMode(options, "table") !== "table") {
+    printJson(value);
+    return;
+  }
+  printTable(extractList(value, "hits"), [
+    { header: "SCORE", value: (row) => typeof row.score === "number" ? row.score.toFixed(3) : "" },
+    { header: "KIND", value: (row) => field(row, "kind") },
+    { header: "SLUG", value: (row) => field(row, "slug"), maxWidth: 28 },
+    { header: "TITLE", value: (row) => field(row, "title"), maxWidth: 40 },
+    { header: "SNIPPET", value: (row) => field(row, "snippet", "summary"), maxWidth: 72 },
+    { header: "URI", value: (row) => field(row, "uri"), maxWidth: 64 },
+  ], "No project knowledge found.");
+}
+
 export function printIssueSessionCollection(value: unknown, options: CliOptions): void {
   if (outputMode(options, "table") !== "table") {
     printJson(value);

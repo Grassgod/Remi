@@ -59,6 +59,7 @@ const AUTO_RETRY_FAILURE_REASONS = new Set([
   "timeout",
   "codex_semantic_inactivity",
   "agent_error.stale_session",
+  "project_knowledge_unavailable",
 ]);
 const RESUME_UNSAFE_FAILURE_REASONS = new Set([
   "iteration_limit",

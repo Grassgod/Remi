@@ -1981,6 +1981,13 @@ export interface MultiremiProjectDoc {
   version: number;
   createdAt: string;
   updatedAt: string;
+  /** ProjectKnowledge control-plane fields. SQL rows created before migration may omit them on the wire. */
+  storageBackend?: "sql" | "openviking";
+  contentUri?: string | null;
+  contentSha256?: string | null;
+  syncStatus?: "sql" | "pending" | "ready" | "failed" | "deleting";
+  syncError?: string | null;
+  snapshotOid?: string | null;
 }
 
 export interface MultiremiProjectDocRevision {
@@ -1993,6 +2000,9 @@ export interface MultiremiProjectDocRevision {
   authorType: "member" | "agent" | null;
   authorId: string | null;
   createdAt: string;
+  contentSha256?: string | null;
+  snapshotOid?: string | null;
+  contentUri?: string | null;
 }
 
 /** Workspace-wide doc listing entry: a doc plus its project's title for grouping. */

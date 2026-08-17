@@ -1,20 +1,20 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 533,
+    "routeCount": 539,
     "routeCountByPrefix": {
       "native": 193,
-      "compat": 327,
+      "compat": 333,
       "root": 13
     },
-    "getRoutes": 235,
-    "getRoutesWithBody": 232,
+    "getRoutes": 238,
+    "getRoutesWithBody": 235,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
       "GET /ws"
     ],
-    "mutationRoutes": 298,
+    "mutationRoutes": 301,
     "mutationRoutesCovered": 276,
     "flows": [
       "agents-compat",
@@ -297,11 +297,14 @@
     "GET /api/notification-preferences",
     "GET /api/pins",
     "GET /api/project-docs",
+    "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
+    "GET /api/projects/:id/docs/:ref/backlinks",
     "GET /api/projects/:id/docs/:ref/revisions",
+    "GET /api/projects/:id/knowledge/recall",
     "GET /api/projects/:id/resources",
     "GET /api/projects/search",
     "GET /api/realtime/ws",
@@ -531,6 +534,9 @@
     "POST /api/multiremi/tasks/:id/human-requests/:requestId/respond",
     "POST /api/multiremi/tokens",
     "POST /api/pins",
+    "POST /api/project-knowledge/migration/backfill",
+    "POST /api/project-knowledge/migration/retry-failed",
+    "POST /api/project-knowledge/migration/verify",
     "POST /api/projects",
     "POST /api/projects/:id/docs",
     "POST /api/projects/:id/resources",
@@ -829,11 +835,14 @@
     "GET /api/notification-preferences",
     "GET /api/pins",
     "GET /api/project-docs",
+    "GET /api/project-knowledge/migration",
     "GET /api/projects",
     "GET /api/projects/:id",
     "GET /api/projects/:id/docs",
     "GET /api/projects/:id/docs/:ref",
+    "GET /api/projects/:id/docs/:ref/backlinks",
     "GET /api/projects/:id/docs/:ref/revisions",
+    "GET /api/projects/:id/knowledge/recall",
     "GET /api/projects/:id/resources",
     "GET /api/projects/search",
     "GET /api/realtime/ws",
@@ -13272,6 +13281,23 @@
       }
     },
     {
+      "key": "get-sweep GET /api/project-knowledge/migration",
+      "route": "GET /api/project-knowledge/migration",
+      "path": "/api/project-knowledge/migration",
+      "status": 200,
+      "body": {
+        "mode": "sql",
+        "workspaceId": "local",
+        "openviking": "not_configured",
+        "total": 2,
+        "sql": 2,
+        "pending": 0,
+        "ready": 0,
+        "failed": 0,
+        "deleting": 0
+      }
+    },
+    {
       "key": "get-sweep GET /api/projects",
       "route": "GET /api/projects",
       "path": "/api/projects",
@@ -13415,6 +13441,15 @@
       }
     },
     {
+      "key": "get-sweep GET /api/projects/:id/docs/:ref/backlinks",
+      "route": "GET /api/projects/:id/docs/:ref/backlinks",
+      "path": "/api/projects/prj_snapshot/docs/spec/backlinks",
+      "status": 200,
+      "body": {
+        "docs": []
+      }
+    },
+    {
       "key": "get-sweep GET /api/projects/:id/docs/:ref/revisions",
       "route": "GET /api/projects/:id/docs/:ref/revisions",
       "path": "/api/projects/prj_snapshot/docs/spec/revisions",
@@ -13433,6 +13468,15 @@
             "created_at": "<timestamp>"
           }
         ]
+      }
+    },
+    {
+      "key": "get-sweep GET /api/projects/:id/knowledge/recall",
+      "route": "GET /api/projects/:id/knowledge/recall",
+      "path": "/api/projects/prj_snapshot/knowledge/recall",
+      "status": 400,
+      "body": {
+        "error": "q is required"
       }
     },
     {

@@ -11,8 +11,8 @@ import {
   integerOption,
   rawStringOption,
 } from "../options.js";
-import { multiremiApiRequest } from "../http.js";
-import { printJson, printProjectDocCollection } from "../output.js";
+import { multiremiApiConnection, multiremiApiRequest } from "../http.js";
+import { printJson, printProjectDocCollection, printProjectKnowledgeHits } from "../output.js";
 import {
   addStringBodyField,
   citationRefsOption,
@@ -29,7 +29,11 @@ export async function project(positional: string[], options: CliOptions): Promis
     await projectMemory(positional.slice(1), options);
     return;
   }
-  throw new Error("usage: multiremi project doc|memory ...");
+  if (area === "knowledge") {
+    await projectKnowledge(positional.slice(1), options);
+    return;
+  }
+  throw new Error("usage: multiremi project doc|memory|knowledge ...");
 }
 
 export async function projectDoc(positional: string[], options: CliOptions): Promise<void> {
@@ -98,7 +102,17 @@ export async function projectDoc(positional: string[], options: CliOptions): Pro
     ), options);
     return;
   }
-  throw new Error("usage: multiremi project doc list|get|create|update|delete|search <project-id> ...");
+  if (action === "revisions" || action === "history") {
+    if (!projectId || !ref) throw new Error("usage: multiremi project doc revisions <project-id> <slug-or-id>");
+    printJson(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}/revisions`,
+      undefined,
+      options,
+    ));
+    return;
+  }
+  throw new Error("usage: multiremi project doc list|get|create|update|delete|search|revisions <project-id> ...");
 }
 
 export async function projectDocCreate(projectId: string, options: CliOptions): Promise<void> {
@@ -132,7 +146,7 @@ export async function projectDocUpdate(projectId: string, ref: string, options: 
 export async function projectMemory(positional: string[], options: CliOptions): Promise<void> {
   const action = positional[0] ?? "";
   const projectId = positional[1]?.trim();
-  if (action === "add") {
+  if (action === "add" || action === "remember") {
     if (!projectId) {
       throw new Error("usage: multiremi project memory add <project-id> --title <one-sentence fact> [--summary <text>] [--ref <type>:<value>] [--content <text>|--content-file <path>|--content-stdin]");
     }
@@ -148,7 +162,74 @@ export async function projectMemory(positional: string[], options: CliOptions): 
     printJson(await multiremiApiRequest("POST", `/api/projects/${encodeURIComponent(projectId)}/docs`, body, options));
     return;
   }
-  throw new Error("usage: multiremi project memory add <project-id> --title <one-sentence fact> ...");
+  if (action === "recall") {
+    const query = positional[2]?.trim();
+    if (!projectId || !query) throw new Error("usage: multiremi project memory recall <project-id> <query> [--kind memory|wiki] [--limit <n>]");
+    const params = new URLSearchParams({ q: query, kind: rawStringOption(options, "kind") ?? "memory" });
+    const limit = integerOption(options, "limit");
+    if (limit !== null) params.set("limit", String(limit));
+    printProjectKnowledgeHits(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/knowledge/recall?${params}`,
+      undefined,
+      options,
+    ), options);
+    return;
+  }
+  if (action === "forget") {
+    const ref = positional[2]?.trim();
+    if (!projectId || !ref) throw new Error("usage: multiremi project memory forget <project-id> <slug-or-id>");
+    printJson(await multiremiApiRequest(
+      "DELETE",
+      `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}`,
+      undefined,
+      options,
+    ));
+    return;
+  }
+  if (action === "backlinks") {
+    const ref = positional[2]?.trim();
+    if (!projectId || !ref) throw new Error("usage: multiremi project memory backlinks <project-id> <slug-or-id>");
+    printProjectDocCollection(await multiremiApiRequest(
+      "GET",
+      `/api/projects/${encodeURIComponent(projectId)}/docs/${encodeURIComponent(ref)}/backlinks`,
+      undefined,
+      options,
+    ), options);
+    return;
+  }
+  throw new Error("usage: multiremi project memory recall|remember|forget|backlinks <project-id> ...");
+}
+
+export async function projectKnowledge(positional: string[], options: CliOptions): Promise<void> {
+  const action = positional[0] ?? "status";
+  const projectId = positional[1]?.trim() || null;
+  const workspaceId = multiremiApiConnection(options).workspaceId;
+  if (action === "status") {
+    const params = new URLSearchParams();
+    addQueryParam(params, "workspace_id", workspaceId);
+    const query = params.toString();
+    printJson(await multiremiApiRequest("GET", `/api/project-knowledge/migration${query ? `?${query}` : ""}`, undefined, options));
+    return;
+  }
+  if (action === "backfill") {
+    printJson(await multiremiApiRequest("POST", "/api/project-knowledge/migration/backfill", {
+      project_id: projectId,
+      workspace_id: workspaceId,
+      dry_run: Boolean(options["dry-run"] ?? options.dryRun),
+      resume: Boolean(options.resume),
+    }, options));
+    return;
+  }
+  if (action === "verify") {
+    printJson(await multiremiApiRequest("POST", "/api/project-knowledge/migration/verify", { project_id: projectId, workspace_id: workspaceId }, options));
+    return;
+  }
+  if (action === "retry-failed") {
+    printJson(await multiremiApiRequest("POST", "/api/project-knowledge/migration/retry-failed", { project_id: projectId, workspace_id: workspaceId }, options));
+    return;
+  }
+  throw new Error("usage: multiremi project knowledge status|backfill|verify|retry-failed [project-id] [--dry-run] [--resume]");
 }
 
 /** --tags / --pinned / --ref / --content: shared by doc create, doc update, and memory add. */

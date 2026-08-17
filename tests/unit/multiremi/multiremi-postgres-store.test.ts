@@ -310,6 +310,53 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
     expect(store.getProject(a.id)?.title).toBe("Alpha");
   });
 
+  it("persists OpenViking control metadata without project knowledge bodies", () => {
+    const ws = freshWorkspace();
+    const project = store.createProject({ title: "PG OpenViking", workspaceId: ws });
+    const uri = `viking://resources/multiremi/workspaces/${ws}/projects/${project.id}/knowledge/wiki/runbook.md`;
+    const created = store.createProjectDocMetadata(project.id, {
+      kind: "wiki",
+      slug: "runbook",
+      title: "Runbook",
+      body: "must not enter SQL",
+    }, {
+      contentUri: uri,
+      contentSha256: "hash-v1",
+      snapshotOid: "oid-v1",
+      syncStatus: "ready",
+    });
+
+    expect(created).toMatchObject({
+      body: "",
+      storageBackend: "openviking",
+      contentUri: uri,
+      contentSha256: "hash-v1",
+      syncStatus: "ready",
+      snapshotOid: "oid-v1",
+    });
+    const v2 = store.replaceProjectDocMetadataExact({
+      ...created,
+      title: "Runbook v2",
+      version: 2,
+      updatedAt: new Date(Date.now() + 1_000).toISOString(),
+    }, {
+      contentUri: uri,
+      contentSha256: "hash-v2",
+      snapshotOid: "oid-v2",
+      syncStatus: "ready",
+    });
+    expect(v2).toMatchObject({ body: "", version: 2, contentSha256: "hash-v2", snapshotOid: "oid-v2" });
+    expect(store.listProjectDocRevisions(created.id).map((revision) => ({
+      version: revision.version,
+      body: revision.body,
+      contentSha256: revision.contentSha256,
+      snapshotOid: revision.snapshotOid,
+    }))).toEqual([
+      { version: 2, body: "", contentSha256: "hash-v2", snapshotOid: "oid-v2" },
+      { version: 1, body: "", contentSha256: "hash-v1", snapshotOid: "oid-v1" },
+    ]);
+  });
+
   it("escapes LIKE metacharacters in project doc search the same way sqlite does", () => {
     // searchProjectDocs pins `ESCAPE '\'` into the SQL text. Postgres already
     // treats backslash as the default LIKE escape while sqlite has none, so the

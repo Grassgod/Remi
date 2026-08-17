@@ -882,6 +882,12 @@ export function runMigrations(db: SqlDatabase): void {
       updated_by_type TEXT,
       updated_by_id TEXT,
       version INTEGER NOT NULL DEFAULT 1,
+      storage_backend TEXT NOT NULL DEFAULT 'sql',
+      content_uri TEXT,
+      content_sha256 TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'sql',
+      sync_error TEXT,
+      snapshot_oid TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(project_id, slug),
@@ -900,6 +906,9 @@ export function runMigrations(db: SqlDatabase): void {
       body TEXT NOT NULL DEFAULT '',
       author_type TEXT,
       author_id TEXT,
+      content_uri TEXT,
+      content_sha256 TEXT,
+      snapshot_oid TEXT,
       created_at TEXT NOT NULL,
       UNIQUE(doc_id, version),
       FOREIGN KEY(doc_id) REFERENCES multiremi_project_docs(id) ON DELETE CASCADE
@@ -1346,6 +1355,16 @@ export function runMigrations(db: SqlDatabase): void {
   // only dev databases predate the column, but CREATE TABLE IF NOT EXISTS never
   // revisits an existing table — so it gets patched in like every other column.
   addColumnIfMissing(db, "multiremi_project_docs", "refs TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(db, "multiremi_project_docs", "storage_backend TEXT NOT NULL DEFAULT 'sql'");
+  addColumnIfMissing(db, "multiremi_project_docs", "content_uri TEXT");
+  addColumnIfMissing(db, "multiremi_project_docs", "content_sha256 TEXT");
+  addColumnIfMissing(db, "multiremi_project_docs", "sync_status TEXT NOT NULL DEFAULT 'sql'");
+  addColumnIfMissing(db, "multiremi_project_docs", "sync_error TEXT");
+  addColumnIfMissing(db, "multiremi_project_docs", "snapshot_oid TEXT");
+  addColumnIfMissing(db, "multiremi_project_doc_revisions", "content_sha256 TEXT");
+  addColumnIfMissing(db, "multiremi_project_doc_revisions", "snapshot_oid TEXT");
+  addColumnIfMissing(db, "multiremi_project_doc_revisions", "content_uri TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_multiremi_project_docs_sync ON multiremi_project_docs(workspace_id, sync_status, updated_at)");
   addColumnIfMissing(db, "multiremi_projects", "archived_at TEXT");
   // Per-project default assignee: prefills the group/agent/member on new issues
   // created under the project so users stop re-picking the same squad each time.

@@ -78,9 +78,13 @@ function toEnvVariables(value: unknown): AcpMcpEnvVariable[] {
  * (command-based) servers are injected — http/sse/url-only entries are skipped
  * because ACP `session/new` here takes command-launched servers.
  */
-export function buildTaskMcpServers(task: AgentTask): AcpMcpServer[] {
+export function buildTaskMcpServers(
+  task: AgentTask,
+  runtime: { serverUrl?: string; fallbackToken?: string | null } = {},
+): AcpMcpServer[] {
   const raw = task.agent?.mcpConfig;
-  if (raw == null) return [];
+  const projectKnowledge = buildProjectKnowledgeMcp(task, runtime);
+  if (raw == null) return projectKnowledge ? [projectKnowledge] : [];
 
   // Tolerate a JSON string as well as an already-parsed object.
   let config: unknown = raw;
@@ -88,16 +92,17 @@ export function buildTaskMcpServers(task: AgentTask): AcpMcpServer[] {
     try {
       config = JSON.parse(raw);
     } catch {
-      return [];
+      return projectKnowledge ? [projectKnowledge] : [];
     }
   }
 
-  if (!isRecord(config)) return [];
+  if (!isRecord(config)) return projectKnowledge ? [projectKnowledge] : [];
   const servers = config.mcpServers;
-  if (!isRecord(servers)) return [];
+  if (!isRecord(servers)) return projectKnowledge ? [projectKnowledge] : [];
 
   const out: AcpMcpServer[] = [];
   for (const [name, entry] of Object.entries(servers)) {
+    if (name === "multiremi-project-knowledge") continue;
     if (!name || !isRecord(entry)) continue;
     const command = entry.command;
     if (typeof command !== "string" || command.length === 0) continue;
@@ -108,5 +113,28 @@ export function buildTaskMcpServers(task: AgentTask): AcpMcpServer[] {
       env: toEnvVariables(entry.env),
     });
   }
+  if (projectKnowledge) out.push(projectKnowledge);
   return out;
+}
+
+function buildProjectKnowledgeMcp(
+  task: AgentTask,
+  runtime: { serverUrl?: string; fallbackToken?: string | null },
+): AcpMcpServer | null {
+  if (!task.project?.id) return null;
+  const token = task.authToken ?? task.auth_token ?? runtime.fallbackToken ?? null;
+  if (!token || !runtime.serverUrl) return null;
+  const command = process.env.MULTIREMI_PROJECT_KNOWLEDGE_MCP_COMMAND?.trim() || "remi";
+  const standalone = /(?:^|[\\/])multiremi(?:\.exe)?$/i.test(command);
+  return {
+    name: "multiremi-project-knowledge",
+    command,
+    args: [...(standalone ? [] : ["multiremi"]), "project-knowledge-mcp", task.project.id],
+    env: [
+      { name: "MULTIREMI_SERVER_URL", value: runtime.serverUrl },
+      { name: "MULTIREMI_TOKEN", value: token },
+      { name: "MULTIREMI_TASK_ID", value: task.id },
+      { name: "MULTIREMI_WORKSPACE_ID", value: task.workspaceId },
+    ],
+  };
 }

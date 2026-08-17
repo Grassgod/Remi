@@ -60,7 +60,12 @@ Commands:
   project doc update <project-id> <slug-or-id>
   project doc delete <project-id> <slug-or-id>
   project doc search <project-id> <query>
-  project memory add <project-id> --title <one-sentence fact>
+  project doc revisions <project-id> <slug-or-id>
+  project memory recall <project-id> <query>
+  project memory remember <project-id> --title <one-sentence fact>
+  project memory forget <project-id> <slug-or-id>
+  project memory backlinks <project-id> <slug-or-id>
+  project knowledge status|backfill|verify|retry-failed [project-id]
   seed                   Create a default local agent
   version                Print Multiremi version
 
@@ -119,5 +124,7 @@ Project knowledge options:
                          also links a published Session result)
   --expected-version <n> Fail the update when the doc moved on (409)
   --limit <n>            Result cap for project doc search
+  --dry-run              Report knowledge migration work without writing
+  --resume               Resume SQL/pending/failed knowledge migration rows
 `);
 }

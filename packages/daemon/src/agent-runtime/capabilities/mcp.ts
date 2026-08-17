@@ -12,7 +12,12 @@ export const mcpBlock: CapabilityBlock = {
   },
 
   ephemeral(ctx: EphemeralContext) {
-    return { mcpServers: buildTaskMcpServers(ctx.task) };
+    return {
+      mcpServers: buildTaskMcpServers(ctx.task, {
+        serverUrl: ctx.daemonOptions.serverUrl,
+        fallbackToken: ctx.daemonOptions.fallbackToken,
+      }),
+    };
   },
 };
 
