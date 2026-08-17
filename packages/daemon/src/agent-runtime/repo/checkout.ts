@@ -62,6 +62,7 @@ export interface MultiremiWorktreeState {
 
 const AGENT_GIT_EXCLUDE_PATTERNS = [".agent_context", ".multiremi", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"];
 const MODERN_FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*";
+const MIRRORED_TAG_FETCH_REFSPEC = "+refs/tags/*:refs/tags/*";
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
 const DEFAULT_STALE_LOCK_MS = 60 * 60_000;
 const MULTIREMI_HOOK_MARKER = "# multiremi:prepare-commit-msg:co-authored-by";
@@ -115,7 +116,7 @@ export class MultiremiRepoCache {
           mkdirSync(workspaceRoot, { recursive: true });
           try {
             git(null, ["clone", "--bare", url, barePath]);
-            ensureRemoteTrackingLayout(barePath);
+            gitFetch(barePath);
           } catch (err) {
             rmSync(barePath, { recursive: true, force: true });
             throw err;
@@ -332,7 +333,14 @@ function git(cwd: string | null, args: string[], options: { allowFailure?: boole
 function gitFetch(barePath: string, options: { allowFailure?: boolean } = {}): void {
   try {
     ensureRemoteTrackingLayout(barePath);
-    git(barePath, ["fetch", "--prune", "origin", "--tags"], { allowFailure: options.allowFailure });
+    git(barePath, [
+      "fetch",
+      "--prune",
+      "--prune-tags",
+      "origin",
+      MODERN_FETCH_REFSPEC,
+      MIRRORED_TAG_FETCH_REFSPEC,
+    ], { allowFailure: options.allowFailure });
     git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
   } catch (err) {
     if (!options.allowFailure) throw err;
@@ -343,8 +351,6 @@ function ensureRemoteTrackingLayout(barePath: string): void {
   const current = git(barePath, ["config", "--get", "remote.origin.fetch"], { allowFailure: true }).trim();
   if (current === MODERN_FETCH_REFSPEC || current === MODERN_FETCH_REFSPEC.slice(1)) return;
   git(barePath, ["config", "remote.origin.fetch", MODERN_FETCH_REFSPEC]);
-  git(barePath, ["fetch", "--prune", "origin", "--tags"]);
-  git(barePath, ["remote", "set-head", "origin", "--auto"], { allowFailure: true });
 }
 
 function gitEnv(): NodeJS.ProcessEnv {

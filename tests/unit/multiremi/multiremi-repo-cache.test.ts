@@ -150,6 +150,40 @@ describe("Multiremi repo cache", () => {
     expect(readFileSync(join(first.path, "README.md"), "utf8")).toBe("snapshot v1\n");
   });
 
+  it("mirrors a remote tag that moved to a newer commit", () => {
+    const source = createRepo("main", "tagged snapshot v1");
+    const cacheRoot = tempDir("multiremi-repo-moved-tag-");
+    const snapshotsRoot = tempDir("multiremi-moved-tag-snapshots-");
+    const cache = new MultiremiRepoCache(cacheRoot);
+    const movingTag = "agent-server-kit-main-last-notified";
+
+    git(source, ["tag", movingTag]);
+    cache.sync("local", [{ url: source }]);
+    const first = cache.createSnapshot({
+      workspaceId: "local",
+      repoUrl: source,
+      snapshotsRoot,
+      ref: movingTag,
+    });
+
+    writeFileSync(join(source, "README.md"), "tagged snapshot v2\n");
+    git(source, ["add", "README.md"]);
+    git(source, ["commit", "-m", "move tag target"]);
+    const movedCommit = git(source, ["rev-parse", "HEAD"]);
+    git(source, ["tag", "--force", movingTag]);
+
+    const second = cache.createSnapshot({
+      workspaceId: "local",
+      repoUrl: source,
+      snapshotsRoot,
+      ref: movingTag,
+    });
+
+    expect(second.commit).toBe(movedCommit);
+    expect(second.commit).not.toBe(first.commit);
+    expect(readFileSync(join(second.path, "README.md"), "utf8")).toBe("tagged snapshot v2\n");
+  });
+
   it("serializes repo mutations with lock dirs and recovers stale locks", () => {
     const source = createRepo("main", "locked repo");
     const cacheRoot = tempDir("multiremi-repo-lock-");
